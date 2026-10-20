@@ -19,7 +19,7 @@ echo    %INSTALL_DIR%
 echo    Application source, scripts, and documentation
 echo.
 echo  REMOVED:
-echo    Python environment, station data, and generated caches
+echo    Python environment, station data, run.bat, and generated caches
 echo.
 
 rem Refuse to operate unless this looks like the StationNet source folder.
@@ -73,6 +73,7 @@ call :remove_directory "%INSTALL_DIR%\.pytest-tmp"
 call :remove_directory "%INSTALL_DIR%\.test-data"
 call :remove_directory "%INSTALL_DIR%\__pycache__"
 call :remove_file "%INSTALL_DIR%\.coverage"
+call :remove_file "%INSTALL_DIR%\run.bat"
 
 rem Python may create cache folders inside source and test packages. Limit the
 rem recursive search to those two known trees; never recurse over INSTALL_DIR.

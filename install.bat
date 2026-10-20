@@ -30,24 +30,44 @@ if not errorlevel 1 (
 if errorlevel 1 goto :python_old
 
 if not exist "%VENV_PYTHON%" (
-    echo [1/3] Creating the Python environment...
+    echo [1/4] Creating the Python environment...
     %PYTHON_COMMAND% -m venv "%VENV_DIR%"
     if errorlevel 1 goto :failed
 ) else (
-    echo [1/3] Existing Python environment found.
+    echo [1/4] Existing Python environment found.
 )
 
-echo [2/3] Installing StationNet dependencies...
+echo [2/4] Installing StationNet dependencies...
 "%VENV_PYTHON%" -m pip install --disable-pip-version-check -r "%INSTALL_DIR%\requirements.txt"
 if errorlevel 1 goto :failed
 
-echo [3/3] Preparing the data directory...
+echo [3/4] Preparing the data directory...
 if not exist "%INSTALL_DIR%\data" mkdir "%INSTALL_DIR%\data"
+if errorlevel 1 goto :failed
+
+echo [4/4] Creating run.bat...
+(
+    echo @echo off
+    echo setlocal EnableExtensions
+    echo cd /d "%%~dp0"
+    echo if not exist ".venv\Scripts\python.exe" ^(
+    echo     echo ERROR: StationNet is not installed in this folder.
+    echo     echo Run install.bat first.
+    echo     pause
+    echo     exit /b 1
+    echo ^)
+    echo echo Starting StationNet at http://127.0.0.1:8080
+    echo echo Press Ctrl+C in this window to stop the server.
+    echo echo.
+    echo ".venv\Scripts\python.exe" "run.py"
+    echo if errorlevel 1 pause
+) > "%INSTALL_DIR%\run.bat"
 if errorlevel 1 goto :failed
 
 echo.
 echo StationNet is installed successfully.
 echo Station data will be stored in "%INSTALL_DIR%\data".
+echo Use run.bat to start StationNet later.
 echo.
 choice /C YN /N /M "Start StationNet now? [Y/N]: "
 if errorlevel 2 goto :done
@@ -88,7 +108,7 @@ exit /b 1
 :done
 echo.
 echo To start StationNet later, run:
-echo   "%VENV_PYTHON%" "%INSTALL_DIR%\run.py"
+echo   "%INSTALL_DIR%\run.bat"
 echo.
 pause
 exit /b 0
