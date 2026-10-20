@@ -27,7 +27,13 @@
 
   <div class="station-message">
     <span>SYS://</span>
-    <p>Welcome to {{ g.station.callsign }}. Browse the public board as a visitor, or identify yourself to post and reply.</p>
+    {% if g.station.landing_message %}
+    <p>{{ g.station.landing_message }}</p>
+    {% elif g.station.guest_access %}
+    <p>Welcome to {{ g.station.callsign }}. Explore the station as a visitor, or identify yourself to participate.</p>
+    {% else %}
+    <p>Welcome to {{ g.station.callsign }}. Identify yourself to access station services.</p>
+    {% endif %}
   </div>
 
   {% if g.user %}

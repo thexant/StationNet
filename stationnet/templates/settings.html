@@ -1,2 +1,30 @@
-{% extends 'base.html' %}{% block title %}SYSOP Settings{% endblock %}{% block content %}<section class="narrow terminal-card"><p class="eyebrow">SYSOP CONTROL / STATION PARAMETERS</p><h1>Station settings</h1><p>Callsign <strong>{{ g.station.callsign }}</strong> has been assigned to this station.</p><form method="post" class="form-grid"><input type="hidden" name="csrf_token" value="{{ session.csrf_token }}"><label>Station name<input name="name" maxlength="80" required value="{{ g.station.name }}"></label><label>Station description<textarea name="description" maxlength="500" rows="5">{{ g.station.description }}</textarea></label><label class="switch"><input type="checkbox" name="registration_open" {% if g.station.registration_open %}checked{% endif %}> Allow new local registrations</label><label class="switch"><input type="checkbox" name="guest_access" {% if g.station.guest_access %}checked{% endif %}> Allow guests to read bulletins</label><button>COMMIT PARAMETERS</button></form></section>{% endblock %}
+{% extends 'base.html' %}
+{% block title %}SYSOP Settings{% endblock %}
+{% block content %}
+<section class="narrow terminal-card">
+  <p class="eyebrow">SYSOP CONTROL / STATION PARAMETERS</p>
+  <h1>Station settings</h1>
+  <p>Callsign <strong>{{ g.station.callsign }}</strong> has been assigned to this station.</p>
+  <form method="post" class="form-grid">
+    <input type="hidden" name="csrf_token" value="{{ session.csrf_token }}">
+    <label>Station name
+      <input name="name" maxlength="80" required value="{{ g.station.name }}">
+    </label>
+    <label>Station description
+      <textarea name="description" maxlength="500" rows="5">{{ g.station.description }}</textarea>
+    </label>
+    <label>Landing message
+      <textarea name="landing_message" maxlength="500" rows="4" placeholder="Use the automatic access-aware welcome message">{{ g.station.landing_message }}</textarea>
+      <small>Shown on the station landing page. Leave blank to use a message that automatically reflects guest access.</small>
+    </label>
+    <label>Header tagline
+      <input name="brand_tagline" maxlength="160" required value="{{ g.station.brand_tagline }}">
+      <small>Shown beneath the station logo on every page.</small>
+    </label>
+    <label class="switch"><input type="checkbox" name="registration_open" {% if g.station.registration_open %}checked{% endif %}> Allow new local registrations</label>
+    <label class="switch"><input type="checkbox" name="guest_access" {% if g.station.guest_access %}checked{% endif %}> Allow guests to read bulletins</label>
+    <button>COMMIT PARAMETERS</button>
+  </form>
+</section>
+{% endblock %}
 

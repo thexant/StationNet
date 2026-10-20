@@ -41,6 +41,44 @@ def test_station_name_drives_ansi_masthead(initialized):
     assert station_banner("Dog City").encode() in response.data
     assert b'aria-label="Dog City home"' in response.data
 
+def test_landing_message_reflects_guest_access(initialized):
+    response = initialized.get("/")
+    assert b"Explore the station as a visitor" in response.data
+    assert b"Browse the public board" not in response.data
+
+    initialized.post(
+        "/sysop/settings",
+        data={
+            "csrf_token": csrf(initialized, "/sysop/settings"),
+            "name": "Test Relay",
+            "description": "Local test station",
+        },
+    )
+    response = initialized.get("/")
+    assert b"Identify yourself to access station services" in response.data
+    assert b"Explore the station as a visitor" not in response.data
+
+def test_sysop_can_customize_landing_message_and_tagline(initialized):
+    response = initialized.post(
+        "/sysop/settings",
+        data={
+            "csrf_token": csrf(initialized, "/sysop/settings"),
+            "name": "Test Relay",
+            "description": "Local test station",
+            "landing_message": "Welcome to every service aboard this relay.",
+            "brand_tagline": "SIGNAL HOUSE // COMMUNITY ONLINE //",
+            "registration_open": "on",
+            "guest_access": "on",
+        },
+        follow_redirects=True,
+    )
+    assert b"Station parameters updated" in response.data
+
+    response = initialized.get("/")
+    assert b"Welcome to every service aboard this relay." in response.data
+    assert b"SIGNAL HOUSE // COMMUNITY ONLINE //" in response.data
+    assert b"Explore the station as a visitor" not in response.data
+
 def test_startup_replaces_legacy_callsigns(app, initialized):
     with app.app_context():
         database = get_db()
