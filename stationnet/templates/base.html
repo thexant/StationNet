@@ -1,0 +1,12 @@
+<!doctype html><html lang="en"><head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="theme-color" content="#07110c">
+<title>{% block title %}StationNet{% endblock %}{% if g.station %} :: {{ g.station.name }}{% endif %}</title>
+<link rel="stylesheet" href="{{ url_for('static',filename='station.css') }}"><script src="{{ url_for('static',filename='station.js') }}" defer></script>
+</head><body><a class="skip-link" href="#main">Skip to content</a><div class="crt-shell">
+<header class="topbar"><a class="station-mark" href="{{ url_for('station.index') if g.station else url_for('auth.setup') }}"><span class="signal">◉</span> {{ g.station.callsign if g.station else 'UNCONFIGURED NODE' }}</a><span class="link-state">● LINK ACTIVE</span></header>
+{% if g.station %}<nav class="service-nav" id="service-nav" aria-label="Station services" tabindex="-1"><a href="{{ url_for('station.terminal') }}" {% if request.endpoint=='station.terminal' %}aria-current="page"{% endif %}>[01] TERMINAL</a><a href="{{ url_for('board.index') }}" {% if request.blueprint=='board' %}aria-current="page"{% endif %}>[02] BULLETINS</a>{% if g.user and g.user.is_admin %}<a href="{{ url_for('station.settings') }}" {% if request.endpoint=='station.settings' %}aria-current="page"{% endif %}>[90] SYSOP</a>{% endif %}</nav>{% endif %}
+<div class="flash-stack" aria-live="polite">{% for category,message in get_flashed_messages(with_categories=true) %}<div class="flash {{ category }}">{{ message }}</div>{% endfor %}</div>
+<main id="main" class="main-panel">{% block content %}{% endblock %}</main>
+<footer class="statusbar"><span>{{ g.station.name if g.station else 'STATION INITIALIZATION' }}</span><span>{% if g.user %}{{ g.user.callsign }} / {{ 'SYSOP' if g.user.is_admin else 'USER' }}{% else %}GUEST LINK{% endif %}</span><span data-clock>--:--:--</span></footer>
+</div></body></html>
+
