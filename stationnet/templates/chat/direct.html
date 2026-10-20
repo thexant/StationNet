@@ -8,7 +8,7 @@
   <div class="chat-log" data-chat-log role="log" aria-live="polite"><p class="muted" data-chat-empty>DIRECT LINK ESTABLISHED. NO TRAFFIC.</p></div>
   <form class="chat-compose" data-chat-form>
     <input type="hidden" name="csrf_token" value="{{ session.csrf_token }}">
-    <label>Transmit privately<textarea name="body" maxlength="1000" rows="3" required></textarea></label>
+    <label>Transmit privately as {{ g.user.username }} - [{{ g.user.callsign }}]<textarea name="body" maxlength="1000" rows="3" required></textarea><small>Press Enter to send. Shift+Enter starts a new line.</small></label>
     <button>SEND DIRECT</button><span class="chat-error" data-chat-error aria-live="polite"></span>
   </form>
 </section>

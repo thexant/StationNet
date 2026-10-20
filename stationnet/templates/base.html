@@ -20,12 +20,12 @@
 
       <a class="station-brand" href="{{ url_for('station.index') if g.station else url_for('auth.setup') }}" aria-label="{{ g.station.name if g.station else 'StationNet' }} home">
         <pre class="ansi-logo" aria-hidden="true">{{ g.station_banner }}</pre>
-        <span class="brand-tag">{{ g.station.brand_tagline if g.station else 'H7/dS! // YOUR INDEPENDENT COMMUNITY NODE //' }}</span>
+        <span class="brand-tag">{{ g.station.brand_tagline if g.station else 'H7/dS! // YOUR INDEPENDENT COMMUNITY STATION //' }}</span>
       </a>
 
       {% if g.station %}
       <div class="node-line">
-        <span>YOUR NODE: <b>{{ g.station.callsign }}</b></span>
+        <span>YOUR STATION: <b>{{ g.station.callsign }}</b></span>
         <span>SYSTEM DATE/TIME: <b data-date>--- -- ----</b> <b data-clock>--:--:--</b></span>
       </div>
       <nav class="service-nav" id="service-nav" aria-label="Station services" tabindex="-1">
@@ -52,7 +52,7 @@
     <main id="main" class="main-panel">{% block content %}{% endblock %}</main>
 
     <footer class="statusbar">
-      <span>NODE: {{ g.station.callsign if g.station else 'OFFLINE' }}</span>
+      <span>STATION: {{ g.station.callsign if g.station else 'OFFLINE' }}</span>
       <span>{% if g.user %}USER: {{ g.user.callsign }} / {{ 'SYSOP' if g.user.is_admin else 'MEMBER' }}{% else %}USER: UNIDENTIFIED{% endif %}</span>
       <span class="carrier"><i aria-hidden="true"></i> CARRIER</span>
     </footer>

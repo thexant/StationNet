@@ -17,12 +17,22 @@ for(const chat of document.querySelectorAll("[data-live-chat]")){
   let lastId=0;
   let busy=false;
 
+  const localTimestamp=value=>{
+    if(!value)return "";
+    const normalized=/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/.test(value)
+      ? `${value.replace(" ","T")}Z`
+      : value;
+    const timestamp=new Date(normalized);
+    if(Number.isNaN(timestamp.getTime()))return value;
+    return timestamp.toLocaleString([],{dateStyle:"medium",timeStyle:"short"});
+  };
+
   const addMessage=message=>{
     chat.querySelector("[data-chat-empty]")?.remove();
     const row=document.createElement("div");
     row.className="chat-message"+(message.mine?" mine":"");
     const meta=document.createElement("span");
-    meta.textContent=`${message.callsign} / ${message.created_at} UTC`;
+    meta.textContent=`${message.username} - [${message.callsign}] · ${localTimestamp(message.created_at)}`;
     const body=document.createElement("p");
     body.textContent=message.body;
     row.append(meta,body);
@@ -61,6 +71,12 @@ for(const chat of document.querySelectorAll("[data-live-chat]")){
       await poll();
     }catch(problem){error.textContent=problem.message}
     finally{button.disabled=false;form.querySelector("textarea").focus()}
+  });
+  form.querySelector("textarea").addEventListener("keydown",event=>{
+    if(event.key==="Enter"&&!event.shiftKey&&!event.isComposing){
+      event.preventDefault();
+      form.requestSubmit();
+    }
   });
   poll();
   setInterval(poll,2000);

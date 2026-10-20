@@ -7,7 +7,7 @@ CREATE TABLE IF NOT EXISTS station (
  id INTEGER PRIMARY KEY CHECK(id=1), name TEXT NOT NULL, description TEXT NOT NULL,
  callsign TEXT NOT NULL UNIQUE, registration_open INTEGER NOT NULL DEFAULT 1,
  guest_access INTEGER NOT NULL DEFAULT 1, landing_message TEXT NOT NULL DEFAULT '',
- brand_tagline TEXT NOT NULL DEFAULT 'H7/dS! // YOUR INDEPENDENT COMMUNITY NODE //',
+ brand_tagline TEXT NOT NULL DEFAULT 'H7/dS! // YOUR INDEPENDENT COMMUNITY STATION //',
  upload_permission TEXT NOT NULL DEFAULT 'members',
  file_storage_limit_mb INTEGER NOT NULL DEFAULT 100,
  file_size_limit_mb INTEGER NOT NULL DEFAULT 10,
@@ -88,8 +88,15 @@ def _migrate_station_customization(database):
     if "brand_tagline" not in columns:
         database.execute(
             "ALTER TABLE station ADD COLUMN brand_tagline TEXT NOT NULL "
-            "DEFAULT 'H7/dS! // YOUR INDEPENDENT COMMUNITY NODE //'"
+            "DEFAULT 'H7/dS! // YOUR INDEPENDENT COMMUNITY STATION //'"
         )
+    database.execute(
+        "UPDATE station SET brand_tagline=? WHERE brand_tagline=?",
+        (
+            "H7/dS! // YOUR INDEPENDENT COMMUNITY STATION //",
+            "H7/dS! // YOUR INDEPENDENT COMMUNITY NODE //",
+        ),
+    )
 
 def _migrate_community_fields(database):
     """Add Milestone 2 settings and profile fields to existing stations."""

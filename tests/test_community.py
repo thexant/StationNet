@@ -59,6 +59,8 @@ def test_direct_chat_is_private_online_only_and_temporary(app, initialized):
     assert response.status_code == 201
     payload = bob.get(f"/chat/direct/{ids['alice']}/messages").get_json()
     assert payload["messages"][0]["body"] == "For Bob only."
+    assert payload["messages"][0]["username"] == "alice"
+    assert payload["messages"][0]["callsign"]
     assert initialized.get(f"/chat/direct/{ids['alice']}/messages").get_json()["messages"] == []
 
     bob.post("/logout", data={"csrf_token": csrf(bob, "/terminal")})

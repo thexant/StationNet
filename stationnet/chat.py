@@ -87,8 +87,10 @@ def direct_messages(user_id):
         g.user["id"], session["connection_id"], peer["id"], peer["connection_id"], after
     )
     for item in messages:
-        item["callsign"] = g.user["callsign"] if item["sender_id"] == g.user["id"] else peer["callsign"]
-        item["mine"] = item["sender_id"] == g.user["id"]
+        mine = item["sender_id"] == g.user["id"]
+        item["callsign"] = g.user["callsign"] if mine else peer["callsign"]
+        item["username"] = g.user["username"] if mine else peer["username"]
+        item["mine"] = mine
         del item["sender_id"]
     return jsonify(active=True, messages=messages)
 
