@@ -1,0 +1,94 @@
+@echo off
+setlocal EnableExtensions
+
+rem StationNet Windows installer. All paths are anchored to this script so
+rem installation works when the extracted folder is moved or contains spaces.
+for %%I in ("%~dp0.") do set "INSTALL_DIR=%%~fI"
+set "VENV_DIR=%INSTALL_DIR%\.venv"
+set "VENV_PYTHON=%VENV_DIR%\Scripts\python.exe"
+
+echo.
+echo ============================================================
+echo  StationNet installer
+echo ============================================================
+echo  Install directory: %INSTALL_DIR%
+echo.
+
+if not exist "%INSTALL_DIR%\run.py" goto :invalid_copy
+if not exist "%INSTALL_DIR%\requirements.txt" goto :invalid_copy
+
+where py.exe >nul 2>nul
+if not errorlevel 1 (
+    set "PYTHON_COMMAND=py -3"
+) else (
+    where python.exe >nul 2>nul
+    if errorlevel 1 goto :python_missing
+    set "PYTHON_COMMAND=python"
+)
+
+%PYTHON_COMMAND% -c "import sys; raise SystemExit(0 if sys.version_info >= (3, 11) else 1)" >nul 2>nul
+if errorlevel 1 goto :python_old
+
+if not exist "%VENV_PYTHON%" (
+    echo [1/3] Creating the Python environment...
+    %PYTHON_COMMAND% -m venv "%VENV_DIR%"
+    if errorlevel 1 goto :failed
+) else (
+    echo [1/3] Existing Python environment found.
+)
+
+echo [2/3] Installing StationNet dependencies...
+"%VENV_PYTHON%" -m pip install --disable-pip-version-check -r "%INSTALL_DIR%\requirements.txt"
+if errorlevel 1 goto :failed
+
+echo [3/3] Preparing the data directory...
+if not exist "%INSTALL_DIR%\data" mkdir "%INSTALL_DIR%\data"
+if errorlevel 1 goto :failed
+
+echo.
+echo StationNet is installed successfully.
+echo Station data will be stored in "%INSTALL_DIR%\data".
+echo.
+choice /C YN /N /M "Start StationNet now? [Y/N]: "
+if errorlevel 2 goto :done
+
+echo.
+echo Starting StationNet at http://127.0.0.1:8080
+echo Press Ctrl+C in this window to stop the server.
+echo.
+cd /d "%INSTALL_DIR%"
+"%VENV_PYTHON%" "%INSTALL_DIR%\run.py"
+goto :done
+
+:invalid_copy
+echo ERROR: run.py or requirements.txt is missing.
+echo Extract a complete StationNet copy, then run install.bat from that folder.
+goto :failed_pause
+
+:python_missing
+echo ERROR: Python 3.11 or newer was not found.
+echo Install Python from https://www.python.org/downloads/windows/ and try again.
+goto :failed_pause
+
+:python_old
+echo ERROR: StationNet requires Python 3.11 or newer.
+echo Install a current Python release and try again.
+goto :failed_pause
+
+:failed
+echo.
+echo ERROR: StationNet installation did not complete.
+echo Review the message above, then run install.bat again.
+
+:failed_pause
+echo.
+pause
+exit /b 1
+
+:done
+echo.
+echo To start StationNet later, run:
+echo   "%VENV_PYTHON%" "%INSTALL_DIR%\run.py"
+echo.
+pause
+exit /b 0

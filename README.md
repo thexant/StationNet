@@ -14,7 +14,14 @@ Future services can be Flask blueprints using the common terminal shell rather t
 
 ## Install and run
 
-Windows PowerShell:
+Windows (easy setup):
+
+1. Double-click `install.bat` and follow the prompts.
+2. Open `http://127.0.0.1:8080` and complete first-run setup.
+
+To reset an installed copy, double-click `uninstall.bat`. It optionally backs up station data, then removes only the generated environment, data, and cache files. The StationNet directory and all application source files remain intact, ready for `install.bat` to be run again.
+
+Windows PowerShell (manual setup):
 
 ```powershell
 python -m venv .venv
