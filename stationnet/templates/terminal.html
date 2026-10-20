@@ -1,3 +1,35 @@
-{% extends 'base.html' %}{% block title %}Terminal{% endblock %}{% block content %}<section class="workspace-grid"><div class="terminal-card"><p class="eyebrow">STATION CONTROL / SERVICE DIRECTORY</p><h1>{{ g.station.name }}</h1><p>{{ g.station.description or 'Independent communications station.' }}</p><div class="service-list"><a href="{{ url_for('board.index') }}"><span>02</span><strong>BULLETIN BOARD</strong><small>READ / WRITE MESSAGE TRAFFIC</small></a><div class="offline"><span>--</span><strong>ADDITIONAL SERVICES</strong><small>NOT INSTALLED</small></div></div></div>
-<aside class="terminal-card identity-card"><p class="eyebrow">CONNECTION TELEMETRY</p>{% if g.user %}<dl><dt>CALLSIGN</dt><dd>{{ g.user.callsign }}</dd><dt>HANDLE</dt><dd>{{ g.user.username }}</dd><dt>PRIVILEGE</dt><dd>{{ 'SYSOP' if g.user.is_admin else 'USER' }}</dd><dt>LINK</dt><dd>AUTHENTICATED</dd></dl><form method="post" action="{{ url_for('auth.logout') }}"><input type="hidden" name="csrf_token" value="{{ session.csrf_token }}"><button class="secondary">DISCONNECT</button></form>{% else %}<dl><dt>CALLSIGN</dt><dd>UNASSIGNED</dd><dt>PRIVILEGE</dt><dd>GUEST</dd><dt>LINK</dt><dd>READ ONLY</dd></dl><a class="button" href="{{ url_for('auth.login') }}">AUTHENTICATE</a>{% endif %}</aside></section>{% endblock %}
+{% extends 'base.html' %}
+{% block title %}Station{% endblock %}
+{% block content %}
+<section class="directory-screen">
+  <header class="screen-heading">
+    <p class="eyebrow">SERVICE DIRECTORY / {{ g.station.callsign }}</p>
+    <h1>{{ g.station.name }}</h1>
+    <p>{{ g.station.description or 'Independent communications station.' }}</p>
+  </header>
 
+  <div class="service-list">
+    <a href="{{ url_for('board.index') }}">
+      <span class="service-number">[02]</span>
+      <span class="service-copy"><strong>BULLETIN BOARD</strong><small>READ / WRITE LOCAL MESSAGE TRAFFIC</small></span>
+      <span class="service-state">* ONLINE</span>
+    </a>
+    <div class="offline">
+      <span class="service-number">[--]</span>
+      <span class="service-copy"><strong>UNASSIGNED SERVICE</strong><small>PORT RESERVED FOR LOCAL EXPANSION</small></span>
+      <span class="service-state">- DARK</span>
+    </div>
+  </div>
+
+  <aside class="operator-block">
+    <h2>&gt; CURRENT OPERATOR</h2>
+    {% if g.user %}
+    <dl><div><dt>CALLSIGN</dt><dd>{{ g.user.callsign }}</dd></div><div><dt>ALIAS</dt><dd>{{ g.user.username }}</dd></div><div><dt>ACCESS</dt><dd>{{ 'SYSOP' if g.user.is_admin else 'MEMBER' }}</dd></div><div><dt>LINK</dt><dd class="positive">AUTHENTICATED</dd></div></dl>
+    <form method="post" action="{{ url_for('auth.logout') }}"><input type="hidden" name="csrf_token" value="{{ session.csrf_token }}"><button class="text-button">[ DISCONNECT ]</button></form>
+    {% else %}
+    <dl><div><dt>CALLSIGN</dt><dd>UNASSIGNED</dd></div><div><dt>ACCESS</dt><dd>READ ONLY</dd></div><div><dt>LINK</dt><dd class="warning-text">ANONYMOUS</dd></div></dl>
+    <a class="button" href="{{ url_for('auth.login') }}">&gt; AUTHENTICATE</a>
+    {% endif %}
+  </aside>
+</section>
+{% endblock %}

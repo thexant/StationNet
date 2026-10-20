@@ -4,6 +4,7 @@ import secrets
 from pathlib import Path
 from flask import Flask, g, redirect, request, url_for
 from . import auth, board, db, station
+from .ansi import station_banner
 from .security import ensure_csrf_token
 
 def _secret(data_dir):
@@ -36,6 +37,7 @@ def create_app(test_config=None):
     def context():
         auth.load_logged_in_user()
         g.station = db.get_station()
+        g.station_banner = station_banner(g.station["name"] if g.station else "STATIONNET")
         ensure_csrf_token()
         endpoint = request.endpoint or ""
         if g.station is None and endpoint not in {"auth.setup", "static"} and not endpoint.startswith("static"):

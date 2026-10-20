@@ -1,3 +1,50 @@
-{% extends 'base.html' %}{% block title %}Connect{% endblock %}{% block content %}<section class="welcome-grid"><div class="hero terminal-card"><p class="eyebrow">INCOMING CARRIER / {{ g.station.callsign }}</p><h1>{{ g.station.name }}</h1><p class="description">{{ g.station.description or 'Independent communications station.' }}</p><div class="readout"><span>PROTOCOL</span><strong>HTTP / LOCAL</strong><span>REGISTRATION</span><strong>{{ 'OPEN' if g.station.registration_open else 'CLOSED' }}</strong><span>BULLETIN RX</span><strong>{{ 'GUEST+USER' if g.station.guest_access else 'USER ONLY' }}</strong></div></div>
-<aside class="terminal-card connect-panel">{% if g.user %}<p class="prompt">IDENTITY CONFIRMED</p><h2>{{ g.user.callsign }}</h2><p>Authenticated as {{ g.user.username }}.</p><a class="button" href="{{ url_for('station.terminal') }}">ENTER TERMINAL</a><form method="post" action="{{ url_for('auth.logout') }}"><input type="hidden" name="csrf_token" value="{{ session.csrf_token }}"><button class="secondary">DISCONNECT</button></form>{% else %}<p class="prompt">REMOTE TERMINAL READY</p><a class="button" href="{{ url_for('auth.login') }}">ESTABLISH LINK</a>{% if g.station.registration_open %}<a class="button secondary" href="{{ url_for('auth.register') }}">REQUEST CALLSIGN</a>{% endif %}{% if g.station.guest_access %}<a href="{{ url_for('board.index') }}">Monitor public bulletins →</a>{% endif %}{% endif %}</aside></section>{% endblock %}
+{% extends 'base.html' %}
+{% block title %}Connect{% endblock %}
+{% block content %}
+<section class="splash">
+  <div class="station-profile">
+    <div class="profile-heading">
+      <p class="kicker">// INCOMING CARRIER //</p>
+      <h1>{{ g.station.name }}</h1>
+      <p class="station-description">{{ g.station.description or 'An independent communications station maintained for the local network.' }}</p>
+    </div>
+    <div class="profile-ident" aria-label="Station identity">
+      <span>NODE IDENT</span>
+      <strong>{{ g.station.callsign }}</strong>
+      <small>SELF-HOSTED / COMMUNITY OPERATED</small>
+    </div>
+  </div>
 
+  <div class="station-board">
+    <h2><span>&gt;</span> STATION INFORMATION</h2>
+    <dl class="access-list">
+      <div><dt>01.</dt><dd>PUBLIC BULLETINS</dd><dd>{{ 'OPEN FOR READING' if g.station.guest_access else 'IDENTIFIED USERS ONLY' }}</dd></div>
+      <div><dt>02.</dt><dd>LOCAL CALLSIGNS</dd><dd>{{ 'ENROLLMENT OPEN' if g.station.registration_open else 'ENROLLMENT CLOSED' }}</dd></div>
+      <div><dt>03.</dt><dd>NETWORK SCOPE</dd><dd>LOCAL / STATION-OWNED</dd></div>
+      <div><dt>04.</dt><dd>CURRENT SESSION</dd><dd>{{ g.user.callsign if g.user else 'VISITOR / READ-ONLY' }}</dd></div>
+    </dl>
+  </div>
+
+  <div class="station-message">
+    <span>SYS://</span>
+    <p>Welcome to {{ g.station.callsign }}. Browse the public board as a visitor, or identify yourself to post and reply.</p>
+  </div>
+
+  {% if g.user %}
+  <div class="access-actions">
+    <p>IDENTITY ACCEPTED: <strong>{{ g.user.callsign }}</strong> / {{ g.user.username }}</p>
+    <a class="button enter-button" href="{{ url_for('station.terminal') }}">&gt; ENTER THE STATION &lt;</a>
+    <form method="post" action="{{ url_for('auth.logout') }}"><input type="hidden" name="csrf_token" value="{{ session.csrf_token }}"><button class="text-button">[ DISCONNECT LINK ]</button></form>
+  </div>
+  {% else %}
+  <div class="access-actions">
+    <p>SELECT AN ACCESS MODE</p>
+    <a class="button enter-button" href="{{ url_for('auth.login') }}">&gt; LOGIN TO STATION &lt;</a>
+    <div class="access-links">
+      {% if g.station.registration_open %}<a href="{{ url_for('auth.register') }}">[ REQUEST A CALLSIGN ]</a>{% endif %}
+      {% if g.station.guest_access %}<a href="{{ url_for('board.index') }}">[ CONTINUE AS VISITOR ]</a>{% endif %}
+    </div>
+  </div>
+  {% endif %}
+</section>
+{% endblock %}

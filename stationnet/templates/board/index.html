@@ -1,4 +1,24 @@
-{% extends 'base.html' %}{% block title %}Bulletins{% endblock %}{% block content %}
-<section class="terminal-card board-head"><div><p class="eyebrow">SERVICE 02 / PUBLIC BULLETINS</p><h1>Message traffic</h1></div>{% if g.user %}<a class="button" href="{{ url_for('board.create') }}">NEW BULLETIN</a>{% else %}<a class="button secondary" href="{{ url_for('auth.login',next=url_for('board.create')) }}">SIGN IN TO TRANSMIT</a>{% endif %}</section>
-<section class="bulletin-list" aria-label="Bulletins">{% for post in posts %}<article class="terminal-card bulletin-row"><div class="bulletin-meta"><span>#{{ '%05d'|format(post.id) }}</span><span>{{ post.callsign }}</span><time>{{ post.created_at }} UTC</time></div><h2><a href="{{ url_for('board.thread',post_id=post.id) }}">{{ post.title }}</a></h2><p>{{ post.body|truncate(220) }}</p><a href="{{ url_for('board.thread',post_id=post.id) }}">{{ post.reply_count }} {{ 'REPLY' if post.reply_count==1 else 'REPLIES' }} →</a></article>{% else %}<div class="terminal-card empty-state"><p>&gt; NO TRAFFIC RECORDED</p><p>The board is silent.</p></div>{% endfor %}</section>{% endblock %}
-
+{% extends 'base.html' %}
+{% block title %}Bulletins{% endblock %}
+{% block content %}
+<header class="board-head">
+  <div>
+    <p class="eyebrow">SERVICE 02 / PUBLIC BULLETINS</p>
+    <h1>Message traffic</h1>
+    <p class="muted">Notes, notices, and conversation carried by this station.</p>
+  </div>
+  {% if g.user %}<a class="button" href="{{ url_for('board.create') }}">NEW BULLETIN <span aria-hidden="true">+</span></a>{% else %}<a class="button secondary" href="{{ url_for('auth.login',next=url_for('board.create')) }}">SIGN IN TO TRANSMIT</a>{% endif %}
+</header>
+<section class="bulletin-list" aria-label="Bulletins">
+  <div class="bulletin-columns" aria-hidden="true"><span>REF / ORIGIN</span><span>SUBJECT / EXCERPT</span><span>TRAFFIC</span></div>
+  {% for post in posts %}
+  <article class="bulletin-row">
+    <div class="bulletin-meta"><span>#{{ '%05d'|format(post.id) }}</span><strong>{{ post.callsign }}</strong><time>{{ post.created_at }} UTC</time></div>
+    <div class="bulletin-content"><h2><a href="{{ url_for('board.thread',post_id=post.id) }}">{{ post.title }}</a></h2><p>{{ post.body|truncate(220) }}</p></div>
+    <a class="reply-count" href="{{ url_for('board.thread',post_id=post.id) }}"><strong>{{ '%02d'|format(post.reply_count) }}</strong><span>{{ 'reply' if post.reply_count==1 else 'replies' }}</span></a>
+  </article>
+  {% else %}
+  <div class="empty-state"><span class="empty-signal" aria-hidden="true">~</span><h2>No traffic recorded.</h2><p>The frequency is quiet. The first message can be yours.</p></div>
+  {% endfor %}
+</section>
+{% endblock %}

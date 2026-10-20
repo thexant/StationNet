@@ -1,2 +1,26 @@
-{% extends 'base.html' %}{% block title %}Authenticate{% endblock %}{% block content %}<section class="narrow terminal-card"><p class="eyebrow">IDENTITY CHALLENGE</p><h1>Establish authenticated link</h1><form method="post" class="form-grid"><input type="hidden" name="csrf_token" value="{{ session.csrf_token }}"><label>Username<input name="username" required autofocus autocomplete="username" value="{{ request.form.username or '' }}"></label><label>Password<input type="password" name="password" required autocomplete="current-password"></label><button>CONNECT</button></form>{% if g.station.registration_open %}<p>Unassigned operator? <a href="{{ url_for('auth.register') }}">Request a local callsign.</a></p>{% endif %}</section>{% endblock %}
+{% extends 'base.html' %}
+{% block title %}Login{% endblock %}
+{% block content %}
+<section class="auth-screen" aria-labelledby="login-title">
+  <header class="auth-heading">
+    <p class="eyebrow">PORT 01 / USER ACCESS</p>
+    <h1 id="login-title">Login to {{ g.station.callsign }}</h1>
+    <p>Enter your station username and password. Your assigned callsign will be restored after authentication.</p>
+  </header>
 
+  <div class="auth-form">
+    <div class="form-title"><span>&gt;</span> IDENTIFY YOURSELF</div>
+    <form method="post" class="form-grid">
+      <input type="hidden" name="csrf_token" value="{{ session.csrf_token }}">
+      <label>Username<input name="username" required autofocus autocomplete="username" value="{{ request.form.username or '' }}"></label>
+      <label>Password<input type="password" name="password" required autocomplete="current-password"></label>
+      <button class="auth-submit">LOGIN / ESTABLISH LINK <span aria-hidden="true">-&gt;</span></button>
+    </form>
+  </div>
+
+  <nav class="auth-alternatives" aria-label="Other access options">
+    <a href="{{ url_for('station.index') }}">&lt;- RETURN TO STATION INFO</a>
+    {% if g.station.registration_open %}<a href="{{ url_for('auth.register') }}">NO ACCOUNT? REQUEST A CALLSIGN -&gt;</a>{% endif %}
+  </nav>
+</section>
+{% endblock %}

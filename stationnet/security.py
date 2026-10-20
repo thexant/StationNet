@@ -6,7 +6,8 @@ import secrets
 from flask import abort, request, session
 
 USERNAME_RE = re.compile(r"^[A-Za-z0-9_-]{3,24}$")
-CALLSIGN_RE = re.compile(r"^[A-Z0-9-]{3,12}$")
+CALLSIGN_RE = re.compile(r"^[A-Z0-9]{3}-[A-Z0-9]{3}$")
+CALLSIGN_ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
 
 def hash_password(password):
     salt = secrets.token_bytes(16)
@@ -31,7 +32,6 @@ def validate_csrf():
     if not session.get("csrf_token") or not hmac.compare_digest(request.form.get("csrf_token", ""), session["csrf_token"]):
         abort(400, "Invalid or expired form token")
 
-def normalize_callsign(value): return re.sub(r"[^A-Z0-9-]", "", value.upper())
 def valid_username(value): return bool(USERNAME_RE.fullmatch(value))
 def valid_callsign(value): return bool(CALLSIGN_RE.fullmatch(value))
 def validate_password(value):
@@ -39,11 +39,15 @@ def validate_password(value):
     if len(value) > 128: return "Password cannot exceed 128 characters."
 
 def generate_station_callsign():
-    return "".join(secrets.choice("ABCDEFGHJKLMNPQRSTUVWXYZ") for _ in range(3)) + str(secrets.randbelow(90)+10)
+    """Return a random six-character alphanumeric callsign as XXX-XXX."""
+    raw = "".join(secrets.choice(CALLSIGN_ALPHABET) for _ in range(6))
+    return f"{raw[:3]}-{raw[3:]}"
 
-def generate_user_callsign(database, station_callsign):
-    prefix = re.sub(r"[^A-Z0-9]", "", station_callsign)[:4] or "NODE"
+def generate_user_callsign(database):
     for _ in range(100):
-        value = f"{prefix}-{secrets.randbelow(9000)+1000}"
-        if not database.execute("SELECT 1 FROM users WHERE callsign=?", (value,)).fetchone(): return value
+        value = generate_station_callsign()
+        user_exists = database.execute("SELECT 1 FROM users WHERE callsign=?", (value,)).fetchone()
+        station_exists = database.execute("SELECT 1 FROM station WHERE callsign=?", (value,)).fetchone()
+        if not user_exists and not station_exists:
+            return value
     raise RuntimeError("Unable to allocate a unique callsign")

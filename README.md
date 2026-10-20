@@ -45,7 +45,7 @@ Open `http://127.0.0.1:8080` and complete first-run setup. By default the statio
 
 Back up the data directory to preserve station identity, accounts, and messages. Never publish its files.
 
-Guests can read bulletins when guest access is enabled. Open registration allows local account creation; every account gets a unique station-local callsign. Users post and reply, while the SYSOP can remove content and alter registration/guest settings. `/` focuses service navigation when not typing; Escape releases focus.
+Guests can read bulletins when guest access is enabled. Open registration allows local account creation; stations and accounts receive independent, random six-character alphanumeric callsigns formatted as `XXX-XXX`. Users post and reply, while the SYSOP can remove content and alter registration/guest settings. `/` focuses service navigation when not typing; Escape releases focus.
 
 ## Tests and layout
 

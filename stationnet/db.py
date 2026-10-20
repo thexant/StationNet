@@ -34,8 +34,29 @@ def close_db(_error=None):
         connection.close()
 
 def init_db():
-    get_db().executescript(SCHEMA)
-    get_db().commit()
+    database = get_db()
+    database.executescript(SCHEMA)
+    _migrate_legacy_callsigns(database)
+    database.commit()
+
+def _migrate_legacy_callsigns(database):
+    """Replace callsigns created under earlier, prefixed formats."""
+    from .security import generate_user_callsign, valid_callsign
+
+    station = database.execute("SELECT callsign FROM station WHERE id=1").fetchone()
+    if station and not valid_callsign(station["callsign"]):
+        database.execute(
+            "UPDATE station SET callsign=? WHERE id=1",
+            (generate_user_callsign(database),),
+        )
+
+    users = database.execute("SELECT id,callsign FROM users").fetchall()
+    for user in users:
+        if not valid_callsign(user["callsign"]):
+            database.execute(
+                "UPDATE users SET callsign=? WHERE id=?",
+                (generate_user_callsign(database), user["id"]),
+            )
 
 def get_station():
     return get_db().execute("SELECT * FROM station WHERE id=1").fetchone()

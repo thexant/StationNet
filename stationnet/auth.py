@@ -3,7 +3,7 @@ import sqlite3
 from functools import wraps
 from flask import Blueprint, flash, g, redirect, render_template, request, session, url_for
 from .db import get_db, get_station
-from .security import check_password, generate_station_callsign, generate_user_callsign, hash_password, normalize_callsign, valid_callsign, valid_username, validate_csrf, validate_password
+from .security import check_password, generate_station_callsign, generate_user_callsign, hash_password, valid_username, validate_csrf, validate_password
 
 bp = Blueprint("auth", __name__)
 
@@ -35,24 +35,22 @@ def setup():
         validate_csrf()
         name = request.form.get("name", "").strip()
         description = request.form.get("description", "").strip()
-        callsign = normalize_callsign(request.form.get("callsign", ""))
         username = request.form.get("username", "").strip()
         password = request.form.get("password", "")
         error = None
         if not 2 <= len(name) <= 80: error = "Station name must be between 2 and 80 characters."
         elif len(description) > 500: error = "Station description cannot exceed 500 characters."
-        elif callsign and not valid_callsign(callsign): error = "Station callsign must be 3–12 letters, numbers, or hyphens."
         elif not valid_username(username): error = "Username must be 3–24 letters, numbers, underscores, or hyphens."
         elif password != request.form.get("confirm_password"): error = "Passwords do not match."
         else: error = validate_password(password)
         if error:
             flash(error, "error")
         else:
-            database = get_db(); callsign = callsign or generate_station_callsign()
+            database = get_db(); callsign = generate_station_callsign()
             try:
                 database.execute("BEGIN IMMEDIATE")
                 database.execute("INSERT INTO station(id,name,description,callsign,registration_open,guest_access) VALUES(1,?,?,?,?,1)", (name, description, callsign, request.form.get("registration_open") == "open"))
-                user_callsign = generate_user_callsign(database, callsign)
+                user_callsign = generate_user_callsign(database)
                 cursor = database.execute("INSERT INTO users(username,callsign,password_hash,is_admin) VALUES(?,?,?,1)", (username, user_callsign, hash_password(password)))
                 database.commit(); session.clear(); session["user_id"] = cursor.lastrowid
                 flash(f"Station initialized. Operator callsign: {user_callsign}", "success")
@@ -75,7 +73,7 @@ def register():
         else: error = validate_password(password)
         if error: flash(error, "error")
         else:
-            database = get_db(); callsign = generate_user_callsign(database, station["callsign"])
+            database = get_db(); callsign = generate_user_callsign(database)
             try:
                 cursor = database.execute("INSERT INTO users(username,callsign,password_hash) VALUES(?,?,?)", (username, callsign, hash_password(password)))
                 database.commit(); session.clear(); session["user_id"] = cursor.lastrowid

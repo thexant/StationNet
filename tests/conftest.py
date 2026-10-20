@@ -24,7 +24,7 @@ def csrf(client, path="/setup"):
 
 @pytest.fixture()
 def initialized(client):
-    response=client.post("/setup", data={"csrf_token":csrf(client),"name":"Test Relay","description":"Local test station","callsign":"TST-01","username":"sysop","password":"correct horse battery staple","confirm_password":"correct horse battery staple","registration_open":"open"}, follow_redirects=True)
+    response=client.post("/setup", data={"csrf_token":csrf(client),"name":"Test Relay","description":"Local test station","username":"sysop","password":"correct horse battery staple","confirm_password":"correct horse battery staple","registration_open":"open"}, follow_redirects=True)
     assert response.status_code==200
     return client
 
