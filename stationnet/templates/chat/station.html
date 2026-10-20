@@ -1,0 +1,15 @@
+{% extends 'base.html' %}
+{% block title %}Station Chat{% endblock %}
+{% block content %}
+<section class="terminal-card live-chat" data-live-chat data-messages-url="{{ url_for('chat.station_messages') }}">
+  <p class="eyebrow">SERVICE 01 / SHARED PUBLIC CHANNEL</p>
+  <h1>Station chat</h1>
+  <p class="muted">Persistent station-wide traffic. Messages remain available after disconnect.</p>
+  <div class="chat-log" data-chat-log role="log" aria-live="polite"><p class="muted" data-chat-empty>SCANNING STORED TRAFFIC...</p></div>
+  <form class="chat-compose" data-chat-form>
+    <input type="hidden" name="csrf_token" value="{{ session.csrf_token }}">
+    <label>Transmit as {{ g.user.callsign }}<textarea name="body" maxlength="1000" rows="3" required></textarea></label>
+    <button>SEND TO STATION</button><span class="chat-error" data-chat-error aria-live="polite"></span>
+  </form>
+</section>
+{% endblock %}

@@ -1,0 +1,7 @@
+{% extends 'base.html' %}
+{% block title %}{{ message.subject }}{% endblock %}
+{% block content %}
+<p><a href="{{ url_for('mail.inbox') if message.recipient_id==g.user.id else url_for('mail.sent') }}">&larr; RETURN TO MAILBOX</a></p>
+<article class="terminal-card message"><div class="bulletin-meta"><span>FROM {{ message.sender_callsign }} / {{ message.sender_name }}</span><span>TO {{ message.recipient_callsign }} / {{ message.recipient_name }}</span><time>{{ message.created_at }} UTC</time></div><h1>{{ message.subject }}</h1><div class="message-body">{{ message.body }}</div>
+<div class="button-row">{% if message.recipient_id==g.user.id %}<a class="button secondary" href="{{ url_for('mail.compose',to=message.sender_id) }}">REPLY</a>{% endif %}<form method="post" action="{{ url_for('mail.delete',message_id=message.id) }}" data-confirm="Remove this message from your mailbox?"><input type="hidden" name="csrf_token" value="{{ session.csrf_token }}"><button class="danger">DELETE</button></form></div></article>
+{% endblock %}

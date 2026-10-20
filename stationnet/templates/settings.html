@@ -23,6 +23,17 @@
     </label>
     <label class="switch"><input type="checkbox" name="registration_open" {% if g.station.registration_open %}checked{% endif %}> Allow new local registrations</label>
     <label class="switch"><input type="checkbox" name="guest_access" {% if g.station.guest_access %}checked{% endif %}> Allow guests to read bulletins</label>
+    <div class="divider">FILE ARCHIVE POLICY</div>
+    <label>Who may upload
+      <select name="upload_permission">
+        <option value="members" {% if g.station.upload_permission=='members' %}selected{% endif %}>All registered users</option>
+        <option value="admins" {% if g.station.upload_permission=='admins' %}selected{% endif %}>Station operators only</option>
+        <option value="disabled" {% if g.station.upload_permission=='disabled' %}selected{% endif %}>Uploads disabled</option>
+      </select>
+    </label>
+    <label>Total archive storage (MB)<input type="number" name="file_storage_limit_mb" min="1" max="10240" required value="{{ g.station.file_storage_limit_mb }}"></label>
+    <label>Maximum file size (MB)<input type="number" name="file_size_limit_mb" min="1" max="64" required value="{{ g.station.file_size_limit_mb }}"></label>
+    <p><a href="{{ url_for('announcements.index') }}">MANAGE STATION ANNOUNCEMENTS</a></p>
     <button>COMMIT PARAMETERS</button>
   </form>
 </section>

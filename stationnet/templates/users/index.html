@@ -1,0 +1,6 @@
+{% extends 'base.html' %}
+{% block title %}User Directory{% endblock %}
+{% block content %}
+<header class="board-head"><div><p class="eyebrow">SERVICE 06 / REGISTERED CALLSIGNS</p><h1>User directory</h1><p class="muted">Direct links are available only while another user is online.</p></div><a class="button secondary" href="{{ url_for('users.profile',user_id=g.user.id) }}">EDIT MY PROFILE</a></header>
+<section class="user-grid">{% for user in users %}<article class="user-card"><div><span class="presence {{ 'online' if user.online else '' }}">{{ 'ONLINE' if user.online else 'OFFLINE' }}</span><h2><a href="{{ url_for('users.profile',user_id=user.id) }}">{{ user.callsign }}</a></h2><p>{{ user.username }}{% if user.is_admin %} / SYSOP{% endif %}</p><small>{{ user.tagline or 'NO TAGLINE RECORDED' }}</small></div><div class="button-row"><a class="button secondary" href="{{ url_for('users.profile',user_id=user.id) }}">PROFILE</a>{% if user.online and user.id!=g.user.id %}<a class="button" href="{{ url_for('chat.direct',user_id=user.id) }}">DIRECT CHAT</a>{% endif %}<a class="button secondary" href="{{ url_for('mail.compose',to=user.id) }}">MAIL</a></div></article>{% endfor %}</section>
+{% endblock %}

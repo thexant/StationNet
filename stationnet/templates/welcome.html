@@ -18,9 +18,9 @@
   <div class="station-board">
     <h2><span>&gt;</span> STATION INFORMATION</h2>
     <dl class="access-list">
-      <div><dt>01.</dt><dd>PUBLIC BULLETINS</dd><dd>{{ 'OPEN FOR READING' if g.station.guest_access else 'IDENTIFIED USERS ONLY' }}</dd></div>
-      <div><dt>02.</dt><dd>LOCAL CALLSIGNS</dd><dd>{{ 'ENROLLMENT OPEN' if g.station.registration_open else 'ENROLLMENT CLOSED' }}</dd></div>
-      <div><dt>03.</dt><dd>NETWORK SCOPE</dd><dd>LOCAL / STATION-OWNED</dd></div>
+      <div><dt>01.</dt><dd>COMMUNITY SERVICES</dd><dd>CHAT / MAIL / FILES / DIRECTORY</dd></div>
+      <div><dt>02.</dt><dd>PUBLIC BULLETINS</dd><dd>{{ 'OPEN FOR READING' if g.station.guest_access else 'IDENTIFIED USERS ONLY' }}</dd></div>
+      <div><dt>03.</dt><dd>LOCAL CALLSIGNS</dd><dd>{{ 'ENROLLMENT OPEN' if g.station.registration_open else 'ENROLLMENT CLOSED' }}</dd></div>
       <div><dt>04.</dt><dd>CURRENT SESSION</dd><dd>{{ g.user.callsign if g.user else 'VISITOR / READ-ONLY' }}</dd></div>
     </dl>
   </div>

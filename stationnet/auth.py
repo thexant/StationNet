@@ -1,15 +1,49 @@
 """First-run setup and local authentication."""
+import secrets
 import sqlite3
+from datetime import datetime, timedelta, timezone
 from functools import wraps
-from flask import Blueprint, flash, g, redirect, render_template, request, session, url_for
+from flask import Blueprint, current_app, flash, g, redirect, render_template, request, session, url_for
 from .db import get_db, get_station
 from .security import check_password, generate_station_callsign, generate_user_callsign, hash_password, valid_username, validate_csrf, validate_password
+from .realtime import ONLINE_SECONDS, utc_now
 
 bp = Blueprint("auth", __name__)
 
 def load_logged_in_user():
     user_id = session.get("user_id")
     g.user = None if user_id is None else get_db().execute("SELECT id,username,callsign,is_admin,created_at FROM users WHERE id=?", (user_id,)).fetchone()
+
+def establish_connection(user_id):
+    connection_id = secrets.token_urlsafe(18)
+    session["connection_id"] = connection_id
+    database = get_db()
+    database.execute(
+        "UPDATE users SET connection_id=?,last_seen=? WHERE id=?",
+        (connection_id, utc_now(), user_id),
+    )
+    database.commit()
+
+def touch_presence():
+    connection_id = session.get("connection_id")
+    if not connection_id:
+        establish_connection(g.user["id"])
+        return
+    database = get_db()
+    presence = database.execute(
+        "SELECT connection_id,last_seen FROM users WHERE id=?", (g.user["id"],)
+    ).fetchone()
+    cutoff = (datetime.now(timezone.utc) - timedelta(seconds=ONLINE_SECONDS)).replace(microsecond=0).isoformat()
+    if (
+        presence and presence["connection_id"] == connection_id
+        and presence["last_seen"] and presence["last_seen"] < cutoff
+    ):
+        current_app.extensions["direct_chat"].disconnect(g.user["id"], connection_id)
+    database.execute(
+        "UPDATE users SET last_seen=? WHERE id=? AND connection_id=?",
+        (utc_now(), g.user["id"], connection_id),
+    )
+    database.commit()
 
 def login_required(view):
     @wraps(view)
@@ -52,7 +86,7 @@ def setup():
                 database.execute("INSERT INTO station(id,name,description,callsign,registration_open,guest_access) VALUES(1,?,?,?,?,1)", (name, description, callsign, request.form.get("registration_open") == "open"))
                 user_callsign = generate_user_callsign(database)
                 cursor = database.execute("INSERT INTO users(username,callsign,password_hash,is_admin) VALUES(?,?,?,1)", (username, user_callsign, hash_password(password)))
-                database.commit(); session.clear(); session["user_id"] = cursor.lastrowid
+                database.commit(); session.clear(); session["user_id"] = cursor.lastrowid; establish_connection(cursor.lastrowid)
                 flash(f"Station initialized. Operator callsign: {user_callsign}", "success")
                 return redirect(url_for("station.terminal"))
             except sqlite3.IntegrityError:
@@ -76,7 +110,7 @@ def register():
             database = get_db(); callsign = generate_user_callsign(database)
             try:
                 cursor = database.execute("INSERT INTO users(username,callsign,password_hash) VALUES(?,?,?)", (username, callsign, hash_password(password)))
-                database.commit(); session.clear(); session["user_id"] = cursor.lastrowid
+                database.commit(); session.clear(); session["user_id"] = cursor.lastrowid; establish_connection(cursor.lastrowid)
                 flash(f"Account linked. Your callsign is {callsign}.", "success")
                 return redirect(url_for("station.terminal"))
             except sqlite3.IntegrityError: flash("That username is already registered.", "error")
@@ -89,7 +123,7 @@ def login():
         user = get_db().execute("SELECT * FROM users WHERE username=?", (username,)).fetchone()
         if user is None or not check_password(user["password_hash"], password): flash("Invalid username or password.", "error")
         else:
-            session.clear(); session["user_id"] = user["id"]
+            session.clear(); session["user_id"] = user["id"]; establish_connection(user["id"])
             flash(f"Link established. Welcome, {user['callsign']}.", "success")
             destination = request.args.get("next", "")
             if not destination.startswith("/") or destination.startswith("//"): destination = url_for("station.terminal")
@@ -98,6 +132,16 @@ def login():
 
 @bp.post("/logout")
 def logout():
-    validate_csrf(); session.clear(); flash("Connection closed.", "success")
+    validate_csrf()
+    if g.user is not None:
+        connection_id = session.get("connection_id")
+        current_app.extensions["direct_chat"].disconnect(g.user["id"], connection_id)
+        database = get_db()
+        database.execute(
+            "UPDATE users SET last_seen=NULL,connection_id=NULL WHERE id=? AND connection_id=?",
+            (g.user["id"], connection_id),
+        )
+        database.commit()
+    session.clear(); flash("Connection closed.", "success")
     return redirect(url_for("station.index"))
 

@@ -8,13 +8,13 @@
   <link rel="stylesheet" href="{{ url_for('static',filename='station.css') }}">
   <script src="{{ url_for('static',filename='station.js') }}" defer></script>
 </head>
-<body>
+<body{% if g.user %} data-presence-url="{{ url_for('users.presence') }}"{% endif %}>
   <a class="skip-link" href="#main">Skip to content</a>
   <div class="station-shell">
     <header class="station-header">
       <div class="system-line">
         <span>StationNet BBS for local networks</span>
-        <span>Version 0.1</span>
+        <span>Version 0.2</span>
         <span>Copyright 2026 / station-owned</span>
       </div>
 
@@ -32,6 +32,14 @@
         <a href="{{ url_for('station.terminal') }}" {% if request.endpoint=='station.terminal' %}aria-current="page"{% endif %}>STATION</a>
         <i>*</i>
         <a href="{{ url_for('board.index') }}" {% if request.blueprint=='board' %}aria-current="page"{% endif %}>BULLETIN BOARD</a>
+        <i>*</i>
+        <a href="{{ url_for('announcements.index') }}" {% if request.blueprint=='announcements' %}aria-current="page"{% endif %}>ANNOUNCEMENTS</a>
+        {% if g.user %}
+        <i>*</i><a href="{{ url_for('chat.station_chat') }}" {% if request.blueprint=='chat' %}aria-current="page"{% endif %}>CHAT</a>
+        <i>*</i><a href="{{ url_for('mail.inbox') }}" {% if request.blueprint=='mail' %}aria-current="page"{% endif %}>MAIL</a>
+        <i>*</i><a href="{{ url_for('archive.index') }}" {% if request.blueprint=='archive' %}aria-current="page"{% endif %}>FILES</a>
+        <i>*</i><a href="{{ url_for('users.directory') }}" {% if request.blueprint=='users' %}aria-current="page"{% endif %}>USERS</a>
+        {% endif %}
         {% if g.user and g.user.is_admin %}<i>*</i><a href="{{ url_for('station.settings') }}" {% if request.endpoint=='station.settings' %}aria-current="page"{% endif %}>SYSOP CONTROL</a>{% endif %}
       </nav>
       {% endif %}

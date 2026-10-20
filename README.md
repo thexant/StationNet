@@ -1,6 +1,6 @@
 # StationNet
 
-StationNet is a self-hosted, browser-accessible communications station inspired by BBS software, monochrome terminals, early computer networks, and amateur radio. This first working milestone provides local station setup, accounts, a responsive terminal workspace, and a persistent bulletin board. It requires no Docker, domain, cloud account, or external database.
+StationNet is a self-hosted, browser-accessible communications station inspired by BBS software, monochrome terminals, early computer networks, and amateur radio. Milestone 2 provides local station setup, accounts, a responsive terminal workspace, persistent bulletins and station chat, temporary direct chat, private mail, shared files, user profiles, and operator announcements. It requires no Docker, domain, cloud account, or external database.
 
 ## Why this stack
 
@@ -51,9 +51,9 @@ Open `http://127.0.0.1:8080` and complete first-run setup. By default the statio
 | `STATIONNET_DATA` | `./data` | Directory for `station.db` and `secret.key`. |
 | `STATIONNET_HTTPS` | unset | Set to `1` only when HTTPS is terminated in front of the app. |
 
-Back up the data directory to preserve station identity, accounts, and messages. Never publish its files.
+Back up the data directory to preserve station identity, accounts, messages, mail, announcements, and the `uploads/` file archive. Never publish its files.
 
-Guests can read bulletins when guest access is enabled. Open registration allows local account creation; stations and accounts receive independent, random six-character alphanumeric callsigns formatted as `XXX-XXX`. Users post and reply, while the SYSOP can remove content and alter registration/guest settings. `/` focuses service navigation when not typing; Escape releases focus.
+Guests can read bulletins when guest access is enabled and can always read station announcements. Registered users can join the persistent public chat, open temporary direct chats with online users, exchange persistent private mail, use the shared file archive, and maintain an optional text profile. Direct traffic is held only in server memory and is discarded on logout, connection expiry, or server restart. The SYSOP can manage announcements and configure archive uploads, total storage, and per-file limits under **SYSOP CONTROL**. `/` focuses service navigation when not typing; Escape releases focus.
 
 ## Tests and layout
 
@@ -62,11 +62,11 @@ python -m pip install -r requirements-dev.txt
 python -m pytest
 ```
 
-`stationnet/` contains the app factory, SQLite layer, authentication, station controls, board blueprint, templates, and static UI. `tests/` exercises setup, secure login, callsign allocation, posting/replies, moderation, CSRF, and restart persistence. `run.py` is the normal Waitress entry point.
+`stationnet/` contains the app factory, SQLite layer, authentication, service blueprints, templates, and static UI. `tests/` covers setup, authentication, callsigns, bulletins, chat persistence and direct-chat expiry, private-mail isolation, profiles, files, announcements, permissions, CSRF, and restart persistence. `run.py` is the normal Waitress entry point.
 
 ## Networking and future work
 
 HTTP is intentional for localhost, LAN, and direct-IP access. It does not protect credentials from observers, so only use plain HTTP on trusted networks. Browsers generally require a secure context (normally HTTPS) for microphone access, so the future radio/voice milestone will need optional HTTPS deployment. This milestone does not attempt certificates, NAT traversal, or internet discovery.
 
-Planned—not implemented—services include live text, file archives, persistent station-wide radio controls, virtual bands and voice, scheduled broadcasts, MUD hosting, and controlled federation. Radio should eventually remain part of the terminal environment while moving between services, not become a separate voice-chat application.
+Later milestones may add persistent station-wide radio controls, virtual bands and voice, scheduled broadcasts, MUD hosting, and controlled federation. Those systems are intentionally outside this milestone. Radio should eventually remain part of the terminal environment while moving between services, not become a separate voice-chat application.
 

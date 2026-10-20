@@ -130,8 +130,8 @@ dd { margin: 0; color: var(--white); font-size: .67rem; text-align: right; overf
 .form-grid { display: grid; gap: 1rem; margin-top: 1.3rem; }
 label { display: grid; gap: .35rem; color: var(--green); font-size: .68rem; letter-spacing: .04em; text-transform: uppercase; }
 label small { color: var(--grey); font-size: .58rem; letter-spacing: .02em; text-transform: none; }
-input, textarea { width: 100%; padding: .65rem .7rem; border: 1px solid var(--green-dim); border-radius: 0; color: var(--green-bright); background: #030703; font: inherit; font-size: .8rem; caret-color: var(--green-bright); }
-input:focus, textarea:focus { border-color: var(--green-bright); outline: none; box-shadow: 0 0 0 1px var(--green-bright); }
+input, textarea, select { width: 100%; padding: .65rem .7rem; border: 1px solid var(--green-dim); border-radius: 0; color: var(--green-bright); background: #030703; font: inherit; font-size: .8rem; caret-color: var(--green-bright); }
+input:focus, textarea:focus, select:focus { border-color: var(--green-bright); outline: none; box-shadow: 0 0 0 1px var(--green-bright); }
 textarea { resize: vertical; line-height: 1.55; }
 fieldset { padding: .8rem; border: 1px dotted var(--green-dim); }
 legend { color: var(--cyan); font-size: .65rem; }
@@ -182,6 +182,40 @@ button:hover, .button:hover { color: #000; background: var(--green); }
 .carrier { color: var(--green); }
 .carrier i { display: inline-block; width: .38rem; height: .38rem; margin-right: .3rem; border-radius: 50%; background: currentColor; box-shadow: 0 0 .45rem currentColor; }
 
+.subnav { display: flex; flex-wrap: wrap; gap: .45rem 1rem; padding: .7rem .35rem; border-bottom: 1px dotted var(--green-dim); }
+.subnav a { color: var(--grey); font-size: .65rem; text-decoration: none; }
+.subnav a:hover, .subnav a[aria-current="page"] { color: var(--green-bright); }
+.traffic-list, .file-list, .announcement-list, .user-grid { display: grid; gap: .7rem; margin-top: 1rem; }
+.traffic-row { display: grid; grid-template-columns: 8rem minmax(0,1fr) auto; gap: 1rem; padding: .85rem .5rem; color: var(--grey); border-bottom: 1px dotted var(--green-dim); font-size: .68rem; text-decoration: none; }
+.traffic-row strong { color: var(--green); font-weight: 400; }
+.traffic-row.unread strong { color: var(--green-bright); font-weight: 700; }
+.traffic-row:hover { background: rgba(0,237,69,.04); }
+.file-row, .user-card { display: flex; justify-content: space-between; gap: 1.25rem; padding: 1rem; border: 1px solid var(--green-dim); }
+.file-row h2, .user-card h2 { margin: .2rem 0; }
+.file-row p, .user-card p { margin: .2rem 0; color: var(--grey); font-size: .72rem; }
+.file-row span, .file-row small, .user-card small { color: var(--grey); font-size: .6rem; }
+.file-row .button-row, .user-card .button-row { align-content: start; justify-content: end; }
+.file-row form, .announcement form { margin: 0; }
+.file-row .danger, .announcement .danger, .message .danger { margin-top: 0; }
+.announcement { width: 100%; }
+.announcement h2 { margin-top: .6rem; color: var(--green-bright); font-size: 1.25rem; }
+.profile-page { display: grid; gap: 1rem; }
+.profile-data { margin: 0 0 1.5rem; }
+.profile-data div { display: grid; grid-template-columns: 8rem minmax(0,1fr); gap: 1rem; padding: .5rem 0; border-bottom: 1px dotted var(--green-dim); }
+.profile-data dd { text-align: left; }
+.presence { color: var(--grey); font-size: .6rem; }
+.presence.online { color: var(--green-bright); text-shadow: 0 0 .45rem var(--green); }
+
+.live-chat { width: min(820px,100%); }
+.chat-log { height: min(52vh,30rem); margin: 1rem 0; padding: .7rem; overflow-y: auto; border: 1px solid var(--green-dim); background: #010401; }
+.chat-message { padding: .55rem .3rem; border-bottom: 1px dotted #064d1d; }
+.chat-message span { color: var(--cyan); font-size: .6rem; }
+.chat-message.mine span { color: var(--magenta); }
+.chat-message p { margin: .15rem 0 0; color: var(--white); font-size: .78rem; white-space: pre-wrap; overflow-wrap: anywhere; }
+.chat-compose { display: grid; gap: .6rem; }
+.chat-error { color: var(--red); font-size: .65rem; }
+button:disabled { opacity: .5; cursor: not-allowed; }
+
 @media (max-width: 700px) {
   .station-shell { padding-inline: .65rem; }
   .system-line span:nth-child(2) { display: none; }
@@ -198,6 +232,9 @@ button:hover, .button:hover { color: #000; background: var(--green); }
   .station-profile { grid-template-columns: 1fr; }
   .profile-ident { border-top: 1px dotted var(--cyan); border-left: 0; }
   .auth-alternatives { align-items: flex-start; flex-direction: column; }
+  .traffic-row { grid-template-columns: 1fr; gap: .2rem; }
+  .file-row, .user-card { flex-direction: column; }
+  .file-row .button-row, .user-card .button-row { justify-content: start; }
 }
 
 @media (max-width: 430px) {

@@ -1,0 +1,9 @@
+{% extends 'base.html' %}
+{% block title %}{{ profile.callsign }} Profile{% endblock %}
+{% block content %}
+<section class="profile-page"><header class="screen-heading"><p class="eyebrow">USER PROFILE / {{ profile.callsign }}</p><h1>{{ profile.username }}</h1><p><span class="presence {{ 'online' if profile.online else '' }}">{{ 'ONLINE' if profile.online else 'OFFLINE' }}</span>{% if profile.is_admin %} / STATION OPERATOR{% endif %}</p></header>
+<div class="terminal-card"><dl class="profile-data"><div><dt>CALLSIGN</dt><dd>{{ profile.callsign }}</dd></div><div><dt>TAGLINE</dt><dd>{{ profile.tagline or '—' }}</dd></div><div><dt>BIRTHDAY</dt><dd>{{ profile.birthday or '—' }}</dd></div><div><dt>GENDER</dt><dd>{{ profile.gender or '—' }}</dd></div><div><dt>MEMBER SINCE</dt><dd>{{ profile.created_at }} UTC</dd></div></dl><h2>ABOUT</h2><div class="message-body">{{ profile.about or 'No profile information supplied.' }}</div>
+{% if profile.id!=g.user.id %}<div class="button-row">{% if profile.online %}<a class="button" href="{{ url_for('chat.direct',user_id=profile.id) }}">OPEN DIRECT CHAT</a>{% endif %}<a class="button secondary" href="{{ url_for('mail.compose',to=profile.id) }}">SEND PRIVATE MAIL</a></div>{% endif %}</div>
+{% if profile.id==g.user.id %}<section class="terminal-card"><h2>Edit profile</h2><form method="post" class="form-grid"><input type="hidden" name="csrf_token" value="{{ session.csrf_token }}"><label>Tagline<input name="tagline" maxlength="120" value="{{ profile.tagline }}"></label><label>About me<textarea name="about" maxlength="2000" rows="8">{{ profile.about }}</textarea></label><label>Birthday<input type="date" name="birthday" value="{{ profile.birthday or '' }}"></label><label>Gender<input name="gender" maxlength="40" value="{{ profile.gender }}"></label><button>UPDATE MY PROFILE</button></form></section>{% endif %}
+</section>
+{% endblock %}
