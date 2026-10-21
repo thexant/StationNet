@@ -6,6 +6,22 @@
   <a class="button secondary" href="{{ url_for('radio.console') }}">RETURN TO RADIO</a>
 </header>
 
+<section class="terminal-card broadcast-section" id="broadcast-identity">
+  <p class="eyebrow">REGISTERED FREQUENCY / LISTENER IDENTITY</p>
+  <h2>Broadcast identity</h2>
+  {% if assignment %}
+  <p>Assigned frequency: <strong>{{ format_frequency(assignment.frequency_khz) }} MHz</strong></p>
+  <form method="post" action="{{ url_for('broadcast.update_identity') }}" class="form-grid">
+    <input type="hidden" name="csrf_token" value="{{ session.csrf_token }}">
+    <label>Broadcast name<input name="broadcast_name" maxlength="80" value="{{ assignment.broadcast_name }}" placeholder="{{ g.user.callsign }}"><small>Up to 80 characters. If blank, listeners see your callsign.</small></label>
+    <label>Listener message (optional)<textarea name="broadcast_message" maxlength="240" rows="3" placeholder="Community news and music.">{{ assignment.broadcast_message }}</textarea><small>Up to 240 characters.</small></label>
+    <button>SAVE BROADCAST IDENTITY</button>
+  </form>
+  {% else %}
+  <p class="muted">A sysop must assign your registered broadcast frequency before an identity can be configured.</p>
+  {% endif %}
+</section>
+
 <section class="terminal-card broadcast-section" id="audio-library">
   <p class="eyebrow">AUDIO LIBRARY / PRIVATE TO {{ g.user.callsign }}</p>
   <h2>Personal audio files</h2>

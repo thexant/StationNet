@@ -323,6 +323,7 @@ button:disabled { opacity: .5; cursor: not-allowed; }
 .radio-display { display: grid; align-content: center; padding: .4rem .65rem; border: 1px solid var(--green-dim); background: #000; }
 .radio-display span, .radio-display small { color: var(--grey); font-size: .52rem; letter-spacing: .06em; }
 .radio-display output { color: var(--green-bright); font-size: 1.45rem; line-height: 1.2; letter-spacing: .1em; text-shadow: 0 0 .55rem var(--green-dim); }
+.radio-display > strong { color: var(--cyan); font-size: .7rem; letter-spacing: .05em; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .radio-display small { color: var(--amber); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .radio-controls { display: grid; grid-template-columns: auto minmax(8rem,1fr) auto auto auto; gap: .45rem; align-items: end; }
 .radio-controls button { min-height: 2.35rem; padding-inline: .6rem; white-space: nowrap; }

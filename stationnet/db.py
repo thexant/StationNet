@@ -114,6 +114,8 @@ CREATE INDEX IF NOT EXISTS idx_radio_playlist_tracks
 CREATE TABLE IF NOT EXISTS radio_broadcast_assignments (
  user_id INTEGER PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
  frequency_khz INTEGER NOT NULL UNIQUE CHECK(frequency_khz BETWEEN 100 AND 999990),
+ broadcast_name TEXT NOT NULL DEFAULT '',
+ broadcast_message TEXT NOT NULL DEFAULT '',
  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);
 CREATE TABLE IF NOT EXISTS application_storage (
@@ -192,6 +194,7 @@ def init_db():
     _migrate_station_customization(database)
     _migrate_community_fields(database)
     _migrate_hosted_broadcast_fields(database)
+    _migrate_broadcast_identity_fields(database)
     _migrate_legacy_callsigns(database)
     _migrate_factory_radio_bands(database)
     _align_radio_bands_to_display_precision(database)
@@ -405,6 +408,24 @@ def _migrate_hosted_broadcast_fields(database):
         database.execute(
             "ALTER TABLE radio_playlists ADD COLUMN shuffle_enabled INTEGER NOT NULL DEFAULT 0 "
             "CHECK(shuffle_enabled IN (0,1))"
+        )
+
+def _migrate_broadcast_identity_fields(database):
+    """Add listener-facing labels to existing frequency assignments in place."""
+    columns = {
+        row["name"] for row in database.execute(
+            "PRAGMA table_info(radio_broadcast_assignments)"
+        )
+    }
+    if "broadcast_name" not in columns:
+        database.execute(
+            "ALTER TABLE radio_broadcast_assignments "
+            "ADD COLUMN broadcast_name TEXT NOT NULL DEFAULT ''"
+        )
+    if "broadcast_message" not in columns:
+        database.execute(
+            "ALTER TABLE radio_broadcast_assignments "
+            "ADD COLUMN broadcast_message TEXT NOT NULL DEFAULT ''"
         )
 
 def _migrate_legacy_callsigns(database):

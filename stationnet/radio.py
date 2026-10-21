@@ -552,6 +552,26 @@ def _default_frequency(user_id=None):
     return rows[0]["start_khz"] if rows else None
 
 
+def broadcast_identity(frequency):
+    """Return the registered assignment label for a frequency, if one exists."""
+    if frequency is None:
+        return None
+    row = get_db().execute(
+        "SELECT a.broadcast_name,a.broadcast_message,u.callsign "
+        "FROM radio_broadcast_assignments a JOIN users u ON u.id=a.user_id "
+        "WHERE a.frequency_khz=?", (frequency,),
+    ).fetchone()
+    if row is None:
+        return None
+    return {
+        "registered": True,
+        "name": row["broadcast_name"] or row["callsign"],
+        "message": row["broadcast_message"],
+        "callsign": row["callsign"],
+        "configured_name": row["broadcast_name"],
+    }
+
+
 def reconcile_radio_permissions(user_id=None):
     _store().reconcile_permissions(effective_access, transmission_authorized, user_id)
     current_app.extensions["hosted_broadcasts"].refresh(user_id)
@@ -580,7 +600,9 @@ def state():
     return jsonify(frequency=format_frequency(frequency) if frequency else None,
                    band=_band_payload(band, g.user["id"], frequency) if frequency else None,
                    bands=_bands_payload(g.user["id"]), cursor=cursor,
-                   access=access, powered=already_tuned, step_khz=TUNING_STEP_KHZ)
+                   access=access, powered=already_tuned, step_khz=TUNING_STEP_KHZ,
+                   identity=(broadcast_identity(frequency)
+                             if already_tuned and access != "DENIED" else None))
 
 
 @bp.post("/power-off")
@@ -604,7 +626,8 @@ def tune():
     cursor = (_store().tune(session["connection_id"], g.user["id"], frequency)
               if access != "DENIED" else _store().cursor())
     return jsonify(frequency=format_frequency(frequency),
-                   band=_band_payload(band, g.user["id"], frequency), cursor=cursor, access=access)
+                   band=_band_payload(band, g.user["id"], frequency), cursor=cursor, access=access,
+                   identity=broadcast_identity(frequency) if access != "DENIED" else None)
 
 
 @bp.get("/receive")
@@ -625,7 +648,8 @@ def receive():
     except ValueError as problem:
         return jsonify(error=str(problem), access=access), 409
     return jsonify(events=events, cursor=cursor, active=active, access=access,
-                   band=_band_payload(find_band(frequency), g.user["id"], frequency))
+                   band=_band_payload(find_band(frequency), g.user["id"], frequency),
+                   identity=broadcast_identity(frequency))
 
 
 @bp.post("/transmit/start")
@@ -714,7 +738,8 @@ def scan():
         return jsonify(found=False, cursor=cursor)
     return jsonify(found=True, frequency=format_frequency(found),
                    band=_band_payload(find_band(found), g.user["id"], found),
-                   access=effective_access(g.user["id"], found), cursor=cursor)
+                   access=effective_access(g.user["id"], found), cursor=cursor,
+                   identity=broadcast_identity(found))
 
 
 @bp.get("/voice/peers")

@@ -26,6 +26,8 @@ AUDIO_FORMATS = {
     ".ogg": "audio/ogg",
     ".wav": "audio/wav",
 }
+BROADCAST_NAME_MAX_LENGTH = 80
+BROADCAST_MESSAGE_MAX_LENGTH = 240
 
 
 class HostedBroadcastStore:
@@ -499,6 +501,9 @@ def _sync_playlist(database, playlist_id):
 @host_required
 def manage():
     database = get_db()
+    assignment = database.execute(
+        "SELECT * FROM radio_broadcast_assignments WHERE user_id=?", (g.user["id"],),
+    ).fetchone()
     audio_files = database.execute(
         "SELECT * FROM radio_audio_files WHERE owner_id=? ORDER BY created_at DESC,id DESC",
         (g.user["id"],),
@@ -518,14 +523,45 @@ def manage():
     used = sum(item["size_bytes"] for item in audio_files)
     quota_mb = _quota(database, g.user["id"])
     return render_template(
-        "radio/manage.html", audio_files=audio_files, playlists=playlists,
+        "radio/manage.html", assignment=assignment, audio_files=audio_files, playlists=playlists,
         tracks_by_playlist=tracks_by_playlist, used_bytes=used,
         quota_bytes=quota_mb * MIB, available_bytes=max(0, quota_mb * MIB - used),
         quota_mb=quota_mb,
         usage_percent=min(100, round(used * 100 / (quota_mb * MIB), 1)),
         accepted_formats=", ".join(suffix[1:].upper() for suffix in AUDIO_FORMATS),
-        max_batch_files=MAX_AUDIO_BATCH_FILES,
+        max_batch_files=MAX_AUDIO_BATCH_FILES, format_frequency=format_frequency,
     )
+
+
+@bp.post("/identity")
+@host_required
+def update_identity():
+    """Update only the current host's existing registered assignment."""
+    validate_csrf()
+    name = request.form.get("broadcast_name", "").strip()
+    message = request.form.get("broadcast_message", "").strip()
+    if len(name) > BROADCAST_NAME_MAX_LENGTH:
+        flash(f"Broadcast names cannot exceed {BROADCAST_NAME_MAX_LENGTH} characters.", "error")
+    elif len(message) > BROADCAST_MESSAGE_MAX_LENGTH:
+        flash(f"Broadcast messages cannot exceed {BROADCAST_MESSAGE_MAX_LENGTH} characters.", "error")
+    elif any(ord(character) < 32 and character not in "\t\n\r" for character in name + message):
+        flash("Broadcast identity cannot contain control characters.", "error")
+    elif "\n" in name or "\r" in name:
+        flash("Broadcast names must fit on one line.", "error")
+    else:
+        database = get_db()
+        result = database.execute(
+            "UPDATE radio_broadcast_assignments SET broadcast_name=?,broadcast_message=?,"
+            "updated_at=CURRENT_TIMESTAMP WHERE user_id=?",
+            (name, message, g.user["id"]),
+        )
+        if not result.rowcount:
+            database.rollback()
+            flash("A registered broadcast frequency is required before setting an identity.", "error")
+        else:
+            database.commit()
+            flash("Broadcast identity saved.", "success")
+    return redirect(url_for("broadcast.manage") + "#broadcast-identity")
 
 
 @bp.post("/audio")
@@ -779,7 +815,8 @@ def remove_track(playlist_id, track_id):
 def status():
     database = get_db()
     assignment = database.execute(
-        "SELECT frequency_khz FROM radio_broadcast_assignments WHERE user_id=?",
+        "SELECT frequency_khz,broadcast_name,broadcast_message "
+        "FROM radio_broadcast_assignments WHERE user_id=?",
         (g.user["id"],),
     ).fetchone()
     playlists = database.execute(
@@ -788,16 +825,22 @@ def status():
         "WHERE p.owner_id=? GROUP BY p.id ORDER BY p.name", (g.user["id"],),
     ).fetchall()
     directory = database.execute(
-        "SELECT a.user_id,a.frequency_khz,u.callsign FROM radio_broadcast_assignments a "
+        "SELECT a.user_id,a.frequency_khz,a.broadcast_name,a.broadcast_message,u.callsign "
+        "FROM radio_broadcast_assignments a "
         "JOIN users u ON u.id=a.user_id ORDER BY a.frequency_khz"
     ).fetchall()
     active = _store().all_public()
     return jsonify(
         assignment=format_frequency(assignment["frequency_khz"]) if assignment else None,
         assignment_khz=assignment["frequency_khz"] if assignment else None,
+        identity=({"name": assignment["broadcast_name"] or g.user["callsign"],
+                   "configured_name": assignment["broadcast_name"],
+                   "message": assignment["broadcast_message"]} if assignment else None),
         session=_store().public(g.user["id"]),
         playlists=[dict(row) for row in playlists],
         directory=[{"user_id": row["user_id"], "callsign": row["callsign"],
+                    "name": row["broadcast_name"] or row["callsign"],
+                    "message": row["broadcast_message"],
                     "frequency": format_frequency(row["frequency_khz"]),
                     "broadcasting": row["user_id"] in active and active[row["user_id"]]["status"] == "playing",
                     "now_playing": active.get(row["user_id"], {}).get("track_name")}

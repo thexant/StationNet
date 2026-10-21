@@ -155,6 +155,97 @@ def test_assignment_is_unique_authorized_and_persistent(app, initialized):
     assert b"FULL access and HOST BROADCASTS" in denied.data
 
 
+def test_registered_broadcast_identity_is_owner_scoped_persistent_and_live(app, initialized):
+    alice = register(app, "alice")
+    bob = register(app, "bob")
+    alice_id, _ = authorize_host(app, "alice")
+    bob_id, _ = authorize_host(app, "bob")
+    assign(initialized, alice_id, "7.50")
+    assign(initialized, bob_id, "7.60")
+
+    # An unnamed assignment falls back to its callsign for listeners.
+    fallback = alice.post(
+        "/radio/tune",
+        data={"csrf_token": csrf(alice, "/radio/"), "frequency": "7.50"},
+    ).get_json()["identity"]
+    assert fallback["name"] == fallback["callsign"]
+    assert fallback["configured_name"] == ""
+
+    saved = alice.post(
+        "/radio/manage/identity",
+        data={"csrf_token": csrf(alice, "/radio/manage"),
+              "broadcast_name": "The <Mix> FM",
+              "broadcast_message": "Local news & late-night music."},
+        follow_redirects=True,
+    )
+    assert b"Broadcast identity saved" in saved.data
+    assert b"The &lt;Mix&gt; FM" in saved.data
+
+    # Duplicate labels are display text, not identifiers.
+    duplicate = bob.post(
+        "/radio/manage/identity",
+        data={"csrf_token": csrf(bob, "/radio/manage"),
+              "broadcast_name": "The <Mix> FM", "broadcast_message": "Bob's service"},
+        follow_redirects=True,
+    )
+    assert b"Broadcast identity saved" in duplicate.data
+
+    tuned = bob.post(
+        "/radio/tune",
+        data={"csrf_token": csrf(bob, "/radio/"), "frequency": "7.50"},
+    ).get_json()
+    assert tuned["identity"]["name"] == "The <Mix> FM"
+    assert tuned["identity"]["message"] == "Local news & late-night music."
+
+    # Existing receiver polling observes edits without a retune or reload.
+    alice.post(
+        "/radio/manage/identity",
+        data={"csrf_token": csrf(alice, "/radio/manage"),
+              "broadcast_name": "Community Radio", "broadcast_message": "Updated bulletin"},
+    )
+    received = bob.get("/radio/receive?frequency=7.50&after=0").get_json()
+    assert received["identity"]["name"] == "Community Radio"
+    assert received["identity"]["message"] == "Updated bulletin"
+
+    # The owner-only route cannot be used to overwrite another assignment.
+    bob.post(
+        "/radio/manage/identity",
+        data={"csrf_token": csrf(bob, "/radio/manage"),
+              "broadcast_name": "Bob Radio", "broadcast_message": ""},
+    )
+    with app.app_context():
+        rows = get_db().execute(
+            "SELECT user_id,broadcast_name FROM radio_broadcast_assignments ORDER BY user_id"
+        ).fetchall()
+        assert {row["user_id"]: row["broadcast_name"] for row in rows} == {
+            alice_id: "Community Radio", bob_id: "Bob Radio",
+        }
+
+    too_long = alice.post(
+        "/radio/manage/identity",
+        data={"csrf_token": csrf(alice, "/radio/manage"),
+              "broadcast_name": "X" * 81, "broadcast_message": ""},
+        follow_redirects=True,
+    )
+    assert b"cannot exceed 80 characters" in too_long.data
+
+    restarted = create_app({
+        "TESTING": True, "DATA_DIR": app.config["DATA_DIR"], "SECRET_KEY": "restart-secret",
+    })
+    restarted_client = restarted.test_client()
+    login(restarted_client, "alice")
+    assert b"Community Radio" in restarted_client.get("/radio/manage").data
+
+    # Revocation removes identity even for a receiver still on the old frequency.
+    assign(initialized, alice_id, "")
+    assert bob.get("/radio/receive?frequency=7.50&after=0").get_json()["identity"] is None
+    away = bob.post(
+        "/radio/tune",
+        data={"csrf_token": csrf(bob, "/radio/"), "frequency": "7.70"},
+    ).get_json()
+    assert away["identity"] is None
+
+
 def test_server_hosted_start_join_disconnect_pause_resume_and_release(app, initialized):
     alice = register(app, "alice")
     bob = register(app, "bob")
