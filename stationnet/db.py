@@ -12,6 +12,7 @@ CREATE TABLE IF NOT EXISTS station (
  file_storage_limit_mb INTEGER NOT NULL DEFAULT 100,
  file_size_limit_mb INTEGER NOT NULL DEFAULT 10,
  radio_default_quota_mb INTEGER NOT NULL DEFAULT 100,
+ radio_broadcast_limit_minutes INTEGER NOT NULL DEFAULT 120,
  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);
 CREATE TABLE IF NOT EXISTS users (
  id INTEGER PRIMARY KEY AUTOINCREMENT, username TEXT NOT NULL COLLATE NOCASE UNIQUE,
@@ -59,6 +60,7 @@ CREATE TABLE IF NOT EXISTS radio_bands (
  start_khz INTEGER NOT NULL, end_khz INTEGER NOT NULL,
  supports_live_voice INTEGER NOT NULL DEFAULT 0 CHECK(supports_live_voice IN (0,1)),
  supports_hosted_broadcasts INTEGER NOT NULL DEFAULT 0 CHECK(supports_hosted_broadcasts IN (0,1)),
+ allow_open_broadcasts INTEGER NOT NULL DEFAULT 0 CHECK(allow_open_broadcasts IN (0,1)),
  tx_permission TEXT NOT NULL DEFAULT 'members'
  CHECK(tx_permission IN ('members','admins','receive')),
  CHECK(start_khz > 0 AND end_khz >= start_khz));
@@ -89,6 +91,7 @@ CREATE TABLE IF NOT EXISTS radio_audio_files (
  owner_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
  display_name TEXT NOT NULL, stored_name TEXT NOT NULL UNIQUE,
  media_type TEXT NOT NULL, size_bytes INTEGER NOT NULL CHECK(size_bytes>0),
+ duration_seconds REAL NOT NULL DEFAULT 180 CHECK(duration_seconds>0),
  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);
 CREATE INDEX IF NOT EXISTS idx_radio_audio_owner ON radio_audio_files(owner_id,id);
 CREATE TABLE IF NOT EXISTS radio_playlists (
@@ -105,6 +108,11 @@ CREATE TABLE IF NOT EXISTS radio_playlist_tracks (
  display_name TEXT NOT NULL, position INTEGER NOT NULL CHECK(position>=0));
 CREATE INDEX IF NOT EXISTS idx_radio_playlist_tracks
  ON radio_playlist_tracks(playlist_id,position,id);
+CREATE TABLE IF NOT EXISTS radio_broadcast_assignments (
+ user_id INTEGER PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+ frequency_khz INTEGER NOT NULL UNIQUE CHECK(frequency_khz BETWEEN 100 AND 999990),
+ created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+ updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);
 CREATE TRIGGER IF NOT EXISTS radio_default_membership_after_user_insert
 AFTER INSERT ON users
 BEGIN
@@ -114,11 +122,11 @@ END;
 """
 
 DEFAULT_RADIO_BANDS = (
-    (1, "GENERAL COMMUNICATION", 145000, 432990, "members", 1, 0),
-    (2, "BROADCASTS", 7000, 13990, "admins", 0, 1),
-    (3, "MORSE / CW", 14000, 27990, "members", 0, 0),
-    (4, "DATA TRANSMISSIONS", 28000, 144990, "members", 0, 0),
-    (5, "EXPERIMENTAL / UNRESTRICTED", 433000, 999990, "members", 0, 0),
+    (1, "GENERAL COMMUNICATION", 145000, 432990, "members", 1, 0, 0),
+    (2, "BROADCASTS", 7000, 13990, "admins", 0, 1, 0),
+    (3, "MORSE / CW", 14000, 27990, "members", 0, 0, 0),
+    (4, "DATA TRANSMISSIONS", 28000, 144990, "members", 0, 0, 0),
+    (5, "EXPERIMENTAL / UNRESTRICTED", 433000, 999990, "members", 0, 0, 1),
 )
 
 NARROW_DEFAULT_RADIO_BANDS = (
@@ -156,13 +164,14 @@ def init_db():
     database.executescript(SCHEMA)
     _migrate_station_customization(database)
     _migrate_community_fields(database)
+    _migrate_hosted_broadcast_fields(database)
     _migrate_legacy_callsigns(database)
     _migrate_factory_radio_bands(database)
     _align_radio_bands_to_display_precision(database)
     added_band_capabilities, added_group_capability = _migrate_radio_capability_columns(database)
     database.executemany(
         "INSERT OR IGNORE INTO radio_bands(id,name,start_khz,end_khz,tx_permission,"
-        "supports_live_voice,supports_hosted_broadcasts) VALUES(?,?,?,?,?,?,?)",
+        "supports_live_voice,supports_hosted_broadcasts,allow_open_broadcasts) VALUES(?,?,?,?,?,?,?,?)",
         DEFAULT_RADIO_BANDS,
     )
     _migrate_radio_permissions(database)
@@ -215,7 +224,7 @@ def _migrate_factory_radio_bands(database):
     database.executemany(
         "UPDATE radio_bands SET name=?,start_khz=?,end_khz=?,tx_permission=? WHERE id=?",
         [(name, start, end, permission, band_id)
-         for band_id, name, start, end, permission, _voice, _broadcast in DEFAULT_RADIO_BANDS],
+         for band_id, name, start, end, permission, _voice, _broadcast, _open in DEFAULT_RADIO_BANDS],
     )
 
 
@@ -321,6 +330,29 @@ def _migrate_community_fields(database):
     for name, declaration in user_additions.items():
         if name not in user_columns:
             database.execute(f"ALTER TABLE users ADD COLUMN {name} {declaration}")
+
+def _migrate_hosted_broadcast_fields(database):
+    """Add hosted-radio controls without overwriting established band choices."""
+    station_columns = {row["name"] for row in database.execute("PRAGMA table_info(station)")}
+    if "radio_broadcast_limit_minutes" not in station_columns:
+        database.execute(
+            "ALTER TABLE station ADD COLUMN radio_broadcast_limit_minutes INTEGER NOT NULL DEFAULT 120"
+        )
+    band_columns = {row["name"] for row in database.execute("PRAGMA table_info(radio_bands)")}
+    if "allow_open_broadcasts" not in band_columns:
+        database.execute(
+            "ALTER TABLE radio_bands ADD COLUMN allow_open_broadcasts INTEGER NOT NULL DEFAULT 0 "
+            "CHECK(allow_open_broadcasts IN (0,1))"
+        )
+        database.execute(
+            "UPDATE radio_bands SET allow_open_broadcasts=1 "
+            "WHERE name='EXPERIMENTAL / UNRESTRICTED'"
+        )
+    audio_columns = {row["name"] for row in database.execute("PRAGMA table_info(radio_audio_files)")}
+    if "duration_seconds" not in audio_columns:
+        database.execute(
+            "ALTER TABLE radio_audio_files ADD COLUMN duration_seconds REAL NOT NULL DEFAULT 180"
+        )
 
 def _migrate_legacy_callsigns(database):
     """Replace callsigns created under earlier, prefixed formats."""

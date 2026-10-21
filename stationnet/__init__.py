@@ -31,6 +31,7 @@ def create_app(test_config=None):
     db.init_app(app)
     app.extensions["direct_chat"] = DirectChatStore()
     app.extensions["radio"] = RadioStore()
+    app.extensions["hosted_broadcasts"] = broadcast.HostedBroadcastStore(app.extensions["radio"])
     app.register_blueprint(auth.bp)
     app.register_blueprint(station.bp)
     app.register_blueprint(board.bp)

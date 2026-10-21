@@ -219,7 +219,7 @@ class RadioStore:
         while self._events and now - self._events[0]["stamp"] > self.event_lifetime:
             self._events.popleft()
         for transmission in list(self._transmissions.values()):
-            if now - transmission["last_seen"] > self.transmission_timeout:
+            if not transmission.get("server_hosted") and now - transmission["last_seen"] > self.transmission_timeout:
                 self._finish_locked(transmission, "timeout")
         for connection, receiver in list(self._receivers.items()):
             if now - receiver["stamp"] > self.receiver_lifetime:
@@ -270,6 +270,54 @@ class RadioStore:
                 width=transmission.get("width"), height=transmission.get("height"),
             )
             return transmission["id"], event
+
+    def start_hosted(self, user_id, frequency, callsign, **metadata):
+        """Reserve a frequency for server-owned playback, independent of a browser."""
+        now = monotonic()
+        connection_id = f"hosted:{user_id}"
+        with self._lock:
+            self._prune(now)
+            if frequency in self._frequency_owners:
+                raise RuntimeError("Frequency busy.")
+            if any(item["user_id"] == user_id and item.get("server_hosted")
+                   for item in self._transmissions.values()):
+                raise RuntimeError("You already have an active hosted broadcast.")
+            transmission = {
+                "id": self._next_transmission_id, "connection_id": connection_id,
+                "user_id": user_id, "frequency": frequency, "callsign": callsign,
+                "mode": "MUSIC", "transmission_type": "HOSTED_BROADCAST",
+                "started": now, "started_at": datetime.now(timezone.utc).isoformat(),
+                "state": "active", "last_seen": now, "server_hosted": True,
+                "key_down": None, "last_key_up": None, "next_row": 0, **metadata,
+            }
+            self._next_transmission_id += 1
+            self._transmissions[transmission["id"]] = transmission
+            self._frequency_owners[frequency] = transmission["id"]
+            return transmission["id"], self._append_event(transmission, "start")
+
+    def end_hosted(self, user_id, reason="ended"):
+        with self._lock:
+            self._prune(monotonic())
+            for item in list(self._transmissions.values()):
+                if item["user_id"] == user_id and item.get("server_hosted"):
+                    return self._finish_locked(item, reason)
+            return None
+
+    def hosted_for_user(self, user_id):
+        with self._lock:
+            self._prune(monotonic())
+            for item in self._transmissions.values():
+                if item["user_id"] == user_id and item.get("server_hosted"):
+                    return dict(item)
+            return None
+
+    def update_hosted(self, user_id, **metadata):
+        with self._lock:
+            for item in self._transmissions.values():
+                if item["user_id"] == user_id and item.get("server_hosted"):
+                    item.update(metadata)
+                    return True
+            return False
 
     def signal(self, connection_id, transmission_id, kind, **payload):
         now = monotonic()
@@ -337,7 +385,7 @@ class RadioStore:
     def _public_transmission(transmission):
         if not transmission:
             return None
-        return {
+        result = {
             "id": transmission["id"],
             "mode": transmission["mode"],
             "transmission_type": transmission["transmission_type"],
@@ -348,6 +396,13 @@ class RadioStore:
             "started_at": transmission["started_at"],
             "state": transmission["state"],
         }
+        if transmission.get("server_hosted"):
+            result["hosted"] = True
+            result["playlist_name"] = transmission.get("playlist_name")
+            result["track_name"] = transmission.get("track_name")
+            result["audio_file_id"] = transmission.get("audio_file_id")
+            result["track_offset"] = transmission.get("track_offset", 0)
+        return result
 
     def scan(self, connection_id, user_id, current, direction, allocations):
         now = monotonic()
@@ -494,6 +549,7 @@ def _default_frequency(user_id=None):
 
 def reconcile_radio_permissions(user_id=None):
     _store().reconcile_permissions(effective_access, transmission_authorized, user_id)
+    current_app.extensions["hosted_broadcasts"].refresh(user_id)
 
 
 @bp.get("/")
@@ -507,6 +563,7 @@ def console():
 @bp.get("/state")
 @login_required
 def state():
+    current_app.extensions["hosted_broadcasts"].refresh()
     frequency = _store().receiver_frequency(session["connection_id"])
     already_tuned = frequency is not None and MIN_FREQUENCY_KHZ <= frequency <= MAX_FREQUENCY_KHZ
     if not already_tuned:
@@ -548,6 +605,7 @@ def tune():
 @bp.get("/receive")
 @login_required
 def receive():
+    current_app.extensions["hosted_broadcasts"].refresh()
     frequency = parse_frequency(request.args.get("frequency"))
     if frequency is None:
         _store().disconnect(session["connection_id"])
@@ -639,6 +697,7 @@ def transmit_end():
 @bp.post("/scan")
 @login_required
 def scan():
+    current_app.extensions["hosted_broadcasts"].refresh()
     validate_csrf()
     current = parse_frequency(request.form.get("frequency")) or _default_frequency(g.user["id"])
     direction = -1 if request.form.get("direction") == "down" else 1

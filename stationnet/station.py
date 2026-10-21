@@ -1,6 +1,6 @@
 """Welcome, workspace, and SYSOP settings."""
 import sqlite3
-from flask import Blueprint, flash, g, redirect, render_template, request, url_for
+from flask import Blueprint, current_app, flash, g, redirect, render_template, request, url_for
 from .auth import admin_required
 from .db import get_db
 from .radio import (can_host_broadcast, effective_access, format_frequency,
@@ -44,6 +44,20 @@ def save_radio_default_quota():
         get_db().commit()
         flash("Default radio library quota updated.", "success")
     return redirect(url_for("station.settings") + "#radio-storage")
+
+
+@bp.post("/sysop/radio/broadcast-limit")
+@admin_required
+def save_broadcast_limit():
+    validate_csrf()
+    minutes = request.form.get("radio_broadcast_limit_minutes", type=int)
+    if minutes is None or not 1 <= minutes <= 1440:
+        flash("Broadcast duration must be between 1 and 1440 minutes.", "error")
+    else:
+        get_db().execute("UPDATE station SET radio_broadcast_limit_minutes=? WHERE id=1", (minutes,))
+        get_db().commit()
+        flash("Hosted broadcast duration limit updated.", "success")
+    return redirect(url_for("station.settings") + "#broadcast-frequencies")
 
 
 @bp.post("/sysop/radio/users/<int:user_id>/quota")
@@ -128,6 +142,10 @@ def settings():
     users = database.execute(
         "SELECT id,username,callsign,radio_quota_mb FROM users ORDER BY username COLLATE NOCASE"
     ).fetchall()
+    assignments = {row["user_id"]: row for row in database.execute(
+        "SELECT a.*,u.callsign FROM radio_broadcast_assignments a JOIN users u ON u.id=a.user_id"
+    )}
+    broadcast_sessions = current_app.extensions["hosted_broadcasts"].all_public()
     memberships = {user["id"]: {row["group_id"] for row in database.execute(
         "SELECT group_id FROM radio_group_memberships WHERE user_id=?", (user["id"],)
     )} for user in users}
@@ -142,6 +160,7 @@ def settings():
     return render_template("settings.html", bands=bands, groups=groups, users=users,
                            memberships=memberships, effective=effective,
                            broadcast_hosts=broadcast_hosts,
+                           assignments=assignments, broadcast_sessions=broadcast_sessions,
                            rules_by_group=rules_by_group, format_frequency=format_frequency)
 
 
@@ -163,8 +182,9 @@ def _save_radio_bands():
             break
         supports_voice = request.form.get(f"band_{band_id}_live_voice") == "on"
         supports_broadcasts = request.form.get(f"band_{band_id}_hosted_broadcasts") == "on"
+        allow_open = request.form.get(f"band_{band_id}_open_broadcasts") == "on"
         proposed.append((start, end, name, row["tx_permission"], supports_voice,
-                         supports_broadcasts, band_id))
+                         supports_broadcasts, allow_open, band_id))
     ordered = sorted(proposed)
     if not error and any(left[1] >= right[0] for left, right in zip(ordered, ordered[1:])):
         error = "Radio band allocations cannot overlap."
@@ -173,13 +193,75 @@ def _save_radio_bands():
     else:
         database.executemany(
             "UPDATE radio_bands SET start_khz=?,end_khz=?,name=?,tx_permission=?,"
-            "supports_live_voice=?,supports_hosted_broadcasts=? WHERE id=?",
+            "supports_live_voice=?,supports_hosted_broadcasts=?,allow_open_broadcasts=? WHERE id=?",
             proposed,
         )
         database.commit()
         reconcile_radio_permissions()
         flash("Radio spectrum allocations updated.", "success")
     return redirect(url_for("station.settings") + "#radio-spectrum")
+
+
+@bp.post("/sysop/radio/users/<int:user_id>/broadcast-frequency")
+@admin_required
+def save_broadcast_frequency(user_id):
+    validate_csrf()
+    database = get_db()
+    user = database.execute("SELECT callsign FROM users WHERE id=?", (user_id,)).fetchone()
+    if not user:
+        flash("User not found.", "error")
+        return redirect(url_for("station.settings") + "#broadcast-frequencies")
+    hosted = current_app.extensions["hosted_broadcasts"]
+    if hosted.active_user(user_id):
+        flash("Stop or pause this user's active broadcast before changing its assignment.", "error")
+        return redirect(url_for("station.settings") + "#broadcast-frequencies")
+    raw = request.form.get("frequency", "").strip()
+    if not raw:
+        database.execute("DELETE FROM radio_broadcast_assignments WHERE user_id=?", (user_id,))
+        database.commit()
+        hosted.stop(user_id, "assignment_revoked")
+        flash(f"{user['callsign']} broadcast assignment revoked.", "success")
+        return redirect(url_for("station.settings") + "#broadcast-frequencies")
+    frequency = parse_frequency(raw)
+    band = next((row for row in database.execute("SELECT * FROM radio_bands")
+                 if row["start_khz"] <= (frequency or 0) <= row["end_khz"]), None)
+    if frequency is None or not band or not band["supports_hosted_broadcasts"]:
+        flash("Choose a valid frequency inside a band that supports hosted broadcasts.", "error")
+    elif not can_host_broadcast(user_id, frequency):
+        flash("That user needs effective FULL access and HOST BROADCASTS permission there.", "error")
+    else:
+        try:
+            database.execute(
+                "INSERT INTO radio_broadcast_assignments(user_id,frequency_khz) VALUES(?,?) "
+                "ON CONFLICT(user_id) DO UPDATE SET frequency_khz=excluded.frequency_khz,updated_at=CURRENT_TIMESTAMP",
+                (user_id, frequency),
+            )
+            database.commit()
+            hosted.stop(user_id, "assignment_changed")
+            flash(f"{user['callsign']} assigned {format_frequency(frequency)} MHz.", "success")
+        except sqlite3.IntegrityError:
+            flash("That frequency is already assigned to another broadcaster.", "error")
+    return redirect(url_for("station.settings") + "#broadcast-frequencies")
+
+
+@bp.post("/sysop/radio/users/<int:user_id>/broadcast-control")
+@admin_required
+def control_broadcast(user_id):
+    validate_csrf()
+    action = request.form.get("action")
+    hosted = current_app.extensions["hosted_broadcasts"]
+    try:
+        changed = (hosted.pause(user_id) if action == "pause" else
+                   hosted.resume(user_id) if action == "resume" else
+                   hosted.stop(user_id, "sysop_stopped") if action == "stop" else
+                   hosted.set_indefinite(user_id, request.form.get("enabled") == "1")
+                   if action == "indefinite" else False)
+    except RuntimeError as problem:
+        flash(str(problem), "error")
+        changed = False
+    flash("Broadcast control updated." if changed else "No matching broadcast session.",
+          "success" if changed else "error")
+    return redirect(url_for("station.settings") + "#broadcast-frequencies")
 
 
 def _radio_permissions_redirect(group_id=None):

@@ -87,10 +87,41 @@
       </div>
       <label class="switch"><input type="checkbox" name="band_{{ band.id }}_live_voice" {% if band.supports_live_voice %}checked{% endif %}> SUPPORT LIVE VOICE</label>
       <label class="switch"><input type="checkbox" name="band_{{ band.id }}_hosted_broadcasts" {% if band.supports_hosted_broadcasts %}checked{% endif %}> SUPPORT HOSTED BROADCASTS</label>
+      <label class="switch"><input type="checkbox" name="band_{{ band.id }}_open_broadcasts" {% if band.allow_open_broadcasts %}checked{% endif %}> ALLOW OPEN BROADCASTS</label>
     </fieldset>
     {% endfor %}
     <button>COMMIT RADIO SPECTRUM</button>
   </form>
+</section>
+
+<section class="terminal-card settings-section" id="broadcast-frequencies">
+  <p class="eyebrow">SYSOP CONTROL / HOSTED BROADCAST FREQUENCIES</p>
+  <h2>Frequency assignments</h2>
+  <p class="muted">One reserved hosted-programming frequency per operator. Assignments remain idle until a broadcast begins.</p>
+  <form method="post" action="{{ url_for('station.save_broadcast_limit') }}" class="inline-form">
+    <input type="hidden" name="csrf_token" value="{{ session.csrf_token }}">
+    <label>Maximum continuous session (minutes)<input type="number" min="1" max="1440" name="radio_broadcast_limit_minutes" value="{{ g.station.radio_broadcast_limit_minutes }}" required></label>
+    <button class="secondary">SAVE LIMIT</button>
+  </form>
+  {% for user in users %}
+  {% set live = broadcast_sessions.get(user.id) %}
+  <article class="band-settings">
+    <h3>{{ user.callsign }} / {{ user.username }}</h3>
+    <form method="post" action="{{ url_for('station.save_broadcast_frequency',user_id=user.id) }}" class="inline-form">
+      <input type="hidden" name="csrf_token" value="{{ session.csrf_token }}">
+      <label>Assigned MHz<input name="frequency" inputmode="decimal" placeholder="BLANK TO REVOKE" value="{{ format_frequency(assignments[user.id].frequency_khz) if user.id in assignments else '' }}"></label>
+      <button>{{ 'CHANGE / REVOKE' if user.id in assignments else 'ASSIGN' }}</button>
+    </form>
+    {% if live %}
+    <p>{{ live.status|upper }} / {{ live.playlist_name }} / {{ live.track_name }} / {{ live.frequency }} MHz{% if live.indefinite %} / INDEFINITE{% endif %}</p>
+    <div class="button-row">
+      <form method="post" action="{{ url_for('station.control_broadcast',user_id=user.id) }}"><input type="hidden" name="csrf_token" value="{{ session.csrf_token }}"><input type="hidden" name="action" value="{{ 'resume' if live.status == 'paused' else 'pause' }}"><button class="secondary">{{ 'RESUME' if live.status == 'paused' else 'PAUSE' }}</button></form>
+      <form method="post" action="{{ url_for('station.control_broadcast',user_id=user.id) }}"><input type="hidden" name="csrf_token" value="{{ session.csrf_token }}"><input type="hidden" name="action" value="stop"><button class="danger">STOP</button></form>
+      <form method="post" action="{{ url_for('station.control_broadcast',user_id=user.id) }}"><input type="hidden" name="csrf_token" value="{{ session.csrf_token }}"><input type="hidden" name="action" value="indefinite"><input type="hidden" name="enabled" value="{{ 0 if live.indefinite else 1 }}"><button class="secondary">{{ 'RESTORE TIME LIMIT' if live.indefinite else 'LOOP INDEFINITELY' }}</button></form>
+    </div>
+    {% endif %}
+  </article>
+  {% endfor %}
 </section>
 
 <section class="terminal-card settings-section" id="radio-permissions">

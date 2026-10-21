@@ -55,5 +55,20 @@
     <p class="muted" data-radio-voice-help>Microphone access requires HTTPS when connecting from another computer. Localhost may use HTTP.</p>
   </section>
   <p class="chat-error radio-error" data-radio-error aria-live="polite"></p>
+  <section class="terminal-card broadcast-section" data-radio-broadcast-panel>
+    <p class="eyebrow">HOSTED MUSIC / SERVER PLAYBACK</p>
+    <h2>Music broadcast</h2>
+    <p>Assigned frequency: <strong data-radio-broadcast-frequency>NONE</strong></p>
+    <div class="form-grid">
+      <label>Playlist <select data-radio-broadcast-playlist><option value="">NO PLAYLISTS</option></select></label>
+      <p>Current track: <strong data-radio-broadcast-track>OFF AIR</strong></p>
+      <p>Status: <strong data-radio-broadcast-state>STOPPED</strong></p>
+      <p>Remaining session time: <strong data-radio-broadcast-remaining>--:--</strong></p>
+      <div class="button-row"><button type="button" data-radio-broadcast-start>START BROADCAST</button><button type="button" class="danger" data-radio-broadcast-stop disabled>STOP</button></div>
+      <small data-radio-broadcast-help>An assigned frequency is required unless the tuned band allows open broadcasts.</small>
+    </div>
+    <h3>Station broadcast directory</h3>
+    <div data-radio-broadcast-directory><p class="muted">LOADING DIRECTORY...</p></div>
+  </section>
 </section>
 {% endblock %}
