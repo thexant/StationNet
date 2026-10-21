@@ -78,6 +78,7 @@ p { max-width: 72ch; }
 .access-actions { text-align: center; }
 .access-actions p { max-width: none; margin: .65rem 0; color: var(--grey); font-size: .68rem; letter-spacing: .06em; }
 .access-actions strong { color: var(--green-bright); }
+.access-buttons { display: grid; grid-template-columns: repeat(auto-fit,minmax(15rem,1fr)); gap: .7rem; }
 .enter-button { width: 100%; justify-content: center; min-height: 4.2rem; font-size: clamp(1rem, 3vw, 1.5rem); letter-spacing: .13em; }
 .access-links { display: flex; justify-content: center; flex-wrap: wrap; gap: .6rem 1.4rem; padding-top: .8rem; }
 .access-links a { color: var(--red); font-size: .68rem; text-decoration: none; }
@@ -216,6 +217,51 @@ button:hover, .button:hover { color: #000; background: var(--green); }
 .chat-error { color: var(--red); font-size: .65rem; }
 button:disabled { opacity: .5; cursor: not-allowed; }
 
+.settings-section { margin-top: 1.5rem; }
+.band-settings { display: grid; gap: .75rem; }
+.frequency-fields { display: grid; grid-template-columns: 1fr 1fr; gap: .75rem; }
+
+.radio-console { position: sticky; bottom: 1.7rem; z-index: 12; width: 100%; border: 1px solid var(--cyan); background: rgba(0,5,4,.98); box-shadow: 0 -.35rem 1rem #000; }
+.radio-toggle { display: grid; grid-template-columns: 1fr auto 1fr; width: 100%; min-height: 2.35rem; padding: .45rem .65rem; color: var(--cyan); border: 0; background: #001411; }
+.radio-toggle:hover { color: var(--white); background: #00231d; }
+.radio-toggle strong { color: var(--green-bright); font-size: .86rem; letter-spacing: .1em; }
+.radio-toggle span:first-child { text-align: left; }
+.radio-toggle span:last-child { color: var(--grey); text-align: right; }
+.signal-lamp { display: inline-block; width: .48rem; height: .48rem; margin-right: .35rem; border: 1px solid var(--green-dim); border-radius: 50%; background: #001005; }
+.signal-lamp.active { border-color: var(--green-bright); background: var(--green); box-shadow: 0 0 .55rem var(--green); }
+.radio-panel { padding: .7rem; border-top: 1px solid var(--cyan); }
+.radio-panel[hidden] { display: none; }
+.radio-receiver { display: grid; grid-template-columns: 11rem 1fr; gap: .75rem; }
+.radio-display { display: grid; align-content: center; padding: .4rem .65rem; border: 1px solid var(--green-dim); background: #000; }
+.radio-display span, .radio-display small { color: var(--grey); font-size: .52rem; letter-spacing: .06em; }
+.radio-display output { color: var(--green-bright); font-size: 1.45rem; line-height: 1.2; letter-spacing: .1em; text-shadow: 0 0 .55rem var(--green-dim); }
+.radio-display small { color: var(--amber); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.radio-controls { display: grid; grid-template-columns: auto minmax(8rem,1fr) auto auto auto; gap: .45rem; align-items: end; }
+.radio-controls button { min-height: 2.35rem; padding-inline: .6rem; white-space: nowrap; }
+.radio-controls input { padding-block: .45rem; }
+.radio-monitor { position: relative; height: 8.5rem; margin: .65rem 0; border: 1px solid var(--green-dim); background: #000; overflow: hidden; }
+.radio-monitor canvas { display: block; width: 100%; height: 100%; }
+.radio-monitor-label, .radio-monitor strong { position: absolute; top: .35rem; z-index: 1; padding: .15rem .3rem; background: #000c; font-size: .55rem; letter-spacing: .08em; }
+.radio-monitor-label { left: .4rem; color: var(--green-dim); }
+.radio-monitor strong { right: .4rem; color: var(--amber); font-weight: 400; }
+.radio-operation { display: grid; grid-template-columns: 10rem minmax(8rem,1fr) auto minmax(12rem,auto); gap: .5rem; align-items: end; }
+.radio-operation input, .radio-operation select, .radio-mode-panel input { padding-block: .45rem; }
+.radio-occupancy { align-self: center; color: var(--cyan); font-size: .6rem; text-align: right; }
+.radio-mode-panel { margin-top: .55rem; padding-top: .55rem; border-top: 1px dotted var(--green-dim); }
+.radio-mode-panel[hidden] { display: none; }
+.radio-cw-controls { display: grid; grid-template-columns: auto minmax(9rem,1fr) 7rem 7rem auto; gap: .5rem; align-items: end; }
+.radio-key { touch-action: none; user-select: none; }
+.radio-key.active { color: #000; background: var(--amber); border-color: var(--amber); }
+.radio-decoder { display: block; min-height: 1.7rem; margin-top: .45rem; padding: .35rem .5rem; color: var(--amber); border: 1px dotted var(--green-dim); background: #000; font-size: .7rem; }
+.morse-reference { margin-top: .4rem; color: var(--grey); font-size: .56rem; }
+.morse-reference p { margin: .4rem 0 0; line-height: 1.7; }
+.radio-sstv-controls { display: grid; grid-template-columns: minmax(12rem,1fr) auto auto; gap: .5rem; align-items: end; }
+.radio-pictures { display: grid; grid-template-columns: 1fr 1fr; gap: .55rem; margin-top: .55rem; }
+.radio-pictures figure { margin: 0; padding: .4rem; border: 1px dotted var(--green-dim); background: #000; }
+.radio-pictures figcaption { margin-bottom: .3rem; color: var(--grey); font-size: .55rem; }
+.radio-pictures canvas { display: block; width: 100%; height: 7rem; image-rendering: pixelated; object-fit: contain; background: #000; }
+.radio-error { min-height: 1em; margin: .35rem 0 0; }
+
 @media (max-width: 700px) {
   .station-shell { padding-inline: .65rem; }
   .system-line span:nth-child(2) { display: none; }
@@ -235,6 +281,12 @@ button:disabled { opacity: .5; cursor: not-allowed; }
   .traffic-row { grid-template-columns: 1fr; gap: .2rem; }
   .file-row, .user-card { flex-direction: column; }
   .file-row .button-row, .user-card .button-row { justify-content: start; }
+  .radio-receiver { grid-template-columns: 1fr; }
+  .radio-controls { grid-template-columns: auto minmax(7rem,1fr) auto; }
+  .radio-controls [data-radio-scan] { grid-column: 1 / -1; justify-content: center; }
+  .radio-operation { grid-template-columns: 1fr 1fr; }
+  .radio-cw-controls { grid-template-columns: 1fr 1fr; }
+  .radio-sstv-controls { grid-template-columns: 1fr; }
 }
 
 @media (max-width: 430px) {
@@ -251,4 +303,14 @@ button:disabled { opacity: .5; cursor: not-allowed; }
   .bulletin-meta time { grid-column: 1 / -1; text-align: left; }
   .terminal-card { padding: .8rem; }
   .statusbar span:nth-child(2) { display: none; }
+  .frequency-fields { grid-template-columns: 1fr; }
+  .radio-console { bottom: 1.7rem; }
+  .radio-toggle { grid-template-columns: auto 1fr; }
+  .radio-toggle strong { text-align: right; }
+  .radio-toggle span:last-child { display: none; }
+  .radio-panel { padding: .5rem; }
+  .radio-controls { grid-template-columns: 1fr 1fr; }
+  .radio-controls label { grid-column: 1 / -1; grid-row: 1; }
+  .radio-controls [data-radio-scan] { grid-column: 1 / -1; }
+  .radio-operation, .radio-cw-controls, .radio-pictures { grid-template-columns: 1fr; }
 }

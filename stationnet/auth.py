@@ -39,6 +39,7 @@ def touch_presence():
         and presence["last_seen"] and presence["last_seen"] < cutoff
     ):
         current_app.extensions["direct_chat"].disconnect(g.user["id"], connection_id)
+        current_app.extensions["radio"].disconnect(connection_id)
     database.execute(
         "UPDATE users SET last_seen=? WHERE id=? AND connection_id=?",
         (utc_now(), g.user["id"], connection_id),
@@ -136,6 +137,7 @@ def logout():
     if g.user is not None:
         connection_id = session.get("connection_id")
         current_app.extensions["direct_chat"].disconnect(g.user["id"], connection_id)
+        current_app.extensions["radio"].disconnect(connection_id)
         database = get_db()
         database.execute(
             "UPDATE users SET last_seen=NULL,connection_id=NULL WHERE id=? AND connection_id=?",

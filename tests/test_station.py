@@ -47,12 +47,8 @@ def test_landing_message_reflects_guest_access(initialized):
     assert b"Browse the public board" not in response.data
 
     initialized.post(
-        "/sysop/settings",
-        data={
-            "csrf_token": csrf(initialized, "/sysop/settings"),
-            "name": "Test Relay",
-            "description": "Local test station",
-        },
+        "/sysop/settings/access",
+        data={"csrf_token": csrf(initialized, "/sysop/settings")},
     )
     response = initialized.get("/")
     assert b"Identify yourself to access station services" in response.data
@@ -103,6 +99,34 @@ def test_register_login_and_unique_callsign(app, initialized):
     initialized.post("/logout",data={"csrf_token":csrf(initialized,"/terminal")})
     response=initialized.post("/login",data={"csrf_token":csrf(initialized,"/login"),"username":"visitor","password":"a secure visitor pass"},follow_redirects=True)
     assert b"Link established" in response.data
+
+def test_access_policy_can_enable_registration_independently(app, initialized):
+    response = initialized.post(
+        "/sysop/settings/access",
+        data={
+            "csrf_token": csrf(initialized, "/sysop/settings"),
+            "registration_open": "on",
+            "guest_access": "on",
+        },
+        follow_redirects=True,
+    )
+    assert b"Access policy updated" in response.data
+    with app.app_context():
+        station = get_db().execute(
+            "SELECT registration_open,guest_access FROM station WHERE id=1"
+        ).fetchone()
+        assert tuple(station) == (1, 1)
+
+    initialized.post(
+        "/logout", data={"csrf_token": csrf(initialized, "/terminal")}
+    )
+    landing = initialized.get("/")
+    assert b'href="/register"' in landing.data
+    assert b"CREATE ACCOUNT" in landing.data
+
+    registration = initialized.get("/register")
+    assert registration.status_code == 200
+    assert b"Create your account" in registration.data
 
 def test_board_reply_guest_read_and_restart(app, initialized):
     response=initialized.post("/board/new",data={"csrf_token":csrf(initialized,"/board/new"),"title":"First transmission","body":"Hello local network."},follow_redirects=True)

@@ -1,6 +1,6 @@
 # StationNet
 
-StationNet is a self-hosted, browser-accessible communications station inspired by BBS software, monochrome terminals, early computer networks, and amateur radio. Milestone 2 provides local station setup, accounts, a responsive terminal workspace, persistent bulletins and station chat, temporary direct chat, private mail, shared files, user profiles, and operator announcements. It requires no Docker, domain, cloud account, or external database.
+StationNet is a self-hosted, browser-accessible communications station inspired by BBS software, monochrome terminals, early computer networks, and amateur radio. Milestone 3 provides local station setup, accounts, a responsive terminal workspace, community services, and an ephemeral shared radio with configurable bands, live Morse/CW keying, and simplified SSTV picture transmissions. It requires no Docker, domain, cloud account, or external database.
 
 ## Why this stack
 
@@ -53,7 +53,9 @@ Open `http://127.0.0.1:8080` and complete first-run setup. By default the statio
 
 Back up the data directory to preserve station identity, accounts, messages, mail, announcements, and the `uploads/` file archive. Never publish its files.
 
-Guests can read bulletins when guest access is enabled and can always read station announcements. Registered users can join the persistent public chat, open temporary direct chats with online users, exchange persistent private mail, use the shared file archive, and maintain an optional text profile. Direct traffic is held only in server memory and is discarded on logout, connection expiry, or server restart. The SYSOP can manage announcements and configure archive uploads, total storage, and per-file limits under **SYSOP CONTROL**. `/` focuses service navigation when not typing; Escape releases focus.
+Guests can read bulletins when guest access is enabled and can always read station announcements. Registered users can join the persistent public chat, open temporary direct chats with online users, exchange persistent private mail, use the shared file archive, maintain a profile, and operate the radio from every authenticated station page. Radio signal events and direct traffic are held only in server memory and are discarded after expiry or server restart. The SYSOP can manage announcements, archive policy, and radio band ranges/permissions under **SYSOP CONTROL**. `/` focuses service navigation when not typing; Escape releases focus.
+
+The radio uses lightweight HTTP polling and is intended for one local StationNet process. A frequency admits one live transmitter at a time. CW key transitions and SSTV scanlines are relayed as short-lived signal events; they are never stored as messages or made available as history. Each receiving browser synthesizes audio from those events while the oscilloscope monitors the actual audio path. Browsers require a click or tap before allowing sound. Voice, propagation/interference simulation, automated broadcasts, and cross-station radio are not part of this milestone.
 
 ## Tests and layout
 
@@ -62,11 +64,11 @@ python -m pip install -r requirements-dev.txt
 python -m pytest
 ```
 
-`stationnet/` contains the app factory, SQLite layer, authentication, service blueprints, templates, and static UI. `tests/` covers setup, authentication, callsigns, bulletins, chat persistence and direct-chat expiry, private-mail isolation, profiles, files, announcements, permissions, CSRF, and restart persistence. `run.py` is the normal Waitress entry point.
+`stationnet/` contains the app factory, SQLite layer, authentication, service blueprints, templates, and static UI. `tests/` covers setup, authentication, callsigns, community services, live radio occupancy/CW/SSTV/tuning/permissions, CSRF, and restart persistence. `run.py` is the normal Waitress entry point.
 
 ## Networking and future work
 
 HTTP is intentional for localhost, LAN, and direct-IP access. It does not protect credentials from observers, so only use plain HTTP on trusted networks. Browsers generally require a secure context (normally HTTPS) for microphone access, so the future radio/voice milestone will need optional HTTPS deployment. This milestone does not attempt certificates, NAT traversal, or internet discovery.
 
-Later milestones may add persistent station-wide radio controls, virtual bands and voice, scheduled broadcasts, MUD hosting, and controlled federation. Those systems are intentionally outside this milestone. Radio should eventually remain part of the terminal environment while moving between services, not become a separate voice-chat application.
+Later milestones may add voice, scheduled broadcasts, MUD hosting, controlled federation, and more detailed radio behavior. Those systems are intentionally outside this milestone.
 

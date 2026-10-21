@@ -3,9 +3,10 @@ import os
 import secrets
 from pathlib import Path
 from flask import Flask, g, redirect, request, url_for
-from . import announcements, archive, auth, board, chat, db, mail, station, users
+from . import announcements, archive, auth, board, chat, db, mail, radio, station, users
 from .ansi import station_banner
 from .realtime import DirectChatStore
+from .radio import RadioStore
 from .security import ensure_csrf_token
 
 def _secret(data_dir):
@@ -29,6 +30,7 @@ def create_app(test_config=None):
         app.config.update(test_config)
     db.init_app(app)
     app.extensions["direct_chat"] = DirectChatStore()
+    app.extensions["radio"] = RadioStore()
     app.register_blueprint(auth.bp)
     app.register_blueprint(station.bp)
     app.register_blueprint(board.bp)
@@ -37,6 +39,7 @@ def create_app(test_config=None):
     app.register_blueprint(archive.bp)
     app.register_blueprint(users.bp)
     app.register_blueprint(announcements.bp)
+    app.register_blueprint(radio.bp)
     with app.app_context():
         db.init_db()
 
@@ -58,7 +61,7 @@ def create_app(test_config=None):
     def headers(response):
         response.headers.update({
             "X-Content-Type-Options": "nosniff", "X-Frame-Options": "DENY", "Referrer-Policy": "same-origin",
-            "Content-Security-Policy": "default-src 'self'; style-src 'self'; script-src 'self'; img-src 'self' data:; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'",
+            "Content-Security-Policy": "default-src 'self'; style-src 'self'; script-src 'self'; img-src 'self' data: blob:; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'",
         })
         if g.get("user") is not None and request.endpoint != "static":
             response.headers["Cache-Control"] = "no-store"

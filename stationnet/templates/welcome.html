@@ -44,10 +44,12 @@
   </div>
   {% else %}
   <div class="access-actions">
-    <p>SELECT AN ACCESS MODE</p>
-    <a class="button enter-button" href="{{ url_for('auth.login') }}">&gt; LOGIN TO STATION &lt;</a>
+    <p>{{ 'NEW HERE? CREATE AN ACCOUNT OR LOG IN' if g.station.registration_open else 'ACCOUNT REGISTRATION IS CURRENTLY CLOSED' }}</p>
+    <div class="access-buttons">
+      {% if g.station.registration_open %}<a class="button enter-button" href="{{ url_for('auth.register') }}">&gt; CREATE ACCOUNT &lt;</a>{% endif %}
+      <a class="button enter-button secondary" href="{{ url_for('auth.login') }}">&gt; LOG IN &lt;</a>
+    </div>
     <div class="access-links">
-      {% if g.station.registration_open %}<a href="{{ url_for('auth.register') }}">[ REQUEST A CALLSIGN ]</a>{% endif %}
       {% if g.station.guest_access %}<a href="{{ url_for('board.index') }}">[ CONTINUE AS VISITOR ]</a>{% endif %}
     </div>
   </div>

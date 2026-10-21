@@ -7,14 +7,15 @@
   <title>{% block title %}StationNet{% endblock %}{% if g.station %} :: {{ g.station.name }}{% endif %}</title>
   <link rel="stylesheet" href="{{ url_for('static',filename='station.css') }}">
   <script src="{{ url_for('static',filename='station.js') }}" defer></script>
+  <script src="{{ url_for('static',filename='radio.js') }}" defer></script>
 </head>
-<body{% if g.user %} data-presence-url="{{ url_for('users.presence') }}"{% endif %}>
+<body{% if g.user %} data-presence-url="{{ url_for('users.presence') }}" data-radio-state-url="{{ url_for('radio.state') }}"{% endif %}>
   <a class="skip-link" href="#main">Skip to content</a>
   <div class="station-shell">
     <header class="station-header">
       <div class="system-line">
         <span>StationNet BBS for local networks</span>
-        <span>Version 0.2</span>
+        <span>Version 0.3</span>
         <span>Copyright 2026 / station-owned</span>
       </div>
 
@@ -50,6 +51,8 @@
     </div>
 
     <main id="main" class="main-panel">{% block content %}{% endblock %}</main>
+
+    {% if g.user %}{% include '_radio.html' %}{% endif %}
 
     <footer class="statusbar">
       <span>STATION: {{ g.station.callsign if g.station else 'OFFLINE' }}</span>

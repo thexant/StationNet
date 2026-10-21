@@ -52,7 +52,21 @@ CREATE TABLE IF NOT EXISTS announcements (
  title TEXT NOT NULL, body TEXT NOT NULL,
  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);
+CREATE TABLE IF NOT EXISTS radio_bands (
+ id INTEGER PRIMARY KEY, name TEXT NOT NULL,
+ start_khz INTEGER NOT NULL, end_khz INTEGER NOT NULL,
+ tx_permission TEXT NOT NULL DEFAULT 'members'
+ CHECK(tx_permission IN ('members','admins','receive')),
+ CHECK(start_khz > 0 AND end_khz >= start_khz));
 """
+
+DEFAULT_RADIO_BANDS = (
+    (1, "GENERAL COMMUNICATION", 144000, 144399, "members"),
+    (2, "BROADCASTS", 144400, 144599, "admins"),
+    (3, "MORSE / CW", 144600, 144799, "members"),
+    (4, "DATA TRANSMISSIONS", 144800, 144999, "members"),
+    (5, "EXPERIMENTAL / UNRESTRICTED", 145000, 145999, "members"),
+)
 
 def get_db():
     if "db" not in g:
@@ -74,6 +88,11 @@ def init_db():
     _migrate_station_customization(database)
     _migrate_community_fields(database)
     _migrate_legacy_callsigns(database)
+    database.executemany(
+        "INSERT OR IGNORE INTO radio_bands(id,name,start_khz,end_khz,tx_permission) "
+        "VALUES(?,?,?,?,?)",
+        DEFAULT_RADIO_BANDS,
+    )
     database.commit()
 
 def _migrate_station_customization(database):

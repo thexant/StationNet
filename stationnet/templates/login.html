@@ -20,7 +20,7 @@
 
   <nav class="auth-alternatives" aria-label="Other access options">
     <a href="{{ url_for('station.index') }}">&lt;- RETURN TO STATION INFO</a>
-    {% if g.station.registration_open %}<a href="{{ url_for('auth.register') }}">NO ACCOUNT? REQUEST A CALLSIGN -&gt;</a>{% endif %}
+    {% if g.station.registration_open %}<a href="{{ url_for('auth.register') }}">NO ACCOUNT? CREATE ONE -&gt;</a>{% endif %}
   </nav>
 </section>
 {% endblock %}
