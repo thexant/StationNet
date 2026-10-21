@@ -100,7 +100,8 @@ CREATE TABLE IF NOT EXISTS radio_playlists (
  id INTEGER PRIMARY KEY AUTOINCREMENT,
  owner_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
  name TEXT NOT NULL COLLATE NOCASE, loop_enabled INTEGER NOT NULL DEFAULT 0
- CHECK(loop_enabled IN (0,1)), created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+ CHECK(loop_enabled IN (0,1)), shuffle_enabled INTEGER NOT NULL DEFAULT 0
+ CHECK(shuffle_enabled IN (0,1)), created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
  UNIQUE(owner_id,name));
 CREATE INDEX IF NOT EXISTS idx_radio_playlists_owner ON radio_playlists(owner_id,id);
 CREATE TABLE IF NOT EXISTS radio_playlist_tracks (
@@ -398,6 +399,12 @@ def _migrate_hosted_broadcast_fields(database):
     if "duration_seconds" not in audio_columns:
         database.execute(
             "ALTER TABLE radio_audio_files ADD COLUMN duration_seconds REAL NOT NULL DEFAULT 180"
+        )
+    playlist_columns = {row["name"] for row in database.execute("PRAGMA table_info(radio_playlists)")}
+    if "shuffle_enabled" not in playlist_columns:
+        database.execute(
+            "ALTER TABLE radio_playlists ADD COLUMN shuffle_enabled INTEGER NOT NULL DEFAULT 0 "
+            "CHECK(shuffle_enabled IN (0,1))"
         )
 
 def _migrate_legacy_callsigns(database):

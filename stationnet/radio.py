@@ -406,6 +406,7 @@ class RadioStore:
             result["track_name"] = transmission.get("track_name")
             result["audio_file_id"] = transmission.get("audio_file_id")
             result["track_offset"] = transmission.get("track_offset", 0)
+            result["track_serial"] = transmission.get("track_serial", 0)
         return result
 
     def scan(self, connection_id, user_id, current, direction, allocations):

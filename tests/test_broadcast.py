@@ -172,7 +172,8 @@ def test_playlist_editing_order_missing_tracks_and_restart(app, initialized):
     initialized.post(
         f"/radio/manage/playlists/{playlist_id}",
         data={"csrf_token": csrf(initialized, "/radio/manage"),
-              "name": "Night Signal Revised", "loop_enabled": "on"},
+              "name": "Night Signal Revised", "loop_enabled": "on",
+              "shuffle_enabled": "on"},
     )
     initialized.post(
         f"/radio/manage/audio/{files[1]['id']}/delete",
@@ -196,8 +197,21 @@ def test_playlist_editing_order_missing_tracks_and_restart(app, initialized):
             "SELECT display_name,audio_file_id FROM radio_playlist_tracks ORDER BY position"
         ).fetchall()
         assert playlist["loop_enabled"] == 1
+        assert playlist["shuffle_enabled"] == 1
         assert [row["display_name"] for row in order] == ["two.mp3", "one.mp3"]
         assert order[0]["audio_file_id"] is None
+    assert b"SHUFFLE PLAYBACK" in persisted.data
+    assert b'name="shuffle_enabled" checked' in persisted.data
+
+
+def test_non_host_cannot_change_playlist_shuffle(app, initialized):
+    alice = register(app, "alice")
+    response = alice.post(
+        "/radio/manage/playlists/1",
+        data={"csrf_token": csrf(alice, "/terminal"), "name": "NOPE",
+              "shuffle_enabled": "on"},
+    )
+    assert response.status_code == 403
 
 
 def test_sysop_quota_controls_do_not_require_broadcast_permission(app, initialized):

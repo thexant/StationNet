@@ -1,6 +1,7 @@
 """Private audio libraries and playlist preparation for broadcast hosts."""
 import secrets
 import sqlite3
+import random
 from threading import RLock, Timer
 from time import monotonic
 from functools import wraps
@@ -35,36 +36,121 @@ class HostedBroadcastStore:
         self._sessions = {}
         self._paused = {}
 
+    @staticmethod
+    def _elapsed(item, now=None):
+        return item.get("resume_elapsed", 0) + max(
+            0, (monotonic() if now is None else now) - item["clock_started"]
+        )
+
+    @staticmethod
+    def _track_map(item):
+        return {track["entry_id"]: track for track in item["tracks"]}
+
+    @staticmethod
+    def _set_current(item, track):
+        item["current_track"] = track
+        item["track_serial"] = item.get("track_serial", -1) + 1
+
+    def _shuffle_ids(self, item, exclude_file_id=None):
+        ids = [track["entry_id"] for track in item["tracks"]]
+        random.shuffle(ids)
+        by_id = self._track_map(item)
+        if len(ids) > 1 and exclude_file_id is not None and \
+                by_id[ids[0]]["file_id"] == exclude_file_id:
+            replacement = next(
+                (index for index, entry_id in enumerate(ids[1:], 1)
+                 if by_id[entry_id]["file_id"] != exclude_file_id), None,
+            )
+            if replacement is not None:
+                ids[0], ids[replacement] = ids[replacement], ids[0]
+        return ids
+
+    def _advance_track(self, item):
+        tracks = item["tracks"]
+        if not tracks:
+            return False
+        current = item.get("current_track")
+        previous_file = current["file_id"] if current else None
+        pending = item.pop("pending_shuffle", None)
+        if pending is not None:
+            item["shuffle"] = pending
+            item["shuffle_remaining"] = self._shuffle_ids(item, previous_file) if pending else []
+            if current:
+                item["shuffle_remaining"] = [
+                    entry_id for entry_id in item["shuffle_remaining"]
+                    if entry_id != current["entry_id"]
+                ]
+
+        if current and len(tracks) == 1:
+            self._set_current(item, tracks[0])
+            item["shuffle_remaining"] = []
+            return True
+
+        if item["shuffle"]:
+            valid_ids = set(self._track_map(item))
+            remaining = [entry_id for entry_id in item.get("shuffle_remaining", [])
+                         if entry_id in valid_ids and (not current or entry_id != current["entry_id"])]
+            if not remaining:
+                if current and not item["loop"]:
+                    return False
+                remaining = self._shuffle_ids(item, previous_file)
+            entry_id = remaining.pop(0)
+            item["shuffle_remaining"] = remaining
+            self._set_current(item, self._track_map(item)[entry_id])
+            return True
+
+        if not current:
+            self._set_current(item, tracks[0])
+            return True
+        ids = [track["entry_id"] for track in tracks]
+        if current["entry_id"] in ids:
+            next_index = ids.index(current["entry_id"]) + 1
+        else:
+            next_index = next(
+                (index for index, track in enumerate(tracks)
+                 if track.get("position", index) > current.get("position", -1)), len(tracks),
+            )
+        if next_index >= len(tracks):
+            if not item["loop"]:
+                return False
+            next_index = 0
+        self._set_current(item, tracks[next_index])
+        return True
+
     def _position(self, item, now=None):
-        elapsed = item.get("resume_elapsed", 0) + max(0, (now or monotonic()) - item["clock_started"])
+        elapsed = self._elapsed(item, now)
         if not item["indefinite"] and elapsed >= item["limit_seconds"]:
             return None, elapsed, "duration_limit"
-        total = sum(track["duration"] for track in item["tracks"])
-        if total <= 0:
+        if not item["tracks"] or not item.get("current_track"):
             return None, elapsed, "playlist_complete"
-        playlist_time = elapsed % total if item["loop"] else elapsed
-        if not item["loop"] and playlist_time >= total:
-            return None, elapsed, "playlist_complete"
-        cursor = playlist_time
-        for index, track in enumerate(item["tracks"]):
-            if cursor < track["duration"] or index == len(item["tracks"]) - 1:
-                return (index, track, cursor), elapsed, None
-            cursor -= track["duration"]
-        return None, elapsed, "playlist_complete"
+
+        delta = max(0, elapsed - item.get("timeline_elapsed", 0))
+        item["timeline_elapsed"] = elapsed
+        item["track_offset"] = item.get("track_offset", 0) + delta
+        transitions = 0
+        while item["track_offset"] >= item["current_track"]["duration"]:
+            item["track_offset"] -= item["current_track"]["duration"]
+            if not self._advance_track(item):
+                return None, elapsed, "playlist_complete"
+            transitions += 1
+            # Corrupt duration data must never create an unbounded retry loop.
+            if transitions > max(1000, len(item["tracks"]) * 10):
+                return None, elapsed, "playlist_complete"
+        track = item["current_track"]
+        index = next((i for i, candidate in enumerate(item["tracks"])
+                      if candidate["entry_id"] == track["entry_id"]), 0)
+        return (index, track, item["track_offset"]), elapsed, None
 
     def _schedule_end(self, item):
         old = item.pop("timer", None)
         if old:
             old.cancel()
-        total = sum(track["duration"] for track in item["tracks"])
-        elapsed = item.get("resume_elapsed", 0)
-        deadlines = []
+        position, elapsed, reason = self._position(item)
+        if reason:
+            return
+        deadlines = [position[1]["duration"] - position[2]]
         if not item["indefinite"]:
             deadlines.append(item["limit_seconds"] - elapsed)
-        if not item["loop"]:
-            deadlines.append(total - elapsed)
-        if not deadlines:
-            return
         delay = max(.01, min(deadlines))
         timer = Timer(delay, self._expire, args=(item["user_id"], item["transmission_id"]))
         timer.daemon = True
@@ -76,9 +162,18 @@ class HostedBroadcastStore:
             item = self._sessions.get(user_id)
             if not item or item.get("transmission_id") != transmission_id:
                 return
-            _position, _elapsed, reason = self._position(item)
-            self.radio.end_hosted(user_id, reason or "duration_limit")
-            self._sessions.pop(user_id, None)
+            position, _elapsed, reason = self._position(item)
+            if reason:
+                self.radio.end_hosted(user_id, reason)
+                self._sessions.pop(user_id, None)
+            elif position:
+                track = position[1]
+                self.radio.update_hosted(
+                    user_id, playlist_name=item["playlist_name"], track_name=track["name"],
+                    audio_file_id=track["file_id"], track_offset=round(position[2], 3),
+                    track_serial=item["track_serial"],
+                )
+                self._schedule_end(item)
 
     def refresh(self, user_id=None):
         """Advance sessions and mirror current metadata into the radio arbiter."""
@@ -101,23 +196,30 @@ class HostedBroadcastStore:
                 item.update(track_index=index, elapsed=elapsed)
                 self.radio.update_hosted(owner_id, playlist_name=item["playlist_name"],
                                          track_name=track["name"], audio_file_id=track["file_id"],
-                                         track_offset=round(offset, 3))
+                                         track_offset=round(offset, 3),
+                                         track_serial=item["track_serial"])
 
     def start(self, user_id, callsign, frequency, playlist_id, playlist_name,
-              tracks, loop, limit_seconds):
+              tracks, loop, limit_seconds, shuffle=False):
         with self._lock:
             self.refresh(user_id)
             if user_id in self._sessions:
                 raise RuntimeError("You already have an active hosted broadcast.")
             item = {"user_id": user_id, "callsign": callsign, "frequency": frequency,
                     "playlist_id": playlist_id, "playlist_name": playlist_name,
-                    "tracks": tracks, "loop": bool(loop), "limit_seconds": limit_seconds,
+                    "tracks": tracks, "loop": bool(loop), "shuffle": bool(shuffle),
+                    "pending_shuffle": None, "shuffle_remaining": [],
+                    "limit_seconds": limit_seconds,
                     "indefinite": False, "base_loop": bool(loop),
-                    "clock_started": monotonic(), "resume_elapsed": 0}
-            first = tracks[0]
+                    "clock_started": monotonic(), "resume_elapsed": 0,
+                    "timeline_elapsed": 0, "track_offset": 0, "track_serial": -1}
+            if not self._advance_track(item):
+                raise RuntimeError("This playlist has no available audio tracks.")
+            first = item["current_track"]
             transmission_id, _event = self.radio.start_hosted(
                 user_id, frequency, callsign, playlist_name=playlist_name,
                 track_name=first["name"], audio_file_id=first["file_id"], track_offset=0,
+                track_serial=item["track_serial"],
             )
             item["transmission_id"] = transmission_id
             self._sessions[user_id] = item
@@ -152,17 +254,83 @@ class HostedBroadcastStore:
             item = self._paused.get(user_id)
             if not item:
                 return False
-            first = item["tracks"][0]
+            first = item["current_track"]
             transmission_id, _event = self.radio.start_hosted(
                 user_id, item["frequency"], item["callsign"],
                 playlist_name=item["playlist_name"], track_name=first["name"],
-                audio_file_id=first["file_id"], track_offset=0,
+                audio_file_id=first["file_id"], track_offset=item.get("track_offset", 0),
+                track_serial=item["track_serial"],
             )
             item["transmission_id"] = transmission_id
             item["clock_started"] = monotonic()
+            item["timeline_elapsed"] = item["resume_elapsed"]
             self._paused.pop(user_id)
             self._sessions[user_id] = item
             self.refresh(user_id)
+            self._schedule_end(item)
+            return True
+
+    def sync_playlist(self, user_id, playlist_id, playlist_name, tracks, loop, shuffle):
+        """Apply playlist edits without restarting the current audio unnecessarily."""
+        with self._lock:
+            item = self._sessions.get(user_id) or self._paused.get(user_id)
+            if not item or item["playlist_id"] != playlist_id:
+                return False
+            current = item.get("current_track")
+            item["playlist_name"] = playlist_name
+            item["tracks"] = tracks
+            item["loop"] = True if item["indefinite"] else bool(loop)
+            item["base_loop"] = bool(loop)
+            if bool(shuffle) != item["shuffle"]:
+                item["pending_shuffle"] = bool(shuffle)
+            valid_ids = {track["entry_id"] for track in tracks}
+            item["shuffle_remaining"] = [entry_id for entry_id in item.get("shuffle_remaining", [])
+                                         if entry_id in valid_ids]
+            if not current or current["entry_id"] not in valid_ids:
+                item["current_track"] = current
+                if not self._advance_track(item):
+                    self.stop(user_id, "playlist_complete")
+                    return True
+                item["track_offset"] = 0
+                item["timeline_elapsed"] = (item["resume_elapsed"] if user_id in self._paused
+                                            else self._elapsed(item))
+            elif current:
+                item["current_track"] = next(
+                    track for track in tracks if track["entry_id"] == current["entry_id"]
+                )
+            if user_id in self._sessions:
+                position, _elapsed, reason = self._position(item)
+                if reason:
+                    self.stop(user_id, reason)
+                else:
+                    track = position[1]
+                    self.radio.update_hosted(
+                        user_id, playlist_name=playlist_name, track_name=track["name"],
+                        audio_file_id=track["file_id"], track_offset=round(position[2], 3),
+                        track_serial=item["track_serial"],
+                    )
+                    self._schedule_end(item)
+            return True
+
+    def advance(self, user_id, file_id, track_serial):
+        """Advance one shared session when a browser proves the current file ended/failed."""
+        with self._lock:
+            item = self._sessions.get(user_id)
+            if (not item or item["current_track"]["file_id"] != file_id or
+                    item["track_serial"] != track_serial):
+                return False
+            elapsed = self._elapsed(item)
+            item["timeline_elapsed"] = elapsed
+            item["track_offset"] = 0
+            if not self._advance_track(item):
+                self.stop(user_id, "playlist_complete")
+                return True
+            track = item["current_track"]
+            self.radio.update_hosted(
+                user_id, playlist_name=item["playlist_name"], track_name=track["name"],
+                audio_file_id=track["file_id"], track_offset=0,
+                track_serial=item["track_serial"],
+            )
             self._schedule_end(item)
             return True
 
@@ -191,16 +359,17 @@ class HostedBroadcastStore:
         if not item:
             return None
         position, elapsed, _reason = self._position(item) if not paused else (None, item["resume_elapsed"], None)
-        track = position[1] if position else item["tracks"][min(item.get("track_index", 0), len(item["tracks"])-1)]
-        offset = position[2] if position else 0
+        track = position[1] if position else item["current_track"]
+        offset = position[2] if position else item.get("track_offset", 0)
         remaining = None if item["indefinite"] else max(0, item["limit_seconds"] - elapsed)
         return {"user_id": user_id, "callsign": item["callsign"],
                 "frequency": format_frequency(item["frequency"]),
                 "frequency_khz": item["frequency"], "playlist_id": item["playlist_id"],
                 "playlist_name": item["playlist_name"], "track_name": track["name"],
                 "audio_file_id": track["file_id"], "track_offset": round(offset, 3),
+                "track_serial": item["track_serial"],
                 "status": "paused" if paused else "playing", "remaining_seconds": remaining,
-                "indefinite": item["indefinite"]}
+                "indefinite": item["indefinite"], "shuffle": item["shuffle"]}
 
     def all_public(self):
         self.refresh()
@@ -295,6 +464,35 @@ def _owned_playlist(database, playlist_id):
     if item is None:
         abort(404)
     return item
+
+
+def _available_tracks(database, playlist_id):
+    rows = database.execute(
+        "SELECT t.id entry_id,t.position,t.display_name,f.id file_id,f.owner_id,"
+        "f.stored_name,f.duration_seconds FROM radio_playlist_tracks t "
+        "JOIN radio_audio_files f ON f.id=t.audio_file_id "
+        "WHERE t.playlist_id=? ORDER BY t.position,t.id", (playlist_id,),
+    ).fetchall()
+    result = []
+    for row in rows:
+        path = Path(current_app.config["DATA_DIR"]) / "radio_audio" / str(row["owner_id"]) / row["stored_name"]
+        if path.is_file():
+            result.append({
+                "entry_id": row["entry_id"], "position": row["position"],
+                "file_id": row["file_id"], "name": row["display_name"],
+                "duration": max(.1, float(row["duration_seconds"])),
+            })
+    return result
+
+
+def _sync_playlist(database, playlist_id):
+    playlist = database.execute("SELECT * FROM radio_playlists WHERE id=?", (playlist_id,)).fetchone()
+    if playlist:
+        _store().sync_playlist(
+            playlist["owner_id"], playlist["id"], playlist["name"],
+            _available_tracks(database, playlist_id), playlist["loop_enabled"],
+            playlist["shuffle_enabled"],
+        )
 
 
 @bp.get("")
@@ -424,6 +622,9 @@ def delete_audio(file_id):
     ).fetchone()
     if item is None:
         abort(404)
+    playlist_ids = [row["playlist_id"] for row in database.execute(
+        "SELECT DISTINCT playlist_id FROM radio_playlist_tracks WHERE audio_file_id=?", (file_id,),
+    )]
     try:
         (_audio_dir(g.user["id"]) / item["stored_name"]).unlink(missing_ok=True)
     except PermissionError:
@@ -431,6 +632,8 @@ def delete_audio(file_id):
         return _redirect()
     database.execute("DELETE FROM radio_audio_files WHERE id=?", (file_id,))
     database.commit()
+    for playlist_id in playlist_ids:
+        _sync_playlist(database, playlist_id)
     flash("Audio file removed. Playlist references are marked missing.", "success")
     return _redirect()
 
@@ -467,10 +670,12 @@ def update_playlist(playlist_id):
     else:
         try:
             database.execute(
-                "UPDATE radio_playlists SET name=?,loop_enabled=? WHERE id=?",
-                (name, request.form.get("loop_enabled") == "on", playlist_id),
+                "UPDATE radio_playlists SET name=?,loop_enabled=?,shuffle_enabled=? WHERE id=?",
+                (name, request.form.get("loop_enabled") == "on",
+                 request.form.get("shuffle_enabled") == "on", playlist_id),
             )
             database.commit()
+            _sync_playlist(database, playlist_id)
             flash("Playlist settings saved.", "success")
         except sqlite3.IntegrityError:
             flash("You already have a playlist with that name.", "error")
@@ -482,9 +687,10 @@ def update_playlist(playlist_id):
 def delete_playlist(playlist_id):
     validate_csrf()
     database = get_db()
-    _owned_playlist(database, playlist_id)
+    playlist = _owned_playlist(database, playlist_id)
     database.execute("DELETE FROM radio_playlists WHERE id=?", (playlist_id,))
     database.commit()
+    _store().sync_playlist(playlist["owner_id"], playlist_id, playlist["name"], [], False, False)
     flash("Playlist deleted.", "success")
     return _redirect()
 
@@ -511,6 +717,7 @@ def add_track(playlist_id):
         "VALUES(?,?,?,?)", (playlist_id, audio["id"], audio["display_name"], position),
     )
     database.commit()
+    _sync_playlist(database, playlist_id)
     flash("Track added to playlist.", "success")
     return _redirect(playlist_id)
 
@@ -537,6 +744,7 @@ def move_track(playlist_id, track_id):
             [(position, item_id) for position, item_id in enumerate(ids)],
         )
         database.commit()
+        _sync_playlist(database, playlist_id)
     return _redirect(playlist_id)
 
 
@@ -561,6 +769,7 @@ def remove_track(playlist_id, track_id):
         [(position, row["id"]) for position, row in enumerate(tracks)],
     )
     database.commit()
+    _sync_playlist(database, playlist_id)
     flash("Track removed from playlist.", "success")
     return _redirect(playlist_id)
 
@@ -574,7 +783,7 @@ def status():
         (g.user["id"],),
     ).fetchone()
     playlists = database.execute(
-        "SELECT p.id,p.name,p.loop_enabled,COUNT(t.id) track_count "
+        "SELECT p.id,p.name,p.loop_enabled,p.shuffle_enabled,COUNT(t.id) track_count "
         "FROM radio_playlists p LEFT JOIN radio_playlist_tracks t ON t.playlist_id=p.id "
         "WHERE p.owner_id=? GROUP BY p.id ORDER BY p.name", (g.user["id"],),
     ).fetchall()
@@ -619,15 +828,9 @@ def start_broadcast():
             return jsonify(error="No broadcast frequency is assigned. Tune to a band that allows open broadcasts or contact a sysop."), 403
     if not transmission_authorized(g.user["id"], frequency, "HOSTED_BROADCAST"):
         return jsonify(error="Hosted broadcasting is not authorized on this frequency."), 403
-    rows = database.execute(
-        "SELECT f.id file_id,t.display_name,f.duration_seconds FROM radio_playlist_tracks t "
-        "JOIN radio_audio_files f ON f.id=t.audio_file_id "
-        "WHERE t.playlist_id=? ORDER BY t.position,t.id", (playlist_id,),
-    ).fetchall()
-    if not rows:
+    tracks = _available_tracks(database, playlist_id)
+    if not tracks:
         return jsonify(error="This playlist has no available audio tracks."), 400
-    tracks = [{"file_id": row["file_id"], "name": row["display_name"],
-               "duration": float(row["duration_seconds"])} for row in rows]
     station = database.execute(
         "SELECT radio_broadcast_limit_minutes FROM station WHERE id=1"
     ).fetchone()
@@ -635,6 +838,7 @@ def start_broadcast():
         result = _store().start(
             g.user["id"], g.user["callsign"], frequency, playlist["id"], playlist["name"],
             tracks, playlist["loop_enabled"], station["radio_broadcast_limit_minutes"] * 60,
+            playlist["shuffle_enabled"],
         )
     except RuntimeError as problem:
         return jsonify(error=str(problem)), 409
@@ -648,6 +852,27 @@ def stop_broadcast():
     if not _store().stop(g.user["id"], "operator_stopped"):
         return jsonify(error="No hosted broadcast is active."), 409
     return jsonify(stopped=True)
+
+
+@bp.post("/advance")
+@login_required
+def advance_broadcast():
+    """Let an in-sync listener report actual media completion or decode failure."""
+    validate_csrf()
+    file_id = request.form.get("file_id", type=int)
+    track_serial = request.form.get("track_serial", type=int)
+    tuned = current_app.extensions["radio"].receiver_frequency(session["connection_id"])
+    if tuned is None or effective_access(g.user["id"], tuned) == "DENIED":
+        return jsonify(error="Tune to the active broadcast first."), 403
+    sessions = _store().all_public()
+    match = next((item for item in sessions.values()
+                  if item and item["status"] == "playing" and
+                  item["frequency_khz"] == tuned and item["audio_file_id"] == file_id and
+                  item["track_serial"] == track_serial), None)
+    if not match:
+        return jsonify(advanced=False), 200
+    advanced = _store().advance(match["user_id"], file_id, track_serial)
+    return jsonify(advanced=advanced)
 
 
 @bp.get("/audio/<int:file_id>")

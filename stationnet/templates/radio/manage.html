@@ -38,6 +38,7 @@
       <input type="hidden" name="csrf_token" value="{{ session.csrf_token }}">
       <label>Playlist name<input name="name" maxlength="80" required value="{{ playlist.name }}"></label>
       <label class="switch"><input type="checkbox" name="loop_enabled" {% if playlist.loop_enabled %}checked{% endif %}> LOOP PLAYLIST</label>
+      <label class="switch"><input type="checkbox" name="shuffle_enabled" {% if playlist.shuffle_enabled %}checked{% endif %}> SHUFFLE PLAYBACK</label>
       <button class="secondary">SAVE</button>
     </form>
     <ol class="track-list">
