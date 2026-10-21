@@ -37,6 +37,8 @@ def test_compact_radio_is_in_shared_shell_and_console_has_advanced_controls(app,
     for path in ("/terminal", "/board", "/users"):
         response = initialized.get(path)
         assert b"data-radio-player" in response.data
+        assert b"data-radio-player-toggle" in response.data
+        assert b'class="radio-player minimized"' in response.data
         assert b"POWER: OFF" in response.data
         assert b"OPEN RADIO" in response.data
         assert b"data-radio-scope" not in response.data
@@ -47,6 +49,8 @@ def test_compact_radio_is_in_shared_shell_and_console_has_advanced_controls(app,
     console = initialized.get("/radio/")
     assert console.status_code == 200
     assert b"data-radio-console" in console.data
+    assert b"data-radio-player" not in console.data
+    assert b"data-radio-power" in console.data
     assert b"data-radio-scope" in console.data
     assert b"BEGIN CW TRANSMISSION" in console.data
     assert b"TRANSMIT PICTURE" in console.data
@@ -373,3 +377,73 @@ def test_sysop_group_management_and_live_revocation(app, initialized):
             "SELECT 1 FROM radio_group_memberships m JOIN radio_permission_groups g ON g.id=m.group_id "
             "WHERE m.user_id=? AND g.is_default=1", (user_id,),
         ).fetchone()
+
+
+def test_builtin_operators_group_rules_save_and_change_effective_access(app, initialized):
+    with app.app_context():
+        database = get_db()
+        operator_group = database.execute(
+            "SELECT id FROM radio_permission_groups WHERE name='OPERATORS'"
+        ).fetchone()["id"]
+        broadcast_band = database.execute(
+            "SELECT id FROM radio_bands WHERE name='BROADCASTS'"
+        ).fetchone()["id"]
+        sysop_id = database.execute("SELECT id FROM users WHERE is_admin=1").fetchone()["id"]
+        assert effective_access(sysop_id, 7000) == "FULL"
+
+    response = initialized.post(
+        f"/sysop/radio/groups/{operator_group}/rules",
+        data={"csrf_token": csrf(initialized, "/sysop/settings"), "scope_type": "band",
+              "band_id": str(broadcast_band), "permission": "LISTEN"},
+        follow_redirects=True,
+    )
+    assert response.status_code == 200
+    assert b"OPERATORS: band BROADCASTS rule updated (LISTEN)." in response.data
+    with app.app_context():
+        database = get_db()
+        rule = database.execute(
+            "SELECT permission FROM radio_permission_rules "
+            "WHERE group_id=? AND scope_type='band' AND band_id=?",
+            (operator_group, broadcast_band),
+        ).fetchone()
+        assert rule["permission"] == "LISTEN"
+        assert effective_access(sysop_id, 7000) == "LISTEN"
+
+    with app.app_context():
+        general_band = get_db().execute(
+            "SELECT id FROM radio_bands WHERE name='GENERAL COMMUNICATION'"
+        ).fetchone()["id"]
+    added = initialized.post(
+        f"/sysop/radio/groups/{operator_group}/rules",
+        data={"csrf_token": csrf(initialized, "/sysop/settings"), "scope_type": "band",
+              "band_id": str(general_band), "permission": "DENIED"},
+        follow_redirects=True,
+    )
+    assert b"BAND / GENERAL COMMUNICATION" in added.data
+    assert b"DENIED" in added.data
+    with app.app_context():
+        database = get_db()
+        added_rule = database.execute(
+            "SELECT id FROM radio_permission_rules "
+            "WHERE group_id=? AND scope_type='band' AND band_id=?",
+            (operator_group, general_band),
+        ).fetchone()
+        assert added_rule is not None
+
+    initialized.post(
+        f"/sysop/radio/rules/{added_rule['id']}/delete",
+        data={"csrf_token": csrf(initialized, "/sysop/settings")},
+    )
+    readded = initialized.post(
+        f"/sysop/radio/groups/{operator_group}/rules",
+        data={"csrf_token": csrf(initialized, "/sysop/settings"), "scope_type": "band",
+              "band_id": str(general_band), "permission": "FULL"},
+        follow_redirects=True,
+    )
+    assert b"BAND / GENERAL COMMUNICATION" in readded.data
+    with app.app_context():
+        assert get_db().execute(
+            "SELECT permission FROM radio_permission_rules "
+            "WHERE group_id=? AND scope_type='band' AND band_id=?",
+            (operator_group, general_band),
+        ).fetchone()["permission"] == "FULL"

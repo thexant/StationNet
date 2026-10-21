@@ -82,7 +82,7 @@
   </form>
 
   {% for group in groups %}
-  <article class="band-settings radio-group-settings">
+  <article class="band-settings radio-group-settings" id="radio-group-{{ group.id }}">
     <div class="split-heading">
       <div><h3>{{ group.name }}</h3>{% if group.is_default %}<small>PERMANENT / EVERY ACCOUNT</small>{% endif %}</div>
       {% if not group.is_default %}
@@ -128,7 +128,7 @@
       <label>Permission
         <select name="permission"><option value="FULL">FULL / receive + transmit</option><option value="LISTEN">LISTEN / receive only</option><option value="DENIED">DENIED / no access</option><option value="UNSET">UNSET / remove matching rule</option></select>
       </label>
-      <button>SAVE RULE</button>
+      <button>ADD / UPDATE RULE</button>
     </form>
   </article>
   {% endfor %}

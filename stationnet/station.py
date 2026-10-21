@@ -137,8 +137,9 @@ def _save_radio_bands():
     return redirect(url_for("station.settings") + "#radio-spectrum")
 
 
-def _radio_permissions_redirect():
-    return redirect(url_for("station.settings") + "#radio-permissions")
+def _radio_permissions_redirect(group_id=None):
+    anchor = f"radio-group-{group_id}" if group_id is not None else "radio-permissions"
+    return redirect(url_for("station.settings") + f"#{anchor}")
 
 
 @bp.post("/sysop/radio/groups")
@@ -205,7 +206,10 @@ def delete_radio_group(group_id):
 def save_radio_rule(group_id):
     validate_csrf()
     database = get_db()
-    if database.execute("SELECT 1 FROM radio_permission_groups WHERE id=?", (group_id,)).fetchone() is None:
+    group = database.execute(
+        "SELECT name FROM radio_permission_groups WHERE id=?", (group_id,)
+    ).fetchone()
+    if group is None:
         flash("Radio group not found.", "error")
         return _radio_permissions_redirect()
     scope = request.form.get("scope_type", "")
@@ -213,7 +217,8 @@ def save_radio_rule(group_id):
     band_id = start = end = None
     if scope == "band":
         band_id = request.form.get("band_id", type=int)
-        valid_scope = database.execute("SELECT 1 FROM radio_bands WHERE id=?", (band_id,)).fetchone() is not None
+        band = database.execute("SELECT name FROM radio_bands WHERE id=?", (band_id,)).fetchone()
+        valid_scope = band is not None
     elif scope in {"range", "frequency"}:
         start = parse_frequency(request.form.get("start"))
         end = start if scope == "frequency" else parse_frequency(request.form.get("end"))
@@ -222,22 +227,40 @@ def save_radio_rule(group_id):
         valid_scope = False
     if not valid_scope or permission not in {"FULL", "LISTEN", "DENIED", "UNSET"}:
         flash("Choose a valid band, frequency or range and permission.", "error")
-        return _radio_permissions_redirect()
+        return _radio_permissions_redirect(group_id)
     if scope == "band":
         match_sql, match_values = "scope_type='band' AND band_id=?", (band_id,)
+        scope_label = f"band {band['name']}"
     else:
         match_sql, match_values = "scope_type=? AND start_khz=? AND end_khz=?", (scope, start, end)
-    database.execute(f"DELETE FROM radio_permission_rules WHERE group_id=? AND {match_sql}",
-                     (group_id,) + match_values)
-    if permission != "UNSET":
+        scope_label = (f"frequency {format_frequency(start)} MHz" if scope == "frequency" else
+                       f"range {format_frequency(start)}–{format_frequency(end)} MHz")
+    existing = database.execute(
+        f"SELECT id FROM radio_permission_rules WHERE group_id=? AND {match_sql} ORDER BY id DESC LIMIT 1",
+        (group_id,) + match_values,
+    ).fetchone()
+    if permission == "UNSET":
+        database.execute(
+            f"DELETE FROM radio_permission_rules WHERE group_id=? AND {match_sql}",
+            (group_id,) + match_values,
+        )
+        action = "removed"
+    elif existing:
+        database.execute(
+            f"UPDATE radio_permission_rules SET permission=? WHERE group_id=? AND {match_sql}",
+            (permission, group_id) + match_values,
+        )
+        action = "updated"
+    else:
         database.execute(
             "INSERT INTO radio_permission_rules(group_id,scope_type,band_id,start_khz,end_khz,permission) "
             "VALUES(?,?,?,?,?,?)", (group_id, scope, band_id, start, end, permission),
         )
+        action = "added"
     database.commit()
     reconcile_radio_permissions()
-    flash("Radio permission rule updated.", "success")
-    return _radio_permissions_redirect()
+    flash(f"{group['name']}: {scope_label} rule {action} ({permission}).", "success")
+    return _radio_permissions_redirect(group_id)
 
 
 @bp.post("/sysop/radio/rules/<int:rule_id>/delete")

@@ -53,7 +53,7 @@
 
     <main id="main" class="main-panel">{% block content %}{% endblock %}</main>
 
-    {% if g.user %}{% include '_radio.html' %}{% endif %}
+    {% if g.user and request.endpoint != 'radio.console' %}{% include '_radio.html' %}{% endif %}
 
     <footer class="statusbar">
       <span>STATION: {{ g.station.callsign if g.station else 'OFFLINE' }}</span>

@@ -1,9 +1,8 @@
 "use strict";
 
 (()=>{
-  const body=document.body, player=document.querySelector("[data-radio-player]");
-  if(!player||!body.dataset.radioStateUrl)return;
-  const consolePanel=document.querySelector("[data-radio-console]");
+  const body=document.body, player=document.querySelector("[data-radio-player]"),consolePanel=document.querySelector("[data-radio-console]");
+  if((!player&&!consolePanel)||!body.dataset.radioStateUrl)return;
   const one=name=>consolePanel?.querySelector(`[data-radio-${name}]`)||null;
   const every=name=>[...document.querySelectorAll(`[data-radio-${name}]`)];
   const csrf=body.dataset.radioCsrf;
@@ -62,6 +61,10 @@
   const keyUp=async()=>{if(!keyIsDown)return;keyIsDown=false;oscillatorOff(localKey);localKey=null;key.classList.remove("active");try{await post(body.dataset.radioSignalUrl,{transmission_id:transmissionId,kind:"key_up"})}catch(problem){showError(problem);await endTransmission(true)}};
   const sendPicture=async()=>{if(!preparedImage)return;showError("");sstvButton.disabled=true;try{const width=txCanvas.width,height=txCanvas.height,payload=await post(body.dataset.radioStartUrl,{frequency,mode:"SSTV",width,height});transmissionId=payload.transmission_id;transmissionMode="SSTV";setStatus("TRANSMITTING",true);occupancy.textContent="BUSY / YOUR SSTV SIGNAL";const rgba=txCanvas.getContext("2d").getImageData(0,0,width,height).data;for(let row=0;row<height&&transmissionId;row++){const rgb=new Uint8Array(width*3);for(let x=0;x<width;x++){const source=(row*width+x)*4,target=x*3;rgb[target]=rgba[source];rgb[target+1]=rgba[source+1];rgb[target+2]=rgba[source+2]}playScanline(rgb);await post(body.dataset.radioSignalUrl,{transmission_id:transmissionId,kind:"scanline",row,pixels:encodePixels(rgb)});monitorStatus.textContent=`TRANSMITTING LINE ${row+1}/${height}`;await new Promise(resolve=>setTimeout(resolve,90))}await endTransmission()}catch(problem){showError(problem);await endTransmission(true)}finally{sstvButton.disabled=currentAccess!=="FULL"||!preparedImage}};
 
+  const playerToggle=player?.querySelector("[data-radio-player-toggle]");
+  const setPlayerExpanded=expanded=>{if(!player||!playerToggle)return;player.classList.toggle("minimized",!expanded);playerToggle.setAttribute("aria-expanded",String(expanded));playerToggle.setAttribute("aria-label",`${expanded?"Minimize":"Expand"} radio player`);playerToggle.textContent=expanded?"RADIO ▼":"R";sessionStorage.setItem("stationnet.radio.playerExpanded",String(expanded))};
+  playerToggle?.addEventListener("click",()=>setPlayerExpanded(playerToggle.getAttribute("aria-expanded")!=="true"));
+  if(player)setPlayerExpanded(sessionStorage.getItem("stationnet.radio.playerExpanded")==="true");
   every("power").forEach(button=>button.addEventListener("click",()=>powered?powerOff():powerOn()));
   every("step").forEach(button=>button.addEventListener("click",()=>{const khz=parseKhz(frequency);if(khz!==null)tune(formatKhz(khz+Number(button.dataset.radioStep)))}));
   every("volume").forEach(control=>control.addEventListener("input",()=>{volumeValue=Number(control.value);localStorage.setItem("stationnet.radio.volume",volumeValue);syncVolume()}));
