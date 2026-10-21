@@ -1,6 +1,6 @@
 # StationNet
 
-StationNet is a self-hosted, browser-accessible communications station inspired by BBS software, monochrome terminals, early computer networks, and amateur radio. It provides local station setup, accounts, a responsive terminal workspace, community services, and an ephemeral shared radio with configurable bands, live Morse/CW keying, simplified SSTV picture transmissions, and half-duplex WebRTC voice. It requires no Docker, domain, cloud account, or external database.
+StationNet is a self-hosted, browser-accessible communications station inspired by BBS software, monochrome terminals, early computer networks, and amateur radio. It provides local station setup, accounts, a responsive terminal workspace, community services, an optional native MUD foundation, and an ephemeral shared radio with configurable bands, live Morse/CW keying, simplified SSTV picture transmissions, and half-duplex WebRTC voice. It requires no Docker, domain, cloud account, or external database.
 
 ## Why this stack
 
@@ -57,6 +57,8 @@ Guests can read bulletins when guest access is enabled and can always read stati
 
 The radio uses lightweight HTTP polling for control and WebRTC for live voice media, and is intended for one local StationNet process. A frequency admits one live transmitter at a time, independent of transmission type. Hold the on-screen PTT control (or hold **V** while focus is outside a text field) to talk; releasing it immediately stops the microphone track and clears the frequency. Callsigns, carrier state, and WebRTC negotiation messages are short-lived memory-only state. Voice audio travels directly between browsers and is never recorded, uploaded, or stored. CW key transitions and SSTV scanlines are likewise relayed as short-lived signal events and are never made available as history. The oscilloscope monitors the actual received or transmitted audio path. Browsers require a click or tap before allowing sound.
 
+The native MUD can be enabled under **SYSOP CONTROL**. Its current foundation provides an authenticated text-first interface, persistent action/event records, and a shared server-side dispatch path for contextual buttons and slash commands. Rooms, characters, inventory, movement, multiplayer interaction, combat, and dungeons are intentionally reserved for later development chunks.
+
 ## Tests and layout
 
 ```powershell
@@ -83,5 +85,5 @@ Make `stationnet.lan` resolve to the station computer and install Caddy's local 
 
 Voice uses direct peer-to-peer ICE candidates and no external STUN/TURN service. It is designed for clients on the same reachable LAN. Routed/VLAN-isolated clients, restrictive endpoint firewalls, carrier-grade NAT, and internet use may require a separately operated TURN service, which StationNet does not currently configure. Broadcast scheduling, recurring automation, propagation simulation, and cross-station radio remain out of scope.
 
-Later milestones may add scheduled broadcasts, MUD hosting, controlled federation, and more detailed radio behavior. Those systems are intentionally outside this milestone.
+Later milestones may add scheduled broadcasts, expanded MUD gameplay, controlled federation, and more detailed radio behavior. Those systems are intentionally outside this milestone.
 

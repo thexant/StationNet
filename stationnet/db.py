@@ -13,6 +13,7 @@ CREATE TABLE IF NOT EXISTS station (
  file_size_limit_mb INTEGER NOT NULL DEFAULT 10,
  radio_default_quota_mb INTEGER NOT NULL DEFAULT 100,
  radio_broadcast_limit_minutes INTEGER NOT NULL DEFAULT 120,
+ mud_enabled INTEGER NOT NULL DEFAULT 0 CHECK(mud_enabled IN (0,1)),
  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);
 CREATE TABLE IF NOT EXISTS users (
  id INTEGER PRIMARY KEY AUTOINCREMENT, username TEXT NOT NULL COLLATE NOCASE UNIQUE,
@@ -151,6 +152,26 @@ CREATE TABLE IF NOT EXISTS application_states (
  application_slug TEXT PRIMARY KEY,
  enabled INTEGER NOT NULL DEFAULT 1 CHECK(enabled IN (0,1)),
  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);
+CREATE TABLE IF NOT EXISTS mud_action_log (
+ id INTEGER PRIMARY KEY AUTOINCREMENT,
+ request_id TEXT NOT NULL,
+ actor_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+ action_key TEXT NOT NULL,
+ input_method TEXT NOT NULL CHECK(input_method IN ('context','command')),
+ parameters_json TEXT NOT NULL DEFAULT '{}',
+ created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+ UNIQUE(actor_id,request_id));
+CREATE INDEX IF NOT EXISTS idx_mud_action_actor ON mud_action_log(actor_id,id);
+CREATE TABLE IF NOT EXISTS mud_events (
+ id INTEGER PRIMARY KEY AUTOINCREMENT,
+ action_id INTEGER REFERENCES mud_action_log(id) ON DELETE SET NULL,
+ audience_type TEXT NOT NULL CHECK(audience_type IN ('private','station','room','instance')),
+ audience_key TEXT NOT NULL,
+ event_type TEXT NOT NULL,
+ body TEXT NOT NULL,
+ created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);
+CREATE INDEX IF NOT EXISTS idx_mud_events_audience
+ ON mud_events(audience_type,audience_key,id);
 CREATE TRIGGER IF NOT EXISTS radio_default_membership_after_user_insert
 AFTER INSERT ON users
 BEGIN
@@ -204,6 +225,7 @@ def init_db():
     _migrate_community_fields(database)
     _migrate_hosted_broadcast_fields(database)
     _migrate_broadcast_identity_fields(database)
+    _migrate_mud_settings(database)
     _migrate_legacy_callsigns(database)
     _migrate_factory_radio_bands(database)
     _align_radio_bands_to_display_precision(database)
@@ -443,6 +465,18 @@ def _migrate_broadcast_identity_fields(database):
         database.execute(
             "ALTER TABLE radio_broadcast_assignments "
             "ADD COLUMN broadcast_message TEXT NOT NULL DEFAULT ''"
+        )
+
+
+def _migrate_mud_settings(database):
+    """Add the native MUD feature switch without changing an operator's data."""
+    columns = {
+        row["name"] for row in database.execute("PRAGMA table_info(station)")
+    }
+    if "mud_enabled" not in columns:
+        database.execute(
+            "ALTER TABLE station ADD COLUMN mud_enabled INTEGER NOT NULL DEFAULT 0 "
+            "CHECK(mud_enabled IN (0,1))"
         )
 
 def _migrate_legacy_callsigns(database):

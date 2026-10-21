@@ -57,6 +57,21 @@
   </div>
 </section>
 
+<section class="narrow terminal-card settings-section collapsible-panel" id="mud-service" data-collapsible-panel data-panel-key="sysop-mud-service">
+  <button type="button" class="collapsible-panel-toggle" data-panel-toggle aria-expanded="true" aria-controls="mud-service-content">
+    <span class="collapsible-panel-heading"><span class="eyebrow">SYSOP CONTROL / NATIVE MUD</span><span class="collapsible-panel-title" role="heading" aria-level="2">MUD service</span></span>
+    <span class="collapsible-panel-chevron" aria-hidden="true"></span>
+  </button>
+  <div id="mud-service-content" data-panel-content>
+  <p class="muted">Enable the native StationNet MUD interface. Disabling access preserves its action history and all future world and character data.</p>
+  <form method="post" action="{{ url_for('station.mud_settings') }}" class="form-grid">
+    <input type="hidden" name="csrf_token" value="{{ session.csrf_token }}">
+    <label class="switch"><input type="checkbox" name="mud_enabled" {% if g.station.mud_enabled %}checked{% endif %}> Enable MUD service for authenticated members</label>
+    <button>SAVE MUD SERVICE</button>
+  </form>
+  </div>
+</section>
+
 <section class="narrow terminal-card settings-section collapsible-panel" id="radio-storage" data-collapsible-panel data-panel-key="sysop-radio-storage">
   <button type="button" class="collapsible-panel-toggle" data-panel-toggle aria-expanded="true" aria-controls="radio-storage-content">
     <span class="collapsible-panel-heading"><span class="eyebrow">SYSOP CONTROL / RADIO STORAGE</span><span class="collapsible-panel-title" role="heading" aria-level="2">Broadcaster library quotas</span></span>

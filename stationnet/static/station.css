@@ -293,6 +293,35 @@ button:hover, .button:hover { color: #000; background: var(--green); }
 .chat-error { color: var(--red); font-size: .65rem; }
 button:disabled { opacity: .5; cursor: not-allowed; }
 
+.mud-shell { width: min(100%, 920px); margin-inline: auto; }
+.mud-header { display: flex; align-items: end; justify-content: space-between; gap: 1rem; padding: .7rem .9rem; border: 1px solid var(--cyan); border-bottom: 0; }
+.mud-header h1, .mud-header .eyebrow { margin-bottom: 0; }
+.mud-link-state { color: var(--green-bright); font-size: .6rem; letter-spacing: .08em; white-space: nowrap; }
+.mud-layout { display: grid; grid-template-columns: minmax(0, 1fr) 15rem; min-height: 34rem; border: 1px solid var(--green); }
+.mud-main { display: grid; grid-template-rows: minmax(16rem, 1fr) auto auto; min-width: 0; border-right: 1px solid var(--green-dim); }
+.mud-events { min-height: 16rem; max-height: 52vh; padding: .8rem; overflow-y: auto; background: #010401; scrollbar-color: var(--green-dim) #000; }
+.mud-event { display: grid; grid-template-columns: 4.5rem minmax(0,1fr); gap: .65rem; padding: .5rem .25rem; border-bottom: 1px dotted #064d1d; }
+.mud-event span { color: var(--cyan); font-size: .57rem; letter-spacing: .06em; }
+.mud-event p { margin: 0; color: var(--white); font-size: .76rem; white-space: pre-wrap; overflow-wrap: anywhere; }
+.mud-event-system p { color: var(--green-bright); }
+.mud-context { padding: .65rem .8rem; border-top: 1px solid var(--green-dim); background: rgba(0,237,69,.025); }
+.mud-section-heading { display: flex; justify-content: space-between; gap: .75rem; margin-bottom: .55rem; color: var(--cyan); font-size: .61rem; letter-spacing: .07em; }
+.mud-section-heading small { color: var(--grey); font-size: .55rem; letter-spacing: 0; }
+.mud-action-groups { display: grid; gap: .55rem; }
+.mud-action-group > span { display: block; margin-bottom: .3rem; color: var(--grey); font-size: .54rem; letter-spacing: .08em; }
+.mud-action-group > div { display: flex; flex-wrap: wrap; gap: .45rem; }
+.mud-action-group button { min-height: 2.65rem; }
+.mud-command { padding: .7rem .8rem .8rem; border-top: 1px solid var(--green-dim); }
+.mud-command > div { display: grid; grid-template-columns: minmax(0,1fr) auto; gap: .5rem; }
+.mud-command label { margin-bottom: .3rem; color: var(--cyan); }
+.mud-command small { display: block; margin-top: .35rem; color: var(--grey); font-size: .56rem; }
+.mud-command button { min-width: 7rem; justify-content: center; }
+.mud-error { display: block; min-height: 1em; margin-top: .35rem; color: var(--red); font-size: .62rem; }
+.mud-sidebar { min-width: 0; background: #000; }
+.mud-panel { padding: .8rem; border-bottom: 1px solid var(--green-dim); }
+.mud-panel .collapsible-panel-title { font-size: .82rem; text-transform: uppercase; }
+.mud-panel [data-panel-content] p { margin: 0; font-size: .65rem; }
+
 .settings-section { margin-top: 1.5rem; }
 .collapsible-panel-toggle { width: 100%; min-height: 0; padding: 0 0 .55rem; color: inherit; border: 0; border-bottom: 1px solid var(--green-dim); background: transparent; text-align: left; }
 .collapsible-panel-toggle:hover { color: inherit; background: rgba(0,237,69,.045); }
@@ -451,6 +480,10 @@ button:disabled { opacity: .5; cursor: not-allowed; }
   .radio-player { grid-template-columns: 1fr; }
   .radio-player-state { justify-content: center; }
   .radio-player-controls { justify-content: center; flex-wrap: wrap; }
+  .mud-layout { grid-template-columns: 1fr; }
+  .mud-main { border-right: 0; }
+  .mud-sidebar { display: grid; grid-template-columns: 1fr 1fr; border-top: 1px solid var(--green-dim); }
+  .mud-panel { border-right: 1px solid var(--green-dim); }
 }
 
 @media (max-width: 430px) {
@@ -480,4 +513,12 @@ button:disabled { opacity: .5; cursor: not-allowed; }
   .radio-operation, .radio-cw-controls, .radio-pictures, .radio-voice-controls { grid-template-columns: 1fr; }
   .playlist-settings { grid-template-columns: 1fr; }
   .track-row { align-items: flex-start; flex-direction: column; }
+  .mud-header { align-items: start; flex-direction: column; }
+  .mud-events { max-height: 45vh; }
+  .mud-event { grid-template-columns: 1fr; gap: .2rem; }
+  .mud-section-heading { align-items: flex-start; flex-direction: column; }
+  .mud-action-group > div { display: grid; grid-template-columns: 1fr; }
+  .mud-command > div { grid-template-columns: 1fr; }
+  .mud-command button { width: 100%; }
+  .mud-sidebar { grid-template-columns: 1fr; }
 }

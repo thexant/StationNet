@@ -60,15 +60,16 @@ def test_station_name_and_callsign_appear_in_descriptive_identity(initialized, a
 def test_sysop_settings_use_independent_accessible_collapsible_sections(initialized):
     page = initialized.get("/sysop/settings")
 
-    assert page.data.count(b"data-collapsible-panel") == 7
+    assert page.data.count(b"data-collapsible-panel") == 8
     for content_id in (
         "station-parameters-content", "access-policy-content", "radio-storage-content",
+        "mud-service-content",
         "radio-spectrum-content", "broadcast-frequencies-content",
         "radio-permissions-content", "radio-users-content",
     ):
         assert f'aria-controls="{content_id}"'.encode() in page.data
         assert f'id="{content_id}" data-panel-content'.encode() in page.data
-    assert page.data.count(b'aria-expanded="true"') >= 7
+    assert page.data.count(b'aria-expanded="true"') >= 8
     assert b"COMMIT PARAMETERS" in page.data
     assert b"SAVE ACCESS POLICY" in page.data
     assert b"ADD / UPDATE RULE" in page.data

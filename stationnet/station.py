@@ -32,6 +32,19 @@ def access_settings():
     return redirect(url_for("station.settings") + "#access-policy")
 
 
+@bp.post("/sysop/settings/mud")
+@admin_required
+def mud_settings():
+    """Enable or disable the native MUD without deleting its persisted data."""
+    validate_csrf()
+    enabled = request.form.get("mud_enabled") == "on"
+    database = get_db()
+    database.execute("UPDATE station SET mud_enabled=? WHERE id=1", (enabled,))
+    database.commit()
+    flash(f"MUD service {'enabled' if enabled else 'disabled'}.", "success")
+    return redirect(url_for("station.settings") + "#mud-service")
+
+
 @bp.post("/sysop/radio/storage")
 @admin_required
 def save_radio_default_quota():
