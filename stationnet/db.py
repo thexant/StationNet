@@ -88,6 +88,14 @@ END;
 """
 
 DEFAULT_RADIO_BANDS = (
+    (1, "GENERAL COMMUNICATION", 145000, 432990, "members"),
+    (2, "BROADCASTS", 7000, 13990, "admins"),
+    (3, "MORSE / CW", 14000, 27990, "members"),
+    (4, "DATA TRANSMISSIONS", 28000, 144990, "members"),
+    (5, "EXPERIMENTAL / UNRESTRICTED", 433000, 999990, "members"),
+)
+
+NARROW_DEFAULT_RADIO_BANDS = (
     (1, "GENERAL COMMUNICATION", 145000, 145990, "members"),
     (2, "BROADCASTS", 7000, 7990, "admins"),
     (3, "MORSE / CW", 14000, 14990, "members"),
@@ -135,11 +143,12 @@ def init_db():
 
 
 def _migrate_factory_radio_bands(database):
-    """Move only the untouched legacy factory plan; preserve operator customizations."""
+    """Expand known factory plans while preserving operator customizations."""
     rows = database.execute(
         "SELECT id,name,start_khz,end_khz,tx_permission FROM radio_bands ORDER BY id"
     ).fetchall()
-    if [tuple(row) for row in rows] != list(LEGACY_DEFAULT_RADIO_BANDS):
+    current = [tuple(row) for row in rows]
+    if current not in (list(LEGACY_DEFAULT_RADIO_BANDS), list(NARROW_DEFAULT_RADIO_BANDS)):
         return
     database.executemany(
         "UPDATE radio_bands SET name=?,start_khz=?,end_khz=?,tx_permission=? WHERE id=?",

@@ -1,308 +1,85 @@
 "use strict";
 
-for(const radio of document.querySelectorAll("[data-radio]")){
-  const find=name=>radio.querySelector(`[data-radio-${name}]`);
-  const csrf=radio.dataset.csrf;
-  const input=find("input"), display=find("display"), compact=find("frequency");
-  const bandReadout=find("band"), status=find("status"), monitorStatus=find("monitor-status");
-  const lamp=find("lamp"), occupancy=find("occupancy"), error=find("error");
-  const mode=find("mode"), cwPanel=find("cw"), sstvPanel=find("sstv");
-  const cwButton=find("cw-tx"), key=find("key"), toneInput=find("tone"), wpmInput=find("wpm");
-  const decoder=find("decoder"), decoderOutput=find("decoder-output");
-  const imageInput=find("image"), sstvButton=find("sstv-tx"), saveButton=find("sstv-save");
-  const txCanvas=find("tx-picture"), rxCanvas=find("rx-picture"), rxCaption=find("rx-caption");
-  const volume=find("volume"), mute=find("mute"), scope=find("scope");
-  const bandSelect=find("band-select");
+(()=>{
+  const body=document.body, player=document.querySelector("[data-radio-player]");
+  if(!player||!body.dataset.radioStateUrl)return;
+  const consolePanel=document.querySelector("[data-radio-console]");
+  const one=name=>consolePanel?.querySelector(`[data-radio-${name}]`)||null;
+  const every=name=>[...document.querySelectorAll(`[data-radio-${name}]`)];
+  const csrf=body.dataset.radioCsrf;
 
-  let frequency=null, currentBand=null, cursor=0, receiving=false, transmissionId=null;
-  let currentAccess="DENIED";
-  let transmissionMode=null, heartbeat=null, keyIsDown=false, localKey=null;
-  let context=null, analyser=null, outputGain=null, squelchSource=null, muted=false;
+  let frequency=null, currentBand=null, cursor=0, powered=false, receiving=false;
+  let currentAccess="DENIED", transmissionId=null, transmissionMode=null, heartbeat=null;
+  let keyIsDown=false, localKey=null, context=null, analyser=null, outputGain=null, squelchSource=null;
   let receiveNodes=new Set(), rxOscillator=null, rxKeyStarted=0, rxAudioTime=0, tuneGeneration=0;
-  let preparedImage=null, receivedRows=0, expectedRows=0;
-  let decodeMarks="", decodedText="", decodeTimer=null;
+  let preparedImage=null, receivedRows=0, expectedRows=0, decodeMarks="", decodedText="", decodeTimer=null;
+  let muted=sessionStorage.getItem("stationnet.radio.muted")==="true";
+  let volumeValue=Number(localStorage.getItem("stationnet.radio.volume")||55);
 
+  const input=one("input"), display=one("display"), bandReadout=one("band"), monitorStatus=one("monitor-status");
+  const occupancy=one("occupancy"), mode=one("mode"), cwPanel=one("cw"), sstvPanel=one("sstv");
+  const cwButton=one("cw-tx"), key=one("key"), toneInput=one("tone"), wpmInput=one("wpm");
+  const decoder=one("decoder"), decoderOutput=one("decoder-output"), imageInput=one("image");
+  const sstvButton=one("sstv-tx"), saveButton=one("sstv-save"), txCanvas=one("tx-picture");
+  const rxCanvas=one("rx-picture"), rxCaption=one("rx-caption"), scope=one("scope"), bandSelect=one("band-select");
   const morseDecode={".-":"A","-...":"B","-.-.":"C","-..":"D",".":"E","..-.":"F","--.":"G","....":"H","..":"I",".---":"J","-.-":"K",".-..":"L","--":"M","-.":"N","---":"O",".--.":"P","--.-":"Q",".-.":"R","...":"S","-":"T","..-":"U","...-":"V",".--":"W","-..-":"X","-.--":"Y","--..":"Z","-----":"0",".----":"1","..---":"2","...--":"3","....-":"4",".....":"5","-....":"6","--...":"7","---..":"8","----.":"9"};
 
-  const setStatus=(label,active=false)=>{
-    status.textContent=label;
-    monitorStatus.textContent=label;
-    lamp.classList.toggle("active",active);
-  };
-  const showError=problem=>{error.textContent=problem?.message||String(problem||"");};
-  const post=async(url,values)=>{
-    const data=new FormData(); data.set("csrf_token",csrf);
-    for(const [name,value] of Object.entries(values))data.set(name,value);
-    const response=await fetch(url,{method:"POST",body:data,headers:{Accept:"application/json"}});
-    const payload=await response.json();
-    if(!response.ok)throw new Error(payload.error||"Radio operation failed.");
-    return payload;
-  };
+  const setText=(name,value)=>every(name).forEach(node=>node.textContent=value);
+  const showError=problem=>setText("error",problem?.message||String(problem||""));
+  const setStatus=(label,active=false)=>{setText("status",label);if(monitorStatus)monitorStatus.textContent=label;every("lamp").forEach(lamp=>lamp.classList.toggle("active",powered&&active))};
+  const post=async(url,values={})=>{const data=new FormData();data.set("csrf_token",csrf);for(const [name,value] of Object.entries(values))data.set(name,value);const response=await fetch(url,{method:"POST",body:data,headers:{Accept:"application/json"}}),payload=await response.json();if(!response.ok)throw new Error(payload.error||"Radio operation failed.");return payload};
   const permissionLabel=access=>access==="FULL"?"FULL":access==="LISTEN"?"RX ONLY":"ACCESS RESTRICTED";
   const formatKhz=khz=>`${Math.floor(khz/1000)}.${String(Math.floor((khz%1000)/10)).padStart(2,"0")}`;
-  const parseKhz=value=>{
-    const match=/^(\d{1,3})(?:\.(\d{1,2}))?$/.exec(String(value).trim());
-    if(!match)return null;
-    const result=Number(match[1])*1000+Number((match[2]||"").padEnd(2,"0"))*10;
-    return result>=100&&result<=999999?result:null;
-  };
+  const parseKhz=value=>{const match=/^(\d{1,3})(?:\.(\d{1,2}))?$/.exec(String(value).trim());if(!match)return null;const result=Number(match[1])*1000+Number((match[2]||"").padEnd(2,"0"))*10;return result>=100&&result<=999990?result:null};
 
-  const ensureAudio=()=>{
-    if(!context){
-      const Audio=window.AudioContext||window.webkitAudioContext;
-      if(!Audio)return null;
-      context=new Audio();
-      analyser=context.createAnalyser(); analyser.fftSize=2048;
-      outputGain=context.createGain();
-      analyser.connect(outputGain).connect(context.destination);
-      updateVolume();
-    }
-    if(context.state==="suspended")context.resume().catch(()=>{});
-    return context;
-  };
-  const updateVolume=()=>{
-    if(outputGain)outputGain.gain.setTargetAtTime(muted?0:(Number(volume.value)/100)*.35,context.currentTime,.01);
-  };
-  const connectSignal=node=>{node.connect(analyser); receiveNodes.add(node); node.addEventListener?.("ended",()=>receiveNodes.delete(node)); return node;};
-  const stopReception=()=>{
-    for(const node of receiveNodes){try{node.stop()}catch(_){}}
-    receiveNodes.clear(); rxOscillator=null; rxAudioTime=0; tuneGeneration++;
-    setStatus("IDLE");
-  };
-  const playSquelch=()=>{
-    const audio=ensureAudio(); if(!audio||audio.state!=="running"||muted)return;
-    try{squelchSource?.stop()}catch(_){}
-    const duration=.13, buffer=audio.createBuffer(1,Math.floor(audio.sampleRate*duration),audio.sampleRate);
-    const data=buffer.getChannelData(0);
-    for(let i=0;i<data.length;i++)data[i]=(Math.random()*2-1)*(1-i/data.length);
-    const source=audio.createBufferSource(), filter=audio.createBiquadFilter(), gain=audio.createGain();
-    filter.type="bandpass"; filter.frequency.value=1700; filter.Q.value=.65; gain.gain.value=.38;
-    source.buffer=buffer; source.connect(filter).connect(gain).connect(analyser); source.start(); squelchSource=source;
-    source.onended=()=>{if(squelchSource===source)squelchSource=null};
-  };
-  const oscillatorOn=(hz,local=false)=>{
-    const audio=ensureAudio(); if(!audio||audio.state!=="running")return null;
-    const oscillator=audio.createOscillator(), gain=audio.createGain();
-    oscillator.frequency.value=hz; gain.gain.setValueAtTime(.0001,audio.currentTime);
-    gain.gain.exponentialRampToValueAtTime(local ? .20 : .28,audio.currentTime+.008);
-    oscillator.connect(gain).connect(analyser); oscillator.start();
-    oscillator._radioGain=gain; receiveNodes.add(oscillator);
-    oscillator.addEventListener("ended",()=>receiveNodes.delete(oscillator)); return oscillator;
-  };
-  const oscillatorOff=(oscillator,delayMs=0)=>{
-    if(!oscillator||!context)return;
-    try{const stopAt=context.currentTime+Math.max(0,delayMs)/1000;oscillator._radioGain.gain.setTargetAtTime(.0001,stopAt,.008);oscillator.stop(stopAt+.04)}catch(_){}
-  };
+  const syncVolume=()=>{every("volume").forEach(control=>{if(Number(control.value)!==volumeValue)control.value=volumeValue});every("mute").forEach(button=>{button.textContent=`MUTE: ${muted?"ON":"OFF"}`;button.setAttribute("aria-pressed",String(muted))});if(outputGain&&context)outputGain.gain.setTargetAtTime(muted?0:(volumeValue/100)*.35,context.currentTime,.01)};
+  const ensureAudio=()=>{if(!context){const Audio=window.AudioContext||window.webkitAudioContext;if(!Audio)return null;context=new Audio();analyser=context.createAnalyser();analyser.fftSize=2048;outputGain=context.createGain();analyser.connect(outputGain).connect(context.destination);syncVolume()}if(context.state==="suspended")context.resume().catch(()=>{});return context};
+  const connectSignal=node=>{node.connect(analyser);receiveNodes.add(node);node.addEventListener?.("ended",()=>receiveNodes.delete(node));return node};
+  const stopReception=()=>{for(const node of receiveNodes){try{node.stop()}catch(_){}}receiveNodes.clear();rxOscillator=null;rxAudioTime=0;tuneGeneration++};
+  const playSquelch=()=>{const audio=ensureAudio();if(!audio||audio.state!=="running"||muted)return;try{squelchSource?.stop()}catch(_){}const duration=.13,buffer=audio.createBuffer(1,Math.floor(audio.sampleRate*duration),audio.sampleRate),data=buffer.getChannelData(0);for(let i=0;i<data.length;i++)data[i]=(Math.random()*2-1)*(1-i/data.length);const source=audio.createBufferSource(),filter=audio.createBiquadFilter(),gain=audio.createGain();filter.type="bandpass";filter.frequency.value=1700;filter.Q.value=.65;gain.gain.value=.38;source.buffer=buffer;source.connect(filter).connect(gain).connect(analyser);source.start();squelchSource=source;source.onended=()=>{if(squelchSource===source)squelchSource=null}};
+  const oscillatorOn=(hz,local=false)=>{const audio=ensureAudio();if(!audio||audio.state!=="running")return null;const oscillator=audio.createOscillator(),gain=audio.createGain();oscillator.frequency.value=hz;gain.gain.setValueAtTime(.0001,audio.currentTime);gain.gain.exponentialRampToValueAtTime(local?.20:.28,audio.currentTime+.008);oscillator.connect(gain).connect(analyser);oscillator.start();oscillator._radioGain=gain;receiveNodes.add(oscillator);oscillator.addEventListener("ended",()=>receiveNodes.delete(oscillator));return oscillator};
+  const oscillatorOff=(oscillator,delayMs=0)=>{if(!oscillator||!context)return;try{const stopAt=context.currentTime+Math.max(0,delayMs)/1000;oscillator._radioGain.gain.setTargetAtTime(.0001,stopAt,.008);oscillator.stop(stopAt+.04)}catch(_){}};
 
-  const drawScope=()=>{
-    const drawing=scope.getContext("2d"), width=scope.width, height=scope.height;
-    drawing.fillStyle="#000"; drawing.fillRect(0,0,width,height);
-    drawing.strokeStyle="#073b23"; drawing.lineWidth=1;
-    drawing.beginPath(); for(let x=0;x<width;x+=45){drawing.moveTo(x,0);drawing.lineTo(x,height)}
-    for(let y=0;y<height;y+=25){drawing.moveTo(0,y);drawing.lineTo(width,y)} drawing.stroke();
-    drawing.strokeStyle="#35ff8a"; drawing.shadowColor="#18c968"; drawing.shadowBlur=5; drawing.beginPath();
-    if(analyser){
-      const values=new Uint8Array(analyser.fftSize); analyser.getByteTimeDomainData(values);
-      for(let i=0;i<values.length;i++){
-        const x=i/(values.length-1)*width, y=(values[i]/255)*height;
-        i?drawing.lineTo(x,y):drawing.moveTo(x,y);
-      }
-    }else{drawing.moveTo(0,height/2);drawing.lineTo(width,height/2)}
-    drawing.stroke(); drawing.shadowBlur=0; requestAnimationFrame(drawScope);
-  };
-  drawScope();
-  document.addEventListener("pointerdown",ensureAudio,{once:true,capture:true});
+  const renderPower=()=>{every("power").forEach(button=>{button.textContent=`POWER: ${powered?"ON":"OFF"}`;button.setAttribute("aria-pressed",String(powered));button.classList.toggle("active",powered)});every("step").forEach(button=>button.disabled=!powered);if(input)input.disabled=!powered;if(bandSelect)bandSelect.disabled=!powered;for(const button of consolePanel?.querySelectorAll("[data-radio-scan]")||[])button.disabled=!powered;if(!powered){setStatus("OFF");if(monitorStatus)monitorStatus.textContent="OFF";if(occupancy)occupancy.textContent="RECEIVER OFF";if(bandReadout)bandReadout.textContent="RADIO POWER OFF"}};
+  const applyAccess=access=>{currentAccess=access||"DENIED";const canTransmit=powered&&currentAccess==="FULL";if(cwButton)cwButton.disabled=!canTransmit;if(sstvButton)sstvButton.disabled=!canTransmit||!preparedImage;setText("access",powered?permissionLabel(currentAccess):"RADIO OFF");if(powered&&currentAccess==="DENIED"){if(occupancy)occupancy.textContent="ACCESS RESTRICTED";setStatus("ACCESS RESTRICTED")}else if(powered&&currentAccess==="LISTEN"&&!transmissionId)setStatus("RX ONLY")};
+  const applyFrequency=(value,band,newCursor,withSquelch=true,access=band?.access)=>{frequency=value;currentBand=band;cursor=Math.max(0,Number(newCursor)||0);setText("frequency",value||"---.--");if(input)input.value=value||"";if(display)display.textContent=value||"---.--";if(bandReadout&&band)bandReadout.textContent=`${band.name} / ${permissionLabel(access)}`;if(bandSelect&&band)bandSelect.value=String(band.id);if(occupancy)occupancy.textContent="FREQUENCY CLEAR";if(value)localStorage.setItem("stationnet.radio.frequency",value);stopReception();applyAccess(access);if(withSquelch&&powered&&access!=="DENIED")playSquelch()};
+  const endTransmission=async(silent=false)=>{if(!transmissionId)return;const ending=transmissionId;transmissionId=null;transmissionMode=null;clearInterval(heartbeat);heartbeat=null;if(key)key.disabled=true;if(cwButton)cwButton.textContent="BEGIN CW TRANSMISSION";if(keyIsDown){keyIsDown=false;oscillatorOff(localKey);localKey=null}try{await post(body.dataset.radioEndUrl,{transmission_id:ending})}catch(problem){if(!silent)showError(problem)}if(powered)setStatus(currentAccess==="LISTEN"?"RX ONLY":currentAccess==="DENIED"?"ACCESS RESTRICTED":"IDLE")};
+  const tune=async(value,withSquelch=true)=>{showError("");const parsed=parseKhz(value);if(parsed===null){showError("Use a frequency from 0.10 to 999.99 MHz with no more than two decimal places.");if(input)input.value=frequency||"";return false}if(!powered)return false;stopReception();await endTransmission(true);setStatus("TUNING");try{const payload=await post(body.dataset.radioTuneUrl,{frequency:formatKhz(parsed)});applyFrequency(payload.frequency,payload.band,payload.cursor,withSquelch,payload.access);setStatus(payload.access==="DENIED"?"ACCESS RESTRICTED":payload.access==="LISTEN"?"RX ONLY":"IDLE");return true}catch(problem){showError(problem);if(input)input.value=frequency||"";setStatus("TUNE ERROR");return false}};
+  const powerOn=async()=>{ensureAudio();powered=true;sessionStorage.setItem("stationnet.radio.powered","true");renderPower();const target=localStorage.getItem("stationnet.radio.frequency")||frequency;if(!await tune(target)){powered=false;sessionStorage.removeItem("stationnet.radio.powered");renderPower()}};
+  const powerOff=async()=>{await endTransmission(true);powered=false;sessionStorage.removeItem("stationnet.radio.powered");stopReception();renderPower();applyAccess(currentAccess);try{await post(body.dataset.radioPowerOffUrl)}catch(problem){showError(problem)}};
 
-  const endTransmission=async(silent=false)=>{
-    if(!transmissionId)return;
-    const ending=transmissionId; transmissionId=null; transmissionMode=null;
-    clearInterval(heartbeat); heartbeat=null; key.disabled=true; cwButton.textContent="BEGIN CW TRANSMISSION";
-    if(keyIsDown){keyIsDown=false;oscillatorOff(localKey);localKey=null}
-    try{await post(radio.dataset.endUrl,{transmission_id:ending})}catch(problem){if(!silent)showError(problem)}
-    setStatus(currentAccess==="LISTEN"?"RX ONLY":currentAccess==="DENIED"?"ACCESS RESTRICTED":"IDLE");
-  };
-  const applyAccess=access=>{
-    currentAccess=access||"DENIED";
-    const canTransmit=currentAccess==="FULL";
-    cwButton.disabled=!canTransmit;
-    sstvButton.disabled=!canTransmit||!preparedImage;
-    if(currentAccess==="DENIED"){
-      stopReception(); occupancy.textContent="ACCESS RESTRICTED"; setStatus("ACCESS RESTRICTED");
-    }else if(currentAccess==="LISTEN"&&!transmissionId){setStatus("RX ONLY")}
-  };
-  const applyFrequency=(value,band,newCursor,withSquelch=true,access=band?.access)=>{
-    frequency=value; currentBand=band; cursor=Math.max(0,Number(newCursor)||0);
-    input.value=value; display.textContent=value; compact.textContent=value;
-    bandReadout.textContent=`${band.name} / ${permissionLabel(access)}`;
-    if(bandSelect&&band)bandSelect.value=String(band.id);
-    occupancy.textContent="FREQUENCY CLEAR"; localStorage.setItem("stationnet.radio.frequency",value);
-    stopReception(); applyAccess(access); if(withSquelch&&access!=="DENIED")playSquelch();
-  };
-  const tune=async value=>{
-    error.textContent=""; const parsed=parseKhz(value);
-    if(parsed===null){showError("Use a numeric MHz frequency with no more than two decimal places.");input.value=frequency||"";return false}
-    stopReception(); await endTransmission(true); setStatus("TUNING");
-    try{const payload=await post(radio.dataset.tuneUrl,{frequency:formatKhz(parsed)});applyFrequency(payload.frequency,payload.band,payload.cursor,true,payload.access);return true}
-    catch(problem){showError(problem);input.value=frequency||"";setStatus("TUNE ERROR");return false}
-  };
+  const flushDecode=(wordGap=false)=>{if(!decoderOutput)return;if(decodeMarks){decodedText+=(morseDecode[decodeMarks]||"?");decodeMarks=""}if(wordGap&&decodedText&&!decodedText.endsWith(" "))decodedText+=" ";decoderOutput.textContent=(decodedText||"...").slice(-48)};
+  const decodeEvent=event=>{if(!decoder?.checked)return;const dot=1200/Math.max(5,Number(wpmInput.value)||18);if(event.kind==="key_down"&&event.gap_ms!=null){if(event.gap_ms>=dot*6)flushDecode(true);else if(event.gap_ms>=dot*2)flushDecode(false)}if(event.kind==="key_up"){decodeMarks+=event.duration_ms<dot*2?".":"-";clearTimeout(decodeTimer);decodeTimer=setTimeout(()=>flushDecode(false),dot*3.2)}if(event.kind==="end")flushDecode(false)};
+  const decodePixels=value=>{const binary=atob(value),pixels=new Uint8ClampedArray(binary.length);for(let i=0;i<binary.length;i++)pixels[i]=binary.charCodeAt(i);return pixels};
+  const encodePixels=pixels=>{let binary="";for(let i=0;i<pixels.length;i++)binary+=String.fromCharCode(pixels[i]);return btoa(binary)};
+  const playScanline=(pixels,generation=tuneGeneration)=>{const audio=ensureAudio();if(!audio||audio.state!=="running"||generation!==tuneGeneration)return;const samplesPerPixel=Math.max(20,Math.floor(audio.sampleRate*.09/(pixels.length/3))),buffer=audio.createBuffer(1,samplesPerPixel*(pixels.length/3),audio.sampleRate),data=buffer.getChannelData(0);let phase=0;for(let pixel=0;pixel<pixels.length/3;pixel++){const r=pixels[pixel*3],g=pixels[pixel*3+1],b=pixels[pixel*3+2],hz=550+(r*.299+g*.587+b*.114)*6.1;for(let sample=0;sample<samplesPerPixel;sample++){phase+=2*Math.PI*hz/audio.sampleRate;data[pixel*samplesPerPixel+sample]=Math.sin(phase)*.42}}const source=connectSignal(audio.createBufferSource());source.buffer=buffer;rxAudioTime=Math.max(audio.currentTime+.01,rxAudioTime);source.start(rxAudioTime);rxAudioTime+=buffer.duration};
+  const drawReceivedLine=event=>{if(!rxCanvas)return;const pixels=decodePixels(event.pixels),width=pixels.length/3;if(rxCanvas.width!==width){rxCanvas.width=width;rxCanvas.height=Math.max(expectedRows||60,event.row+1)}const rgba=new Uint8ClampedArray(width*4);for(let i=0;i<width;i++){rgba[i*4]=pixels[i*3];rgba[i*4+1]=pixels[i*3+1];rgba[i*4+2]=pixels[i*3+2];rgba[i*4+3]=255}rxCanvas.getContext("2d").putImageData(new ImageData(rgba,width),0,event.row);receivedRows=Math.max(receivedRows,event.row+1);rxCaption.textContent=`RX PICTURE / LINE ${receivedRows}${expectedRows?` OF ${expectedRows}`:""}`;playScanline(pixels)};
+  const handleEvent=event=>{if(event.kind==="start"){if(occupancy)occupancy.textContent=`BUSY / ${event.callsign} / ${event.mode}`;if(!event.mine)setStatus("RECEIVING",true);if(event.mode==="SSTV"&&!event.mine&&rxCanvas){rxCanvas.width=event.width||80;rxCanvas.height=event.height||60;rxCanvas.getContext("2d").fillRect(0,0,rxCanvas.width,rxCanvas.height);receivedRows=0;expectedRows=event.height||0;saveButton.disabled=true}}else if(event.mode==="CW"){if(!event.mine&&event.kind==="key_down"){oscillatorOff(rxOscillator);rxOscillator=oscillatorOn(event.tone_hz||650);rxKeyStarted=performance.now();setStatus("RECEIVING",true)}if(!event.mine&&event.kind==="key_up"){const remaining=Math.max(0,(event.duration_ms||0)-(performance.now()-rxKeyStarted));oscillatorOff(rxOscillator,remaining);rxOscillator=null;rxKeyStarted=0}if(!event.mine)decodeEvent(event)}else if(event.mode==="SSTV"&&event.kind==="scanline"&&!event.mine){drawReceivedLine(event);setStatus("RECEIVING",true)}if(event.kind==="end"){if(!event.mine){oscillatorOff(rxOscillator);rxOscillator=null;setStatus("IDLE");if(event.mode==="SSTV"&&receivedRows&&saveButton){saveButton.disabled=false;rxCaption.textContent=`RX PICTURE / ${receivedRows} LINES RECEIVED`}}if(occupancy)occupancy.textContent="FREQUENCY CLEAR"}};
+  const receive=async()=>{if(receiving||!powered||!frequency)return;receiving=true;try{const response=await fetch(`${body.dataset.radioReceiveUrl}?frequency=${encodeURIComponent(frequency)}&after=${cursor}`,{headers:{Accept:"application/json"},cache:"no-store"}),payload=await response.json();if(response.status===401||response.redirected){location.reload();return}if(!response.ok){if(payload.access)applyAccess(payload.access);throw new Error(payload.error||"Receiver link interrupted.")}applyAccess(payload.access);for(const event of payload.events||[])handleEvent(event);cursor=Math.max(cursor,Number(payload.cursor)||0);if(payload.active){if(occupancy)occupancy.textContent=`BUSY / ${payload.active.callsign} / ${payload.active.mode}`;if(!transmissionId)setStatus("RECEIVING",true)}else if(!transmissionId){if(occupancy)occupancy.textContent="FREQUENCY CLEAR";setStatus(currentAccess==="LISTEN"?"RX ONLY":"IDLE")}}catch(_){if(powered&&currentAccess!=="DENIED")setStatus("LINK RETRYING")}finally{receiving=false}};
 
-  const flushDecode=(wordGap=false)=>{
-    if(decodeMarks){decodedText+=(morseDecode[decodeMarks]||"?");decodeMarks=""}
-    if(wordGap&&decodedText&&!decodedText.endsWith(" "))decodedText+=" ";
-    decoderOutput.textContent=(decodedText||"...").slice(-48);
-  };
-  const decodeEvent=event=>{
-    if(!decoder.checked)return;
-    const dot=1200/Math.max(5,Number(wpmInput.value)||18);
-    if(event.kind==="key_down"&&event.gap_ms!=null){
-      if(event.gap_ms>=dot*6)flushDecode(true); else if(event.gap_ms>=dot*2)flushDecode(false);
-    }
-    if(event.kind==="key_up"){
-      decodeMarks+=event.duration_ms<dot*2?".":"-";
-      clearTimeout(decodeTimer); decodeTimer=setTimeout(()=>flushDecode(false),dot*3.2);
-    }
-    if(event.kind==="end")flushDecode(false);
-  };
-  const decodePixels=value=>{
-    const binary=atob(value), pixels=new Uint8ClampedArray(binary.length);
-    for(let i=0;i<binary.length;i++)pixels[i]=binary.charCodeAt(i); return pixels;
-  };
-  const encodePixels=pixels=>{
-    let binary=""; for(let i=0;i<pixels.length;i++)binary+=String.fromCharCode(pixels[i]); return btoa(binary);
-  };
-  const playScanline=(pixels,generation=tuneGeneration)=>{
-    const audio=ensureAudio(); if(!audio||audio.state!=="running"||generation!==tuneGeneration)return;
-    const samplesPerPixel=Math.max(20,Math.floor(audio.sampleRate*.09/(pixels.length/3)));
-    const buffer=audio.createBuffer(1,samplesPerPixel*(pixels.length/3),audio.sampleRate), data=buffer.getChannelData(0);
-    let phase=0;
-    for(let pixel=0;pixel<pixels.length/3;pixel++){
-      const r=pixels[pixel*3],g=pixels[pixel*3+1],b=pixels[pixel*3+2];
-      const frequencyHz=550+(r*.299+g*.587+b*.114)*6.1;
-      for(let sample=0;sample<samplesPerPixel;sample++){
-        phase+=2*Math.PI*frequencyHz/audio.sampleRate; data[pixel*samplesPerPixel+sample]=Math.sin(phase)*.42;
-      }
-    }
-    const source=connectSignal(audio.createBufferSource()); source.buffer=buffer;
-    rxAudioTime=Math.max(audio.currentTime+.01,rxAudioTime); source.start(rxAudioTime); rxAudioTime+=buffer.duration;
-  };
-  const drawReceivedLine=event=>{
-    const pixels=decodePixels(event.pixels), width=pixels.length/3;
-    if(rxCanvas.width!==width){rxCanvas.width=width;rxCanvas.height=Math.max(expectedRows||60,event.row+1)}
-    const rgba=new Uint8ClampedArray(width*4);
-    for(let i=0;i<width;i++){rgba[i*4]=pixels[i*3];rgba[i*4+1]=pixels[i*3+1];rgba[i*4+2]=pixels[i*3+2];rgba[i*4+3]=255}
-    rxCanvas.getContext("2d").putImageData(new ImageData(rgba,width),0,event.row);
-    receivedRows=Math.max(receivedRows,event.row+1); rxCaption.textContent=`RX PICTURE / LINE ${receivedRows}${expectedRows?` OF ${expectedRows}`:""}`;
-    playScanline(pixels);
-  };
-  const handleEvent=event=>{
-    if(event.kind==="start"){
-      occupancy.textContent=`BUSY / ${event.callsign} / ${event.mode}`;
-      if(!event.mine)setStatus("RECEIVING",true);
-      if(event.mode==="SSTV"&&!event.mine){
-        rxCanvas.width=event.width||80;rxCanvas.height=event.height||60;rxCanvas.getContext("2d").fillRect(0,0,rxCanvas.width,rxCanvas.height);
-        receivedRows=0;expectedRows=event.height||0;saveButton.disabled=true;
-      }
-    }else if(event.mode==="CW"){
-      if(!event.mine&&event.kind==="key_down"){oscillatorOff(rxOscillator);rxOscillator=oscillatorOn(event.tone_hz||650);rxKeyStarted=performance.now();setStatus("RECEIVING",true)}
-      if(!event.mine&&event.kind==="key_up"){const remaining=Math.max(0,(event.duration_ms||0)-(performance.now()-rxKeyStarted));oscillatorOff(rxOscillator,remaining);rxOscillator=null;rxKeyStarted=0}
-      if(!event.mine)decodeEvent(event);
-    }else if(event.mode==="SSTV"&&event.kind==="scanline"&&!event.mine){drawReceivedLine(event);setStatus("RECEIVING",true)}
-    if(event.kind==="end"){
-      if(!event.mine){oscillatorOff(rxOscillator);rxOscillator=null;setStatus("IDLE");if(event.mode==="SSTV"&&receivedRows){saveButton.disabled=false;rxCaption.textContent=`RX PICTURE / ${receivedRows} LINES RECEIVED`}}
-      occupancy.textContent="FREQUENCY CLEAR";
-    }
-  };
-  const receive=async()=>{
-    if(receiving||!frequency)return; receiving=true;
-    try{
-      const response=await fetch(`${radio.dataset.receiveUrl}?frequency=${encodeURIComponent(frequency)}&after=${cursor}`,{headers:{Accept:"application/json"},cache:"no-store"});
-      const payload=await response.json(); if(response.status===401||response.redirected){location.reload();return}
-      if(!response.ok){
-        const priorAccess=currentAccess;
-        if(payload.access)applyAccess(payload.access);
-        if(priorAccess==="DENIED"&&payload.access&&payload.access!=="DENIED"){await tune(frequency);return}
-        throw new Error(payload.error||"Receiver link interrupted.");
-      }
-      applyAccess(payload.access);
-      for(const event of payload.events||[])handleEvent(event);
-      cursor=Math.max(cursor,Number(payload.cursor)||0);
-      if(payload.active){occupancy.textContent=`BUSY / ${payload.active.callsign} / ${payload.active.mode}`;if(!transmissionId&&status.textContent==="IDLE")setStatus("RECEIVING",true)}
-      else if(!transmissionId){occupancy.textContent="FREQUENCY CLEAR";if(status.textContent!=="TUNING")setStatus("IDLE")}
-    }catch(problem){if(currentAccess!=="DENIED"&&status.textContent!=="TUNING")setStatus("LINK RETRYING")}
-    finally{receiving=false}
-  };
+  const beginCw=async()=>{showError("");try{const payload=await post(body.dataset.radioStartUrl,{frequency,mode:"CW",tone_hz:toneInput.value});transmissionId=payload.transmission_id;transmissionMode="CW";key.disabled=false;cwButton.textContent="END CW TRANSMISSION";occupancy.textContent="BUSY / YOUR CW SIGNAL";setStatus("TRANSMITTING",true);heartbeat=setInterval(()=>post(body.dataset.radioSignalUrl,{transmission_id:transmissionId,kind:"heartbeat"}).catch(()=>endTransmission(true)),2000)}catch(problem){showError(problem)}};
+  const keyDown=async()=>{if(keyIsDown||transmissionMode!=="CW")return;keyIsDown=true;showError("");try{await post(body.dataset.radioSignalUrl,{transmission_id:transmissionId,kind:"key_down"});localKey=oscillatorOn(Number(toneInput.value)||650,true);key.classList.add("active");setStatus("TRANSMITTING",true)}catch(problem){keyIsDown=false;showError(problem);await endTransmission(true)}};
+  const keyUp=async()=>{if(!keyIsDown)return;keyIsDown=false;oscillatorOff(localKey);localKey=null;key.classList.remove("active");try{await post(body.dataset.radioSignalUrl,{transmission_id:transmissionId,kind:"key_up"})}catch(problem){showError(problem);await endTransmission(true)}};
+  const sendPicture=async()=>{if(!preparedImage)return;showError("");sstvButton.disabled=true;try{const width=txCanvas.width,height=txCanvas.height,payload=await post(body.dataset.radioStartUrl,{frequency,mode:"SSTV",width,height});transmissionId=payload.transmission_id;transmissionMode="SSTV";setStatus("TRANSMITTING",true);occupancy.textContent="BUSY / YOUR SSTV SIGNAL";const rgba=txCanvas.getContext("2d").getImageData(0,0,width,height).data;for(let row=0;row<height&&transmissionId;row++){const rgb=new Uint8Array(width*3);for(let x=0;x<width;x++){const source=(row*width+x)*4,target=x*3;rgb[target]=rgba[source];rgb[target+1]=rgba[source+1];rgb[target+2]=rgba[source+2]}playScanline(rgb);await post(body.dataset.radioSignalUrl,{transmission_id:transmissionId,kind:"scanline",row,pixels:encodePixels(rgb)});monitorStatus.textContent=`TRANSMITTING LINE ${row+1}/${height}`;await new Promise(resolve=>setTimeout(resolve,90))}await endTransmission()}catch(problem){showError(problem);await endTransmission(true)}finally{sstvButton.disabled=currentAccess!=="FULL"||!preparedImage}};
 
-  const beginCw=async()=>{
-    error.textContent="";
-    try{
-      const payload=await post(radio.dataset.startUrl,{frequency,mode:"CW",tone_hz:toneInput.value});
-      transmissionId=payload.transmission_id;transmissionMode="CW";key.disabled=false;cwButton.textContent="END CW TRANSMISSION";
-      occupancy.textContent="BUSY / YOUR CW SIGNAL";setStatus("TRANSMITTING",true);
-      heartbeat=setInterval(()=>post(radio.dataset.signalUrl,{transmission_id:transmissionId,kind:"heartbeat"}).catch(()=>endTransmission(true)),2000);
-    }catch(problem){showError(problem)}
-  };
-  const keyDown=async()=>{
-    if(keyIsDown||transmissionMode!=="CW")return;keyIsDown=true;error.textContent="";
-    try{await post(radio.dataset.signalUrl,{transmission_id:transmissionId,kind:"key_down"});localKey=oscillatorOn(Number(toneInput.value)||650,true);key.classList.add("active");setStatus("TRANSMITTING",true)}
-    catch(problem){keyIsDown=false;showError(problem);await endTransmission(true)}
-  };
-  const keyUp=async()=>{
-    if(!keyIsDown)return;keyIsDown=false;oscillatorOff(localKey);localKey=null;key.classList.remove("active");
-    try{await post(radio.dataset.signalUrl,{transmission_id:transmissionId,kind:"key_up"})}catch(problem){showError(problem);await endTransmission(true)}
-  };
-  const sendPicture=async()=>{
-    if(!preparedImage)return;error.textContent="";sstvButton.disabled=true;
-    try{
-      const width=txCanvas.width,height=txCanvas.height;
-      const payload=await post(radio.dataset.startUrl,{frequency,mode:"SSTV",width,height});
-      transmissionId=payload.transmission_id;transmissionMode="SSTV";setStatus("TRANSMITTING",true);occupancy.textContent="BUSY / YOUR SSTV SIGNAL";
-      const rgba=txCanvas.getContext("2d").getImageData(0,0,width,height).data;
-      for(let row=0;row<height&&transmissionId;row++){
-        const rgb=new Uint8Array(width*3);
-        for(let x=0;x<width;x++){const source=(row*width+x)*4,target=x*3;rgb[target]=rgba[source];rgb[target+1]=rgba[source+1];rgb[target+2]=rgba[source+2]}
-        playScanline(rgb); await post(radio.dataset.signalUrl,{transmission_id:transmissionId,kind:"scanline",row,pixels:encodePixels(rgb)});
-        monitorStatus.textContent=`TRANSMITTING LINE ${row+1}/${height}`; await new Promise(resolve=>setTimeout(resolve,90));
-      }
-      await endTransmission();
-    }catch(problem){showError(problem);await endTransmission(true)}
-    finally{sstvButton.disabled=currentAccess!=="FULL"||!preparedImage}
-  };
-
-  radio.querySelector("[data-radio-toggle]").addEventListener("click",event=>{const expanded=event.currentTarget.getAttribute("aria-expanded")==="true";event.currentTarget.setAttribute("aria-expanded",String(!expanded));find("panel").hidden=expanded});
-  input.addEventListener("change",()=>tune(input.value));
-  input.addEventListener("keydown",event=>{if(event.key==="Enter"){event.preventDefault();tune(input.value)}});
-  for(const button of radio.querySelectorAll("[data-radio-step]"))button.addEventListener("click",()=>{const khz=parseKhz(frequency||input.value);if(khz!==null)tune(formatKhz(khz+Number(button.dataset.radioStep)))});
+  every("power").forEach(button=>button.addEventListener("click",()=>powered?powerOff():powerOn()));
+  every("step").forEach(button=>button.addEventListener("click",()=>{const khz=parseKhz(frequency);if(khz!==null)tune(formatKhz(khz+Number(button.dataset.radioStep)))}));
+  every("volume").forEach(control=>control.addEventListener("input",()=>{volumeValue=Number(control.value);localStorage.setItem("stationnet.radio.volume",volumeValue);syncVolume()}));
+  every("mute").forEach(button=>button.addEventListener("click",()=>{muted=!muted;sessionStorage.setItem("stationnet.radio.muted",String(muted));syncVolume()}));
+  input?.addEventListener("change",()=>tune(input.value));input?.addEventListener("keydown",event=>{if(event.key==="Enter"){event.preventDefault();tune(input.value)}});
   bandSelect?.addEventListener("change",()=>{const option=bandSelect.selectedOptions[0];if(option?.dataset.frequency)tune(option.dataset.frequency)});
-  for(const button of radio.querySelectorAll("[data-radio-scan]"))button.addEventListener("click",async()=>{error.textContent="";await endTransmission(true);setStatus("SCANNING");try{const payload=await post(radio.dataset.scanUrl,{frequency,direction:button.dataset.radioScan});if(payload.found)applyFrequency(payload.frequency,payload.band,payload.cursor);else setStatus("NO ACTIVITY")}catch(problem){showError(problem);setStatus("SCAN ERROR")}});
-  mode.addEventListener("change",async()=>{await endTransmission(true);const cw=mode.value==="CW";cwPanel.hidden=!cw;sstvPanel.hidden=cw});
-  cwButton.addEventListener("click",()=>transmissionId?endTransmission():beginCw());
-  key.addEventListener("pointerdown",event=>{event.preventDefault();key.setPointerCapture(event.pointerId);keyDown()});
-  key.addEventListener("pointerup",keyUp);key.addEventListener("pointercancel",keyUp);
-  document.addEventListener("keydown",event=>{if(event.code==="Space"&&transmissionMode==="CW"&&!(event.target instanceof HTMLInputElement)&&!(event.target instanceof HTMLSelectElement)){event.preventDefault();keyDown()}});
-  document.addEventListener("keyup",event=>{if(event.code==="Space"&&keyIsDown){event.preventDefault();keyUp()}});
-  window.addEventListener("blur",keyUp);
-  volume.addEventListener("input",updateVolume);
-  mute.addEventListener("click",()=>{muted=!muted;mute.textContent=`MUTE: ${muted?"ON":"OFF"}`;mute.setAttribute("aria-pressed",String(muted));updateVolume()});
-  decoder.addEventListener("change",()=>{decodeMarks="";decodedText="";decoderOutput.textContent=decoder.checked?"LISTENING...":"DECODER OFF"});
-  imageInput.addEventListener("change",()=>{
-    const file=imageInput.files?.[0];preparedImage=null;sstvButton.disabled=true;if(!file)return;
-    if(file.size>5*1024*1024){showError("Choose an image smaller than 5 MB.");return}
-    const image=new Image(),url=URL.createObjectURL(file);
-    image.onload=()=>{const scale=Math.min(80/image.width,60/image.height,1),width=Math.max(1,Math.round(image.width*scale)),height=Math.max(1,Math.round(image.height*scale));txCanvas.width=width;txCanvas.height=height;txCanvas.getContext("2d").drawImage(image,0,0,width,height);URL.revokeObjectURL(url);preparedImage=true;sstvButton.disabled=currentAccess!=="FULL"};
-    image.onerror=()=>{URL.revokeObjectURL(url);showError("The selected image could not be read.")};image.src=url;
-  });
-  sstvButton.addEventListener("click",sendPicture);
-  saveButton.addEventListener("click",()=>{const link=document.createElement("a");link.download=`stationnet-sstv-${frequency}.png`;link.href=rxCanvas.toDataURL("image/png");link.click()});
-  window.addEventListener("beforeunload",()=>{if(transmissionId){const data=new FormData();data.set("csrf_token",csrf);data.set("transmission_id",transmissionId);navigator.sendBeacon(radio.dataset.endUrl,data)}});
+  for(const button of consolePanel?.querySelectorAll("[data-radio-scan]")||[])button.addEventListener("click",async()=>{showError("");await endTransmission(true);setStatus("SCANNING");try{const payload=await post(body.dataset.radioScanUrl,{frequency,direction:button.dataset.radioScan});if(payload.found)applyFrequency(payload.frequency,payload.band,payload.cursor,true,payload.access);else setStatus("NO ACTIVITY")}catch(problem){showError(problem);setStatus("SCAN ERROR")}});
+  mode?.addEventListener("change",async()=>{await endTransmission(true);const cw=mode.value==="CW";cwPanel.hidden=!cw;sstvPanel.hidden=cw});
+  cwButton?.addEventListener("click",()=>transmissionId?endTransmission():beginCw());key?.addEventListener("pointerdown",event=>{event.preventDefault();key.setPointerCapture(event.pointerId);keyDown()});key?.addEventListener("pointerup",keyUp);key?.addEventListener("pointercancel",keyUp);
+  document.addEventListener("keydown",event=>{if(event.code==="Space"&&transmissionMode==="CW"&&!(event.target instanceof HTMLInputElement)&&!(event.target instanceof HTMLSelectElement)){event.preventDefault();keyDown()}});document.addEventListener("keyup",event=>{if(event.code==="Space"&&keyIsDown){event.preventDefault();keyUp()}});window.addEventListener("blur",keyUp);
+  decoder?.addEventListener("change",()=>{decodeMarks="";decodedText="";decoderOutput.textContent=decoder.checked?"LISTENING...":"DECODER OFF"});
+  imageInput?.addEventListener("change",()=>{const file=imageInput.files?.[0];preparedImage=null;sstvButton.disabled=true;if(!file)return;if(file.size>5*1024*1024){showError("Choose an image smaller than 5 MB.");return}const image=new Image(),url=URL.createObjectURL(file);image.onload=()=>{const scale=Math.min(80/image.width,60/image.height,1),width=Math.max(1,Math.round(image.width*scale)),height=Math.max(1,Math.round(image.height*scale));txCanvas.width=width;txCanvas.height=height;txCanvas.getContext("2d").drawImage(image,0,0,width,height);URL.revokeObjectURL(url);preparedImage=true;sstvButton.disabled=currentAccess!=="FULL"};image.onerror=()=>{URL.revokeObjectURL(url);showError("The selected image could not be read.")};image.src=url});
+  sstvButton?.addEventListener("click",sendPicture);saveButton?.addEventListener("click",()=>{const link=document.createElement("a");link.download=`stationnet-sstv-${frequency}.png`;link.href=rxCanvas.toDataURL("image/png");link.click()});
+  window.addEventListener("pagehide",()=>{if(transmissionId){const data=new FormData();data.set("csrf_token",csrf);data.set("transmission_id",transmissionId);navigator.sendBeacon(body.dataset.radioEndUrl,data)}});
 
-  (async()=>{
-    try{
-      const response=await fetch(radio.dataset.stateUrl,{headers:{Accept:"application/json"},cache:"no-store"}),payload=await response.json();
-      if(bandSelect){bandSelect.replaceChildren(...payload.bands.map(band=>{const option=document.createElement("option");option.value=band.id;option.dataset.frequency=band.start;option.textContent=`${band.name} / ${band.start} MHz / ${permissionLabel(band.access)}`;return option}))}
-      const saved=localStorage.getItem("stationnet.radio.frequency");
-      if(!saved||!await tune(saved))applyFrequency(payload.frequency,payload.band,payload.cursor,false,payload.access);
-      await receive();
-    }catch(_){setStatus("RADIO OFFLINE")}
-  })();
-  setInterval(receive,100);
-}
+  if(scope){const drawScope=()=>{const drawing=scope.getContext("2d"),width=scope.width,height=scope.height;drawing.fillStyle="#000";drawing.fillRect(0,0,width,height);drawing.strokeStyle="#073b23";drawing.lineWidth=1;drawing.beginPath();for(let x=0;x<width;x+=45){drawing.moveTo(x,0);drawing.lineTo(x,height)}for(let y=0;y<height;y+=25){drawing.moveTo(0,y);drawing.lineTo(width,y)}drawing.stroke();drawing.strokeStyle="#35ff8a";drawing.shadowColor="#18c968";drawing.shadowBlur=5;drawing.beginPath();if(analyser){const values=new Uint8Array(analyser.fftSize);analyser.getByteTimeDomainData(values);for(let i=0;i<values.length;i++){const x=i/(values.length-1)*width,y=values[i]/255*height;i?drawing.lineTo(x,y):drawing.moveTo(x,y)}}else{drawing.moveTo(0,height/2);drawing.lineTo(width,height/2)}drawing.stroke();drawing.shadowBlur=0;requestAnimationFrame(drawScope)};drawScope()}
+  document.addEventListener("pointerdown",()=>{if(powered)ensureAudio()},{once:true,capture:true});
+  syncVolume();renderPower();
+  (async()=>{try{const response=await fetch(body.dataset.radioStateUrl,{headers:{Accept:"application/json"},cache:"no-store"}),payload=await response.json();if(bandSelect)bandSelect.replaceChildren(...payload.bands.map(band=>{const option=document.createElement("option");option.value=band.id;option.dataset.frequency=band.start;option.textContent=`${band.name} / ${band.start} MHz / ${permissionLabel(band.access)}`;return option}));const saved=localStorage.getItem("stationnet.radio.frequency")||payload.frequency,wantsPower=payload.powered||sessionStorage.getItem("stationnet.radio.powered")==="true";applyFrequency(payload.powered?payload.frequency:saved,payload.band,payload.cursor,false,payload.access);if(payload.powered){powered=true;sessionStorage.setItem("stationnet.radio.powered","true");renderPower();applyAccess(payload.access);setStatus(payload.access==="LISTEN"?"RX ONLY":"IDLE")}else if(wantsPower)await powerOn();renderPower()}catch(_){setStatus("RADIO OFFLINE")}})();
+  setInterval(receive,250);
+})();

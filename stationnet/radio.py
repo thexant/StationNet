@@ -10,7 +10,7 @@ from collections import deque
 from threading import RLock
 from time import monotonic
 
-from flask import Blueprint, current_app, g, jsonify, request, session
+from flask import Blueprint, current_app, g, jsonify, render_template, request, session
 
 from .auth import login_required
 from .db import get_db
@@ -20,6 +20,8 @@ bp = Blueprint("radio", __name__, url_prefix="/radio")
 
 FREQUENCY_RE = re.compile(r"^(?:\d{1,3})(?:\.\d{1,2})?$")
 TUNING_STEP_KHZ = 500
+MIN_FREQUENCY_KHZ = 100
+MAX_FREQUENCY_KHZ = 999990
 SSTV_MAX_WIDTH = 80
 SSTV_MAX_HEIGHT = 60
 
@@ -35,7 +37,7 @@ def parse_frequency(value):
     pieces = value.strip().split(".")
     whole, fraction = pieces[0], pieces[1] if len(pieces) == 2 else ""
     khz = int(whole) * 1000 + int(fraction.ljust(2, "0")) * 10
-    return khz if 100 <= khz <= 999999 else None
+    return khz if MIN_FREQUENCY_KHZ <= khz <= MAX_FREQUENCY_KHZ else None
 
 
 def find_band(khz):
@@ -50,8 +52,9 @@ def find_band(khz):
 def effective_access(user_id, khz):
     """Resolve group rules at a frequency: specificity per group, then deny wins."""
     band = find_band(khz)
-    if band is None:
+    if khz is None or not MIN_FREQUENCY_KHZ <= khz <= MAX_FREQUENCY_KHZ:
         return "DENIED"
+    band_id = band["id"] if band else None
     rows = get_db().execute(
         "SELECT r.* FROM radio_permission_rules r "
         "JOIN radio_group_memberships m ON m.group_id=r.group_id "
@@ -59,7 +62,7 @@ def effective_access(user_id, khz):
         "OR (r.scope_type IN ('range','frequency') AND r.start_khz<=? AND r.end_khz>=?)) "
         "ORDER BY r.group_id, CASE r.scope_type WHEN 'frequency' THEN 3 "
         "WHEN 'range' THEN 2 ELSE 1 END DESC, r.id DESC",
-        (user_id, band["id"], khz, khz),
+        (user_id, band_id, khz, khz),
     ).fetchall()
     per_group = {}
     for rule in rows:
@@ -298,10 +301,15 @@ def _store():
 
 
 def _band_payload(row, user_id=None, frequency=None):
-    data = {**dict(row), "start": format_frequency(row["start_khz"]),
-            "end": format_frequency(row["end_khz"])}
+    if row is None:
+        data = {"id": None, "name": "OUTSIDE DEFINED BAND", "start": None, "end": None}
+    else:
+        data = {**dict(row), "start": format_frequency(row["start_khz"]),
+                "end": format_frequency(row["end_khz"])}
     if user_id is not None:
-        data["access"] = effective_access(user_id, frequency if frequency is not None else row["start_khz"])
+        data["access"] = effective_access(
+            user_id, frequency if frequency is not None else row["start_khz"]
+        )
     return data
 
 
@@ -323,22 +331,35 @@ def reconcile_radio_permissions(user_id=None):
     _store().reconcile_permissions(effective_access, user_id)
 
 
+@bp.get("/")
+@login_required
+def console():
+    return render_template("radio/console.html")
+
+
 @bp.get("/state")
 @login_required
 def state():
     frequency = _store().receiver_frequency(session["connection_id"])
-    already_tuned = find_band(frequency) is not None
+    already_tuned = frequency is not None and MIN_FREQUENCY_KHZ <= frequency <= MAX_FREQUENCY_KHZ
     if not already_tuned:
         frequency = _default_frequency(g.user["id"])
     band = find_band(frequency)
-    access = effective_access(g.user["id"], frequency) if band else "DENIED"
-    cursor = (_store().cursor() if already_tuned else
-              _store().tune(session["connection_id"], g.user["id"], frequency)
-              if band and access != "DENIED" else _store().cursor())
+    access = effective_access(g.user["id"], frequency)
+    # Merely reading configuration must not activate reception.
+    cursor = _store().cursor()
     return jsonify(frequency=format_frequency(frequency) if frequency else None,
-                   band=_band_payload(band, g.user["id"], frequency) if band else None,
+                   band=_band_payload(band, g.user["id"], frequency) if frequency else None,
                    bands=_bands_payload(g.user["id"]), cursor=cursor,
-                   access=access, step_khz=TUNING_STEP_KHZ)
+                   access=access, powered=already_tuned, step_khz=TUNING_STEP_KHZ)
+
+
+@bp.post("/power-off")
+@login_required
+def power_off():
+    validate_csrf()
+    _store().disconnect(session["connection_id"])
+    return jsonify(powered=False)
 
 
 @bp.post("/tune")
@@ -347,8 +368,8 @@ def tune():
     validate_csrf()
     frequency = parse_frequency(request.form.get("frequency"))
     band = find_band(frequency)
-    if band is None:
-        return jsonify(error="Enter a frequency in MHz with no more than two decimal places inside an allocated band."), 400
+    if frequency is None:
+        return jsonify(error="Enter a frequency from 0.10 to 999.99 MHz with no more than two decimal places."), 400
     access = effective_access(g.user["id"], frequency)
     _store().disconnect(session["connection_id"])
     cursor = (_store().tune(session["connection_id"], g.user["id"], frequency)
@@ -361,7 +382,7 @@ def tune():
 @login_required
 def receive():
     frequency = parse_frequency(request.args.get("frequency"))
-    if find_band(frequency) is None:
+    if frequency is None:
         _store().disconnect(session["connection_id"])
         return jsonify(error="ACCESS RESTRICTED", access="DENIED"), 403
     access = effective_access(g.user["id"], frequency)
@@ -381,9 +402,8 @@ def receive():
 def transmit_start():
     validate_csrf()
     frequency = parse_frequency(request.form.get("frequency"))
-    band = find_band(frequency)
-    if band is None:
-        return jsonify(error="Frequency is outside the station's allocated spectrum."), 400
+    if frequency is None:
+        return jsonify(error="Frequency is outside the supported spectrum."), 400
     access = effective_access(g.user["id"], frequency)
     if access != "FULL":
         message = "RX ONLY" if access == "LISTEN" else "ACCESS RESTRICTED"

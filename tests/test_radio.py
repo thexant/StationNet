@@ -33,21 +33,53 @@ def end(client, transmission_id):
     )
 
 
-def test_radio_is_in_shared_shell_with_live_controls(app, initialized):
+def test_compact_radio_is_in_shared_shell_and_console_has_advanced_controls(app, initialized):
     for path in ("/terminal", "/board", "/users"):
         response = initialized.get(path)
-        assert b"data-radio-scope" in response.data
-        assert b"BEGIN CW TRANSMISSION" in response.data
-        assert b"TRANSMIT PICTURE" in response.data
+        assert b"data-radio-player" in response.data
+        assert b"POWER: OFF" in response.data
+        assert b"OPEN RADIO" in response.data
+        assert b"data-radio-scope" not in response.data
+        assert b"BEGIN CW TRANSMISSION" not in response.data
+        assert b"TRANSMIT PICTURE" not in response.data
         assert b"data-radio-log" not in response.data
+
+    console = initialized.get("/radio/")
+    assert console.status_code == 200
+    assert b"data-radio-console" in console.data
+    assert b"data-radio-scope" in console.data
+    assert b"BEGIN CW TRANSMISSION" in console.data
+    assert b"TRANSMIT PICTURE" in console.data
 
     state = initialized.get("/radio/state").get_json()
     assert state["frequency"] == "7.00"
+    assert state["powered"] is False
     assert state["step_khz"] == 500
     assert [band["name"] for band in state["bands"]] == [
         "BROADCASTS", "MORSE / CW", "DATA TRANSMISSIONS",
         "GENERAL COMMUNICATION", "EXPERIMENTAL / UNRESTRICTED",
     ]
+    assert [(band["start"], band["end"]) for band in state["bands"]] == [
+        ("7.00", "13.99"), ("14.00", "27.99"), ("28.00", "144.99"),
+        ("145.00", "432.99"), ("433.00", "999.99"),
+    ]
+    with initialized.session_transaction() as user_session:
+        connection_id = user_session["connection_id"]
+    assert app.extensions["radio"].receiver_frequency(connection_id) is None
+
+
+def test_power_off_disconnects_receiver_and_ends_transmission(app, initialized):
+    assert tune(initialized, "14.50").status_code == 200
+    opened = start(initialized, "14.50", tone_hz="650").get_json()
+    response = initialized.post(
+        "/radio/power-off", data={"csrf_token": csrf(initialized, "/terminal")}
+    )
+    assert response.status_code == 200
+    assert response.get_json()["powered"] is False
+    with initialized.session_transaction() as user_session:
+        connection_id = user_session["connection_id"]
+    assert app.extensions["radio"].receiver_frequency(connection_id) is None
+    assert opened["transmission_id"] not in app.extensions["radio"]._transmissions
 
 
 def test_frequency_parser_and_tuning_are_strict_and_synchronized(app, initialized):
@@ -65,6 +97,66 @@ def test_frequency_parser_and_tuning_are_strict_and_synchronized(app, initialize
         connection_id = user_session["connection_id"]
     assert app.extensions["radio"].receiver_frequency(connection_id) == 145250
     assert initialized.get("/radio/receive?frequency=145.26&after=0").status_code == 409
+
+
+def test_tuning_is_continuous_across_bands_and_unassigned_spectrum(app, initialized):
+    # Start from the broadcast preset, then cross its former upper boundary using
+    # the same 0.50 MHz steps used by both radio interfaces.
+    for expected in ("7.00", "7.50", "8.00", "8.50", "9.00"):
+        response = tune(initialized, expected)
+        assert response.status_code == 200
+        assert response.get_json()["frequency"] == expected
+    broadcast = tune(initialized, "13.50").get_json()
+    assert broadcast["frequency"] == "13.50"
+    assert broadcast["band"]["name"] == "BROADCASTS"
+
+    morse = tune(initialized, "14.00").get_json()
+    assert morse["band"]["name"] == "MORSE / CW"
+    assert tune(initialized, "14.50").get_json()["frequency"] == "14.50"
+    assert tune(initialized, "14.00").get_json()["frequency"] == "14.00"
+    assert tune(initialized, "13.50").get_json()["frequency"] == "13.50"
+    outside = tune(initialized, "6.50").get_json()
+    assert outside["band"]["name"] == "OUTSIDE DEFINED BAND"
+
+
+def test_range_permissions_apply_outside_presets_and_manual_entry_cannot_bypass_denial(app, initialized):
+    alice = register(app, "alice")
+    with app.app_context():
+        database = get_db()
+        user_id = database.execute("SELECT id FROM users WHERE username='alice'").fetchone()["id"]
+        granted = database.execute(
+            "INSERT INTO radio_permission_groups(name) VALUES('CONTINUOUS TEST')"
+        ).lastrowid
+        denied = database.execute(
+            "INSERT INTO radio_permission_groups(name) VALUES('CONTINUOUS DENIAL')"
+        ).lastrowid
+        database.executemany(
+            "INSERT INTO radio_group_memberships(user_id,group_id) VALUES(?,?)",
+            [(user_id, granted), (user_id, denied)],
+        )
+        database.execute(
+            "INSERT INTO radio_permission_rules(group_id,scope_type,start_khz,end_khz,permission) "
+            "VALUES(?,'range',1000,6990,'FULL')", (granted,),
+        )
+        database.execute(
+            "INSERT INTO radio_permission_rules(group_id,scope_type,start_khz,end_khz,permission) "
+            "VALUES(?,'frequency',6500,6500,'DENIED')", (denied,),
+        )
+        database.commit()
+        assert effective_access(user_id, 6000) == "FULL"
+        assert effective_access(user_id, 6500) == "DENIED"
+
+    tuned = tune(alice, "6.00").get_json()
+    assert tuned["band"]["name"] == "OUTSIDE DEFINED BAND"
+    assert tuned["access"] == "FULL"
+    opened = start(alice, "6.00", tone_hz="650")
+    assert opened.status_code == 201
+    assert end(alice, opened.get_json()["transmission_id"]).status_code == 200
+
+    restricted = tune(alice, "6.50").get_json()
+    assert restricted["frequency"] == "6.50"
+    assert restricted["access"] == "DENIED"
+    assert start(alice, "6.50", tone_hz="650").status_code == 403
 
 
 def test_cw_is_live_key_timing_without_plaintext_or_history(app, initialized):
