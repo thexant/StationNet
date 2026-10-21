@@ -4,7 +4,7 @@
 <section class="splash">
   <div class="station-profile">
     <div class="profile-heading">
-      <p class="kicker">// INCOMING CARRIER //</p>
+      <p class="kicker">// INCOMING CONNECTION //</p>
       <h1>{{ g.station.name }}</h1>
       <p class="station-description">{{ g.station.description or 'An independent communications station maintained for the local network.' }}</p>
     </div>
@@ -30,9 +30,9 @@
     {% if g.station.landing_message %}
     <p>{{ g.station.landing_message }}</p>
     {% elif g.station.guest_access %}
-    <p>Welcome to {{ g.station.callsign }}. Explore the station as a visitor, or identify yourself to participate.</p>
+    <p>Welcome to {{ g.station.name }} - [{{ g.station.callsign }}]. Explore the station as a visitor, or identify yourself to participate.</p>
     {% else %}
-    <p>Welcome to {{ g.station.callsign }}. Identify yourself to access station services.</p>
+    <p>Welcome to {{ g.station.name }} - [{{ g.station.callsign }}]. Identify yourself to access station services.</p>
     {% endif %}
   </div>
 

@@ -26,7 +26,7 @@
 
       {% if g.station %}
       <div class="node-line">
-        <span>YOUR STATION: <b>{{ g.station.callsign }}</b></span>
+        <span>YOUR STATION: <b>{{ g.station.name }} - [{{ g.station.callsign }}]</b></span>
         <span>SYSTEM DATE/TIME: <b data-date>--- -- ----</b> <b data-clock>--:--:--</b></span>
       </div>
       <nav class="service-nav" id="service-nav" aria-label="Station services" tabindex="-1">

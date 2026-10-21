@@ -113,6 +113,17 @@ CREATE TABLE IF NOT EXISTS radio_broadcast_assignments (
  frequency_khz INTEGER NOT NULL UNIQUE CHECK(frequency_khz BETWEEN 100 AND 999990),
  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);
+CREATE TABLE IF NOT EXISTS application_storage (
+ application_slug TEXT NOT NULL,
+ storage_scope TEXT NOT NULL CHECK(storage_scope IN ('user','shared')),
+ owner_key TEXT NOT NULL,
+ storage_key TEXT NOT NULL,
+ value_json TEXT NOT NULL,
+ size_bytes INTEGER NOT NULL CHECK(size_bytes>=0),
+ updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+ PRIMARY KEY(application_slug,storage_scope,owner_key,storage_key));
+CREATE INDEX IF NOT EXISTS idx_application_storage_namespace
+ ON application_storage(application_slug,storage_scope,owner_key,storage_key);
 CREATE TRIGGER IF NOT EXISTS radio_default_membership_after_user_insert
 AFTER INSERT ON users
 BEGIN

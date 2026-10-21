@@ -236,6 +236,8 @@ button:hover, .button:hover { color: #000; background: var(--green); }
 .app-emphasis { color: var(--green-bright); font-weight: 700; }
 .app-menu { display: flex; flex-wrap: wrap; gap: .55rem; }
 .app-menu legend { width: 100%; margin-bottom: .35rem; }
+.app-checkbox { display: flex; align-items: center; gap: .55rem; }
+.application-surface textarea { min-height: 6rem; resize: vertical; }
 .app-list { padding-left: 1.5rem; color: var(--white); font-size: .76rem; line-height: 1.7; }
 .app-pre, .app-grid { padding: .75rem; overflow: auto; color: var(--green-bright); border: 1px dotted var(--green-dim); background: #010401; font: inherit; font-size: .75rem; line-height: 1.35; white-space: pre; }
 .app-grid { width: fit-content; letter-spacing: .04em; }

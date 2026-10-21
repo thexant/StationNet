@@ -13,7 +13,9 @@
   <div class="application-viewport">
     {% if application.runnable %}
     <div class="application-status" data-app-status>PROGRAM STATUS / INITIALIZING</div>
-    <div class="application-surface" data-app-surface aria-live="polite">
+    <div class="application-surface" data-app-surface aria-live="polite"
+      data-app-storage-url="{{ url_for('applications.storage', slug=application.slug) }}"
+      data-app-csrf="{{ session.csrf_token }}">
       <p class="muted">Establishing isolated program session...</p>
     </div>
     <iframe class="application-runtime" data-app-runtime

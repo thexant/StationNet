@@ -3,7 +3,7 @@
 {% block content %}
 <section class="directory-screen">
   <header class="screen-heading">
-    <p class="eyebrow">SERVICE DIRECTORY / {{ g.station.callsign }}</p>
+    <p class="eyebrow">SERVICE DIRECTORY / {{ g.station.name }} - [{{ g.station.callsign }}]</p>
     <h1>{{ g.station.name }}</h1>
     <p>{{ g.station.description or 'Independent communications station.' }}</p>
   </header>

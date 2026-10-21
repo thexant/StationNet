@@ -1,19 +1,26 @@
 """StationNet games/applications catalog and isolated script delivery."""
 import base64
+import hmac
 import json
 import re
 from dataclasses import dataclass
 from pathlib import Path
 
-from flask import Blueprint, abort, make_response, render_template
+from flask import Blueprint, abort, g, jsonify, make_response, render_template, request, session
 
 from .auth import login_required
+from .db import get_db
 
 bp = Blueprint("applications", __name__, url_prefix="/games-apps")
 
 GAMES = "Games"
 APPS = "Apps"
 CATEGORIES = (GAMES, APPS)
+STORAGE_KEY_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,79}$")
+STORAGE_MAX_KEYS = 100
+STORAGE_MAX_VALUE_BYTES = 64 * 1024
+STORAGE_USER_BYTES = 512 * 1024
+STORAGE_SHARED_BYTES = 2 * 1024 * 1024
 
 
 @dataclass(frozen=True)
@@ -85,26 +92,26 @@ def _load_package(folder: str) -> Application:
 
 for _application in (
     Application(
-        slug="orbit-command",
-        name="Orbit Command [Placeholder]",
-        description="A future turn-based station logistics game.",
+        slug="word-chain",
+        name="Word Chain [Placeholder]",
+        description="A future word game built for quick rounds and high scores.",
         author="StationNet Core",
         version="0.0.1",
         category=GAMES,
     ),
     _load_package("number_guess"),
     Application(
-        slug="crew-roster",
-        name="Crew Roster [Placeholder]",
-        description="A future utility for organizing station duty rotations.",
+        slug="event-board",
+        name="Event Board [Placeholder]",
+        description="A future utility for organizing community events and sign-ups.",
         author="StationNet Core",
         version="0.0.1",
         category=APPS,
     ),
     Application(
-        slug="cargo-ledger",
-        name="Cargo Ledger [Placeholder]",
-        description="A future utility for tracking station stores and supplies.",
+        slug="note-stack",
+        name="Note Stack [Placeholder]",
+        description="A future utility for keeping small personal notes and lists.",
         author="StationNet Core",
         version="0.0.1",
         category=APPS,
@@ -132,6 +139,98 @@ def display(slug):
     if application is None:
         abort(404)
     return render_template("applications/display.html", application=application)
+
+
+def _storage_error(message, status=400):
+    return jsonify(ok=False, error=message), status
+
+
+def _storage_namespace(scope):
+    if scope == "user":
+        return f"user:{g.user['id']}"
+    if scope == "shared":
+        return "shared"
+    return None
+
+
+@bp.post("/<slug>/storage")
+@login_required
+def storage(slug):
+    """Broker bounded JSON storage without exposing SQL or namespace ownership."""
+    application = find(slug)
+    if application is None or not application.runnable:
+        abort(404)
+    token = request.headers.get("X-CSRF-Token", "")
+    if not session.get("csrf_token") or not hmac.compare_digest(token, session["csrf_token"]):
+        return _storage_error("Invalid or expired request token.", 400)
+    data = request.get_json(silent=True)
+    if not isinstance(data, dict):
+        return _storage_error("A JSON request body is required.")
+    operation = data.get("operation")
+    scope = data.get("scope", "user")
+    owner_key = _storage_namespace(scope)
+    if owner_key is None:
+        return _storage_error("Storage scope must be 'user' or 'shared'.")
+    database = get_db()
+    params = (slug, scope, owner_key)
+
+    if operation == "keys":
+        rows = database.execute(
+            "SELECT storage_key FROM application_storage "
+            "WHERE application_slug=? AND storage_scope=? AND owner_key=? ORDER BY storage_key",
+            params,
+        ).fetchall()
+        return jsonify(ok=True, value=[row["storage_key"] for row in rows])
+
+    key = data.get("key")
+    if not isinstance(key, str) or not STORAGE_KEY_RE.fullmatch(key):
+        return _storage_error("Keys must be 1-80 characters using letters, numbers, '.', '_', ':', or '-'.")
+    item_params = (*params, key)
+    if operation == "get":
+        row = database.execute(
+            "SELECT value_json FROM application_storage WHERE application_slug=? "
+            "AND storage_scope=? AND owner_key=? AND storage_key=?", item_params,
+        ).fetchone()
+        return jsonify(ok=True, value=None if row is None else json.loads(row["value_json"]), found=row is not None)
+    if operation == "delete":
+        cursor = database.execute(
+            "DELETE FROM application_storage WHERE application_slug=? AND storage_scope=? "
+            "AND owner_key=? AND storage_key=?", item_params,
+        )
+        database.commit()
+        return jsonify(ok=True, value=bool(cursor.rowcount))
+    if operation != "set" or "value" not in data:
+        return _storage_error("Unknown storage operation.")
+    try:
+        serialized = json.dumps(data["value"], ensure_ascii=False, separators=(",", ":"), allow_nan=False)
+    except (TypeError, ValueError):
+        return _storage_error("Storage values must be JSON-compatible.")
+    size = len(serialized.encode("utf-8"))
+    if size > STORAGE_MAX_VALUE_BYTES:
+        return _storage_error("Storage value exceeds the 64 KiB limit.", 413)
+    usage = database.execute(
+        "SELECT COUNT(*) AS key_count,COALESCE(SUM(size_bytes),0) AS used_bytes "
+        "FROM application_storage WHERE application_slug=? AND storage_scope=? AND owner_key=?",
+        params,
+    ).fetchone()
+    previous = database.execute(
+        "SELECT size_bytes FROM application_storage WHERE application_slug=? AND storage_scope=? "
+        "AND owner_key=? AND storage_key=?", item_params,
+    ).fetchone()
+    if previous is None and usage["key_count"] >= STORAGE_MAX_KEYS:
+        return _storage_error("Storage namespace has reached its 100-key limit.", 413)
+    projected = usage["used_bytes"] - (previous["size_bytes"] if previous else 0) + size
+    byte_limit = STORAGE_SHARED_BYTES if scope == "shared" else STORAGE_USER_BYTES
+    if projected > byte_limit:
+        return _storage_error("Storage namespace has reached its size limit.", 413)
+    database.execute(
+        "INSERT INTO application_storage(application_slug,storage_scope,owner_key,storage_key,value_json,size_bytes) "
+        "VALUES(?,?,?,?,?,?) ON CONFLICT(application_slug,storage_scope,owner_key,storage_key) "
+        "DO UPDATE SET value_json=excluded.value_json,size_bytes=excluded.size_bytes,updated_at=CURRENT_TIMESTAMP",
+        (*item_params, serialized, size),
+    )
+    database.commit()
+    return jsonify(ok=True, value=True)
 
 
 @bp.get("/<slug>/runtime")

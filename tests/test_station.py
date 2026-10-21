@@ -41,6 +41,21 @@ def test_station_name_drives_ansi_masthead(initialized):
     assert station_banner("Dog City").encode() in response.data
     assert b'aria-label="Dog City home"' in response.data
 
+
+def test_station_name_and_callsign_appear_in_descriptive_identity(initialized, app):
+    with app.app_context():
+        callsign = get_db().execute("SELECT callsign FROM station WHERE id=1").fetchone()[0]
+    identity = f"Test Relay - [{callsign}]".encode()
+
+    for path in ("/", "/login", "/terminal", "/sysop/settings"):
+        response = initialized.get(path)
+        assert identity in response.data
+
+    # The compact footer remains callsign-only.
+    response = initialized.get("/")
+    assert f"STATION: {callsign}".encode() in response.data
+    assert f"STATION: Test Relay - [{callsign}]".encode() not in response.data
+
 def test_landing_message_reflects_guest_access(initialized):
     response = initialized.get("/")
     assert b"Explore the station as a visitor" in response.data

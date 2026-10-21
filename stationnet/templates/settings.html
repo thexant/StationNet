@@ -4,7 +4,7 @@
 <section class="narrow terminal-card">
   <p class="eyebrow">SYSOP CONTROL / STATION PARAMETERS</p>
   <h1>Station settings</h1>
-  <p>Callsign <strong>{{ g.station.callsign }}</strong> has been assigned to this station.</p>
+  <p>Station identity: <strong>{{ g.station.name }} - [{{ g.station.callsign }}]</strong></p>
   <form method="post" class="form-grid">
     <input type="hidden" name="csrf_token" value="{{ session.csrf_token }}">
     <label>Station name
