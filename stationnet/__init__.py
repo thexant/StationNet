@@ -53,6 +53,7 @@ def create_app(test_config=None):
     def context():
         auth.load_logged_in_user()
         g.station = db.get_station()
+        g.mud_can_build = bool(g.user and mud.can_build(db.get_db(), g.user))
         g.station_banner = station_banner(g.station["name"] if g.station else "STATIONNET")
         ensure_csrf_token()
         if g.user is not None:

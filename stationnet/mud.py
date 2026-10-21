@@ -1,6 +1,7 @@
 """Native MUD service and server-authoritative action dispatch."""
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
+from functools import wraps
 import json
 import math
 import re
@@ -8,9 +9,9 @@ import shlex
 import sqlite3
 import uuid
 
-from flask import Blueprint, abort, g, jsonify, render_template, request, session
+from flask import Blueprint, abort, flash, g, jsonify, redirect, render_template, request, session, url_for
 
-from .auth import login_required
+from .auth import admin_required, login_required
 from .db import get_db
 from .security import validate_csrf
 
@@ -23,6 +24,30 @@ PROGRESSION_TRACKS = frozenset({"shared", "traditional", "procedural"})
 ACTIVE_PROGRESSION_TRACK = "shared"
 HEALTH_PER_LEVEL = 10
 MAX_EXPERIENCE = 2**63 - 1
+DIRECTIONS = (
+    "north", "northeast", "east", "southeast", "south", "southwest",
+    "west", "northwest", "up", "down", "in", "out",
+)
+
+
+def can_build(database, user):
+    """Return whether a user may edit the handcrafted traditional world."""
+    if user is None:
+        return False
+    return bool(user["is_admin"] or database.execute(
+        "SELECT 1 FROM mud_builder_permissions WHERE user_id=?", (user["id"],)
+    ).fetchone())
+
+
+def builder_required(view):
+    """Protect builder UI and mutations independently of general administration."""
+    @wraps(view)
+    @login_required
+    def wrapped(**kwargs):
+        if not can_build(get_db(), g.user):
+            abort(403)
+        return view(**kwargs)
+    return wrapped
 
 
 class ActionError(ValueError):
@@ -920,3 +945,297 @@ def perform_action():
         action=action_key, events=events,
         actions=available, room=room, character=character,
     )
+
+
+def _builder_redirect(room_id=None):
+    anchor = f"room-{room_id}" if room_id else None
+    return redirect(url_for("mud.builder", _anchor=anchor))
+
+
+def _valid_room_fields():
+    name = " ".join(request.form.get("name", "").split())
+    description = request.form.get("description", "").strip()
+    if not 2 <= len(name) <= 80:
+        return None, None, "Room names must be between 2 and 80 characters."
+    if not 1 <= len(description) <= 4000:
+        return None, None, "Room descriptions must be between 1 and 4000 characters."
+    return name, description, None
+
+
+def _valid_exit_fields(database, exit_id=None):
+    from_room_id = request.form.get("from_room_id", "").strip()
+    to_room_id = request.form.get("to_room_id", "").strip()
+    name = " ".join(request.form.get("name", "").split())
+    direction = request.form.get("direction", "").strip().casefold() or None
+    room_ids = {
+        row["id"] for row in database.execute(
+            "SELECT id FROM mud_world_rooms WHERE id IN (?,?)", (from_room_id, to_room_id)
+        )
+    }
+    if from_room_id not in room_ids or to_room_id not in room_ids:
+        return None, "Choose existing source and destination rooms."
+    if not 1 <= len(name) <= 80:
+        return None, "Exit names must be between 1 and 80 characters."
+    if direction is not None and direction not in DIRECTIONS:
+        return None, "Choose a supported direction or leave direction blank for a named exit."
+    duplicate = database.execute(
+        "SELECT id FROM mud_world_exits WHERE from_room_id=? AND id<>COALESCE(?, '') "
+        "AND (name=? COLLATE NOCASE OR (? IS NOT NULL AND direction=? COLLATE NOCASE))",
+        (from_room_id, exit_id, name, direction, direction),
+    ).fetchone()
+    if duplicate:
+        return None, "That source room already has an exit with this name or direction."
+    return (from_room_id, to_room_id, name, direction), None
+
+
+@bp.get("/builder")
+@builder_required
+def builder():
+    database = get_db()
+    room_rows = database.execute(
+        "SELECT r.*,COUNT(DISTINCT l.user_id) AS located_players,"
+        "COUNT(DISTINCT p.user_id) AS present_players "
+        "FROM mud_world_rooms AS r "
+        "LEFT JOIN mud_world_locations AS l ON l.room_id=r.id "
+        "LEFT JOIN mud_presence AS p ON p.room_id=r.id "
+        "GROUP BY r.id ORDER BY r.is_start DESC,r.name COLLATE NOCASE,r.id"
+    ).fetchall()
+    rooms = [dict(row) for row in room_rows]
+    exits_by_room = {room["id"]: [] for room in rooms}
+    for row in database.execute(
+        "SELECT e.*,destination.name AS destination_name "
+        "FROM mud_world_exits AS e "
+        "JOIN mud_world_rooms AS destination ON destination.id=e.to_room_id "
+        "ORDER BY e.from_room_id,e.direction IS NULL,e.direction,e.name COLLATE NOCASE"
+    ):
+        exits_by_room.setdefault(row["from_room_id"], []).append(dict(row))
+    users = database.execute(
+        "SELECT u.id,u.username,u.callsign,u.is_admin,"
+        "CASE WHEN p.user_id IS NULL THEN 0 ELSE 1 END AS is_builder "
+        "FROM users AS u LEFT JOIN mud_builder_permissions AS p ON p.user_id=u.id "
+        "ORDER BY u.is_admin DESC,u.callsign COLLATE NOCASE"
+    ).fetchall() if g.user["is_admin"] else []
+    return render_template(
+        "mud/builder.html", rooms=rooms, exits_by_room=exits_by_room,
+        users=users, directions=DIRECTIONS,
+    )
+
+
+@bp.post("/builder/rooms")
+@builder_required
+def builder_create_room():
+    validate_csrf()
+    name, description, error = _valid_room_fields()
+    if error:
+        flash(error, "error")
+        return _builder_redirect()
+    room_id = f"world:room:{uuid.uuid4().hex}"
+    database = get_db()
+    database.execute(
+        "INSERT INTO mud_world_rooms(id,name,description) VALUES(?,?,?)",
+        (room_id, name, description),
+    )
+    database.commit()
+    flash(f"Room {name} created.", "success")
+    return _builder_redirect(room_id)
+
+
+@bp.post("/builder/rooms/<path:room_id>")
+@builder_required
+def builder_update_room(room_id):
+    validate_csrf()
+    name, description, error = _valid_room_fields()
+    database = get_db()
+    room = database.execute(
+        "SELECT id,name FROM mud_world_rooms WHERE id=?", (room_id,)
+    ).fetchone()
+    if room is None:
+        abort(404)
+    if error:
+        flash(error, "error")
+        return _builder_redirect(room_id)
+    recipients = _occupant_ids(database, room_id)
+    database.execute(
+        "UPDATE mud_world_rooms SET name=?,description=?,updated_at=CURRENT_TIMESTAMP WHERE id=?",
+        (name, description, room_id),
+    )
+    if recipients:
+        _insert_event(database, EventDraft(
+            f"Your surroundings have changed. You are now in {name}.",
+            event_type="room", audience_type="room", audience_key=room_id,
+            recipient_ids=recipients,
+        ))
+    database.commit()
+    flash(f"Room {name} updated.", "success")
+    return _builder_redirect(room_id)
+
+
+@bp.post("/builder/rooms/<path:room_id>/delete")
+@builder_required
+def builder_delete_room(room_id):
+    validate_csrf()
+    database = get_db()
+    try:
+        database.execute("BEGIN IMMEDIATE")
+        room = database.execute(
+            "SELECT id,name,is_start FROM mud_world_rooms WHERE id=?", (room_id,)
+        ).fetchone()
+        if room is None:
+            abort(404)
+        if request.form.get("confirmation", "").strip() != room["name"]:
+            flash("Type the room name exactly to confirm deletion.", "error")
+            database.rollback()
+            return _builder_redirect(room_id)
+        if room["is_start"]:
+            flash("The current starting room cannot be deleted. Designate another valid start first.", "error")
+            database.rollback()
+            return _builder_redirect(room_id)
+        start = _start_room(database)
+        affected = [row["user_id"] for row in database.execute(
+            "SELECT user_id FROM mud_world_locations WHERE room_id=? UNION "
+            "SELECT user_id FROM mud_presence WHERE room_id=?", (room_id, room_id)
+        )]
+        database.executemany(
+            "INSERT INTO mud_world_locations(user_id,room_id) VALUES(?,?) "
+            "ON CONFLICT(user_id) DO UPDATE SET room_id=excluded.room_id,"
+            "updated_at=CURRENT_TIMESTAMP",
+            ((user_id, start["id"]) for user_id in affected),
+        )
+        database.execute(
+            "UPDATE mud_presence SET room_id=? WHERE room_id=?", (start["id"], room_id)
+        )
+        database.execute("DELETE FROM mud_world_rooms WHERE id=?", (room_id,))
+        for user_id in affected:
+            _insert_event(database, EventDraft(
+                f"{room['name']} was removed by a world builder. You have been moved to {start['name']}.",
+                event_type="movement", recipient_ids=(user_id,),
+            ), default_user_id=user_id)
+        database.commit()
+    except sqlite3.Error:
+        database.rollback()
+        raise
+    flash(f"Room {room['name']} and its connected exits were deleted.", "success")
+    return _builder_redirect()
+
+
+@bp.post("/builder/exits")
+@builder_required
+def builder_create_exit():
+    validate_csrf()
+    database = get_db()
+    fields, error = _valid_exit_fields(database)
+    if error:
+        flash(error, "error")
+        return _builder_redirect(request.form.get("from_room_id"))
+    exit_id = f"world:exit:{uuid.uuid4().hex}"
+    database.execute(
+        "INSERT INTO mud_world_exits(id,from_room_id,to_room_id,name,direction) "
+        "VALUES(?,?,?,?,?)", (exit_id, *fields),
+    )
+    database.commit()
+    flash(f"Exit {fields[2]} created.", "success")
+    return _builder_redirect(fields[0])
+
+
+@bp.post("/builder/exits/<path:exit_id>")
+@builder_required
+def builder_update_exit(exit_id):
+    validate_csrf()
+    database = get_db()
+    existing = database.execute(
+        "SELECT id,from_room_id FROM mud_world_exits WHERE id=?", (exit_id,)
+    ).fetchone()
+    if existing is None:
+        abort(404)
+    fields, error = _valid_exit_fields(database, exit_id)
+    if error:
+        flash(error, "error")
+        return _builder_redirect(existing["from_room_id"])
+    database.execute(
+        "UPDATE mud_world_exits SET from_room_id=?,to_room_id=?,name=?,direction=? WHERE id=?",
+        (*fields, exit_id),
+    )
+    database.commit()
+    flash(f"Exit {fields[2]} updated.", "success")
+    return _builder_redirect(fields[0])
+
+
+@bp.post("/builder/exits/<path:exit_id>/delete")
+@builder_required
+def builder_delete_exit(exit_id):
+    validate_csrf()
+    database = get_db()
+    exit_row = database.execute(
+        "SELECT id,name,from_room_id FROM mud_world_exits WHERE id=?", (exit_id,)
+    ).fetchone()
+    if exit_row is None:
+        abort(404)
+    if request.form.get("confirmation") != "delete":
+        flash("Exit deletion was not confirmed.", "error")
+        return _builder_redirect(exit_row["from_room_id"])
+    database.execute("DELETE FROM mud_world_exits WHERE id=?", (exit_id,))
+    database.commit()
+    flash(f"Exit {exit_row['name']} removed.", "success")
+    return _builder_redirect(exit_row["from_room_id"])
+
+
+@bp.post("/builder/start")
+@admin_required
+def builder_set_start():
+    validate_csrf()
+    room_id = request.form.get("room_id", "").strip()
+    database = get_db()
+    try:
+        database.execute("BEGIN IMMEDIATE")
+        room = database.execute(
+            "SELECT id,name FROM mud_world_rooms WHERE id=?", (room_id,)
+        ).fetchone()
+        if room is None:
+            flash("Choose an existing room as the starting location.", "error")
+            database.rollback()
+            return _builder_redirect()
+        database.execute("UPDATE mud_world_rooms SET is_start=0 WHERE is_start=1")
+        database.execute(
+            "UPDATE mud_world_rooms SET is_start=1,updated_at=CURRENT_TIMESTAMP WHERE id=?",
+            (room_id,),
+        )
+        database.execute(
+            "UPDATE mud_world_locations SET room_id=?,updated_at=CURRENT_TIMESTAMP WHERE room_id IS NULL",
+            (room_id,),
+        )
+        database.commit()
+    except sqlite3.Error:
+        database.rollback()
+        raise
+    flash(f"{room['name']} is now the traditional-world starting room.", "success")
+    return _builder_redirect(room_id)
+
+
+@bp.post("/builder/permissions/<int:user_id>")
+@admin_required
+def builder_permission(user_id):
+    validate_csrf()
+    database = get_db()
+    user = database.execute(
+        "SELECT id,callsign,is_admin FROM users WHERE id=?", (user_id,)
+    ).fetchone()
+    if user is None:
+        abort(404)
+    enabled = request.form.get("enabled") == "1"
+    if enabled and not user["is_admin"]:
+        database.execute(
+            "INSERT INTO mud_builder_permissions(user_id,granted_by) VALUES(?,?) "
+            "ON CONFLICT(user_id) DO UPDATE SET granted_by=excluded.granted_by,"
+            "granted_at=CURRENT_TIMESTAMP", (user_id, g.user["id"]),
+        )
+    else:
+        database.execute("DELETE FROM mud_builder_permissions WHERE user_id=?", (user_id,))
+    database.commit()
+    if user["is_admin"]:
+        flash("Station operators already have world-builder access.", "success")
+    else:
+        flash(
+            f"World-builder access {'granted to' if enabled else 'revoked from'} {user['callsign']}.",
+            "success",
+        )
+    return _builder_redirect()

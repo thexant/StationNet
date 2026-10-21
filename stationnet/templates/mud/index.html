@@ -7,7 +7,10 @@
       <p class="eyebrow">NATIVE SERVICE / SERVER-AUTHORITATIVE LINK</p>
       <h1>Station MUD</h1>
     </div>
-    <span class="mud-link-state">FOUNDATION ONLINE</span>
+    <div class="mud-header-actions">
+      {% if g.mud_can_build %}<a class="button secondary" href="{{ url_for('mud.builder') }}">WORLD BUILDER</a>{% endif %}
+      <span class="mud-link-state">FOUNDATION ONLINE</span>
+    </div>
   </header>
 
   <div class="mud-layout">

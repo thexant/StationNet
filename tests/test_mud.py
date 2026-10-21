@@ -558,6 +558,282 @@ def test_accounts_receive_one_persistent_character_with_mode_ready_tracks(initia
     assert b"data-character-attribute=\"strength\"" in page.data
 
 
+def test_sysop_can_grant_and_revoke_builder_without_admin_access(initialized, app):
+    member = register_member(app, "worldsmith")
+    with app.app_context():
+        user_id = get_db().execute(
+            "SELECT id FROM users WHERE username='worldsmith'"
+        ).fetchone()["id"]
+
+    assert member.get("/mud/builder").status_code == 403
+    denied = member.post(
+        "/mud/builder/rooms",
+        data={
+            "csrf_token": csrf(member, "/terminal"),
+            "name": "Forbidden Room",
+            "description": "This should never be saved.",
+        },
+    )
+    assert denied.status_code == 403
+
+    granted = initialized.post(
+        f"/mud/builder/permissions/{user_id}",
+        data={"csrf_token": csrf(initialized, "/mud/builder"), "enabled": "1"},
+        follow_redirects=True,
+    )
+    assert b"World-builder access granted" in granted.data
+    builder_page = member.get("/mud/builder")
+    assert builder_page.status_code == 200
+    assert b"MUD World Builder" in builder_page.data
+    assert b"Builder permissions" not in builder_page.data
+
+    created = member.post(
+        "/mud/builder/rooms",
+        data={
+            "csrf_token": csrf(member, "/mud/builder"),
+            "name": "Builder Workshop",
+            "description": "A room made without station administration rights.",
+        },
+        follow_redirects=True,
+    )
+    assert b"Builder Workshop" in created.data
+
+    initialized.post(
+        f"/mud/builder/permissions/{user_id}",
+        data={"csrf_token": csrf(initialized, "/mud/builder"), "enabled": "0"},
+    )
+    assert member.get("/mud/builder").status_code == 403
+    with app.app_context():
+        database = get_db()
+        assert database.execute(
+            "SELECT is_admin FROM users WHERE id=?", (user_id,)
+        ).fetchone()["is_admin"] == 0
+        assert database.execute(
+            "SELECT COUNT(*) FROM mud_world_rooms WHERE name='Forbidden Room'"
+        ).fetchone()[0] == 0
+
+
+def test_builder_room_and_exit_changes_are_persistent_and_immediately_playable(initialized, app):
+    enable_mud(initialized)
+    token = csrf(initialized, "/mud/builder")
+    initialized.post(
+        "/mud/builder/rooms",
+        data={
+            "csrf_token": token,
+            "name": "Observation Deck",
+            "description": "A broad viewport looks over the station.",
+        },
+    )
+    with app.app_context():
+        room_id = get_db().execute(
+            "SELECT id FROM mud_world_rooms WHERE name='Observation Deck'"
+        ).fetchone()["id"]
+
+    initialized.post(
+        "/mud/builder/exits",
+        data={
+            "csrf_token": token,
+            "from_room_id": "stationnet:start",
+            "to_room_id": room_id,
+            "name": "observation hatch",
+            "direction": "up",
+        },
+    )
+    page = initialized.get("/mud")
+    assert b"Observation Deck" in page.data
+    moved = initialized.post(
+        "/mud/actions",
+        data={"csrf_token": csrf(initialized, "/mud"), "command": "/up", "request_id": "built-move-001"},
+    )
+    assert moved.status_code == 200
+    assert moved.json["room"]["name"] == "Observation Deck"
+
+    initialized.post(
+        f"/mud/builder/rooms/{room_id}",
+        data={
+            "csrf_token": token,
+            "name": "Panorama Deck",
+            "description": "Freshly polished windows frame a field of stars.",
+        },
+    )
+    refreshed = mud_update(initialized, "builder-live-client")
+    assert refreshed.json["room"]["name"] == "Panorama Deck"
+    assert "polished windows" in refreshed.json["room"]["description"]
+
+    restarted = create_app({
+        "TESTING": True,
+        "DATA_DIR": app.config["DATA_DIR"],
+        "SECRET_KEY": "new-process",
+    })
+    with restarted.app_context():
+        database = get_db()
+        assert database.execute(
+            "SELECT name,description FROM mud_world_rooms WHERE id=?", (room_id,)
+        ).fetchone()["name"] == "Panorama Deck"
+        assert database.execute(
+            "SELECT to_room_id FROM mud_world_exits WHERE from_room_id='stationnet:start'"
+        ).fetchone()["to_room_id"] == room_id
+
+
+def test_exit_editor_rejects_broken_and_duplicate_connections(initialized, app):
+    token = csrf(initialized, "/mud/builder")
+    for name in ("North Gallery", "South Gallery"):
+        initialized.post(
+            "/mud/builder/rooms",
+            data={"csrf_token": token, "name": name, "description": f"The {name.lower()}."},
+        )
+    with app.app_context():
+        ids = {row["name"]: row["id"] for row in get_db().execute(
+            "SELECT id,name FROM mud_world_rooms WHERE name LIKE '%Gallery'"
+        )}
+
+    first = initialized.post(
+        "/mud/builder/exits",
+        data={
+            "csrf_token": token, "from_room_id": "stationnet:start",
+            "to_room_id": ids["North Gallery"], "name": "north arch", "direction": "north",
+        },
+        follow_redirects=True,
+    )
+    assert b"Exit north arch created" in first.data
+    duplicate = initialized.post(
+        "/mud/builder/exits",
+        data={
+            "csrf_token": token, "from_room_id": "stationnet:start",
+            "to_room_id": ids["South Gallery"], "name": "other arch", "direction": "north",
+        },
+        follow_redirects=True,
+    )
+    assert b"already has an exit" in duplicate.data
+    broken = initialized.post(
+        "/mud/builder/exits",
+        data={
+            "csrf_token": token, "from_room_id": "stationnet:start",
+            "to_room_id": "missing-room", "name": "void", "direction": "out",
+        },
+        follow_redirects=True,
+    )
+    assert b"Choose existing source and destination rooms" in broken.data
+    with app.app_context():
+        database = get_db()
+        assert database.execute("SELECT COUNT(*) FROM mud_world_exits").fetchone()[0] == 1
+        exit_id = database.execute("SELECT id FROM mud_world_exits").fetchone()["id"]
+    changed = initialized.post(
+        f"/mud/builder/exits/{exit_id}",
+        data={
+            "csrf_token": token, "from_room_id": ids["North Gallery"],
+            "to_room_id": ids["South Gallery"], "name": "south passage", "direction": "south",
+        },
+        follow_redirects=True,
+    )
+    assert b"Exit south passage updated" in changed.data
+    with app.app_context():
+        row = get_db().execute(
+            "SELECT from_room_id,to_room_id,name,direction FROM mud_world_exits WHERE id=?",
+            (exit_id,),
+        ).fetchone()
+        assert tuple(row) == (
+            ids["North Gallery"], ids["South Gallery"], "south passage", "south"
+        )
+    removed = initialized.post(
+        f"/mud/builder/exits/{exit_id}/delete",
+        data={"csrf_token": token, "confirmation": "delete"},
+        follow_redirects=True,
+    )
+    assert b"Exit south passage removed" in removed.data
+    with app.app_context():
+        assert get_db().execute("SELECT COUNT(*) FROM mud_world_exits").fetchone()[0] == 0
+
+
+def test_deleting_occupied_room_rehomes_players_and_removes_connected_exits(initialized, app):
+    enable_mud(initialized)
+    token = csrf(initialized, "/mud/builder")
+    initialized.post(
+        "/mud/builder/rooms",
+        data={"csrf_token": token, "name": "Temporary Annex", "description": "Built to be removed."},
+    )
+    with app.app_context():
+        room_id = get_db().execute(
+            "SELECT id FROM mud_world_rooms WHERE name='Temporary Annex'"
+        ).fetchone()["id"]
+        database = get_db()
+        database.executemany(
+            "INSERT INTO mud_world_exits(id,from_room_id,to_room_id,name,direction) VALUES(?,?,?,?,?)",
+            (
+                ("builder:annex-in", "stationnet:start", room_id, "annex", "east"),
+                ("builder:annex-out", room_id, "stationnet:start", "return", "west"),
+            ),
+        )
+        database.commit()
+
+    explorer = register_member(app, "explorer")
+    explorer.get("/mud")
+    mud_update(explorer, "explorer-client")
+    moved = explorer.post(
+        "/mud/actions",
+        data={"csrf_token": csrf(explorer, "/mud"), "command": "/east", "request_id": "annex-move-001"},
+    )
+    assert moved.json["room"]["id"] == room_id
+
+    rejected = initialized.post(
+        "/mud/builder/rooms/stationnet:start/delete",
+        data={"csrf_token": token, "confirmation": "Starting Room"},
+        follow_redirects=True,
+    )
+    assert b"current starting room cannot be deleted" in rejected.data
+    deleted = initialized.post(
+        f"/mud/builder/rooms/{room_id}/delete",
+        data={"csrf_token": token, "confirmation": "Temporary Annex"},
+        follow_redirects=True,
+    )
+    assert b"connected exits were deleted" in deleted.data
+
+    recovered = mud_update(explorer, "explorer-client")
+    assert recovered.status_code == 200
+    assert recovered.json["room"]["id"] == "stationnet:start"
+    assert any("removed by a world builder" in event["body"] for event in recovered.json["events"])
+    with app.app_context():
+        database = get_db()
+        assert database.execute(
+            "SELECT COUNT(*) FROM mud_world_rooms WHERE id=?", (room_id,)
+        ).fetchone()[0] == 0
+        assert database.execute(
+            "SELECT COUNT(*) FROM mud_world_exits WHERE from_room_id=? OR to_room_id=?",
+            (room_id, room_id),
+        ).fetchone()[0] == 0
+        assert database.execute(
+            "SELECT room_id FROM mud_world_locations JOIN users ON users.id=user_id "
+            "WHERE username='explorer'"
+        ).fetchone()["room_id"] == "stationnet:start"
+
+
+def test_sysop_can_replace_start_only_with_an_existing_room(initialized, app):
+    token = csrf(initialized, "/mud/builder")
+    initialized.post(
+        "/mud/builder/rooms",
+        data={"csrf_token": token, "name": "Arrival Hall", "description": "A safer point of entry."},
+    )
+    with app.app_context():
+        room_id = get_db().execute(
+            "SELECT id FROM mud_world_rooms WHERE name='Arrival Hall'"
+        ).fetchone()["id"]
+    invalid = initialized.post(
+        "/mud/builder/start",
+        data={"csrf_token": token, "room_id": "missing"},
+        follow_redirects=True,
+    )
+    assert b"Choose an existing room" in invalid.data
+    initialized.post(
+        "/mud/builder/start",
+        data={"csrf_token": token, "room_id": room_id},
+    )
+    with app.app_context():
+        starts = get_db().execute(
+            "SELECT id FROM mud_world_rooms WHERE is_start=1"
+        ).fetchall()
+        assert [row["id"] for row in starts] == [room_id]
+
+
 def test_character_and_stats_commands_share_authoritative_character_action(initialized):
     enable_mud(initialized)
     token = csrf(initialized, "/mud")

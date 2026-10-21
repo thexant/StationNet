@@ -174,6 +174,10 @@ CREATE TABLE IF NOT EXISTS mud_character_progression (
  CHECK(current_health<=maximum_health));
 CREATE INDEX IF NOT EXISTS idx_mud_character_progression_track
  ON mud_character_progression(track_key,level,experience);
+CREATE TABLE IF NOT EXISTS mud_builder_permissions (
+ user_id INTEGER PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+ granted_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+ granted_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);
 CREATE TABLE IF NOT EXISTS mud_action_log (
  id INTEGER PRIMARY KEY AUTOINCREMENT,
  request_id TEXT NOT NULL,

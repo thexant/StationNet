@@ -1,0 +1,139 @@
+{% extends 'base.html' %}
+{% block title %}MUD World Builder{% endblock %}
+{% block content %}
+<section class="builder-shell">
+  <header class="board-head builder-head">
+    <div>
+      <p class="eyebrow">TRADITIONAL WORLD / AUTHORIZED BUILDERS</p>
+      <h1>MUD World Builder</h1>
+      <p class="muted">Create rooms and connect them with server-validated exits. Changes are live for players.</p>
+    </div>
+    {% if g.station.mud_enabled %}<a class="button secondary" href="{{ url_for('mud.index') }}">OPEN MUD</a>{% endif %}
+  </header>
+
+  {% if g.user.is_admin %}
+  <section class="terminal-card builder-settings" aria-labelledby="world-settings-heading">
+    <p class="eyebrow">SYSOP / WORLD SETTINGS</p>
+    <h2 id="world-settings-heading">Starting location</h2>
+    <p class="muted">New and displaced players enter here. The current starting room cannot be deleted.</p>
+    <form method="post" action="{{ url_for('mud.builder_set_start') }}" class="builder-inline-form">
+      <input type="hidden" name="csrf_token" value="{{ session.csrf_token }}">
+      <label for="start-room">Traditional-world start room</label>
+      <select id="start-room" name="room_id" required>
+        {% for room in rooms %}<option value="{{ room.id }}" {% if room.is_start %}selected{% endif %}>{{ room.name }}</option>{% endfor %}
+      </select>
+      <button>SAVE START ROOM</button>
+    </form>
+  </section>
+
+  <section class="terminal-card builder-settings collapsible-panel" data-collapsible-panel data-panel-key="mud-builder-permissions">
+    <button type="button" class="collapsible-panel-toggle" data-panel-toggle aria-expanded="false" aria-controls="builder-permissions-panel">
+      <span class="collapsible-panel-heading"><span class="eyebrow">SYSOP / ACCESS</span><span class="collapsible-panel-title" role="heading" aria-level="2">Builder permissions</span></span>
+      <span class="collapsible-panel-chevron" aria-hidden="true"></span>
+    </button>
+    <div id="builder-permissions-panel" data-panel-content hidden>
+      <p class="muted">Builder access permits editing only the handcrafted MUD world. It does not grant StationNet administration.</p>
+      <div class="builder-permission-list">
+        {% for user in users %}
+        <form method="post" action="{{ url_for('mud.builder_permission',user_id=user.id) }}">
+          <input type="hidden" name="csrf_token" value="{{ session.csrf_token }}">
+          <span><strong>{{ user.callsign }}</strong> <small>{{ user.username }}</small></span>
+          {% if user.is_admin %}
+          <span class="mud-builder-badge">SYSOP / INHERITED</span>
+          {% elif user.is_builder %}
+          <input type="hidden" name="enabled" value="0"><button class="danger">REVOKE BUILDER</button>
+          {% else %}
+          <input type="hidden" name="enabled" value="1"><button class="secondary">GRANT BUILDER</button>
+          {% endif %}
+        </form>
+        {% endfor %}
+      </div>
+    </div>
+  </section>
+  {% endif %}
+
+  <section class="terminal-card builder-create" aria-labelledby="create-room-heading">
+    <p class="eyebrow">ROOM DATABASE / NEW RECORD</p>
+    <h2 id="create-room-heading">Create a room</h2>
+    <form method="post" action="{{ url_for('mud.builder_create_room') }}" class="form-grid">
+      <input type="hidden" name="csrf_token" value="{{ session.csrf_token }}">
+      <label>Room name<input name="name" minlength="2" maxlength="80" required autocomplete="off"></label>
+      <label>Description<textarea name="description" minlength="1" maxlength="4000" rows="5" required></textarea></label>
+      <button>CREATE ROOM</button>
+    </form>
+  </section>
+
+  <div class="builder-room-list">
+    {% for room in rooms %}
+    <article class="terminal-card builder-room" id="room-{{ room.id }}">
+      <header class="builder-room-heading">
+        <div>
+          <p class="eyebrow">ROOM {{ '%02d'|format(loop.index) }}{% if room.is_start %} / STARTING LOCATION{% endif %}</p>
+          <h2>{{ room.name }}</h2>
+          <small>{{ room.located_players }} saved player location{{ '' if room.located_players==1 else 's' }} / {{ room.present_players }} currently present</small>
+        </div>
+        {% if room.is_start %}<span class="mud-builder-badge">START</span>{% endif %}
+      </header>
+
+      <form method="post" action="{{ url_for('mud.builder_update_room',room_id=room.id) }}" class="form-grid">
+        <input type="hidden" name="csrf_token" value="{{ session.csrf_token }}">
+        <label>Room name<input name="name" minlength="2" maxlength="80" required value="{{ room.name }}"></label>
+        <label>Description<textarea name="description" minlength="1" maxlength="4000" rows="5" required>{{ room.description }}</textarea></label>
+        <button>SAVE ROOM</button>
+      </form>
+
+      <section class="builder-exits" aria-labelledby="exits-{{ loop.index }}">
+        <h3 id="exits-{{ loop.index }}">Exits from {{ room.name }}</h3>
+        {% for exit in exits_by_room[room.id] %}
+        <form method="post" action="{{ url_for('mud.builder_update_exit',exit_id=exit.id) }}" class="builder-exit-row">
+          <input type="hidden" name="csrf_token" value="{{ session.csrf_token }}">
+          <label>Name<input name="name" maxlength="80" required value="{{ exit.name }}"></label>
+          <label>Direction
+            <select name="direction"><option value="">Named exit</option>{% for direction in directions %}<option value="{{ direction }}" {% if exit.direction==direction %}selected{% endif %}>{{ direction|upper }}</option>{% endfor %}</select>
+          </label>
+          <label>From
+            <select name="from_room_id" required>{% for option in rooms %}<option value="{{ option.id }}" {% if option.id==exit.from_room_id %}selected{% endif %}>{{ option.name }}</option>{% endfor %}</select>
+          </label>
+          <label>Destination
+            <select name="to_room_id" required>{% for option in rooms %}<option value="{{ option.id }}" {% if option.id==exit.to_room_id %}selected{% endif %}>{{ option.name }}</option>{% endfor %}</select>
+          </label>
+          <div class="button-row"><button class="secondary">SAVE EXIT</button></div>
+        </form>
+        <form method="post" action="{{ url_for('mud.builder_delete_exit',exit_id=exit.id) }}" class="builder-delete-exit" data-confirm="Remove the exit '{{ exit.name }}'? Players will no longer see this route.">
+          <input type="hidden" name="csrf_token" value="{{ session.csrf_token }}"><input type="hidden" name="confirmation" value="delete">
+          <button class="danger">REMOVE {{ exit.name|upper }}</button>
+        </form>
+        {% else %}<p class="muted">No exits lead from this room.</p>{% endfor %}
+
+        <form method="post" action="{{ url_for('mud.builder_create_exit') }}" class="builder-exit-row builder-add-exit">
+          <input type="hidden" name="csrf_token" value="{{ session.csrf_token }}">
+          <input type="hidden" name="from_room_id" value="{{ room.id }}">
+          <label>Name<input name="name" maxlength="80" required placeholder="oak door"></label>
+          <label>Direction
+            <select name="direction"><option value="">Named exit</option>{% for direction in directions %}<option value="{{ direction }}">{{ direction|upper }}</option>{% endfor %}</select>
+          </label>
+          <label>Destination
+            <select name="to_room_id" required><option value="" selected disabled>Choose a room</option>{% for option in rooms %}<option value="{{ option.id }}">{{ option.name }}</option>{% endfor %}</select>
+          </label>
+          <button>ADD EXIT</button>
+        </form>
+      </section>
+
+      <details class="builder-danger-zone">
+        <summary>Delete room</summary>
+        {% if room.is_start %}
+        <p class="muted">Choose another starting location before this room can be deleted.</p>
+        {% else %}
+        <p>Deleting this room also removes every exit connected to it. Players in the room will be moved to the current start.</p>
+        <form method="post" action="{{ url_for('mud.builder_delete_room',room_id=room.id) }}" data-confirm="Permanently delete '{{ room.name }}' and every connected exit?">
+          <input type="hidden" name="csrf_token" value="{{ session.csrf_token }}">
+          <label>Type <strong>{{ room.name }}</strong> to confirm<input name="confirmation" required autocomplete="off"></label>
+          <button class="danger">DELETE ROOM</button>
+        </form>
+        {% endif %}
+      </details>
+    </article>
+    {% endfor %}
+  </div>
+</section>
+{% endblock %}
