@@ -46,6 +46,8 @@ def test_compact_radio_is_in_shared_shell_and_console_has_advanced_controls(app,
         assert b'class="radio-player minimized"' in response.data
         assert b"POWER: OFF" in response.data
         assert b"OPEN RADIO" in response.data
+        assert b"data-radio-input" in response.data
+        assert b'pattern="[0-9]{1,3}(\\.[0-9]{1,2})?"' in response.data
         assert b"data-radio-scope" not in response.data
         assert b"BEGIN CW TRANSMISSION" not in response.data
         assert b"TRANSMIT PICTURE" not in response.data

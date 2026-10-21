@@ -38,12 +38,12 @@
         {% if g.user %}
         <i>*</i><a href="{{ url_for('chat.station_chat') }}" {% if request.blueprint=='chat' %}aria-current="page"{% endif %}>CHAT</a>
         <i>*</i><a href="{{ url_for('mail.inbox') }}" {% if request.blueprint=='mail' %}aria-current="page"{% endif %}>MAIL</a>
+        <i>*</i><a href="{{ url_for('radio.console') }}" {% if request.endpoint=='radio.console' %}aria-current="page"{% endif %}>RADIO</a>
         <i>*</i><a href="{{ url_for('archive.index') }}" {% if request.blueprint=='archive' %}aria-current="page"{% endif %}>FILES</a>
         <i>*</i><a href="{{ url_for('users.directory') }}" {% if request.blueprint=='users' %}aria-current="page"{% endif %}>USERS</a>
         <i>*</i><a href="{{ url_for('applications.index') }}" {% if request.blueprint=='applications' %}aria-current="page"{% endif %}>GAMES + APPS</a>
         {% if g.station.mud_enabled %}<i>*</i><a href="{{ url_for('mud.index') }}" {% if request.endpoint=='mud.index' %}aria-current="page"{% endif %}>MUD</a>{% endif %}
         {% if g.mud_can_build %}<i>*</i><a href="{{ url_for('mud.builder') }}" {% if request.endpoint and request.endpoint.startswith('mud.builder') %}aria-current="page"{% endif %}>WORLD BUILDER</a>{% endif %}
-        <i>*</i><a href="{{ url_for('radio.console') }}" {% if request.endpoint=='radio.console' %}aria-current="page"{% endif %}>RADIO</a>
         {% endif %}
         {% if g.user and g.user.is_admin %}<i>*</i><a href="{{ url_for('station.settings') }}" {% if request.endpoint=='station.settings' or request.blueprint=='application_admin' %}aria-current="page"{% endif %}>SYSOP CONTROL</a>{% endif %}
       </nav>
