@@ -87,6 +87,11 @@ def setup():
                 database.execute("INSERT INTO station(id,name,description,callsign,registration_open,guest_access) VALUES(1,?,?,?,?,1)", (name, description, callsign, request.form.get("registration_open") == "open"))
                 user_callsign = generate_user_callsign(database)
                 cursor = database.execute("INSERT INTO users(username,callsign,password_hash,is_admin) VALUES(?,?,?,1)", (username, user_callsign, hash_password(password)))
+                database.execute(
+                    "INSERT OR IGNORE INTO radio_group_memberships(user_id,group_id) "
+                    "SELECT ?,id FROM radio_permission_groups WHERE name='OPERATORS'",
+                    (cursor.lastrowid,),
+                )
                 database.commit(); session.clear(); session["user_id"] = cursor.lastrowid; establish_connection(cursor.lastrowid)
                 flash(f"Station initialized. Operator callsign: {user_callsign}", "success")
                 return redirect(url_for("station.terminal"))

@@ -1,8 +1,9 @@
 """Welcome, workspace, and SYSOP settings."""
+import sqlite3
 from flask import Blueprint, flash, g, redirect, render_template, request, url_for
 from .auth import admin_required
 from .db import get_db
-from .radio import format_frequency, parse_frequency
+from .radio import effective_access, format_frequency, parse_frequency, reconcile_radio_permissions
 from .security import validate_csrf
 bp = Blueprint("station", __name__)
 
@@ -83,13 +84,29 @@ def settings():
             )
             database.commit(); flash("Station parameters updated.", "success")
             return redirect(url_for("station.settings"))
-    bands = get_db().execute("SELECT * FROM radio_bands ORDER BY start_khz").fetchall()
-    return render_template("settings.html", bands=bands, format_frequency=format_frequency)
+    database = get_db()
+    bands = database.execute("SELECT * FROM radio_bands ORDER BY start_khz").fetchall()
+    groups = database.execute("SELECT * FROM radio_permission_groups ORDER BY is_default DESC,name").fetchall()
+    rules = database.execute(
+        "SELECT r.*,b.name band_name FROM radio_permission_rules r "
+        "LEFT JOIN radio_bands b ON b.id=r.band_id ORDER BY r.group_id,r.id"
+    ).fetchall()
+    users = database.execute("SELECT id,username,callsign FROM users ORDER BY username COLLATE NOCASE").fetchall()
+    memberships = {user["id"]: {row["group_id"] for row in database.execute(
+        "SELECT group_id FROM radio_group_memberships WHERE user_id=?", (user["id"],)
+    )} for user in users}
+    effective = {user["id"]: {band["id"]: effective_access(user["id"], band["start_khz"])
+                              for band in bands} for user in users}
+    rules_by_group = {group["id"]: [rule for rule in rules if rule["group_id"] == group["id"]]
+                      for group in groups}
+    return render_template("settings.html", bands=bands, groups=groups, users=users,
+                           memberships=memberships, effective=effective,
+                           rules_by_group=rules_by_group, format_frequency=format_frequency)
 
 
 def _save_radio_bands():
     database = get_db()
-    existing = database.execute("SELECT id FROM radio_bands ORDER BY id").fetchall()
+    existing = database.execute("SELECT id,tx_permission FROM radio_bands ORDER BY id").fetchall()
     proposed = []
     error = None
     for row in existing:
@@ -97,16 +114,13 @@ def _save_radio_bands():
         name = request.form.get(f"band_{band_id}_name", "").strip().upper()
         start = parse_frequency(request.form.get(f"band_{band_id}_start"))
         end = parse_frequency(request.form.get(f"band_{band_id}_end"))
-        permission = request.form.get(f"band_{band_id}_permission", "")
         if not 2 <= len(name) <= 40:
             error = "Band names must be between 2 and 40 characters."
         elif start is None or end is None or start > end:
             error = "Each radio band requires a valid start and end frequency."
-        elif permission not in {"members", "admins", "receive"}:
-            error = "Select a valid transmission permission for every band."
         if error:
             break
-        proposed.append((start, end, name, permission, band_id))
+        proposed.append((start, end, name, row["tx_permission"], band_id))
     ordered = sorted(proposed)
     if not error and any(left[1] >= right[0] for left, right in zip(ordered, ordered[1:])):
         error = "Radio band allocations cannot overlap."
@@ -118,6 +132,153 @@ def _save_radio_bands():
             proposed,
         )
         database.commit()
+        reconcile_radio_permissions()
         flash("Radio spectrum allocations updated.", "success")
     return redirect(url_for("station.settings") + "#radio-spectrum")
+
+
+def _radio_permissions_redirect():
+    return redirect(url_for("station.settings") + "#radio-permissions")
+
+
+@bp.post("/sysop/radio/groups")
+@admin_required
+def create_radio_group():
+    validate_csrf()
+    name = request.form.get("name", "").strip().upper()
+    if not 2 <= len(name) <= 40 or name == "DEFAULT":
+        flash("Group names must be 2–40 characters and cannot use DEFAULT.", "error")
+    else:
+        try:
+            get_db().execute("INSERT INTO radio_permission_groups(name) VALUES(?)", (name,))
+            get_db().commit()
+            flash(f"Radio group {name} created.", "success")
+        except sqlite3.IntegrityError:
+            flash("A radio group with that name already exists.", "error")
+    return _radio_permissions_redirect()
+
+
+@bp.post("/sysop/radio/groups/<int:group_id>")
+@admin_required
+def rename_radio_group(group_id):
+    validate_csrf()
+    database = get_db()
+    group = database.execute("SELECT * FROM radio_permission_groups WHERE id=?", (group_id,)).fetchone()
+    if group is None:
+        flash("Radio group not found.", "error")
+    elif group["is_default"]:
+        flash("DEFAULT is permanent and cannot be renamed.", "error")
+    else:
+        name = request.form.get("name", "").strip().upper()
+        if not 2 <= len(name) <= 40 or name == "DEFAULT":
+            flash("Group names must be 2–40 characters and cannot use DEFAULT.", "error")
+        else:
+            try:
+                database.execute("UPDATE radio_permission_groups SET name=? WHERE id=?", (name, group_id))
+                database.commit()
+                flash("Radio group renamed.", "success")
+            except sqlite3.IntegrityError:
+                flash("A radio group with that name already exists.", "error")
+    return _radio_permissions_redirect()
+
+
+@bp.post("/sysop/radio/groups/<int:group_id>/delete")
+@admin_required
+def delete_radio_group(group_id):
+    validate_csrf()
+    database = get_db()
+    group = database.execute("SELECT * FROM radio_permission_groups WHERE id=?", (group_id,)).fetchone()
+    if group is None:
+        flash("Radio group not found.", "error")
+    elif group["is_default"]:
+        flash("DEFAULT cannot be deleted.", "error")
+    else:
+        database.execute("DELETE FROM radio_permission_groups WHERE id=?", (group_id,))
+        database.commit()
+        reconcile_radio_permissions()
+        flash("Radio group and its assignments were removed.", "success")
+    return _radio_permissions_redirect()
+
+
+@bp.post("/sysop/radio/groups/<int:group_id>/rules")
+@admin_required
+def save_radio_rule(group_id):
+    validate_csrf()
+    database = get_db()
+    if database.execute("SELECT 1 FROM radio_permission_groups WHERE id=?", (group_id,)).fetchone() is None:
+        flash("Radio group not found.", "error")
+        return _radio_permissions_redirect()
+    scope = request.form.get("scope_type", "")
+    permission = request.form.get("permission", "")
+    band_id = start = end = None
+    if scope == "band":
+        band_id = request.form.get("band_id", type=int)
+        valid_scope = database.execute("SELECT 1 FROM radio_bands WHERE id=?", (band_id,)).fetchone() is not None
+    elif scope in {"range", "frequency"}:
+        start = parse_frequency(request.form.get("start"))
+        end = start if scope == "frequency" else parse_frequency(request.form.get("end"))
+        valid_scope = start is not None and end is not None and start <= end
+    else:
+        valid_scope = False
+    if not valid_scope or permission not in {"FULL", "LISTEN", "DENIED", "UNSET"}:
+        flash("Choose a valid band, frequency or range and permission.", "error")
+        return _radio_permissions_redirect()
+    if scope == "band":
+        match_sql, match_values = "scope_type='band' AND band_id=?", (band_id,)
+    else:
+        match_sql, match_values = "scope_type=? AND start_khz=? AND end_khz=?", (scope, start, end)
+    database.execute(f"DELETE FROM radio_permission_rules WHERE group_id=? AND {match_sql}",
+                     (group_id,) + match_values)
+    if permission != "UNSET":
+        database.execute(
+            "INSERT INTO radio_permission_rules(group_id,scope_type,band_id,start_khz,end_khz,permission) "
+            "VALUES(?,?,?,?,?,?)", (group_id, scope, band_id, start, end, permission),
+        )
+    database.commit()
+    reconcile_radio_permissions()
+    flash("Radio permission rule updated.", "success")
+    return _radio_permissions_redirect()
+
+
+@bp.post("/sysop/radio/rules/<int:rule_id>/delete")
+@admin_required
+def delete_radio_rule(rule_id):
+    validate_csrf()
+    database = get_db()
+    database.execute("DELETE FROM radio_permission_rules WHERE id=?", (rule_id,))
+    database.commit()
+    reconcile_radio_permissions()
+    flash("Radio permission rule removed (UNSET).", "success")
+    return _radio_permissions_redirect()
+
+
+@bp.post("/sysop/radio/users/<int:user_id>")
+@admin_required
+def save_radio_memberships(user_id):
+    validate_csrf()
+    database = get_db()
+    if database.execute("SELECT 1 FROM users WHERE id=?", (user_id,)).fetchone() is None:
+        flash("User not found.", "error")
+        return _radio_permissions_redirect()
+    selected = {int(value) for value in request.form.getlist("group_id") if value.isdigit()}
+    valid = {row["id"] for row in database.execute(
+        "SELECT id FROM radio_permission_groups WHERE is_default=0"
+    )}
+    default_id = database.execute(
+        "SELECT id FROM radio_permission_groups WHERE is_default=1"
+    ).fetchone()["id"]
+    database.execute("DELETE FROM radio_group_memberships WHERE user_id=? AND group_id<>?",
+                     (user_id, default_id))
+    database.executemany(
+        "INSERT OR IGNORE INTO radio_group_memberships(user_id,group_id) VALUES(?,?)",
+        [(user_id, group_id) for group_id in selected & valid],
+    )
+    database.execute(
+        "INSERT OR IGNORE INTO radio_group_memberships(user_id,group_id) VALUES(?,?)",
+        (user_id, default_id),
+    )
+    database.commit()
+    reconcile_radio_permissions(user_id)
+    flash("User radio groups updated.", "success")
+    return _radio_permissions_redirect()
 

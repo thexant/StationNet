@@ -58,9 +58,44 @@ CREATE TABLE IF NOT EXISTS radio_bands (
  tx_permission TEXT NOT NULL DEFAULT 'members'
  CHECK(tx_permission IN ('members','admins','receive')),
  CHECK(start_khz > 0 AND end_khz >= start_khz));
+CREATE TABLE IF NOT EXISTS radio_permission_groups (
+ id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL COLLATE NOCASE UNIQUE,
+ is_default INTEGER NOT NULL DEFAULT 0 CHECK(is_default IN (0,1)));
+CREATE UNIQUE INDEX IF NOT EXISTS idx_radio_default_group
+ ON radio_permission_groups(is_default) WHERE is_default=1;
+CREATE TABLE IF NOT EXISTS radio_group_memberships (
+ user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+ group_id INTEGER NOT NULL REFERENCES radio_permission_groups(id) ON DELETE CASCADE,
+ PRIMARY KEY(user_id,group_id));
+CREATE TABLE IF NOT EXISTS radio_permission_rules (
+ id INTEGER PRIMARY KEY AUTOINCREMENT,
+ group_id INTEGER NOT NULL REFERENCES radio_permission_groups(id) ON DELETE CASCADE,
+ scope_type TEXT NOT NULL CHECK(scope_type IN ('band','range','frequency')),
+ band_id INTEGER REFERENCES radio_bands(id) ON DELETE CASCADE,
+ start_khz INTEGER, end_khz INTEGER,
+ permission TEXT NOT NULL CHECK(permission IN ('FULL','LISTEN','DENIED')),
+ CHECK((scope_type='band' AND band_id IS NOT NULL AND start_khz IS NULL AND end_khz IS NULL)
+    OR (scope_type IN ('range','frequency') AND band_id IS NULL AND start_khz IS NOT NULL
+        AND end_khz IS NOT NULL AND start_khz>0 AND end_khz>=start_khz)));
+CREATE INDEX IF NOT EXISTS idx_radio_memberships_user ON radio_group_memberships(user_id);
+CREATE INDEX IF NOT EXISTS idx_radio_rules_group ON radio_permission_rules(group_id);
+CREATE TRIGGER IF NOT EXISTS radio_default_membership_after_user_insert
+AFTER INSERT ON users
+BEGIN
+ INSERT OR IGNORE INTO radio_group_memberships(user_id,group_id)
+ SELECT NEW.id,id FROM radio_permission_groups WHERE is_default=1;
+END;
 """
 
 DEFAULT_RADIO_BANDS = (
+    (1, "GENERAL COMMUNICATION", 145000, 145990, "members"),
+    (2, "BROADCASTS", 7000, 7990, "admins"),
+    (3, "MORSE / CW", 14000, 14990, "members"),
+    (4, "DATA TRANSMISSIONS", 28000, 28990, "members"),
+    (5, "EXPERIMENTAL / UNRESTRICTED", 433000, 433990, "members"),
+)
+
+LEGACY_DEFAULT_RADIO_BANDS = (
     (1, "GENERAL COMMUNICATION", 144000, 144399, "members"),
     (2, "BROADCASTS", 144400, 144599, "admins"),
     (3, "MORSE / CW", 144600, 144799, "members"),
@@ -88,12 +123,84 @@ def init_db():
     _migrate_station_customization(database)
     _migrate_community_fields(database)
     _migrate_legacy_callsigns(database)
+    _migrate_factory_radio_bands(database)
+    _align_radio_bands_to_display_precision(database)
     database.executemany(
         "INSERT OR IGNORE INTO radio_bands(id,name,start_khz,end_khz,tx_permission) "
         "VALUES(?,?,?,?,?)",
         DEFAULT_RADIO_BANDS,
     )
+    _migrate_radio_permissions(database)
     database.commit()
+
+
+def _migrate_factory_radio_bands(database):
+    """Move only the untouched legacy factory plan; preserve operator customizations."""
+    rows = database.execute(
+        "SELECT id,name,start_khz,end_khz,tx_permission FROM radio_bands ORDER BY id"
+    ).fetchall()
+    if [tuple(row) for row in rows] != list(LEGACY_DEFAULT_RADIO_BANDS):
+        return
+    database.executemany(
+        "UPDATE radio_bands SET name=?,start_khz=?,end_khz=?,tx_permission=? WHERE id=?",
+        [(name, start, end, permission, band_id)
+         for band_id, name, start, end, permission in DEFAULT_RADIO_BANDS],
+    )
+
+
+def _align_radio_bands_to_display_precision(database):
+    """Minimally align legacy custom limits with the two-decimal tuning grid."""
+    for row in database.execute("SELECT id,start_khz,end_khz FROM radio_bands").fetchall():
+        start = min(999990, ((row["start_khz"] + 9) // 10) * 10)
+        end = min(999990, (row["end_khz"] // 10) * 10)
+        if start > end:
+            point = min(999990, max(100, ((row["start_khz"] + 5) // 10) * 10))
+            start = end = point
+        if start != row["start_khz"] or end != row["end_khz"]:
+            database.execute(
+                "UPDATE radio_bands SET start_khz=?,end_khz=? WHERE id=?",
+                (start, end, row["id"]),
+            )
+
+
+def _migrate_radio_permissions(database):
+    """Create baseline groups/rules and guarantee DEFAULT membership for every account."""
+    default = database.execute(
+        "SELECT id FROM radio_permission_groups WHERE is_default=1"
+    ).fetchone()
+    first_install = default is None
+    if first_install:
+        cursor = database.execute(
+            "INSERT INTO radio_permission_groups(name,is_default) VALUES('DEFAULT',1)"
+        )
+        default_id = cursor.lastrowid
+        operator_id = database.execute(
+            "INSERT INTO radio_permission_groups(name) VALUES('OPERATORS')"
+        ).lastrowid
+        bands = database.execute(
+            "SELECT id,tx_permission FROM radio_bands ORDER BY id"
+        ).fetchall()
+        for band in bands:
+            baseline = "FULL" if band["tx_permission"] == "members" else "LISTEN"
+            database.execute(
+                "INSERT INTO radio_permission_rules(group_id,scope_type,band_id,permission) "
+                "VALUES(?, 'band', ?, ?)", (default_id, band["id"], baseline),
+            )
+            if band["tx_permission"] == "admins":
+                database.execute(
+                    "INSERT INTO radio_permission_rules(group_id,scope_type,band_id,permission) "
+                    "VALUES(?, 'band', ?, 'FULL')", (operator_id, band["id"]),
+                )
+        database.execute(
+            "INSERT OR IGNORE INTO radio_group_memberships(user_id,group_id) "
+            "SELECT id,? FROM users WHERE is_admin=1", (operator_id,),
+        )
+    else:
+        default_id = default["id"]
+    database.execute(
+        "INSERT OR IGNORE INTO radio_group_memberships(user_id,group_id) "
+        "SELECT id,? FROM users", (default_id,),
+    )
 
 def _migrate_station_customization(database):
     """Add customizable station copy to databases created by older versions."""

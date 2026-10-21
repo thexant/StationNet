@@ -12,8 +12,10 @@ for(const radio of document.querySelectorAll("[data-radio]")){
   const imageInput=find("image"), sstvButton=find("sstv-tx"), saveButton=find("sstv-save");
   const txCanvas=find("tx-picture"), rxCanvas=find("rx-picture"), rxCaption=find("rx-caption");
   const volume=find("volume"), mute=find("mute"), scope=find("scope");
+  const bandSelect=find("band-select");
 
   let frequency=null, currentBand=null, cursor=0, receiving=false, transmissionId=null;
+  let currentAccess="DENIED";
   let transmissionMode=null, heartbeat=null, keyIsDown=false, localKey=null;
   let context=null, analyser=null, outputGain=null, squelchSource=null, muted=false;
   let receiveNodes=new Set(), rxOscillator=null, rxKeyStarted=0, rxAudioTime=0, tuneGeneration=0;
@@ -36,12 +38,12 @@ for(const radio of document.querySelectorAll("[data-radio]")){
     if(!response.ok)throw new Error(payload.error||"Radio operation failed.");
     return payload;
   };
-  const permissionLabel=band=>band.tx_permission==="receive"?"RX ONLY":band.tx_permission==="admins"?"SYSOP TX":"OPEN TX";
-  const formatKhz=khz=>`${Math.floor(khz/1000)}.${String(khz%1000).padStart(3,"0")}`;
+  const permissionLabel=access=>access==="FULL"?"FULL":access==="LISTEN"?"RX ONLY":"ACCESS RESTRICTED";
+  const formatKhz=khz=>`${Math.floor(khz/1000)}.${String(Math.floor((khz%1000)/10)).padStart(2,"0")}`;
   const parseKhz=value=>{
-    const match=/^(\d{1,3})\.(\d{3})$/.exec(String(value).trim());
+    const match=/^(\d{1,3})(?:\.(\d{1,2}))?$/.exec(String(value).trim());
     if(!match)return null;
-    const result=Number(match[1])*1000+Number(match[2]);
+    const result=Number(match[1])*1000+Number((match[2]||"").padEnd(2,"0"))*10;
     return result>=100&&result<=999999?result:null;
   };
 
@@ -117,20 +119,30 @@ for(const radio of document.querySelectorAll("[data-radio]")){
     clearInterval(heartbeat); heartbeat=null; key.disabled=true; cwButton.textContent="BEGIN CW TRANSMISSION";
     if(keyIsDown){keyIsDown=false;oscillatorOff(localKey);localKey=null}
     try{await post(radio.dataset.endUrl,{transmission_id:ending})}catch(problem){if(!silent)showError(problem)}
-    setStatus("IDLE");
+    setStatus(currentAccess==="LISTEN"?"RX ONLY":currentAccess==="DENIED"?"ACCESS RESTRICTED":"IDLE");
   };
-  const applyFrequency=(value,band,newCursor,withSquelch=true)=>{
+  const applyAccess=access=>{
+    currentAccess=access||"DENIED";
+    const canTransmit=currentAccess==="FULL";
+    cwButton.disabled=!canTransmit;
+    sstvButton.disabled=!canTransmit||!preparedImage;
+    if(currentAccess==="DENIED"){
+      stopReception(); occupancy.textContent="ACCESS RESTRICTED"; setStatus("ACCESS RESTRICTED");
+    }else if(currentAccess==="LISTEN"&&!transmissionId){setStatus("RX ONLY")}
+  };
+  const applyFrequency=(value,band,newCursor,withSquelch=true,access=band?.access)=>{
     frequency=value; currentBand=band; cursor=Math.max(0,Number(newCursor)||0);
     input.value=value; display.textContent=value; compact.textContent=value;
-    bandReadout.textContent=`${band.name} / ${permissionLabel(band)}`;
+    bandReadout.textContent=`${band.name} / ${permissionLabel(access)}`;
+    if(bandSelect&&band)bandSelect.value=String(band.id);
     occupancy.textContent="FREQUENCY CLEAR"; localStorage.setItem("stationnet.radio.frequency",value);
-    stopReception(); if(withSquelch)playSquelch();
+    stopReception(); applyAccess(access); if(withSquelch&&access!=="DENIED")playSquelch();
   };
   const tune=async value=>{
     error.textContent=""; const parsed=parseKhz(value);
-    if(parsed===null){showError("Use a numeric MHz frequency with exactly three decimal places.");input.value=frequency||"";return false}
+    if(parsed===null){showError("Use a numeric MHz frequency with no more than two decimal places.");input.value=frequency||"";return false}
     stopReception(); await endTransmission(true); setStatus("TUNING");
-    try{const payload=await post(radio.dataset.tuneUrl,{frequency:formatKhz(parsed)});applyFrequency(payload.frequency,payload.band,payload.cursor);return true}
+    try{const payload=await post(radio.dataset.tuneUrl,{frequency:formatKhz(parsed)});applyFrequency(payload.frequency,payload.band,payload.cursor,true,payload.access);return true}
     catch(problem){showError(problem);input.value=frequency||"";setStatus("TUNE ERROR");return false}
   };
 
@@ -205,12 +217,18 @@ for(const radio of document.querySelectorAll("[data-radio]")){
     try{
       const response=await fetch(`${radio.dataset.receiveUrl}?frequency=${encodeURIComponent(frequency)}&after=${cursor}`,{headers:{Accept:"application/json"},cache:"no-store"});
       const payload=await response.json(); if(response.status===401||response.redirected){location.reload();return}
-      if(!response.ok)throw new Error(payload.error||"Receiver link interrupted.");
+      if(!response.ok){
+        const priorAccess=currentAccess;
+        if(payload.access)applyAccess(payload.access);
+        if(priorAccess==="DENIED"&&payload.access&&payload.access!=="DENIED"){await tune(frequency);return}
+        throw new Error(payload.error||"Receiver link interrupted.");
+      }
+      applyAccess(payload.access);
       for(const event of payload.events||[])handleEvent(event);
       cursor=Math.max(cursor,Number(payload.cursor)||0);
       if(payload.active){occupancy.textContent=`BUSY / ${payload.active.callsign} / ${payload.active.mode}`;if(!transmissionId&&status.textContent==="IDLE")setStatus("RECEIVING",true)}
       else if(!transmissionId){occupancy.textContent="FREQUENCY CLEAR";if(status.textContent!=="TUNING")setStatus("IDLE")}
-    }catch(problem){if(status.textContent!=="TUNING")setStatus("LINK RETRYING")}
+    }catch(problem){if(currentAccess!=="DENIED"&&status.textContent!=="TUNING")setStatus("LINK RETRYING")}
     finally{receiving=false}
   };
 
@@ -247,13 +265,14 @@ for(const radio of document.querySelectorAll("[data-radio]")){
       }
       await endTransmission();
     }catch(problem){showError(problem);await endTransmission(true)}
-    finally{sstvButton.disabled=!preparedImage}
+    finally{sstvButton.disabled=currentAccess!=="FULL"||!preparedImage}
   };
 
   radio.querySelector("[data-radio-toggle]").addEventListener("click",event=>{const expanded=event.currentTarget.getAttribute("aria-expanded")==="true";event.currentTarget.setAttribute("aria-expanded",String(!expanded));find("panel").hidden=expanded});
   input.addEventListener("change",()=>tune(input.value));
   input.addEventListener("keydown",event=>{if(event.key==="Enter"){event.preventDefault();tune(input.value)}});
   for(const button of radio.querySelectorAll("[data-radio-step]"))button.addEventListener("click",()=>{const khz=parseKhz(frequency||input.value);if(khz!==null)tune(formatKhz(khz+Number(button.dataset.radioStep)))});
+  bandSelect?.addEventListener("change",()=>{const option=bandSelect.selectedOptions[0];if(option?.dataset.frequency)tune(option.dataset.frequency)});
   for(const button of radio.querySelectorAll("[data-radio-scan]"))button.addEventListener("click",async()=>{error.textContent="";await endTransmission(true);setStatus("SCANNING");try{const payload=await post(radio.dataset.scanUrl,{frequency,direction:button.dataset.radioScan});if(payload.found)applyFrequency(payload.frequency,payload.band,payload.cursor);else setStatus("NO ACTIVITY")}catch(problem){showError(problem);setStatus("SCAN ERROR")}});
   mode.addEventListener("change",async()=>{await endTransmission(true);const cw=mode.value==="CW";cwPanel.hidden=!cw;sstvPanel.hidden=cw});
   cwButton.addEventListener("click",()=>transmissionId?endTransmission():beginCw());
@@ -269,7 +288,7 @@ for(const radio of document.querySelectorAll("[data-radio]")){
     const file=imageInput.files?.[0];preparedImage=null;sstvButton.disabled=true;if(!file)return;
     if(file.size>5*1024*1024){showError("Choose an image smaller than 5 MB.");return}
     const image=new Image(),url=URL.createObjectURL(file);
-    image.onload=()=>{const scale=Math.min(80/image.width,60/image.height,1),width=Math.max(1,Math.round(image.width*scale)),height=Math.max(1,Math.round(image.height*scale));txCanvas.width=width;txCanvas.height=height;txCanvas.getContext("2d").drawImage(image,0,0,width,height);URL.revokeObjectURL(url);preparedImage=true;sstvButton.disabled=false};
+    image.onload=()=>{const scale=Math.min(80/image.width,60/image.height,1),width=Math.max(1,Math.round(image.width*scale)),height=Math.max(1,Math.round(image.height*scale));txCanvas.width=width;txCanvas.height=height;txCanvas.getContext("2d").drawImage(image,0,0,width,height);URL.revokeObjectURL(url);preparedImage=true;sstvButton.disabled=currentAccess!=="FULL"};
     image.onerror=()=>{URL.revokeObjectURL(url);showError("The selected image could not be read.")};image.src=url;
   });
   sstvButton.addEventListener("click",sendPicture);
@@ -279,8 +298,9 @@ for(const radio of document.querySelectorAll("[data-radio]")){
   (async()=>{
     try{
       const response=await fetch(radio.dataset.stateUrl,{headers:{Accept:"application/json"},cache:"no-store"}),payload=await response.json();
+      if(bandSelect){bandSelect.replaceChildren(...payload.bands.map(band=>{const option=document.createElement("option");option.value=band.id;option.dataset.frequency=band.start;option.textContent=`${band.name} / ${band.start} MHz / ${permissionLabel(band.access)}`;return option}))}
       const saved=localStorage.getItem("stationnet.radio.frequency");
-      if(!saved||!await tune(saved))applyFrequency(payload.frequency,payload.band,payload.cursor,false);
+      if(!saved||!await tune(saved))applyFrequency(payload.frequency,payload.band,payload.cursor,false,payload.access);
       await receive();
     }catch(_){setStatus("RADIO OFFLINE")}
   })();

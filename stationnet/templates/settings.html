@@ -51,7 +51,7 @@
 <section class="narrow terminal-card settings-section" id="radio-spectrum">
   <p class="eyebrow">SYSOP CONTROL / RADIO SPECTRUM</p>
   <h2>Band allocations</h2>
-  <p class="muted">Set each band's purpose, limits, and who may transmit. All authenticated operators may receive.</p>
+  <p class="muted">Set each band's purpose and limits. Access is controlled independently by the radio permission groups below.</p>
   <form method="post" class="form-grid">
     <input type="hidden" name="csrf_token" value="{{ session.csrf_token }}">
     <input type="hidden" name="settings_section" value="radio">
@@ -62,20 +62,97 @@
         <input name="band_{{ band.id }}_name" maxlength="40" required value="{{ band.name }}">
       </label>
       <div class="frequency-fields">
-        <label>Start MHz<input type="number" inputmode="decimal" step="0.001" min="0.100" max="999.999" name="band_{{ band.id }}_start" required value="{{ format_frequency(band.start_khz) }}"></label>
-        <label>End MHz<input type="number" inputmode="decimal" step="0.001" min="0.100" max="999.999" name="band_{{ band.id }}_end" required value="{{ format_frequency(band.end_khz) }}"></label>
+        <label>Start MHz<input type="number" inputmode="decimal" step="0.01" min="0.10" max="999.99" name="band_{{ band.id }}_start" required value="{{ format_frequency(band.start_khz) }}"></label>
+        <label>End MHz<input type="number" inputmode="decimal" step="0.01" min="0.10" max="999.99" name="band_{{ band.id }}_end" required value="{{ format_frequency(band.end_khz) }}"></label>
       </div>
-      <label>Transmit permission
-        <select name="band_{{ band.id }}_permission">
-          <option value="members" {% if band.tx_permission=='members' %}selected{% endif %}>All authenticated operators</option>
-          <option value="admins" {% if band.tx_permission=='admins' %}selected{% endif %}>SYSOP only (members receive)</option>
-          <option value="receive" {% if band.tx_permission=='receive' %}selected{% endif %}>Receive only</option>
-        </select>
-      </label>
     </fieldset>
     {% endfor %}
     <button>COMMIT RADIO SPECTRUM</button>
   </form>
+</section>
+
+<section class="terminal-card settings-section" id="radio-permissions">
+  <p class="eyebrow">SYSOP CONTROL / RADIO PERMISSIONS</p>
+  <h2>Permission groups</h2>
+  <p class="muted">Within a group, frequency rules override ranges, and ranges override bands. Across a user's groups: DENIED overrides FULL, FULL overrides LISTEN, and an absent rule is UNSET.</p>
+  <form method="post" action="{{ url_for('station.create_radio_group') }}" class="inline-form">
+    <input type="hidden" name="csrf_token" value="{{ session.csrf_token }}">
+    <label>New group <input name="name" maxlength="40" required placeholder="EMERGENCY SERVICES"></label>
+    <button>CREATE GROUP</button>
+  </form>
+
+  {% for group in groups %}
+  <article class="band-settings radio-group-settings">
+    <div class="split-heading">
+      <div><h3>{{ group.name }}</h3>{% if group.is_default %}<small>PERMANENT / EVERY ACCOUNT</small>{% endif %}</div>
+      {% if not group.is_default %}
+      <form method="post" action="{{ url_for('station.rename_radio_group',group_id=group.id) }}" class="inline-form">
+        <input type="hidden" name="csrf_token" value="{{ session.csrf_token }}">
+        <input name="name" maxlength="40" required value="{{ group.name }}" aria-label="Rename {{ group.name }}">
+        <button class="secondary">RENAME</button>
+      </form>
+      <form method="post" action="{{ url_for('station.delete_radio_group',group_id=group.id) }}" data-confirm="Delete {{ group.name }} and remove all of its user assignments?">
+        <input type="hidden" name="csrf_token" value="{{ session.csrf_token }}">
+        <button class="danger">DELETE GROUP</button>
+      </form>
+      {% endif %}
+    </div>
+
+    <div class="permission-rules">
+      {% for rule in rules_by_group[group.id] %}
+      <div class="permission-rule">
+        <span>{{ rule.scope_type|upper }} / {% if rule.scope_type=='band' %}{{ rule.band_name }}{% elif rule.scope_type=='frequency' %}{{ format_frequency(rule.start_khz) }} MHz{% else %}{{ format_frequency(rule.start_khz) }}–{{ format_frequency(rule.end_khz) }} MHz{% endif %}</span>
+        <strong>{{ rule.permission }}</strong>
+        <form method="post" action="{{ url_for('station.delete_radio_rule',rule_id=rule.id) }}">
+          <input type="hidden" name="csrf_token" value="{{ session.csrf_token }}">
+          <button class="secondary">SET UNSET</button>
+        </form>
+      </div>
+      {% else %}<p class="muted">No rules. This group currently contributes UNSET everywhere.</p>{% endfor %}
+    </div>
+
+    <form method="post" action="{{ url_for('station.save_radio_rule',group_id=group.id) }}" class="form-grid radio-rule-form">
+      <input type="hidden" name="csrf_token" value="{{ session.csrf_token }}">
+      <label>Rule type
+        <select name="scope_type" data-rule-scope>
+          <option value="band">Existing band</option><option value="range">Frequency range</option><option value="frequency">Individual frequency</option>
+        </select>
+      </label>
+      <label>Band
+        <select name="band_id">{% for band in bands %}<option value="{{ band.id }}">{{ band.name }} / {{ format_frequency(band.start_khz) }}–{{ format_frequency(band.end_khz) }}</option>{% endfor %}</select>
+      </label>
+      <div class="frequency-fields">
+        <label>Frequency / range start MHz<input name="start" inputmode="decimal" placeholder="145.00"></label>
+        <label>Range end MHz<input name="end" inputmode="decimal" placeholder="145.99"></label>
+      </div>
+      <label>Permission
+        <select name="permission"><option value="FULL">FULL / receive + transmit</option><option value="LISTEN">LISTEN / receive only</option><option value="DENIED">DENIED / no access</option><option value="UNSET">UNSET / remove matching rule</option></select>
+      </label>
+      <button>SAVE RULE</button>
+    </form>
+  </article>
+  {% endfor %}
+</section>
+
+<section class="terminal-card settings-section" id="radio-users">
+  <p class="eyebrow">SYSOP CONTROL / USER RADIO GROUPS</p>
+  <h2>Assignments and effective access</h2>
+  {% for user in users %}
+  <article class="band-settings">
+    <h3>{{ user.callsign }} / {{ user.username }}</h3>
+    <form method="post" action="{{ url_for('station.save_radio_memberships',user_id=user.id) }}" class="form-grid">
+      <input type="hidden" name="csrf_token" value="{{ session.csrf_token }}">
+      <label class="switch"><input type="checkbox" checked disabled> DEFAULT (permanent)</label>
+      {% for group in groups if not group.is_default %}
+      <label class="switch"><input type="checkbox" name="group_id" value="{{ group.id }}" {% if group.id in memberships[user.id] %}checked{% endif %}> {{ group.name }}</label>
+      {% endfor %}
+      <button>SAVE {{ user.callsign }} GROUPS</button>
+    </form>
+    <div class="permission-summary">
+      {% for band in bands %}<span>{{ band.name }}: <strong>{{ effective[user.id][band.id] }}</strong></span>{% endfor %}
+    </div>
+  </article>
+  {% endfor %}
 </section>
 {% endblock %}
 
