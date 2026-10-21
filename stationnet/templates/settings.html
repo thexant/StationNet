@@ -48,6 +48,26 @@
   </form>
 </section>
 
+<section class="narrow terminal-card settings-section" id="radio-storage">
+  <p class="eyebrow">SYSOP CONTROL / RADIO STORAGE</p>
+  <h2>Broadcaster library quotas</h2>
+  <p class="muted">Quotas are available for administration regardless of your personal broadcast permissions. Blank user overrides inherit the station default.</p>
+  <form method="post" action="{{ url_for('station.save_radio_default_quota') }}" class="form-grid">
+    <input type="hidden" name="csrf_token" value="{{ session.csrf_token }}">
+    <label>Default per-user quota (MB)<input type="number" name="radio_default_quota_mb" min="1" max="10240" required value="{{ g.station.radio_default_quota_mb }}"></label>
+    <button>SAVE DEFAULT RADIO QUOTA</button>
+  </form>
+  <div class="quota-admin-list">
+    {% for user in users %}
+    <form method="post" action="{{ url_for('station.save_radio_user_quota',user_id=user.id) }}" class="inline-form">
+      <input type="hidden" name="csrf_token" value="{{ session.csrf_token }}">
+      <label>{{ user.callsign }} / {{ user.username }}<input type="number" name="radio_quota_mb" min="1" max="10240" value="{{ user.radio_quota_mb or '' }}" placeholder="INHERIT {{ g.station.radio_default_quota_mb }} MB"><small>Leave blank to inherit the default.</small></label>
+      <button class="secondary">SAVE QUOTA</button>
+    </form>
+    {% endfor %}
+  </div>
+</section>
+
 <section class="narrow terminal-card settings-section" id="radio-spectrum">
   <p class="eyebrow">SYSOP CONTROL / RADIO SPECTRUM</p>
   <h2>Band allocations</h2>

@@ -254,6 +254,7 @@ button:disabled { opacity: .5; cursor: not-allowed; }
 .radio-console-head { margin-bottom: .8rem; padding-top: 0; }
 .radio-console-access { color: var(--amber); font-size: .65rem; white-space: nowrap; }
 .radio-console-power { display: flex; align-items: center; gap: .65rem; }
+.radio-console-actions { display: grid; justify-items: end; gap: .55rem; }
 .radio-receiver { display: grid; grid-template-columns: 11rem 1fr; gap: .75rem; }
 .radio-display { display: grid; align-content: center; padding: .4rem .65rem; border: 1px solid var(--green-dim); background: #000; }
 .radio-display span, .radio-display small { color: var(--grey); font-size: .52rem; letter-spacing: .06em; }
@@ -289,6 +290,25 @@ button:disabled { opacity: .5; cursor: not-allowed; }
 .radio-pictures figcaption { margin-bottom: .3rem; color: var(--grey); font-size: .55rem; }
 .radio-pictures canvas { display: block; width: 100%; height: 7rem; image-rendering: pixelated; object-fit: contain; background: #000; }
 .radio-error { min-height: 1em; margin: .35rem 0 0; }
+
+.broadcast-section { width: 100%; margin-top: 1.5rem; }
+.quota-readout { display: flex; flex-wrap: wrap; justify-content: space-between; gap: .5rem 1rem; color: var(--grey); font-size: .62rem; }
+.quota-meter { height: .6rem; margin: .45rem 0 1rem; border: 1px solid var(--green-dim); background: #020702; }
+.quota-meter i { display: block; height: 100%; background: var(--cyan); }
+.empty-state.small { padding: 2rem 1rem; }
+.compact-files .file-row { align-items: center; }
+.compact-files .danger, .playlist-editor .danger { margin-top: 0; }
+.playlist-editor { margin-top: 1rem; padding: 1rem; border: 1px dotted var(--green-dim); }
+.playlist-settings { display: grid; grid-template-columns: minmax(12rem,1fr) auto auto; align-items: end; gap: .75rem; }
+.track-list { margin: 1rem 0; padding: 0; list-style: none; border-top: 1px dotted var(--green-dim); }
+.track-row { display: flex; align-items: center; justify-content: space-between; gap: .8rem; padding: .55rem .25rem; border-bottom: 1px dotted var(--green-dim); font-size: .7rem; }
+.track-row b { color: var(--cyan); font-weight: 400; }
+.track-row em { color: var(--red); font-size: .58rem; font-style: normal; }
+.track-row form { margin: 0; }
+.track-row button { min-height: 1.8rem; padding: .25rem .45rem; font-size: .55rem; }
+.add-track { margin: .8rem 0; }
+.quota-admin-list { display: grid; gap: .75rem; margin-top: 1rem; }
+.quota-admin-list form { padding-top: .75rem; border-top: 1px dotted var(--green-dim); }
 
 @media (max-width: 700px) {
   .station-shell { padding-inline: .65rem; }
@@ -344,4 +364,6 @@ button:disabled { opacity: .5; cursor: not-allowed; }
   .radio-controls label { grid-column: 1 / -1; grid-row: 1; }
   .radio-controls [data-radio-scan] { grid-column: 1 / -1; }
   .radio-operation, .radio-cw-controls, .radio-pictures, .radio-voice-controls { grid-template-columns: 1fr; }
+  .playlist-settings { grid-template-columns: 1fr; }
+  .track-row { align-items: flex-start; flex-direction: column; }
 }

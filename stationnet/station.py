@@ -31,6 +31,39 @@ def access_settings():
     flash("Access policy updated.", "success")
     return redirect(url_for("station.settings") + "#access-policy")
 
+
+@bp.post("/sysop/radio/storage")
+@admin_required
+def save_radio_default_quota():
+    validate_csrf()
+    quota = request.form.get("radio_default_quota_mb", type=int)
+    if quota is None or not 1 <= quota <= 10240:
+        flash("Default radio quota must be between 1 and 10240 MB.", "error")
+    else:
+        get_db().execute("UPDATE station SET radio_default_quota_mb=? WHERE id=1", (quota,))
+        get_db().commit()
+        flash("Default radio library quota updated.", "success")
+    return redirect(url_for("station.settings") + "#radio-storage")
+
+
+@bp.post("/sysop/radio/users/<int:user_id>/quota")
+@admin_required
+def save_radio_user_quota(user_id):
+    validate_csrf()
+    database = get_db()
+    if database.execute("SELECT 1 FROM users WHERE id=?", (user_id,)).fetchone() is None:
+        flash("User not found.", "error")
+        return redirect(url_for("station.settings") + "#radio-storage")
+    raw = request.form.get("radio_quota_mb", "").strip()
+    quota = int(raw) if raw.isdigit() else None
+    if raw and (quota is None or not 1 <= quota <= 10240):
+        flash("User radio quota must be blank or between 1 and 10240 MB.", "error")
+    else:
+        database.execute("UPDATE users SET radio_quota_mb=? WHERE id=?", (quota, user_id))
+        database.commit()
+        flash("User radio library quota updated.", "success")
+    return redirect(url_for("station.settings") + "#radio-storage")
+
 @bp.route("/sysop/settings", methods=("GET", "POST"))
 @admin_required
 def settings():
@@ -92,7 +125,9 @@ def settings():
         "SELECT r.*,b.name band_name FROM radio_permission_rules r "
         "LEFT JOIN radio_bands b ON b.id=r.band_id ORDER BY r.group_id,r.id"
     ).fetchall()
-    users = database.execute("SELECT id,username,callsign FROM users ORDER BY username COLLATE NOCASE").fetchall()
+    users = database.execute(
+        "SELECT id,username,callsign,radio_quota_mb FROM users ORDER BY username COLLATE NOCASE"
+    ).fetchall()
     memberships = {user["id"]: {row["group_id"] for row in database.execute(
         "SELECT group_id FROM radio_group_memberships WHERE user_id=?", (user["id"],)
     )} for user in users}

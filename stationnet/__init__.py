@@ -3,7 +3,7 @@ import os
 import secrets
 from pathlib import Path
 from flask import Flask, g, redirect, request, url_for
-from . import announcements, archive, auth, board, chat, db, mail, radio, station, users
+from . import announcements, archive, auth, board, broadcast, chat, db, mail, radio, station, users
 from .ansi import station_banner
 from .realtime import DirectChatStore
 from .radio import RadioStore
@@ -24,7 +24,7 @@ def create_app(test_config=None):
     app.config.from_mapping(
         DATABASE=str(data_dir / "station.db"), DATA_DIR=str(data_dir), SECRET_KEY=_secret(data_dir),
         SESSION_COOKIE_HTTPONLY=True, SESSION_COOKIE_SAMESITE="Lax",
-        SESSION_COOKIE_SECURE=os.environ.get("STATIONNET_HTTPS") == "1", MAX_CONTENT_LENGTH=64 * 1024 * 1024,
+        SESSION_COOKIE_SECURE=os.environ.get("STATIONNET_HTTPS") == "1", MAX_CONTENT_LENGTH=128 * 1024 * 1024,
     )
     if test_config:
         app.config.update(test_config)
@@ -40,6 +40,7 @@ def create_app(test_config=None):
     app.register_blueprint(users.bp)
     app.register_blueprint(announcements.bp)
     app.register_blueprint(radio.bp)
+    app.register_blueprint(broadcast.bp)
     with app.app_context():
         db.init_db()
 

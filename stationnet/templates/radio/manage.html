@@ -1,0 +1,57 @@
+{% extends 'base.html' %}
+{% block title %}Broadcast Management{% endblock %}
+{% block content %}
+<header class="board-head">
+  <div><p class="eyebrow">RADIO SERVICE / HOST PREPARATION</p><h1>Broadcast Management</h1><p>Prepare station-hosted audio and running orders. No audio is transmitted from this page.</p></div>
+  <a class="button secondary" href="{{ url_for('radio.console') }}">RETURN TO RADIO</a>
+</header>
+
+<section class="terminal-card broadcast-section" id="audio-library">
+  <p class="eyebrow">AUDIO LIBRARY / PRIVATE TO {{ g.user.callsign }}</p>
+  <h2>Personal audio files</h2>
+  <div class="quota-readout">
+    <span>{{ used_bytes|filesizeformat }} used</span><span>{{ available_bytes|filesizeformat }} available</span><span>{{ quota_bytes|filesizeformat }} quota</span>
+  </div>
+  <div class="quota-meter" role="meter" aria-label="Radio library storage used" aria-valuemin="0" aria-valuemax="{{ quota_bytes }}" aria-valuenow="{{ used_bytes }}"><i style="width: {{ usage_percent }}%"></i></div>
+  <form method="post" action="{{ url_for('broadcast.upload_audio') }}" enctype="multipart/form-data" class="form-grid">
+    <input type="hidden" name="csrf_token" value="{{ session.csrf_token }}">
+    <label>Audio files<input type="file" name="file" accept=".mp3,.ogg,.wav,audio/mpeg,audio/ogg,audio/wav" multiple required><small>Select up to {{ max_batch_files }} {{ accepted_formats }} files. Maximum 64 MB per file. The complete batch must fit your remaining quota or no files will be added.</small></label>
+    <button>UPLOAD BATCH TO LIBRARY +</button>
+  </form>
+  <div class="file-list compact-files">
+    {% for file in audio_files %}
+    <article class="file-row"><div><span>{{ file.media_type|upper }} / {{ file.size_bytes|filesizeformat }}</span><h2>{{ file.display_name }}</h2><small>STORED {{ file.created_at }} UTC</small></div><form method="post" action="{{ url_for('broadcast.delete_audio',file_id=file.id) }}" data-confirm="Remove this audio file? Playlist entries will remain marked as missing."><input type="hidden" name="csrf_token" value="{{ session.csrf_token }}"><button class="danger">DELETE</button></form></article>
+    {% else %}<div class="empty-state small"><span class="empty-signal">~</span><p>No audio files in your library.</p></div>{% endfor %}
+  </div>
+</section>
+
+<section class="terminal-card broadcast-section" id="playlists">
+  <p class="eyebrow">PLAYLISTS / RUNNING ORDERS</p>
+  <h2>Prepared playlists</h2>
+  <form method="post" action="{{ url_for('broadcast.create_playlist') }}" class="inline-form">
+    <input type="hidden" name="csrf_token" value="{{ session.csrf_token }}">
+    <label>New playlist<input name="name" maxlength="80" required placeholder="NIGHT SIGNAL"></label><button>CREATE PLAYLIST +</button>
+  </form>
+  {% for playlist in playlists %}
+  <article class="playlist-editor" id="playlist-{{ playlist.id }}">
+    <form method="post" action="{{ url_for('broadcast.update_playlist',playlist_id=playlist.id) }}" class="playlist-settings">
+      <input type="hidden" name="csrf_token" value="{{ session.csrf_token }}">
+      <label>Playlist name<input name="name" maxlength="80" required value="{{ playlist.name }}"></label>
+      <label class="switch"><input type="checkbox" name="loop_enabled" {% if playlist.loop_enabled %}checked{% endif %}> LOOP PLAYLIST</label>
+      <button class="secondary">SAVE</button>
+    </form>
+    <ol class="track-list">
+      {% for track in tracks_by_playlist[playlist.id] %}
+      <li class="track-row {% if track.audio_file_id is none %}missing{% endif %}"><span><b>{{ loop.index }}.</b> {{ track.display_name }}{% if track.audio_file_id is none %} <em>MISSING FILE</em>{% endif %}</span><div class="button-row">
+        <form method="post" action="{{ url_for('broadcast.move_track',playlist_id=playlist.id,track_id=track.id) }}"><input type="hidden" name="csrf_token" value="{{ session.csrf_token }}"><input type="hidden" name="direction" value="up"><button class="secondary" aria-label="Move {{ track.display_name }} up" {% if loop.first %}disabled{% endif %}>UP</button></form>
+        <form method="post" action="{{ url_for('broadcast.move_track',playlist_id=playlist.id,track_id=track.id) }}"><input type="hidden" name="csrf_token" value="{{ session.csrf_token }}"><input type="hidden" name="direction" value="down"><button class="secondary" aria-label="Move {{ track.display_name }} down" {% if loop.last %}disabled{% endif %}>DOWN</button></form>
+        <form method="post" action="{{ url_for('broadcast.remove_track',playlist_id=playlist.id,track_id=track.id) }}"><input type="hidden" name="csrf_token" value="{{ session.csrf_token }}"><button class="text-button">REMOVE</button></form>
+      </div></li>
+      {% else %}<li class="muted">NO TRACKS ASSIGNED</li>{% endfor %}
+    </ol>
+    {% if audio_files %}<form method="post" action="{{ url_for('broadcast.add_track',playlist_id=playlist.id) }}" class="inline-form add-track"><input type="hidden" name="csrf_token" value="{{ session.csrf_token }}"><label>Add from library<select name="audio_file_id">{% for file in audio_files %}<option value="{{ file.id }}">{{ file.display_name }}</option>{% endfor %}</select></label><button>ADD TRACK</button></form>{% else %}<p class="muted">Upload audio before adding tracks.</p>{% endif %}
+    <form method="post" action="{{ url_for('broadcast.delete_playlist',playlist_id=playlist.id) }}" data-confirm="Delete playlist {{ playlist.name }}?"><input type="hidden" name="csrf_token" value="{{ session.csrf_token }}"><button class="danger">DELETE PLAYLIST</button></form>
+  </article>
+  {% else %}<div class="empty-state small"><span class="empty-signal">~</span><p>No playlists prepared.</p></div>{% endfor %}
+</section>
+{% endblock %}

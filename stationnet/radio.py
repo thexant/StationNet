@@ -92,6 +92,36 @@ def can_host_broadcast(user_id, khz):
     ).fetchone() is not None
 
 
+def can_manage_broadcasts(user_id):
+    """Allow capable hosts to prepare media before a frequency is assigned."""
+    database = get_db()
+    capable = database.execute(
+        "SELECT 1 FROM radio_permission_groups g "
+        "JOIN radio_group_memberships m ON m.group_id=g.id "
+        "WHERE m.user_id=? AND g.host_broadcasts=1 LIMIT 1", (user_id,),
+    ).fetchone()
+    if capable is None:
+        return False
+    bands = database.execute(
+        "SELECT start_khz,end_khz FROM radio_bands WHERE supports_hosted_broadcasts=1"
+    ).fetchall()
+    candidates = {point for band in bands for point in (band["start_khz"], band["end_khz"])}
+    for rule in database.execute(
+        "SELECT r.start_khz,r.end_khz FROM radio_permission_rules r "
+        "JOIN radio_group_memberships m ON m.group_id=r.group_id "
+        "WHERE m.user_id=? AND r.scope_type IN ('range','frequency')", (user_id,),
+    ):
+        for band in bands:
+            start = max(rule["start_khz"], band["start_khz"])
+            end = min(rule["end_khz"], band["end_khz"])
+            if start <= end:
+                candidates.update(
+                    point for point in (start - 10, start, end, end + 10)
+                    if band["start_khz"] <= point <= band["end_khz"]
+                )
+    return any(effective_access(user_id, khz) == "FULL" for khz in candidates)
+
+
 def transmission_authorized(user_id, khz, transmission_type):
     """Central server-side policy for current and planned transmission types."""
     access = effective_access(user_id, khz)
@@ -469,7 +499,9 @@ def reconcile_radio_permissions(user_id=None):
 @bp.get("/")
 @login_required
 def console():
-    return render_template("radio/console.html")
+    return render_template(
+        "radio/console.html", can_manage_broadcasts=can_manage_broadcasts(g.user["id"])
+    )
 
 
 @bp.get("/state")

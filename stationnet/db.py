@@ -11,13 +11,15 @@ CREATE TABLE IF NOT EXISTS station (
  upload_permission TEXT NOT NULL DEFAULT 'members',
  file_storage_limit_mb INTEGER NOT NULL DEFAULT 100,
  file_size_limit_mb INTEGER NOT NULL DEFAULT 10,
+ radio_default_quota_mb INTEGER NOT NULL DEFAULT 100,
  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);
 CREATE TABLE IF NOT EXISTS users (
  id INTEGER PRIMARY KEY AUTOINCREMENT, username TEXT NOT NULL COLLATE NOCASE UNIQUE,
  callsign TEXT NOT NULL COLLATE NOCASE UNIQUE, password_hash TEXT NOT NULL,
  is_admin INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
  tagline TEXT NOT NULL DEFAULT '', about TEXT NOT NULL DEFAULT '', birthday TEXT,
- gender TEXT NOT NULL DEFAULT '', last_seen TEXT, connection_id TEXT);
+ gender TEXT NOT NULL DEFAULT '', last_seen TEXT, connection_id TEXT,
+ radio_quota_mb INTEGER);
 CREATE TABLE IF NOT EXISTS posts (
  id INTEGER PRIMARY KEY AUTOINCREMENT, author_id INTEGER NOT NULL REFERENCES users(id) ON DELETE RESTRICT,
  parent_id INTEGER REFERENCES posts(id) ON DELETE CASCADE, title TEXT, body TEXT NOT NULL,
@@ -82,6 +84,27 @@ CREATE TABLE IF NOT EXISTS radio_permission_rules (
         AND end_khz IS NOT NULL AND start_khz>0 AND end_khz>=start_khz)));
 CREATE INDEX IF NOT EXISTS idx_radio_memberships_user ON radio_group_memberships(user_id);
 CREATE INDEX IF NOT EXISTS idx_radio_rules_group ON radio_permission_rules(group_id);
+CREATE TABLE IF NOT EXISTS radio_audio_files (
+ id INTEGER PRIMARY KEY AUTOINCREMENT,
+ owner_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+ display_name TEXT NOT NULL, stored_name TEXT NOT NULL UNIQUE,
+ media_type TEXT NOT NULL, size_bytes INTEGER NOT NULL CHECK(size_bytes>0),
+ created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);
+CREATE INDEX IF NOT EXISTS idx_radio_audio_owner ON radio_audio_files(owner_id,id);
+CREATE TABLE IF NOT EXISTS radio_playlists (
+ id INTEGER PRIMARY KEY AUTOINCREMENT,
+ owner_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+ name TEXT NOT NULL COLLATE NOCASE, loop_enabled INTEGER NOT NULL DEFAULT 0
+ CHECK(loop_enabled IN (0,1)), created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+ UNIQUE(owner_id,name));
+CREATE INDEX IF NOT EXISTS idx_radio_playlists_owner ON radio_playlists(owner_id,id);
+CREATE TABLE IF NOT EXISTS radio_playlist_tracks (
+ id INTEGER PRIMARY KEY AUTOINCREMENT,
+ playlist_id INTEGER NOT NULL REFERENCES radio_playlists(id) ON DELETE CASCADE,
+ audio_file_id INTEGER REFERENCES radio_audio_files(id) ON DELETE SET NULL,
+ display_name TEXT NOT NULL, position INTEGER NOT NULL CHECK(position>=0));
+CREATE INDEX IF NOT EXISTS idx_radio_playlist_tracks
+ ON radio_playlist_tracks(playlist_id,position,id);
 CREATE TRIGGER IF NOT EXISTS radio_default_membership_after_user_insert
 AFTER INSERT ON users
 BEGIN
@@ -279,6 +302,7 @@ def _migrate_community_fields(database):
         "upload_permission": "TEXT NOT NULL DEFAULT 'members'",
         "file_storage_limit_mb": "INTEGER NOT NULL DEFAULT 100",
         "file_size_limit_mb": "INTEGER NOT NULL DEFAULT 10",
+        "radio_default_quota_mb": "INTEGER NOT NULL DEFAULT 100",
     }
     for name, declaration in additions.items():
         if name not in station_columns:
@@ -292,6 +316,7 @@ def _migrate_community_fields(database):
         "gender": "TEXT NOT NULL DEFAULT ''",
         "last_seen": "TEXT",
         "connection_id": "TEXT",
+        "radio_quota_mb": "INTEGER",
     }
     for name, declaration in user_additions.items():
         if name not in user_columns:
