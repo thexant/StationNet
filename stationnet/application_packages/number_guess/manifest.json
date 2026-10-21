@@ -1,0 +1,9 @@
+{
+  "slug": "number-guess",
+  "name": "Number Guess",
+  "description": "Find the station's hidden number in as few guesses as possible.",
+  "author": "StationNet Core",
+  "version": "1.0.0",
+  "category": "Games",
+  "entrypoint": "main.js"
+}

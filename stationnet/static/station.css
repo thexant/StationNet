@@ -223,6 +223,26 @@ button:hover, .button:hover { color: #000; background: var(--green); }
 .application-display-header h1, .application-display-header p { margin-bottom: 0; }
 .application-viewport { min-height: 24rem; margin: 1rem; border: 1px solid var(--green-dim); }
 .application-status { padding: .35rem .55rem; color: var(--amber); border-bottom: 1px dotted var(--green-dim); font-size: .58rem; letter-spacing: .08em; }
+.application-runtime { position: absolute; width: 1px; height: 1px; border: 0; opacity: 0; pointer-events: none; }
+.application-surface { display: grid; align-content: start; gap: .85rem; min-height: 21rem; padding: clamp(1rem,3vw,2rem); }
+.application-surface:focus { outline: 1px dotted var(--cyan); outline-offset: -4px; }
+.application-surface > * { max-width: 100%; margin: 0; }
+.app-title { padding-bottom: .45rem; color: var(--green-bright); border-bottom: 1px solid var(--green-dim); font-size: clamp(1.25rem,4vw,2rem); }
+.app-heading { color: var(--cyan); }
+.app-text { color: var(--white); white-space: pre-wrap; overflow-wrap: anywhere; }
+.app-muted { color: var(--grey); }
+.app-warning, .app-error { color: var(--red); }
+.app-accent { color: var(--cyan); }
+.app-emphasis { color: var(--green-bright); font-weight: 700; }
+.app-menu { display: flex; flex-wrap: wrap; gap: .55rem; }
+.app-menu legend { width: 100%; margin-bottom: .35rem; }
+.app-list { padding-left: 1.5rem; color: var(--white); font-size: .76rem; line-height: 1.7; }
+.app-pre, .app-grid { padding: .75rem; overflow: auto; color: var(--green-bright); border: 1px dotted var(--green-dim); background: #010401; font: inherit; font-size: .75rem; line-height: 1.35; white-space: pre; }
+.app-grid { width: fit-content; letter-spacing: .04em; }
+.app-table-wrap { overflow-x: auto; }
+.app-table-wrap table { width: 100%; border-collapse: collapse; color: var(--white); font-size: .7rem; }
+.app-table-wrap th, .app-table-wrap td { padding: .5rem; border: 1px dotted var(--green-dim); text-align: left; }
+.app-table-wrap th { color: var(--cyan); font-weight: 400; }
 .application-placeholder { display: grid; justify-items: center; align-content: center; min-height: 21rem; padding: 2rem 1rem; text-align: center; }
 .application-placeholder > span { color: var(--cyan); font-size: 2rem; }
 .application-placeholder h2 { margin: .5rem 0; }

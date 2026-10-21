@@ -11,6 +11,17 @@
   </header>
 
   <div class="application-viewport">
+    {% if application.runnable %}
+    <div class="application-status" data-app-status>PROGRAM STATUS / INITIALIZING</div>
+    <div class="application-surface" data-app-surface aria-live="polite">
+      <p class="muted">Establishing isolated program session...</p>
+    </div>
+    <iframe class="application-runtime" data-app-runtime
+      title="{{ application.name }} isolated runtime"
+      aria-hidden="true" tabindex="-1"
+      sandbox="allow-scripts"
+      src="{{ url_for('applications.runtime', slug=application.slug) }}"></iframe>
+    {% else %}
     <div class="application-status">PROGRAM STATUS / PLACEHOLDER</div>
     <div class="application-placeholder">
       <span aria-hidden="true">&gt;_</span>
@@ -23,8 +34,10 @@
       </dl>
       <p class="warning-text">FUNCTIONALITY HAS NOT BEEN IMPLEMENTED YET.</p>
     </div>
+    {% endif %}
   </div>
 
   <a class="button application-return" href="{{ url_for('applications.index') }}">&lt; RETURN TO GAMES AND APPS</a>
 </section>
+{% if application.runnable %}<script src="{{ url_for('static', filename='application_host.js') }}" defer></script>{% endif %}
 {% endblock %}

@@ -1,0 +1,9 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><title>{{ application.name }} runtime</title></head>
+<body>
+<script type="text/plain" id="stationnet-worker-source">{{ worker_source|e }}</script>
+<script type="text/plain" id="stationnet-application-source">{{ application_source|e }}</script>
+<script src="{{ url_for('static', filename='application_frame.js') }}"></script>
+</body>
+</html>

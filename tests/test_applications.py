@@ -61,6 +61,34 @@ def test_unknown_application_returns_not_found(initialized):
     assert initialized.get("/games-apps/not-registered").status_code == 404
 
 
+def test_number_guess_uses_isolated_runtime_and_public_api(initialized):
+    directory = initialized.get("/games-apps")
+    assert b"Number Guess" in directory.data
+    assert b"Signal Runner" not in directory.data
+
+    display = initialized.get("/games-apps/number-guess")
+    assert display.status_code == 200
+    assert b'sandbox="allow-scripts"' in display.data
+    assert b"application_host.js" in display.data
+
+    runtime = initialized.get("/games-apps/number-guess/runtime")
+    assert runtime.status_code == 200
+    assert b"stationnet-application-source" in runtime.data
+    assert "connect-src 'none'" in runtime.headers["Content-Security-Policy"]
+    assert "worker-src blob:" in runtime.headers["Content-Security-Policy"]
+    assert runtime.headers["X-Frame-Options"] == "SAMEORIGIN"
+
+    source = initialized.get("/games-apps/number-guess/source.js")
+    assert source.status_code == 200
+    assert source.mimetype == "application/javascript"
+    assert b"ui.numberInput" in source.data
+
+
+def test_placeholder_has_no_runtime(initialized):
+    assert initialized.get("/games-apps/orbit-command/runtime").status_code == 404
+    assert initialized.get("/games-apps/orbit-command/source.js").status_code == 404
+
+
 def _csrf(client, path="/terminal"):
     client.get(path)
     with client.session_transaction() as session:

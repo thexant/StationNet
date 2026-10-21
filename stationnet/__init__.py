@@ -67,6 +67,17 @@ def create_app(test_config=None):
             "Permissions-Policy": "microphone=(self)",
             "Content-Security-Policy": "default-src 'self'; style-src 'self'; script-src 'self'; img-src 'self' data: blob:; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'",
         })
+        if request.endpoint in {"applications.runtime", "applications.source"}:
+            # The iframe has an opaque origin (no allow-same-origin). Its CSP
+            # also closes every network channel available to application code.
+            response.headers["X-Frame-Options"] = "SAMEORIGIN"
+            response.headers["Content-Security-Policy"] = (
+                "default-src 'none'; script-src 'self'; connect-src 'none'; "
+                "img-src 'none'; media-src 'none'; font-src 'none'; "
+                "style-src 'none'; object-src 'none'; child-src blob:; "
+                "frame-src 'none'; worker-src blob:; base-uri 'none'; "
+                "form-action 'none'; frame-ancestors 'self'"
+            )
         if g.get("user") is not None and request.endpoint != "static":
             response.headers["Cache-Control"] = "no-store"
         return response
