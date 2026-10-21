@@ -1,0 +1,30 @@
+{% extends 'base.html' %}
+{% block title %}{{ application.name }}{% endblock %}
+{% block content %}
+<section class="application-display" aria-labelledby="application-title">
+  <header class="application-display-header">
+    <div>
+      <p class="eyebrow">STATION APPLICATION DISPLAY / {{ application.category|upper }}</p>
+      <h1 id="application-title">{{ application.name }}</h1>
+    </div>
+    <a class="button secondary" href="{{ url_for('applications.index') }}">&lt; DIRECTORY</a>
+  </header>
+
+  <div class="application-viewport">
+    <div class="application-status">PROGRAM STATUS / PLACEHOLDER</div>
+    <div class="application-placeholder">
+      <span aria-hidden="true">&gt;_</span>
+      <h2>{{ application.name }}</h2>
+      <p>{{ application.description }}</p>
+      <dl class="application-metadata">
+        <div><dt>AUTHOR</dt><dd>{{ application.author }}</dd></div>
+        <div><dt>VERSION</dt><dd>{{ application.version }}</dd></div>
+        <div><dt>CATEGORY</dt><dd>{{ application.category }}</dd></div>
+      </dl>
+      <p class="warning-text">FUNCTIONALITY HAS NOT BEEN IMPLEMENTED YET.</p>
+    </div>
+  </div>
+
+  <a class="button application-return" href="{{ url_for('applications.index') }}">&lt; RETURN TO GAMES AND APPS</a>
+</section>
+{% endblock %}

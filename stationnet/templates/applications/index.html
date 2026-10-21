@@ -1,0 +1,39 @@
+{% extends 'base.html' %}
+{% block title %}Games and Apps{% endblock %}
+{% block content %}
+<header class="board-head">
+  <div>
+    <p class="eyebrow">SERVICE 07 / STATION SOFTWARE</p>
+    <h1>Games and Apps</h1>
+    <p class="muted">Station-hosted software runs within the shared StationNet interface.</p>
+  </div>
+</header>
+
+<nav class="subnav" aria-label="Software categories">
+  {% for category in categories %}<a href="#{{ category|lower }}">{{ category|upper }}</a>{% endfor %}
+</nav>
+
+{% for category in categories %}
+<section class="application-category" id="{{ category|lower }}">
+  <div class="application-category-heading">
+    <p class="eyebrow">CAT://{{ '%02d'|format(loop.index) }}</p>
+    <h2>{{ category }}</h2>
+  </div>
+  <div class="application-list">
+    {% for application in applications[category] %}
+    <article class="application-card">
+      <div class="application-copy">
+        <span>{{ application.category|upper }} / V{{ application.version }}</span>
+        <h3>{{ application.name }}</h3>
+        <p>{{ application.description }}</p>
+        <small>AUTHOR: {{ application.author }}</small>
+      </div>
+      <a class="button" href="{{ url_for('applications.display', slug=application.slug) }}">VIEW / LAUNCH</a>
+    </article>
+    {% else %}
+    <div class="empty-state small"><p>NO {{ category|upper }} REGISTERED</p></div>
+    {% endfor %}
+  </div>
+</section>
+{% endfor %}
+{% endblock %}

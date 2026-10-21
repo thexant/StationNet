@@ -207,6 +207,31 @@ button:hover, .button:hover { color: #000; background: var(--green); }
 .presence { color: var(--grey); font-size: .6rem; }
 .presence.online { color: var(--green-bright); text-shadow: 0 0 .45rem var(--green); }
 
+.application-category { margin-top: 1.5rem; }
+.application-category-heading { display: flex; align-items: baseline; gap: .8rem; padding-bottom: .35rem; border-bottom: 1px solid var(--green-dim); }
+.application-category-heading .eyebrow, .application-category-heading h2 { margin: 0; }
+.application-category-heading h2 { color: var(--cyan); text-transform: uppercase; }
+.application-list { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: .7rem; margin-top: .7rem; }
+.application-card { display: flex; flex-direction: column; justify-content: space-between; gap: 1rem; min-height: 13rem; padding: 1rem; border: 1px solid var(--green-dim); background: linear-gradient(135deg,rgba(0,237,69,.04),transparent 55%); }
+.application-card:hover { border-color: var(--green); }
+.application-copy > span, .application-copy > small { color: var(--grey); font-size: .6rem; }
+.application-copy h3 { margin: .4rem 0; color: var(--green-bright); font-size: .9rem; font-weight: 400; letter-spacing: .06em; text-transform: uppercase; }
+.application-copy p { margin: 0 0 .7rem; color: var(--grey); font-size: .72rem; }
+.application-card .button { align-self: start; }
+.application-display { border: 1px solid var(--cyan); background: #000; }
+.application-display-header { display: flex; justify-content: space-between; align-items: end; gap: 1rem; padding: 1rem; border-bottom: 1px solid var(--cyan); }
+.application-display-header h1, .application-display-header p { margin-bottom: 0; }
+.application-viewport { min-height: 24rem; margin: 1rem; border: 1px solid var(--green-dim); }
+.application-status { padding: .35rem .55rem; color: var(--amber); border-bottom: 1px dotted var(--green-dim); font-size: .58rem; letter-spacing: .08em; }
+.application-placeholder { display: grid; justify-items: center; align-content: center; min-height: 21rem; padding: 2rem 1rem; text-align: center; }
+.application-placeholder > span { color: var(--cyan); font-size: 2rem; }
+.application-placeholder h2 { margin: .5rem 0; }
+.application-placeholder > p { margin-inline: auto; color: var(--grey); }
+.application-metadata { width: min(28rem,100%); margin: .5rem 0 1.25rem; }
+.application-metadata div { display: grid; grid-template-columns: 7rem minmax(0,1fr); gap: 1rem; padding: .4rem 0; border-bottom: 1px dotted var(--green-dim); }
+.application-metadata dd { color: var(--green-bright); text-align: left; }
+.application-return { margin: 0 1rem 1rem; }
+
 .live-chat { width: min(820px,100%); }
 .chat-log { height: min(52vh,30rem); margin: 1rem 0; padding: .7rem; overflow-y: auto; border: 1px solid var(--green-dim); background: #010401; }
 .chat-message { padding: .55rem .3rem; border-bottom: 1px dotted #064d1d; }
@@ -328,6 +353,9 @@ button:disabled { opacity: .5; cursor: not-allowed; }
   .auth-alternatives { align-items: flex-start; flex-direction: column; }
   .traffic-row { grid-template-columns: 1fr; gap: .2rem; }
   .file-row, .user-card { flex-direction: column; }
+  .application-list { grid-template-columns: 1fr; }
+  .application-display-header { align-items: stretch; flex-direction: column; }
+  .application-display-header .button { align-self: start; }
   .file-row .button-row, .user-card .button-row { justify-content: start; }
   .radio-receiver { grid-template-columns: 1fr; }
   .radio-controls { grid-template-columns: auto minmax(7rem,1fr) auto; }
