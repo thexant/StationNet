@@ -172,6 +172,30 @@ CREATE TABLE IF NOT EXISTS mud_events (
  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);
 CREATE INDEX IF NOT EXISTS idx_mud_events_audience
  ON mud_events(audience_type,audience_key,id);
+CREATE TABLE IF NOT EXISTS mud_world_rooms (
+ id TEXT PRIMARY KEY,
+ name TEXT NOT NULL,
+ description TEXT NOT NULL,
+ is_start INTEGER NOT NULL DEFAULT 0 CHECK(is_start IN (0,1)),
+ created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+ updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_mud_world_single_start
+ ON mud_world_rooms(is_start) WHERE is_start=1;
+CREATE TABLE IF NOT EXISTS mud_world_exits (
+ id TEXT PRIMARY KEY,
+ from_room_id TEXT NOT NULL REFERENCES mud_world_rooms(id) ON DELETE CASCADE,
+ to_room_id TEXT NOT NULL REFERENCES mud_world_rooms(id) ON DELETE CASCADE,
+ name TEXT NOT NULL COLLATE NOCASE,
+ direction TEXT COLLATE NOCASE,
+ created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+ UNIQUE(from_room_id,name),
+ UNIQUE(from_room_id,direction));
+CREATE INDEX IF NOT EXISTS idx_mud_world_exits_from
+ ON mud_world_exits(from_room_id,id);
+CREATE TABLE IF NOT EXISTS mud_world_locations (
+ user_id INTEGER PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+ room_id TEXT REFERENCES mud_world_rooms(id) ON DELETE SET NULL,
+ updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);
 CREATE TRIGGER IF NOT EXISTS radio_default_membership_after_user_insert
 AFTER INSERT ON users
 BEGIN
@@ -226,6 +250,7 @@ def init_db():
     _migrate_hosted_broadcast_fields(database)
     _migrate_broadcast_identity_fields(database)
     _migrate_mud_settings(database)
+    _initialize_mud_world(database)
     _migrate_legacy_callsigns(database)
     _migrate_factory_radio_bands(database)
     _align_radio_bands_to_display_precision(database)
@@ -254,6 +279,28 @@ def init_db():
             "UPDATE radio_permission_groups SET host_broadcasts=1 WHERE name='OPERATORS'"
         )
     database.commit()
+
+
+def _initialize_mud_world(database):
+    """Install only the generic authored-world entry room."""
+    if database.execute("SELECT 1 FROM mud_world_rooms WHERE is_start=1").fetchone() is None:
+        existing = database.execute(
+            "SELECT 1 FROM mud_world_rooms WHERE id='stationnet:start'"
+        ).fetchone()
+        if existing is not None:
+            database.execute(
+                "UPDATE mud_world_rooms SET is_start=1,updated_at=CURRENT_TIMESTAMP "
+                "WHERE id='stationnet:start'"
+            )
+            return
+        database.execute(
+            "INSERT INTO mud_world_rooms(id,name,description,is_start) VALUES(?,?,?,1)",
+            (
+                "stationnet:start",
+                "Starting Room",
+                "A quiet, unadorned room waiting for this station's world to take shape.",
+            ),
+        )
 
 
 def _migrate_radio_capability_columns(database):

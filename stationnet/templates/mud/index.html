@@ -12,10 +12,16 @@
 
   <div class="mud-layout">
     <section class="mud-main" aria-label="MUD terminal">
+      <section class="mud-room" data-mud-room aria-live="polite" aria-atomic="true">
+        <p class="eyebrow">CURRENT LOCATION</p>
+        <h2 data-mud-room-name>{{ room.name }}</h2>
+        <p data-mud-room-description>{{ room.description }}</p>
+        <p class="mud-room-exits"><span>EXITS</span> <span data-mud-room-exits>{% if room.exits %}{% for exit in room.exits %}{{ exit.direction or exit.name }}{% if not loop.last %}, {% endif %}{% endfor %}{% else %}none{% endif %}</span></p>
+      </section>
       <div class="mud-events" data-mud-events role="log" aria-live="polite" aria-label="MUD events">
         <article class="mud-event mud-event-system">
           <span>SYSTEM</span>
-          <p>MUD interface initialized. Gameplay systems are not installed in this foundation chunk.</p>
+          <p>Location link established. Use the navigation controls or /help for commands.</p>
         </article>
         {% for event in events %}
         <article class="mud-event mud-event-{{ event.event_type }}" data-event-id="{{ event.id }}">

@@ -298,7 +298,13 @@ button:disabled { opacity: .5; cursor: not-allowed; }
 .mud-header h1, .mud-header .eyebrow { margin-bottom: 0; }
 .mud-link-state { color: var(--green-bright); font-size: .6rem; letter-spacing: .08em; white-space: nowrap; }
 .mud-layout { display: grid; grid-template-columns: minmax(0, 1fr) 15rem; min-height: 34rem; border: 1px solid var(--green); }
-.mud-main { display: grid; grid-template-rows: minmax(16rem, 1fr) auto auto; min-width: 0; border-right: 1px solid var(--green-dim); }
+.mud-main { display: grid; grid-template-rows: auto minmax(16rem, 1fr) auto auto; min-width: 0; border-right: 1px solid var(--green-dim); }
+.mud-room { padding: .8rem 1rem; border-bottom: 1px solid var(--green-dim); background: rgba(0,237,69,.035); }
+.mud-room .eyebrow { margin: 0 0 .3rem; }
+.mud-room h2 { margin: 0 0 .45rem; color: var(--green-bright); font-size: 1.15rem; }
+.mud-room > p:not(.eyebrow):not(.mud-room-exits) { margin: 0; color: var(--white); font-size: .76rem; white-space: pre-wrap; }
+.mud-room-exits { margin: .65rem 0 0; color: var(--grey); font-size: .6rem; }
+.mud-room-exits > span:first-child { margin-right: .35rem; color: var(--cyan); letter-spacing: .07em; }
 .mud-events { min-height: 16rem; max-height: 52vh; padding: .8rem; overflow-y: auto; background: #010401; scrollbar-color: var(--green-dim) #000; }
 .mud-event { display: grid; grid-template-columns: 4.5rem minmax(0,1fr); gap: .65rem; padding: .5rem .25rem; border-bottom: 1px dotted #064d1d; }
 .mud-event span { color: var(--cyan); font-size: .57rem; letter-spacing: .06em; }

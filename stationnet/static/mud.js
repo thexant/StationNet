@@ -6,6 +6,9 @@ for(const mud of document.querySelectorAll("[data-mud]")){
   const form=mud.querySelector("[data-mud-command]");
   const input=form.querySelector("[data-command-input]");
   const error=mud.querySelector("[data-mud-error]");
+  const roomName=mud.querySelector("[data-mud-room-name]");
+  const roomDescription=mud.querySelector("[data-mud-room-description]");
+  const roomExits=mud.querySelector("[data-mud-room-exits]");
   let busy=false;
 
   const requestId=()=>globalThis.crypto?.randomUUID?.()||`${Date.now()}-${Math.random().toString(36).slice(2)}`;
@@ -51,6 +54,12 @@ for(const mud of document.querySelectorAll("[data-mud]")){
       actions.append(group);
     }
   };
+  const renderRoom=room=>{
+    if(!room)return;
+    roomName.textContent=room.name||"Unknown Location";
+    roomDescription.textContent=room.description||"";
+    roomExits.textContent=(room.exits||[]).map(exit=>exit.direction||exit.name).join(", ")||"none";
+  };
   const setBusy=value=>{
     busy=value;
     form.querySelector("button").disabled=value;
@@ -68,9 +77,10 @@ for(const mud of document.querySelectorAll("[data-mud]")){
       const response=await fetch(mud.dataset.actionUrl,{method:"POST",body:data,headers:{"Accept":"application/json"}});
       if(response.status===401||response.redirected){location.reload();return}
       const payload=await response.json();
+      renderRoom(payload.room);
+      if(payload.actions)renderActions(payload.actions);
       if(!response.ok)throw new Error(payload.error||"Action rejected by the station.");
       for(const event of payload.events||[])appendEvent(event);
-      renderActions(payload.actions);
     }catch(problem){error.textContent=problem.message||"MUD link interrupted."}
     finally{setBusy(false)}
   };
