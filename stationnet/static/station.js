@@ -5,6 +5,24 @@ if(clock){const tick=()=>{const now=new Date();clock.textContent=now.toLocaleTim
 document.addEventListener("keydown",e=>{const editing=e.target instanceof HTMLInputElement||e.target instanceof HTMLTextAreaElement;if(e.key==="/"&&!editing){e.preventDefault();const command=document.querySelector("[data-command-input]");if(command){command.focus();if(!command.value)command.value="/"}else document.querySelector("#service-nav")?.focus()}if(e.key==="Escape"&&document.activeElement instanceof HTMLElement)document.activeElement.blur()});
 for(const form of document.querySelectorAll("form[data-confirm]"))form.addEventListener("submit",e=>{if(!confirm(form.dataset.confirm))e.preventDefault()});
 
+for(const button of document.querySelectorAll("[data-copy-button]"))button.addEventListener("click",async()=>{
+  const input=button.parentElement?.querySelector("[data-copy-value]");
+  if(!input)return;
+  try{
+    if(navigator.clipboard)await navigator.clipboard.writeText(input.value);
+    else{input.select();document.execCommand("copy")}
+    const original=button.textContent;
+    button.textContent="COPIED";
+    setTimeout(()=>button.textContent=original,1600);
+  }catch(_){input.select();input.setSelectionRange(0,input.value.length)}
+});
+
+const inviteInput=document.querySelector('input[name="invite"]');
+if(inviteInput&&!inviteInput.value&&location.hash){
+  const inviteCode=new URLSearchParams(location.hash.slice(1)).get("invite");
+  if(inviteCode){inviteInput.value=inviteCode;history.replaceState(null,"",location.pathname+location.search)}
+}
+
 for(const panel of document.querySelectorAll("[data-collapsible-panel]")){
   const toggle=panel.querySelector(":scope > [data-panel-toggle]");
   const content=panel.querySelector(":scope > [data-panel-content]");

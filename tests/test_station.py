@@ -1,3 +1,4 @@
+import re
 from unittest.mock import patch
 
 from stationnet import create_app
@@ -94,7 +95,10 @@ def test_sysop_can_customize_landing_message_and_tagline(initialized):
             "csrf_token": csrf(initialized, "/sysop/settings"),
             "name": "Test Relay",
             "description": "Local test station",
-            "landing_message": "Welcome to every service aboard this relay.",
+            "landing_heading": "A note from the operator",
+            "landing_message": "Welcome to **every service** aboard this relay.\n\n- Be kind\n- Have fun",
+            "landing_message_control": "1",
+            "landing_message_enabled": "on",
             "brand_tagline": "SIGNAL HOUSE // COMMUNITY ONLINE //",
             "registration_open": "on",
             "guest_access": "on",
@@ -104,9 +108,50 @@ def test_sysop_can_customize_landing_message_and_tagline(initialized):
     assert b"Station parameters updated" in response.data
 
     response = initialized.get("/")
-    assert b"Welcome to every service aboard this relay." in response.data
+    assert b"A note from the operator" in response.data
+    assert b"Welcome to <strong>every service</strong> aboard this relay." in response.data
+    assert b"<li>Be kind</li>" in response.data
     assert b"SIGNAL HOUSE // COMMUNITY ONLINE //" in response.data
     assert b"Explore the station as a visitor" not in response.data
+
+
+def test_sysop_can_disable_and_reenable_landing_message(initialized):
+    form = {
+        "csrf_token": csrf(initialized, "/sysop/settings"),
+        "name": "Test Relay",
+        "description": "Local test station",
+        "landing_heading": "Operator message",
+        "landing_message": "This message can be hidden.",
+        "landing_message_control": "1",
+    }
+    initialized.post("/sysop/settings", data=form)
+    landing = initialized.get("/")
+    assert b"Operator message" not in landing.data
+    assert b"This message can be hidden." not in landing.data
+    assert b"landing-copy" not in landing.data
+
+    form["csrf_token"] = csrf(initialized, "/sysop/settings")
+    form["landing_message_enabled"] = "on"
+    initialized.post("/sysop/settings", data=form)
+    assert b"This message can be hidden." in initialized.get("/").data
+
+
+def test_landing_markdown_escapes_html_and_unsafe_links(initialized):
+    initialized.post(
+        "/sysop/settings",
+        data={
+            "csrf_token": csrf(initialized, "/sysop/settings"),
+            "name": "Test Relay",
+            "description": "Local test station",
+            "landing_message": "<script>alert(1)</script> [bad](javascript:alert(2))",
+            "landing_message_control": "1",
+            "landing_message_enabled": "on",
+        },
+    )
+    landing = initialized.get("/")
+    assert b"<script>" not in landing.data
+    assert b"&lt;script&gt;alert(1)&lt;/script&gt;" in landing.data
+    assert b'href="javascript:' not in landing.data
 
 def test_startup_replaces_legacy_callsigns(app, initialized):
     with app.app_context():
@@ -132,6 +177,48 @@ def test_register_login_and_unique_callsign(app, initialized):
     initialized.post("/logout",data={"csrf_token":csrf(initialized,"/terminal")})
     response=initialized.post("/login",data={"csrf_token":csrf(initialized,"/login"),"username":"visitor","password":"a secure visitor pass"},follow_redirects=True)
     assert b"Link established" in response.data
+
+def test_login_remember_me_controls_cookie_persistence(app, initialized):
+    initialized.post("/logout", data={"csrf_token": csrf(initialized, "/terminal")})
+
+    login_page = initialized.get("/login")
+    assert b'name="remember_me"' in login_page.data
+    response = initialized.post(
+        "/login",
+        data={
+            "csrf_token": csrf(initialized, "/login"),
+            "username": "sysop",
+            "password": "correct horse battery staple",
+        },
+    )
+    assert "Expires=" not in response.headers["Set-Cookie"]
+
+    initialized.post("/logout", data={"csrf_token": csrf(initialized, "/terminal")})
+    response = initialized.post(
+        "/login",
+        data={
+            "csrf_token": csrf(initialized, "/login"),
+            "username": "sysop",
+            "password": "correct horse battery staple",
+            "remember_me": "on",
+        },
+    )
+    assert "Expires=" in response.headers["Set-Cookie"]
+
+    remembered_cookie = initialized.get_cookie(app.config["SESSION_COOKIE_NAME"])
+    restarted_app = create_app({
+        "TESTING": True,
+        "DATA_DIR": app.config["DATA_DIR"],
+        "SECRET_KEY": app.config["SECRET_KEY"],
+    })
+    restarted = restarted_app.test_client()
+    restarted.set_cookie(app.config["SESSION_COOKIE_NAME"], remembered_cookie.value)
+    assert b"AUTHENTICATED" in restarted.get("/terminal").data
+
+    restarted.post("/logout", data={"csrf_token": csrf(restarted, "/terminal")})
+    terminal = restarted.get("/terminal")
+    assert b"AUTHENTICATED" not in terminal.data
+    assert b"AUTHENTICATE" in terminal.data
 
 def test_access_policy_can_enable_registration_independently(app, initialized):
     response = initialized.post(
@@ -160,6 +247,196 @@ def test_access_policy_can_enable_registration_independently(app, initialized):
     registration = initialized.get("/register")
     assert registration.status_code == 200
     assert b"Create your account" in registration.data
+
+
+def _generate_invitation(client):
+    response = client.post(
+        "/sysop/invitations/generate",
+        data={"csrf_token": csrf(client, "/sysop/settings")},
+    )
+    assert response.status_code == 200
+    match = re.search(rb'value="(SN-[A-Za-z0-9_-]+)"', response.data)
+    assert match
+    return match.group(1).decode(), response
+
+
+def _set_registration_mode(client, mode):
+    response = client.post(
+        "/sysop/settings/access",
+        data={
+            "csrf_token": csrf(client, "/sysop/settings"),
+            "registration_mode": mode,
+            "guest_access": "on",
+        },
+    )
+    assert response.status_code == 302
+
+
+def test_private_registration_requires_and_atomically_consumes_invitation(app, initialized):
+    code, created = _generate_invitation(initialized)
+    assert b"COPY CODE" in created.data
+    assert code.encode() in created.data
+    assert (b"/register#invite=" + code.encode()) in created.data
+
+    with app.app_context():
+        invite = get_db().execute("SELECT * FROM registration_invites").fetchone()
+        assert invite["token_hash"] != code
+        assert code not in tuple(str(value) for value in invite)
+
+    _set_registration_mode(initialized, "private")
+    initialized.post("/logout", data={"csrf_token": csrf(initialized, "/terminal")})
+
+    landing = initialized.get("/")
+    assert b"INVITATION ONLY" in landing.data
+    assert b"USE INVITATION" in landing.data
+    assert b"gateway-splash mode-private" in landing.data
+    assert b"RESTRICTED ACCESS NODE" in landing.data
+    linked = initialized.get("/register?invite=" + code)
+    assert code.encode() in linked.data
+    assert b"Invitation code" in linked.data
+    assert linked.headers["Cache-Control"] == "no-store"
+    assert linked.headers["Referrer-Policy"] == "no-referrer"
+
+    invalid = initialized.post(
+        "/register",
+        data={
+            "csrf_token": csrf(initialized, "/register"),
+            "invite": "SN-not-valid",
+            "username": "intruder",
+            "password": "a secure visitor pass",
+            "confirm_password": "a secure visitor pass",
+        },
+    )
+    assert b"invalid or no longer available" in invalid.data
+
+    registered = initialized.post(
+        "/register",
+        data={
+            "csrf_token": csrf(initialized, "/register"),
+            "invite": code,
+            "username": "invited",
+            "password": "a secure visitor pass",
+            "confirm_password": "a secure visitor pass",
+        },
+        follow_redirects=True,
+    )
+    assert b"Account linked" in registered.data
+
+    initialized.post("/logout", data={"csrf_token": csrf(initialized, "/terminal")})
+    reused = initialized.post(
+        "/register",
+        data={
+            "csrf_token": csrf(initialized, "/register"),
+            "invite": code,
+            "username": "second-user",
+            "password": "a secure visitor pass",
+            "confirm_password": "a secure visitor pass",
+        },
+    )
+    assert b"invalid or no longer available" in reused.data
+    with app.app_context():
+        database = get_db()
+        assert database.execute("SELECT COUNT(*) FROM users WHERE username='second-user'").fetchone()[0] == 0
+        redemption = database.execute("SELECT used_by,used_at FROM registration_invites").fetchone()
+        assert redemption["used_by"] is not None
+        assert redemption["used_at"] is not None
+
+
+def test_sysop_can_revoke_invitation_and_full_code_is_not_listed(app, initialized):
+    code, _ = _generate_invitation(initialized)
+    settings = initialized.get("/sysop/settings")
+    assert code.encode() not in settings.data
+    assert code[-8:].encode() in settings.data
+
+    with app.app_context():
+        invitation_id = get_db().execute("SELECT id FROM registration_invites").fetchone()[0]
+    response = initialized.post(
+        f"/sysop/invitations/{invitation_id}/revoke",
+        data={"csrf_token": csrf(initialized, "/sysop/settings")},
+        follow_redirects=True,
+    )
+    assert b"Invitation revoked" in response.data
+    assert b"REVOKED" in response.data
+
+    _set_registration_mode(initialized, "private")
+    initialized.post("/logout", data={"csrf_token": csrf(initialized, "/terminal")})
+    rejected = initialized.post(
+        "/register",
+        data={
+            "csrf_token": csrf(initialized, "/register"),
+            "invite": code,
+            "username": "revoked-user",
+            "password": "a secure visitor pass",
+            "confirm_password": "a secure visitor pass",
+        },
+    )
+    assert b"invalid or no longer available" in rejected.data
+
+
+def test_disabled_registration_blocks_direct_requests_but_not_login(initialized):
+    _set_registration_mode(initialized, "disabled")
+    initialized.post("/logout", data={"csrf_token": csrf(initialized, "/terminal")})
+
+    landing = initialized.get("/")
+    assert b"CLOSED TO NEW REGISTRATIONS" in landing.data
+    assert b"CREATE ACCOUNT" not in landing.data
+    assert b"gateway-splash mode-disabled" in landing.data
+    assert b"CLOSED ACCESS NODE" in landing.data
+    assert initialized.get("/register").status_code == 302
+    blocked = initialized.post(
+        "/register",
+        data={
+            "csrf_token": csrf(initialized, "/login"),
+            "username": "bypass",
+            "password": "a secure visitor pass",
+            "confirm_password": "a secure visitor pass",
+        },
+    )
+    assert blocked.status_code == 302
+
+    login = initialized.post(
+        "/login",
+        data={
+            "csrf_token": csrf(initialized, "/login"),
+            "username": "sysop",
+            "password": "correct horse battery staple",
+        },
+        follow_redirects=True,
+    )
+    assert b"Link established" in login.data
+
+
+def test_legacy_closed_policy_migrates_without_changing_accounts(app, initialized):
+    with app.app_context():
+        database = get_db()
+        database.execute("UPDATE station SET registration_open=0")
+        original_accounts = database.execute("SELECT COUNT(*) FROM users").fetchone()[0]
+        database.execute(
+            "CREATE TABLE legacy_station (id INTEGER PRIMARY KEY CHECK(id=1),"
+            "name TEXT NOT NULL,description TEXT NOT NULL,callsign TEXT NOT NULL UNIQUE,"
+            "registration_open INTEGER NOT NULL DEFAULT 1,"
+            "guest_access INTEGER NOT NULL DEFAULT 1,created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP)"
+        )
+        database.execute(
+            "INSERT INTO legacy_station(id,name,description,callsign,registration_open,guest_access,created_at) "
+            "SELECT id,name,description,callsign,registration_open,guest_access,created_at FROM station"
+        )
+        database.execute("DROP TABLE station")
+        database.execute("ALTER TABLE legacy_station RENAME TO station")
+        database.commit()
+
+    restarted = create_app({
+        "TESTING": True,
+        "DATA_DIR": app.config["DATA_DIR"],
+        "SECRET_KEY": app.config["SECRET_KEY"],
+    })
+    with restarted.app_context():
+        database = get_db()
+        station = database.execute(
+            "SELECT registration_open,registration_mode FROM station WHERE id=1"
+        ).fetchone()
+        assert tuple(station) == (0, "disabled")
+        assert database.execute("SELECT COUNT(*) FROM users").fetchone()[0] == original_accounts
 
 def test_board_reply_guest_read_and_restart(app, initialized):
     response=initialized.post("/board/new",data={"csrf_token":csrf(initialized,"/board/new"),"title":"First transmission","body":"Hello local network."},follow_redirects=True)

@@ -1,4 +1,6 @@
 """First-run setup and local authentication."""
+import hashlib
+import hmac
 import secrets
 import sqlite3
 from datetime import datetime, timedelta, timezone
@@ -9,6 +11,22 @@ from .security import check_password, generate_station_callsign, generate_user_c
 from .realtime import ONLINE_SECONDS, utc_now
 
 bp = Blueprint("auth", __name__)
+
+
+def invitation_digest(code):
+    """Return a keyed, non-reversible lookup value for an invitation code."""
+    key = current_app.config["SECRET_KEY"]
+    if isinstance(key, str):
+        key = key.encode("utf-8")
+    return hmac.new(key, code.encode("utf-8"), hashlib.sha256).hexdigest()
+
+
+@bp.after_request
+def protect_auth_secrets(response):
+    if request.endpoint == "auth.register":
+        response.headers["Cache-Control"] = "no-store"
+        response.headers["Referrer-Policy"] = "no-referrer"
+    return response
 
 def load_logged_in_user():
     user_id = session.get("user_id")
@@ -84,7 +102,16 @@ def setup():
             database = get_db(); callsign = generate_station_callsign()
             try:
                 database.execute("BEGIN IMMEDIATE")
-                database.execute("INSERT INTO station(id,name,description,callsign,registration_open,guest_access) VALUES(1,?,?,?,?,1)", (name, description, callsign, request.form.get("registration_open") == "open"))
+                registration_mode = request.form.get("registration_mode")
+                if registration_mode not in {"open", "private", "disabled"}:
+                    registration_mode = (
+                        "open" if request.form.get("registration_open") == "open" else "disabled"
+                    )
+                database.execute(
+                    "INSERT INTO station(id,name,description,callsign,registration_open,"
+                    "registration_mode,guest_access) VALUES(1,?,?,?,?,?,1)",
+                    (name, description, callsign, registration_mode == "open", registration_mode),
+                )
                 user_callsign = generate_user_callsign(database)
                 cursor = database.execute("INSERT INTO users(username,callsign,password_hash,is_admin) VALUES(?,?,?,1)", (username, user_callsign, hash_password(password)))
                 database.execute(
@@ -102,9 +129,10 @@ def setup():
 @bp.route("/register", methods=("GET", "POST"))
 def register():
     station = get_station()
-    if not station["registration_open"]:
+    if station["registration_mode"] == "disabled":
         flash("This station is not accepting registrations.", "warning")
         return redirect(url_for("auth.login"))
+    invite_code = request.values.get("invite", "").strip()
     if request.method == "POST":
         validate_csrf(); username = request.form.get("username", "").strip(); password = request.form.get("password", "")
         error = None
@@ -115,12 +143,46 @@ def register():
         else:
             database = get_db(); callsign = generate_user_callsign(database)
             try:
-                cursor = database.execute("INSERT INTO users(username,callsign,password_hash) VALUES(?,?,?)", (username, callsign, hash_password(password)))
+                database.execute("BEGIN IMMEDIATE")
+                mode = database.execute(
+                    "SELECT registration_mode FROM station WHERE id=1"
+                ).fetchone()["registration_mode"]
+                if mode == "disabled":
+                    database.rollback()
+                    flash("This station is not accepting registrations.", "warning")
+                    return redirect(url_for("auth.login"))
+                invitation = None
+                if mode == "private":
+                    invitation = database.execute(
+                        "SELECT id FROM registration_invites WHERE token_hash=? "
+                        "AND revoked_at IS NULL AND used_at IS NULL",
+                        (invitation_digest(invite_code),),
+                    ).fetchone()
+                    if invitation is None:
+                        database.rollback()
+                        flash("That invitation is invalid or no longer available.", "error")
+                        return render_template("register.html", invite_code=invite_code)
+                cursor = database.execute(
+                    "INSERT INTO users(username,callsign,password_hash) VALUES(?,?,?)",
+                    (username, callsign, hash_password(password)),
+                )
+                if invitation is not None:
+                    redeemed = database.execute(
+                        "UPDATE registration_invites SET used_by=?,used_at=CURRENT_TIMESTAMP "
+                        "WHERE id=? AND revoked_at IS NULL AND used_at IS NULL",
+                        (cursor.lastrowid, invitation["id"]),
+                    )
+                    if redeemed.rowcount != 1:
+                        database.rollback()
+                        flash("That invitation is invalid or no longer available.", "error")
+                        return render_template("register.html", invite_code=invite_code)
                 database.commit(); session.clear(); session["user_id"] = cursor.lastrowid; establish_connection(cursor.lastrowid)
                 flash(f"Account linked. Your callsign is {callsign}.", "success")
                 return redirect(url_for("station.terminal"))
-            except sqlite3.IntegrityError: flash("That username is already registered.", "error")
-    return render_template("register.html")
+            except sqlite3.IntegrityError:
+                database.rollback()
+                flash("That username is already registered.", "error")
+    return render_template("register.html", invite_code=invite_code)
 
 @bp.route("/login", methods=("GET", "POST"))
 def login():
@@ -129,7 +191,8 @@ def login():
         user = get_db().execute("SELECT * FROM users WHERE username=?", (username,)).fetchone()
         if user is None or not check_password(user["password_hash"], password): flash("Invalid username or password.", "error")
         else:
-            session.clear(); session["user_id"] = user["id"]; establish_connection(user["id"])
+            remember_me = request.form.get("remember_me") == "on"
+            session.clear(); session.permanent = remember_me; session["user_id"] = user["id"]; establish_connection(user["id"])
             flash(f"Link established. Welcome, {user['callsign']}.", "success")
             destination = request.args.get("next", "")
             if not destination.startswith("/") or destination.startswith("//"): destination = url_for("station.terminal")

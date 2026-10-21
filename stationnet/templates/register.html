@@ -3,16 +3,19 @@
 {% block content %}
 <section class="auth-screen" aria-labelledby="register-title">
   <header class="auth-heading">
-    <p class="eyebrow">PORT 01 / LOCAL ENROLLMENT</p>
+    <p class="eyebrow">PORT 01 / {{ 'INVITED ENROLLMENT' if g.station.registration_mode=='private' else 'LOCAL ENROLLMENT' }}</p>
     <h1 id="register-title">Create your account</h1>
-    <p>Create a station-local account. A unique callsign will be assigned when enrollment is complete.</p>
+    <p>{% if g.station.registration_mode=='private' %}This station is private. Present a single-use invitation to create a station-local account.{% else %}Create a station-local account.{% endif %} A unique callsign will be assigned when enrollment is complete.</p>
   </header>
 
   <div class="auth-form">
     <div class="form-title"><span>&gt;</span> NEW OPERATOR RECORD</div>
     <form method="post" class="form-grid">
       <input type="hidden" name="csrf_token" value="{{ session.csrf_token }}">
-      <label>Username <small>3-24 characters: letters, numbers, _ or -</small><input name="username" minlength="3" maxlength="24" pattern="[A-Za-z0-9_-]{3,24}" required autofocus autocomplete="username" value="{{ request.form.username or '' }}"></label>
+      {% if g.station.registration_mode=='private' %}
+      <label class="invite-code-label">Invitation code <small>From your StationNet invitation link or station operator</small><input name="invite" maxlength="128" required autofocus autocomplete="off" spellcheck="false" value="{{ invite_code }}" placeholder="SN-…"></label>
+      {% endif %}
+      <label>Username <small>3-24 characters: letters, numbers, _ or -</small><input name="username" minlength="3" maxlength="24" pattern="[A-Za-z0-9_-]{3,24}" required {% if g.station.registration_mode=='open' %}autofocus{% endif %} autocomplete="username" value="{{ request.form.username or '' }}"></label>
       <label>Password <small>Minimum 10 characters</small><input type="password" name="password" minlength="10" maxlength="128" required autocomplete="new-password"></label>
       <label>Confirm password<input type="password" name="confirm_password" minlength="10" maxlength="128" required autocomplete="new-password"></label>
       <button class="auth-submit">CREATE ACCOUNT <span aria-hidden="true">-&gt;</span></button>

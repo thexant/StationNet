@@ -6,7 +6,12 @@ SCHEMA = """
 CREATE TABLE IF NOT EXISTS station (
  id INTEGER PRIMARY KEY CHECK(id=1), name TEXT NOT NULL, description TEXT NOT NULL,
  callsign TEXT NOT NULL UNIQUE, registration_open INTEGER NOT NULL DEFAULT 1,
+ registration_mode TEXT NOT NULL DEFAULT 'open'
+ CHECK(registration_mode IN ('open','private','disabled')),
  guest_access INTEGER NOT NULL DEFAULT 1, landing_message TEXT NOT NULL DEFAULT '',
+ landing_heading TEXT NOT NULL DEFAULT '',
+ landing_message_enabled INTEGER NOT NULL DEFAULT 1
+ CHECK(landing_message_enabled IN (0,1)),
  brand_tagline TEXT NOT NULL DEFAULT 'H7/dS! // YOUR INDEPENDENT COMMUNITY STATION //',
  upload_permission TEXT NOT NULL DEFAULT 'members',
  file_storage_limit_mb INTEGER NOT NULL DEFAULT 100,
@@ -22,6 +27,18 @@ CREATE TABLE IF NOT EXISTS users (
  tagline TEXT NOT NULL DEFAULT '', about TEXT NOT NULL DEFAULT '', birthday TEXT,
  gender TEXT NOT NULL DEFAULT '', last_seen TEXT, connection_id TEXT,
  radio_quota_mb INTEGER);
+CREATE TABLE IF NOT EXISTS registration_invites (
+ id INTEGER PRIMARY KEY AUTOINCREMENT,
+ token_hash TEXT NOT NULL UNIQUE,
+ code_hint TEXT NOT NULL,
+ created_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+ created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+ used_by INTEGER UNIQUE REFERENCES users(id) ON DELETE SET NULL,
+ used_at TEXT,
+ revoked_at TEXT,
+ CHECK((used_at IS NULL AND used_by IS NULL) OR used_at IS NOT NULL));
+CREATE INDEX IF NOT EXISTS idx_registration_invites_status
+ ON registration_invites(revoked_at,used_at,created_at);
 CREATE TABLE IF NOT EXISTS posts (
  id INTEGER PRIMARY KEY AUTOINCREMENT, author_id INTEGER NOT NULL REFERENCES users(id) ON DELETE RESTRICT,
  parent_id INTEGER REFERENCES posts(id) ON DELETE CASCADE, title TEXT, body TEXT NOT NULL,
@@ -302,6 +319,7 @@ def init_db():
     database = get_db()
     database.executescript(SCHEMA)
     _migrate_station_customization(database)
+    _migrate_registration_policy(database)
     _migrate_community_fields(database)
     _migrate_hosted_broadcast_fields(database)
     _migrate_broadcast_identity_fields(database)
@@ -490,6 +508,15 @@ def _migrate_station_customization(database):
         database.execute(
             "ALTER TABLE station ADD COLUMN landing_message TEXT NOT NULL DEFAULT ''"
         )
+    if "landing_heading" not in columns:
+        database.execute(
+            "ALTER TABLE station ADD COLUMN landing_heading TEXT NOT NULL DEFAULT ''"
+        )
+    if "landing_message_enabled" not in columns:
+        database.execute(
+            "ALTER TABLE station ADD COLUMN landing_message_enabled INTEGER NOT NULL DEFAULT 1 "
+            "CHECK(landing_message_enabled IN (0,1))"
+        )
     if "brand_tagline" not in columns:
         database.execute(
             "ALTER TABLE station ADD COLUMN brand_tagline TEXT NOT NULL "
@@ -502,6 +529,21 @@ def _migrate_station_customization(database):
             "H7/dS! // YOUR INDEPENDENT COMMUNITY NODE //",
         ),
     )
+
+
+def _migrate_registration_policy(database):
+    """Upgrade the legacy open/closed switch without changing its behavior."""
+    columns = {
+        row["name"] for row in database.execute("PRAGMA table_info(station)")
+    }
+    if "registration_mode" not in columns:
+        database.execute(
+            "ALTER TABLE station ADD COLUMN registration_mode TEXT NOT NULL DEFAULT 'open'"
+        )
+        database.execute(
+            "UPDATE station SET registration_mode="
+            "CASE WHEN registration_open=1 THEN 'open' ELSE 'disabled' END"
+        )
 
 def _migrate_community_fields(database):
     """Add Milestone 2 settings and profile fields to existing stations."""

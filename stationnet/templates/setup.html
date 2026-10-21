@@ -6,5 +6,9 @@
 <p>Your station and operator will each receive an independent, random alphanumeric callsign when setup completes.</p>
 <div class="divider">PRIMARY OPERATOR</div><label>Administrator username<input name="username" minlength="3" maxlength="24" pattern="[A-Za-z0-9_-]{3,24}" required value="{{ request.form.username or '' }}"></label>
 <label>Password<input type="password" name="password" minlength="10" maxlength="128" required autocomplete="new-password"></label><label>Confirm password<input type="password" name="confirm_password" minlength="10" maxlength="128" required autocomplete="new-password"></label>
-<fieldset><legend>Registration policy</legend><label class="radio"><input type="radio" name="registration_open" value="open" checked> Open — visitors may create accounts</label><label class="radio"><input type="radio" name="registration_open" value="closed"> Closed — registration disabled</label></fieldset><button>INITIALIZE STATION</button></form></section>{% endblock %}
+<fieldset><legend>Registration policy</legend>
+<label class="radio"><input type="radio" name="registration_mode" value="open" checked> Open — anyone may create an account</label>
+<label class="radio"><input type="radio" name="registration_mode" value="private"> Private — a single-use invitation is required</label>
+<label class="radio"><input type="radio" name="registration_mode" value="disabled"> Disabled — no new accounts</label>
+</fieldset><button>INITIALIZE STATION</button></form></section>{% endblock %}
 

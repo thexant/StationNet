@@ -1,0 +1,17 @@
+{% extends 'base.html' %}
+{% block title %}Invitation Created{% endblock %}
+{% block content %}
+<section class="narrow terminal-card invitation-created" aria-labelledby="invite-title">
+  <p class="eyebrow">SYSOP CONTROL / INVITATION CREATED</p>
+  <h1 id="invite-title">Copy this invitation now</h1>
+  <p>This is the only time StationNet will display the complete secret. Store it securely or send the link directly to the intended person.</p>
+  <label>Invitation code
+    <span class="copy-field"><input readonly value="{{ invite_code }}" data-copy-value><button type="button" data-copy-button>COPY CODE</button></span>
+  </label>
+  <label>Invitation link
+    <span class="copy-field"><input readonly value="{{ invite_url }}" data-copy-value><button type="button" data-copy-button>COPY LINK</button></span>
+  </label>
+  <p class="muted">The invitation permits exactly one successful registration and can be revoked until it is used.</p>
+  <a class="button secondary" href="{{ url_for('station.settings') }}#invitations">RETURN TO INVITATIONS</a>
+</section>
+{% endblock %}

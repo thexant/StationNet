@@ -8,7 +8,7 @@ StationNet is a self-hosted, browser-accessible communications station inspired 
 - **SQLite** is built into Python and keeps station-owned records in one local file. WAL mode permits concurrent readers and writers.
 - **Waitress** is a production-oriented, pure-Python server for Windows and Linux that handles simultaneous connections.
 - Server-rendered HTML and a little CSS/JavaScript work offline and need no frontend build chain.
-- Passwords use salted `scrypt`; forms have CSRF protection; sessions use signed, HTTP-only cookies; responses include baseline security headers.
+- Passwords use salted `scrypt`; forms have CSRF protection; sessions use signed, HTTP-only cookies; optional remembered logins use a rolling ten-year cookie and remain valid across server restarts; responses include baseline security headers.
 
 Future services can be Flask blueprints using the common terminal shell rather than isolated applications.
 

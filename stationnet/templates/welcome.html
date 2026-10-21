@@ -1,7 +1,15 @@
 {% extends 'base.html' %}
 {% block title %}Connect{% endblock %}
 {% block content %}
-<section class="splash">
+<section class="splash gateway-splash mode-{{ g.station.registration_mode }}">
+  <div class="gateway-marker" aria-label="Station connection status">
+    <span class="gateway-symbol" aria-hidden="true">{% if g.station.registration_mode=='open' %}⌁{% elif g.station.registration_mode=='private' %}◇{% else %}×{% endif %}</span>
+    <div>
+      <p>{% if g.station.registration_mode=='open' %}LOCAL NETWORK STATION{% elif g.station.registration_mode=='private' %}PRIVATE NETWORK STATION{% else %}CLOSED NETWORK STATION{% endif %}</p>
+      <strong>{{ g.station.name }}</strong>
+      <small>{{ g.station.callsign }} / {% if g.station.registration_mode=='open' %}PUBLIC ENROLLMENT AVAILABLE{% elif g.station.registration_mode=='private' %}INVITATION REQUIRED{% else %}ENROLLMENT DISABLED{% endif %}</small>
+    </div>
+  </div>
   <div class="station-profile">
     <div class="profile-heading">
       <p class="kicker">// INCOMING CONNECTION //</p>
@@ -15,26 +23,12 @@
     </div>
   </div>
 
-  <div class="station-board">
-    <h2><span>&gt;</span> STATION INFORMATION</h2>
-    <dl class="access-list">
-      <div><dt>01.</dt><dd>COMMUNITY SERVICES</dd><dd>CHAT / MAIL / FILES / DIRECTORY</dd></div>
-      <div><dt>02.</dt><dd>PUBLIC BULLETINS</dd><dd>{{ 'OPEN FOR READING' if g.station.guest_access else 'IDENTIFIED USERS ONLY' }}</dd></div>
-      <div><dt>03.</dt><dd>LOCAL CALLSIGNS</dd><dd>{{ 'ENROLLMENT OPEN' if g.station.registration_open else 'ENROLLMENT CLOSED' }}</dd></div>
-      <div><dt>04.</dt><dd>CURRENT SESSION</dd><dd>{{ g.user.callsign if g.user else 'VISITOR / READ-ONLY' }}</dd></div>
-    </dl>
-  </div>
-
-  <div class="station-message">
-    <span>SYS://</span>
-    {% if g.station.landing_message %}
-    <p>{{ g.station.landing_message }}</p>
-    {% elif g.station.guest_access %}
-    <p>Welcome to {{ g.station.name }} - [{{ g.station.callsign }}]. Explore the station as a visitor, or identify yourself to participate.</p>
-    {% else %}
-    <p>Welcome to {{ g.station.name }} - [{{ g.station.callsign }}]. Identify yourself to access station services.</p>
-    {% endif %}
-  </div>
+  {% if g.station.landing_message_enabled %}
+  <section class="station-board landing-copy" aria-labelledby="landing-message-heading">
+    <h2 id="landing-message-heading"><span>&gt;</span> {{ landing_heading }}</h2>
+    <div class="markdown-body">{{ landing_body_html }}</div>
+  </section>
+  {% endif %}
 
   {% if g.user %}
   <div class="access-actions">
@@ -44,10 +38,10 @@
   </div>
   {% else %}
   <div class="access-actions">
-    <p>{{ 'NEW HERE? CREATE AN ACCOUNT OR LOG IN' if g.station.registration_open else 'ACCOUNT REGISTRATION IS CURRENTLY CLOSED' }}</p>
+    <p>{% if g.station.registration_mode=='open' %}NEW HERE? CREATE AN ACCOUNT OR LOG IN{% elif g.station.registration_mode=='private' %}THIS IS A PRIVATE STATION / INVITED OPERATORS MAY ENROLL{% else %}THIS STATION IS CLOSED TO NEW REGISTRATIONS / EXISTING USERS MAY LOG IN{% endif %}</p>
     <div class="access-buttons">
-      {% if g.station.registration_open %}<a class="button enter-button" href="{{ url_for('auth.register') }}">&gt; CREATE ACCOUNT &lt;</a>{% endif %}
-      <a class="button enter-button secondary" href="{{ url_for('auth.login') }}">&gt; LOG IN &lt;</a>
+      {% if g.station.registration_mode=='open' %}<a class="button enter-button" href="{{ url_for('auth.register') }}">&gt; CREATE ACCOUNT &lt;</a>{% elif g.station.registration_mode=='private' %}<a class="button enter-button" href="{{ url_for('auth.register') }}">&gt; USE INVITATION &lt;</a>{% endif %}
+      <a class="button enter-button secondary" href="{{ url_for('auth.login') }}">&gt; EXISTING USER LOGIN &lt;</a>
     </div>
     <div class="access-links">
       {% if g.station.guest_access %}<a href="{{ url_for('board.index') }}">[ CONTINUE AS VISITOR ]</a>{% endif %}

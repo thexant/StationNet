@@ -1,6 +1,7 @@
 """StationNet application factory."""
 import os
 import secrets
+from datetime import timedelta
 from pathlib import Path
 from flask import Flask, g, redirect, request, url_for
 from . import announcements, applications, archive, auth, board, broadcast, chat, db, mail, mud, radio, station, users
@@ -25,6 +26,7 @@ def create_app(test_config=None):
         DATABASE=str(data_dir / "station.db"), DATA_DIR=str(data_dir), SECRET_KEY=_secret(data_dir),
         APPLICATIONS_DIR=str(data_dir / "applications"),
         SESSION_COOKIE_HTTPONLY=True, SESSION_COOKIE_SAMESITE="Lax",
+        PERMANENT_SESSION_LIFETIME=timedelta(days=3650),
         SESSION_COOKIE_SECURE=os.environ.get("STATIONNET_HTTPS") == "1", MAX_CONTENT_LENGTH=128 * 1024 * 1024,
     )
     if test_config:
@@ -67,7 +69,8 @@ def create_app(test_config=None):
     @app.after_request
     def headers(response):
         response.headers.update({
-            "X-Content-Type-Options": "nosniff", "X-Frame-Options": "DENY", "Referrer-Policy": "same-origin",
+            "X-Content-Type-Options": "nosniff", "X-Frame-Options": "DENY",
+            "Referrer-Policy": "no-referrer" if request.endpoint == "auth.register" else "same-origin",
             "Permissions-Policy": "microphone=(self)",
             "Content-Security-Policy": "default-src 'self'; style-src 'self'; script-src 'self'; img-src 'self' data: blob:; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'",
         })

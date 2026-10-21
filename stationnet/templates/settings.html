@@ -8,7 +8,7 @@
   </button>
   <div id="station-parameters-content" data-panel-content>
   <p>Station identity: <strong>{{ g.station.name }} - [{{ g.station.callsign }}]</strong></p>
-  <form method="post" class="form-grid">
+  <form method="post" action="{{ url_for('station.settings') }}" class="form-grid">
     <input type="hidden" name="csrf_token" value="{{ session.csrf_token }}">
     <label>Station name
       <input name="name" maxlength="80" required value="{{ g.station.name }}">
@@ -16,9 +16,16 @@
     <label>Station description
       <textarea name="description" maxlength="500" rows="5">{{ g.station.description }}</textarea>
     </label>
-    <label>Landing message
-      <textarea name="landing_message" maxlength="500" rows="4" placeholder="Use the automatic access-aware welcome message">{{ g.station.landing_message }}</textarea>
-      <small>Shown on the station landing page. Leave blank to use a message that automatically reflects guest access.</small>
+    <div class="divider">LANDING PAGE MESSAGE</div>
+    <input type="hidden" name="landing_message_control" value="1">
+    <label class="switch"><input type="checkbox" name="landing_message_enabled" {% if g.station.landing_message_enabled %}checked{% endif %}> Show the message panel on the registration and login landing page</label>
+    <label>Message heading
+      <input name="landing_heading" maxlength="100" value="{{ g.station.landing_heading }}" placeholder="STATION INFORMATION">
+      <small>Leave blank to use a heading that reflects the current registration mode.</small>
+    </label>
+    <label>Message body (Markdown supported)
+      <textarea name="landing_message" maxlength="4000" rows="7" placeholder="Use the automatic access-aware welcome message">{{ g.station.landing_message }}</textarea>
+      <small>Supports headings, lists, links, emphasis, quotes, and code. Leave blank to use the automatic welcome message.</small>
     </label>
     <label>Header tagline
       <input name="brand_tagline" maxlength="160" required value="{{ g.station.brand_tagline }}">
@@ -50,10 +57,36 @@
   <p class="muted">These controls save independently so an error in another station setting cannot prevent an access change.</p>
   <form method="post" action="{{ url_for('station.access_settings') }}" class="form-grid">
     <input type="hidden" name="csrf_token" value="{{ session.csrf_token }}">
-    <label class="switch"><input type="checkbox" name="registration_open" {% if g.station.registration_open %}checked{% endif %}> Allow visitors to create accounts</label>
+    <fieldset><legend>Registration mode</legend>
+      <label class="radio"><input type="radio" name="registration_mode" value="open" {% if g.station.registration_mode=='open' %}checked{% endif %}> Open — anyone may create an account</label>
+      <label class="radio"><input type="radio" name="registration_mode" value="private" {% if g.station.registration_mode=='private' %}checked{% endif %}> Private — require a single-use invitation</label>
+      <label class="radio"><input type="radio" name="registration_mode" value="disabled" {% if g.station.registration_mode=='disabled' %}checked{% endif %}> Disabled — prevent new account creation</label>
+    </fieldset>
     <label class="switch"><input type="checkbox" name="guest_access" {% if g.station.guest_access %}checked{% endif %}> Allow guests to read bulletins</label>
     <button>SAVE ACCESS POLICY</button>
   </form>
+  <div class="invite-admin" id="invitations">
+    <div class="divider">SINGLE-USE INVITATIONS</div>
+    <p class="muted">Generate an unpredictable invitation code and link. The complete secret is shown only once; this list keeps only a non-secret identifier and redemption status.</p>
+    <form method="post" action="{{ url_for('station.generate_invitation') }}">
+      <input type="hidden" name="csrf_token" value="{{ session.csrf_token }}"><button>GENERATE INVITATION</button>
+    </form>
+    <div class="invite-list">
+      {% for invite in invitations %}
+      <article class="invite-row">
+        <div><strong>INV-{{ '%04d'|format(invite.id) }} / …{{ invite.code_hint }}</strong><small>CREATED {{ invite.created_at }}{% if invite.creator_callsign %} BY {{ invite.creator_callsign }}{% endif %}</small></div>
+        {% if invite.used_at %}<span class="invite-state used">USED{% if invite.used_callsign %} / {{ invite.used_callsign }}{% endif %}</span>
+        {% elif invite.revoked_at %}<span class="invite-state revoked">REVOKED</span>
+        {% else %}
+        <span class="invite-state active">ACTIVE</span>
+        <form method="post" action="{{ url_for('station.revoke_invitation',invitation_id=invite.id) }}" data-confirm="Revoke invitation INV-{{ '%04d'|format(invite.id) }}?">
+          <input type="hidden" name="csrf_token" value="{{ session.csrf_token }}"><button class="secondary">REVOKE</button>
+        </form>
+        {% endif %}
+      </article>
+      {% else %}<p class="muted">No invitations have been generated.</p>{% endfor %}
+    </div>
+  </div>
   </div>
 </section>
 

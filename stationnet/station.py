@@ -1,15 +1,53 @@
 """Welcome, workspace, and SYSOP settings."""
+import secrets
 import sqlite3
 from flask import Blueprint, current_app, flash, g, redirect, render_template, request, url_for
-from .auth import admin_required
+from .auth import admin_required, invitation_digest
 from .db import get_db
+from .markdown import render_markdown
 from .radio import (can_host_broadcast, effective_access, format_frequency,
                     parse_frequency, reconcile_radio_permissions)
 from .security import validate_csrf
 bp = Blueprint("station", __name__)
 
 @bp.get("/")
-def index(): return render_template("welcome.html")
+def index():
+    default_headings = {
+        "open": "STATION INFORMATION",
+        "private": "RESTRICTED ACCESS NODE",
+        "disabled": "CLOSED ACCESS NODE",
+    }
+    heading = (
+        g.station["landing_heading"].strip()
+        or default_headings.get(g.station["registration_mode"], "STATION INFORMATION")
+    )
+    body = g.station["landing_message"].strip()
+    if not body:
+        if g.station["registration_mode"] == "private":
+            body = (
+                f"**INVITATION ONLY.** Welcome to **{g.station['name']}** — "
+                f"[{g.station['callsign']}]. Invited operators may enroll; existing users can sign in."
+            )
+        elif g.station["registration_mode"] == "disabled":
+            body = (
+                f"Welcome to **{g.station['name']}** — [{g.station['callsign']}]. "
+                "Identify yourself to access station services. "
+                "New enrollment is closed; existing users can still sign in."
+            )
+        elif g.station["guest_access"]:
+            body = (
+                f"Welcome to **{g.station['name']}** — [{g.station['callsign']}]. "
+                "Explore the station as a visitor, or identify yourself to participate."
+            )
+        else:
+            body = (
+                f"Welcome to **{g.station['name']}** — [{g.station['callsign']}]. "
+                "Identify yourself to access station services."
+            )
+    return render_template(
+        "welcome.html", landing_heading=heading,
+        landing_body_html=render_markdown(body),
+    )
 
 @bp.get("/terminal")
 def terminal(): return render_template("terminal.html")
@@ -20,16 +58,58 @@ def access_settings():
     """Save public access controls independently of unrelated station fields."""
     validate_csrf()
     database = get_db()
+    mode = request.form.get("registration_mode")
+    if mode is None:
+        # Compatibility with the former checkbox form and older clients.
+        mode = "open" if request.form.get("registration_open") == "on" else "disabled"
+    if mode not in {"open", "private", "disabled"}:
+        flash("Select a valid registration mode.", "error")
+        return redirect(url_for("station.settings") + "#access-policy")
     database.execute(
-        "UPDATE station SET registration_open=?,guest_access=? WHERE id=1",
-        (
-            request.form.get("registration_open") == "on",
-            request.form.get("guest_access") == "on",
-        ),
+        "UPDATE station SET registration_mode=?,registration_open=?,guest_access=? WHERE id=1",
+        (mode, mode == "open", request.form.get("guest_access") == "on"),
     )
     database.commit()
     flash("Access policy updated.", "success")
     return redirect(url_for("station.settings") + "#access-policy")
+
+
+@bp.post("/sysop/invitations/generate")
+@admin_required
+def generate_invitation():
+    validate_csrf()
+    code = "SN-" + secrets.token_urlsafe(24)
+    database = get_db()
+    cursor = database.execute(
+        "INSERT INTO registration_invites(token_hash,code_hint,created_by) VALUES(?,?,?)",
+        (invitation_digest(code), code[-8:], g.user["id"]),
+    )
+    database.commit()
+    # Keep the secret in the URL fragment: browsers do not send fragments in
+    # HTTP requests or referrer headers. station.js moves it into the field.
+    invite_url = url_for("auth.register", _external=True) + "#invite=" + code
+    return render_template(
+        "invite_created.html", invitation_id=cursor.lastrowid,
+        invite_code=code, invite_url=invite_url,
+    )
+
+
+@bp.post("/sysop/invitations/<int:invitation_id>/revoke")
+@admin_required
+def revoke_invitation(invitation_id):
+    validate_csrf()
+    database = get_db()
+    changed = database.execute(
+        "UPDATE registration_invites SET revoked_at=CURRENT_TIMESTAMP "
+        "WHERE id=? AND revoked_at IS NULL AND used_at IS NULL",
+        (invitation_id,),
+    )
+    database.commit()
+    flash(
+        "Invitation revoked." if changed.rowcount else "Invitation was already unavailable.",
+        "success" if changed.rowcount else "warning",
+    )
+    return redirect(url_for("station.settings") + "#invitations")
 
 
 @bp.post("/sysop/settings/mud")
@@ -103,6 +183,12 @@ def settings():
         landing_message = request.form.get(
             "landing_message", g.station["landing_message"]
         ).strip()
+        landing_heading = request.form.get(
+            "landing_heading", g.station["landing_heading"]
+        ).strip()
+        landing_message_enabled = g.station["landing_message_enabled"]
+        if "landing_message_control" in request.form:
+            landing_message_enabled = request.form.get("landing_message_enabled") == "on"
         brand_tagline = request.form.get(
             "brand_tagline", g.station["brand_tagline"]
         ).strip()
@@ -111,7 +197,8 @@ def settings():
         file_limit = request.form.get("file_size_limit_mb", g.station["file_size_limit_mb"], type=int)
         if not 2 <= len(name) <= 80: flash("Station name must be between 2 and 80 characters.", "error")
         elif len(description) > 500: flash("Station description cannot exceed 500 characters.", "error")
-        elif len(landing_message) > 500: flash("Landing message cannot exceed 500 characters.", "error")
+        elif len(landing_heading) > 100: flash("Landing message heading cannot exceed 100 characters.", "error")
+        elif len(landing_message) > 4000: flash("Landing message cannot exceed 4000 characters.", "error")
         elif not 1 <= len(brand_tagline) <= 160: flash("Header tagline must be between 1 and 160 characters.", "error")
         elif upload_permission not in {"members", "admins", "disabled"}: flash("Select a valid upload permission.", "error")
         elif storage_limit is None or not 1 <= storage_limit <= 10240: flash("Archive storage must be between 1 and 10240 MB.", "error")
@@ -124,19 +211,24 @@ def settings():
             # Accept the original combined form for compatibility with older
             # pages while allowing the new access-policy form to save alone.
             if "registration_open" in request.form or "guest_access" in request.form:
-                access_update = ",registration_open=?,guest_access=?"
+                access_update = ",registration_open=?,registration_mode=?,guest_access=?"
+                legacy_mode = "open" if request.form.get("registration_open") == "on" else "disabled"
                 access_values = (
-                    request.form.get("registration_open") == "on",
+                    legacy_mode == "open",
+                    legacy_mode,
                     request.form.get("guest_access") == "on",
                 )
             database.execute(
-                "UPDATE station SET name=?,description=?,landing_message=?,brand_tagline=?,"
+                "UPDATE station SET name=?,description=?,landing_message=?,landing_heading=?,"
+                "landing_message_enabled=?,brand_tagline=?,"
                 "upload_permission=?,file_storage_limit_mb=?,file_size_limit_mb=?"
                 + access_update + " WHERE id=1",
                 (
                     name,
                     description,
                     landing_message,
+                    landing_heading,
+                    landing_message_enabled,
                     brand_tagline,
                     upload_permission,
                     storage_limit,
@@ -170,11 +262,20 @@ def settings():
     ) for user in users}
     rules_by_group = {group["id"]: [rule for rule in rules if rule["group_id"] == group["id"]]
                       for group in groups}
+    invitations = database.execute(
+        "SELECT i.id,i.code_hint,i.created_at,i.used_at,i.revoked_at,"
+        "creator.callsign AS creator_callsign,recipient.callsign AS used_callsign "
+        "FROM registration_invites i "
+        "LEFT JOIN users creator ON creator.id=i.created_by "
+        "LEFT JOIN users recipient ON recipient.id=i.used_by "
+        "ORDER BY i.id DESC"
+    ).fetchall()
     return render_template("settings.html", bands=bands, groups=groups, users=users,
                            memberships=memberships, effective=effective,
                            broadcast_hosts=broadcast_hosts,
                            assignments=assignments, broadcast_sessions=broadcast_sessions,
-                           rules_by_group=rules_by_group, format_frequency=format_frequency)
+                           rules_by_group=rules_by_group, invitations=invitations,
+                           format_frequency=format_frequency)
 
 
 def _save_radio_bands():
