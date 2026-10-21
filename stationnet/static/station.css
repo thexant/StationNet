@@ -241,6 +241,13 @@ button:hover, .button:hover { color: #000; background: var(--green); }
 .app-emphasis { color: var(--green-bright); font-weight: 700; }
 .app-menu { display: flex; flex-wrap: wrap; gap: .55rem; }
 .app-menu legend { width: 100%; margin-bottom: .35rem; }
+.app-menu.app-dpad { display: grid; grid-template-columns: repeat(3,minmax(3.25rem,4.25rem)); grid-template-rows: auto repeat(2,3rem); width: fit-content; gap: .35rem; }
+.app-dpad legend { grid-column: 1 / -1; }
+.app-dpad button { display: grid; place-items: center; width: 100%; min-width: 0; margin: 0; padding: .55rem; font-size: 1rem; touch-action: manipulation; }
+.app-dpad button:nth-of-type(1) { grid-column: 2; grid-row: 2; }
+.app-dpad button:nth-of-type(2) { grid-column: 1; grid-row: 3; }
+.app-dpad button:nth-of-type(3) { grid-column: 2; grid-row: 3; }
+.app-dpad button:nth-of-type(4) { grid-column: 3; grid-row: 3; }
 .app-checkbox { display: flex; align-items: center; gap: .55rem; }
 .application-surface textarea { min-height: 6rem; resize: vertical; }
 .app-list { padding-left: 1.5rem; color: var(--white); font-size: .76rem; line-height: 1.7; }
@@ -250,8 +257,11 @@ button:hover, .button:hover { color: #000; background: var(--green); }
 .app-cell { display: grid; place-items: center; width: 1.35rem; min-width: 1.35rem; height: 1.55rem; min-height: 1.55rem; margin: 0; padding: 0; border: 0; border-radius: 0; font: 400 .82rem/1 var(--mono); text-transform: none; box-shadow: none; }
 .app-cell:hover { outline: 1px solid var(--cyan); outline-offset: -1px; filter: brightness(1.25); }
 .app-cell:focus, .app-cell-cursor { z-index: 1; outline: 2px solid var(--cyan); outline-offset: -2px; }
-.app-canvas { display: block; width: min(100%,52rem); height: auto; max-height: 70vh; border: 1px solid var(--green-dim); background: #010401; image-rendering: pixelated; touch-action: none; }
+.app-canvas-wrap { position: relative; width: min(100%,52rem); }
+.app-canvas { display: block; width: 100%; height: auto; max-height: 70vh; border: 1px solid var(--green-dim); background: #010401; image-rendering: pixelated; touch-action: none; }
 .app-canvas:focus { outline: 2px solid var(--cyan); outline-offset: 2px; }
+.app-canvas-controls { position: absolute; inset: 0; display: grid; place-items: center; pointer-events: none; background: rgba(0,0,0,.28); }
+.app-canvas-controls button { min-width: 8rem; padding: .8rem 1.2rem; pointer-events: auto; border-width: 2px; background: rgba(0,12,3,.94); font-size: .85rem; }
 .app-fg-0 { color: #000; } .app-fg-1 { color: #aa0000; } .app-fg-2 { color: #00aa00; } .app-fg-3 { color: #aa5500; }
 .app-fg-4 { color: #0000aa; } .app-fg-5 { color: #aa00aa; } .app-fg-6 { color: #00aaaa; } .app-fg-7 { color: #aaaaaa; }
 .app-fg-8 { color: #555555; } .app-fg-9 { color: #ff5555; } .app-fg-10 { color: #55ff55; } .app-fg-11 { color: #ffff55; }

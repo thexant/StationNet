@@ -102,13 +102,15 @@
       return identified({ type: "button", label: String(label), action: action(onClick), variant: opts.variant, disabled: Boolean(opts.disabled) }, opts);
     },
     menu(label, items, onSelect, settings) {
+      const opts = options(settings);
       return identified({
         type: "menu", label: String(label || "Choose an option"), action: action(onSelect),
+        layout: opts.layout === "dpad" ? "dpad" : undefined,
         items: (Array.isArray(items) ? items : []).map((item) => {
           if (item && typeof item === "object") return { label: String(item.label), value: String(item.value), disabled: Boolean(item.disabled) };
           return { label: String(item), value: String(item) };
         })
-      }, settings);
+      }, opts);
     },
     input(name, label, settings) {
       const opts = options(settings);
@@ -150,7 +152,11 @@
       const opts = options(settings);
       return identified({
         type: "canvas", width, height, commands: Array.isArray(commands) ? commands : [],
-        action: action(opts.onPointer), hover: Boolean(opts.hover), label: String(opts.label || "Game playfield")
+        action: action(opts.onPointer), hover: Boolean(opts.hover), label: String(opts.label || "Game playfield"),
+        controls: Array.isArray(opts.controls) ? opts.controls.slice(0, 4).map((control) => ({
+          label: String(control && control.label || "Action"), action: action(control && control.onClick),
+          variant: control && control.variant === "secondary" ? "secondary" : undefined
+        })) : undefined
       }, opts);
     },
     render(...components) {

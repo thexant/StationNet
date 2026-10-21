@@ -141,6 +141,10 @@ def test_snake_and_breakout_are_discovered_as_independent_game_packages(initiali
         assert marker in source.data
         assert b"ui.canvas" in source.data
         assert b"ui.onVisibility" in source.data
+        assert b"settings.controls" in source.data
+        assert b'ui.button("Start"' not in source.data
+        assert b'ui.button("Restart"' not in source.data
+    assert b'layout: "dpad"' in initialized.get("/games-apps/snake/source.js").data
 
 
 def test_game_package_folders_are_valid_distributable_packages():
@@ -333,6 +337,8 @@ def test_expanded_runtime_and_demo_exercise_updates_timers_and_storage(initializ
     assert b'canvas.toBlob(resolve, "image/png")' in host.data
     assert b'phase === "move"' in host.data
     assert b"drawCanvas" in host.data
+    assert b"app-canvas-controls" in host.data
+    assert b"app-dpad" in host.data
     assert b"data-app-scores-url" in initialized.get("/games-apps/snake").data
 
 

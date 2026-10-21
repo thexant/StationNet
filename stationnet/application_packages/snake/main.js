@@ -12,7 +12,7 @@ StationNet.start(async (ui) => {
   function reset() {
     snake = [cell(8, 10), cell(7, 10), cell(6, 10), cell(5, 10)];
     direction = [1, 0]; queued = direction; score = 0; state = "ready"; placeFood();
-    draw(); updateHud(); updateStatus("READY — START OR PRESS AN ARROW"); updateControls();
+    draw(true); updateHud(); updateStatus("READY — START OR PRESS AN ARROW"); updateControls();
   }
 
   function placeFood() {
@@ -30,12 +30,12 @@ StationNet.start(async (ui) => {
   function start() {
     if (state === "gameover") reset();
     if (state === "running") return;
-    state = "running"; lastMove = Date.now(); updateStatus("RUNNING"); updateControls();
+    state = "running"; lastMove = Date.now(); updateStatus("RUNNING"); updateControls(); draw(true);
   }
 
   function togglePause() {
     if (state === "running") { state = "paused"; updateStatus("PAUSED"); }
-    else if (state === "paused" || state === "ready") start();
+    else if (state === "paused") start();
     updateControls();
   }
 
@@ -52,7 +52,7 @@ StationNet.start(async (ui) => {
 
   async function gameOver() {
     state = "gameover"; best = Math.max(best, score); updateHud(); updateControls();
-    updateStatus(`GAME OVER — FINAL SCORE ${score}`);
+    updateStatus(`GAME OVER — FINAL SCORE ${score}`); draw(true);
     await ui.scores.submit(score).then(showScores).catch(() => {});
   }
 
@@ -65,11 +65,15 @@ StationNet.start(async (ui) => {
     return output;
   }
 
-  function draw() { ui.update("playfield", ui.canvas(COLS * CELL, ROWS * CELL, commands(), { id: "playfield", label: "Snake playfield" })); }
+  function draw(contextChanged = false) {
+    const settings = { id: "playfield", label: "Snake playfield" };
+    if (contextChanged) settings.controls = state === "ready" ? [{ label: "START", onClick: start }] : state === "gameover" ? [{ label: "RESTART", onClick: reset, variant: "secondary" }] : [];
+    ui.update("playfield", ui.canvas(COLS * CELL, ROWS * CELL, commands(), settings));
+  }
   function updateHud() { ui.update("hud", ui.text(`SCORE ${score}   PERSONAL BEST ${best}`, { id: "hud", emphasis: true })); }
   function updateStatus(message) { ui.update("game-status", ui.text(message, { id: "game-status", tone: state === "gameover" ? "warning" : "accent" })); }
   function updateControls() {
-    ui.update("pause", ui.button(state === "paused" ? "Resume" : "Pause", togglePause, { id: "pause", disabled: state === "gameover" }));
+    ui.update("pause", ui.button(state === "paused" ? "Resume" : "Pause", togglePause, { id: "pause", disabled: state !== "running" && state !== "paused" }));
   }
 
   function pointer(event) {
@@ -94,8 +98,8 @@ StationNet.start(async (ui) => {
     ui.text("SCORE 0   PERSONAL BEST 0", { id: "hud", emphasis: true }),
     ui.text("READY", { id: "game-status", tone: "accent" }),
     ui.canvas(COLS * CELL, ROWS * CELL, [], { id: "playfield", onPointer: pointer, label: "Snake playfield" }),
-    ui.menu("Touch controls", [{ label: "▲", value: "up" }, { label: "◀", value: "left" }, { label: "▼", value: "down" }, { label: "▶", value: "right" }], ({ value }) => setDirection({ up: [0, -1], left: [-1, 0], down: [0, 1], right: [1, 0] }[value])),
-    ui.button("Start", start), ui.button("Pause", togglePause, { id: "pause" }), ui.button("Restart", reset, { variant: "secondary" }),
+    ui.menu("Touch controls", [{ label: "▲", value: "up" }, { label: "◀", value: "left" }, { label: "▼", value: "down" }, { label: "▶", value: "right" }], ({ value }) => setDirection({ up: [0, -1], left: [-1, 0], down: [0, 1], right: [1, 0] }[value]), { layout: "dpad" }),
+    ui.button("Pause", togglePause, { id: "pause" }),
     ui.heading("Station leaderboard", 3),
     ui.table(["#", "Player", "Score"], [["—", "Loading…", "—"]], { id: "leaderboard" })
   );

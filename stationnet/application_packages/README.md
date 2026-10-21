@@ -83,12 +83,17 @@ include `button`, `menu`, `input`, `numberInput`, `textarea`, `select`,
 `checkbox`, and `onKey`. Timers use `timeout` and `interval`; register cleanup
 with `onCleanup`.
 
+Menus accept `{ layout: "dpad" }` when four directional actions should use a
+traditional arrow-pad arrangement instead of a horizontal row.
+
 Animated applications can use `ui.canvas(width, height, commands, options)` with
 bounded `rect`, `circle`, and `text` drawing commands. `options.onPointer`
 receives scaled `x`, `y`, and `phase` values; `options.hover` enables desktop
 pointer tracking. Use `ui.onVisibility(handler)` to pause continuous activity
 when its value changes to `"hidden"`. The host updates an existing canvas in
 place and keeps rendering and input inside the same isolated runtime.
+Canvas options may also include a bounded `controls` array of contextual
+`{ label, onClick, variant }` buttons, rendered accessibly over the playfield.
 
 Interactive character canvases can use `cellGrid(rows, options)`. Each cell is
 an object such as `{ char: "#", fg: 7, bg: 0 }`, where foreground and background

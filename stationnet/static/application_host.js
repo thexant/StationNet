@@ -74,6 +74,22 @@
     });
   }
 
+  function drawCanvasControls(wrapper, controls) {
+    const previous = wrapper.querySelector(".app-canvas-controls");
+    if (previous) previous.remove();
+    if (!Array.isArray(controls) || !controls.length) return;
+    const overlay = document.createElement("div"); overlay.className = "app-canvas-controls";
+    controls.slice(0, 4).forEach((control) => {
+      if (!control || typeof control !== "object") return;
+      const button = document.createElement("button"); button.type = "button";
+      button.textContent = text(control.label, 120);
+      if (control.variant === "secondary") button.classList.add("secondary");
+      button.addEventListener("click", () => interact(text(control.action, 80)));
+      overlay.append(button);
+    });
+    if (overlay.childElementCount) wrapper.append(overlay);
+  }
+
   function renderComponent(component) {
     if (!component || typeof component !== "object") return null;
     let node;
@@ -95,6 +111,7 @@
         node.addEventListener("click", () => interact(text(component.action, 80))); break;
       case "menu": {
         node = document.createElement("fieldset"); node.className = "app-menu";
+        if (component.layout === "dpad") node.classList.add("app-dpad");
         const legend = document.createElement("legend"); legend.textContent = text(component.label, 200); node.append(legend);
         (Array.isArray(component.items) ? component.items : []).slice(0, LIMITS.items).forEach((item) => {
           if (!item || typeof item !== "object") return;
@@ -212,17 +229,19 @@
         break;
       }
       case "canvas": {
-        node = document.createElement("canvas"); node.className = "app-canvas"; node.tabIndex = 0;
-        node.setAttribute("role", "img"); drawCanvas(node, component);
+        node = document.createElement("div"); node.className = "app-canvas-wrap";
+        const canvas = document.createElement("canvas"); canvas.className = "app-canvas"; canvas.tabIndex = 0;
+        canvas.setAttribute("role", "img"); drawCanvas(canvas, component); node.append(canvas);
         const point = (event, phase) => {
-          const bounds = node.getBoundingClientRect();
-          const x = (event.clientX - bounds.left) * Number(node.dataset.logicalWidth) / Math.max(1, bounds.width);
-          const y = (event.clientY - bounds.top) * Number(node.dataset.logicalHeight) / Math.max(1, bounds.height);
-          interact(node.dataset.canvasAction, { x, y, phase });
+          const bounds = canvas.getBoundingClientRect();
+          const x = (event.clientX - bounds.left) * Number(canvas.dataset.logicalWidth) / Math.max(1, bounds.width);
+          const y = (event.clientY - bounds.top) * Number(canvas.dataset.logicalHeight) / Math.max(1, bounds.height);
+          interact(canvas.dataset.canvasAction, { x, y, phase });
         };
-        node.addEventListener("pointerdown", (event) => { event.preventDefault(); node.setPointerCapture(event.pointerId); point(event, "start"); });
-        node.addEventListener("pointermove", (event) => { if (event.buttons || event.pointerType === "touch" || node.dataset.canvasHover === "1") point(event, "move"); });
-        node.addEventListener("pointerup", (event) => point(event, "end"));
+        canvas.addEventListener("pointerdown", (event) => { event.preventDefault(); canvas.setPointerCapture(event.pointerId); point(event, "start"); });
+        canvas.addEventListener("pointermove", (event) => { if (event.buttons || event.pointerType === "touch" || canvas.dataset.canvasHover === "1") point(event, "move"); });
+        canvas.addEventListener("pointerup", (event) => point(event, "end"));
+        drawCanvasControls(node, component.controls);
         break;
       }
       default: return null;
@@ -249,8 +268,10 @@
     }
     if (message.mode === "update") {
       const target = targetComponent();
-      if (target && target.tagName === "CANVAS" && components[0] && components[0].type === "canvas") {
-        drawCanvas(target, components[0]); return;
+      if (target && target.classList.contains("app-canvas-wrap") && components[0] && components[0].type === "canvas") {
+        drawCanvas(target.querySelector("canvas"), components[0]);
+        if (Object.prototype.hasOwnProperty.call(components[0], "controls")) drawCanvasControls(target, components[0].controls);
+        return;
       }
       const replacement = renderComponent(components[0]);
       if (target && replacement) target.replaceWith(replacement);
