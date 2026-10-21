@@ -20,7 +20,7 @@
     <canvas data-radio-scope width="900" height="150"></canvas><span class="radio-monitor-label">LIVE SIGNAL</span><strong data-radio-monitor-status>OFF</strong>
   </div>
   <div class="radio-operation">
-    <label>Mode <select data-radio-mode><option value="CW">MORSE / CW</option><option value="SSTV">PICTURE / SSTV</option></select></label>
+    <label>Mode <select data-radio-mode><option value="CW">MORSE / CW</option><option value="SSTV">PICTURE / SSTV</option><option value="VOICE">VOICE / PTT</option></select></label>
     <label>Volume <input data-radio-volume type="range" min="0" max="100" value="55"></label>
     <button type="button" class="secondary" data-radio-mute aria-pressed="false">MUTE: OFF</button>
     <span class="radio-occupancy" data-radio-occupancy>RECEIVER OFF</span>
@@ -46,6 +46,13 @@
       <figure><figcaption>TX PREVIEW / 80 x 60 MAX</figcaption><canvas data-radio-tx-picture width="80" height="60"></canvas></figure>
       <figure><figcaption data-radio-rx-caption>RX PICTURE / NO SIGNAL</figcaption><canvas data-radio-rx-picture width="80" height="60"></canvas></figure>
     </div>
+  </section>
+  <section class="radio-mode-panel" data-radio-voice hidden>
+    <div class="radio-voice-controls">
+      <button type="button" class="radio-ptt" data-radio-ptt disabled>HOLD TO TALK [V]</button>
+      <div><strong data-radio-voice-status>VOICE STANDBY</strong><small>Hold the button or V while this page is not accepting text input. Release to clear the frequency.</small></div>
+    </div>
+    <p class="muted" data-radio-voice-help>Microphone access requires HTTPS when connecting from another computer. Localhost may use HTTP.</p>
   </section>
   <p class="chat-error radio-error" data-radio-error aria-live="polite"></p>
 </section>

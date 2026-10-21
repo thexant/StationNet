@@ -5,8 +5,9 @@ does not retain radio messages, decoded text, or completed pictures.
 """
 import base64
 import binascii
+import json
 import re
-from collections import deque
+from collections import defaultdict, deque
 from datetime import datetime, timezone
 from threading import RLock
 from time import monotonic
@@ -25,6 +26,8 @@ MIN_FREQUENCY_KHZ = 100
 MAX_FREQUENCY_KHZ = 999990
 SSTV_MAX_WIDTH = 80
 SSTV_MAX_HEIGHT = 60
+VOICE_SIGNAL_MAX_BYTES = 65536
+VOICE_SIGNAL_TYPES = {"offer", "answer", "candidate"}
 
 
 def format_frequency(khz):
@@ -117,6 +120,7 @@ class RadioStore:
         self._receivers = {}
         self._transmissions = {}
         self._frequency_owners = {}
+        self._voice_signals = defaultdict(deque)
         self._next_event_id = 1
         self._next_transmission_id = 1
 
@@ -156,10 +160,27 @@ class RadioStore:
         )
         del self._transmissions[transmission["id"]]
         self._frequency_owners.pop(transmission["frequency"], None)
+        self._clear_voice_signals_locked(transmission["id"])
         return event
+
+    def _clear_voice_signals_locked(self, transmission_id):
+        for target, queue in list(self._voice_signals.items()):
+            kept = deque(signal for signal in queue
+                         if signal["transmission_id"] != transmission_id)
+            if kept:
+                self._voice_signals[target] = kept
+            else:
+                self._voice_signals.pop(target, None)
 
     def _disconnect_locked(self, connection_id):
         self._receivers.pop(connection_id, None)
+        self._voice_signals.pop(connection_id, None)
+        for target, queue in list(self._voice_signals.items()):
+            kept = deque(signal for signal in queue if signal["from_peer"] != connection_id)
+            if kept:
+                self._voice_signals[target] = kept
+            else:
+                self._voice_signals.pop(target, None)
         for transmission in list(self._transmissions.values()):
             if transmission["connection_id"] == connection_id:
                 self._finish_locked(transmission, "disconnected")
@@ -329,6 +350,72 @@ class RadioStore:
                 return None
             return dict(item)
 
+    def voice_peers(self, connection_id, transmission_id):
+        """Return current receivers for a voice transmitter without exposing identities."""
+        with self._lock:
+            self._prune(monotonic())
+            transmission = self._transmissions.get(transmission_id)
+            if not transmission or transmission["connection_id"] != connection_id or \
+                    transmission["transmission_type"] != "LIVE_VOICE":
+                raise LookupError("Voice transmission is no longer active.")
+            return [
+                {"peer_id": peer_id, "user_id": receiver["user_id"]}
+                for peer_id, receiver in self._receivers.items()
+                if peer_id != connection_id and receiver["frequency"] == transmission["frequency"]
+            ]
+
+    def voice_signal(self, connection_id, transmission_id, target, kind, payload):
+        """Relay ephemeral WebRTC negotiation data between the owner and tuned listeners."""
+        now = monotonic()
+        with self._lock:
+            self._prune(now)
+            transmission = self._transmissions.get(transmission_id)
+            if not transmission or transmission["transmission_type"] != "LIVE_VOICE":
+                raise LookupError("Voice transmission is no longer active.")
+            owner = transmission["connection_id"]
+            receiver = self._receivers.get(connection_id)
+            target_receiver = self._receivers.get(target)
+            participant = bool(receiver and receiver["frequency"] == transmission["frequency"])
+            target_participant = bool(
+                target_receiver and target_receiver["frequency"] == transmission["frequency"]
+            )
+            if not participant or not target_participant or not (
+                    (connection_id == owner and target != owner) or
+                    (connection_id != owner and target == owner)):
+                raise PermissionError("Voice signaling peer is not on this frequency.")
+            queue = self._voice_signals[target]
+            if len(queue) >= 256:
+                queue.popleft()
+            queue.append({
+                "transmission_id": transmission_id,
+                "from_peer": connection_id,
+                "type": kind,
+                "payload": payload,
+                "stamp": now,
+            })
+
+    def voice_signals(self, connection_id, transmission_id):
+        with self._lock:
+            self._prune(monotonic())
+            transmission = self._transmissions.get(transmission_id)
+            receiver = self._receivers.get(connection_id)
+            if not transmission or transmission["transmission_type"] != "LIVE_VOICE" or not \
+                    receiver or receiver["frequency"] != transmission["frequency"]:
+                raise LookupError("Voice transmission is no longer active on this frequency.")
+            queue = self._voice_signals.get(connection_id, deque())
+            selected = []
+            retained = deque()
+            for signal in queue:
+                if signal["transmission_id"] == transmission_id:
+                    selected.append({key: value for key, value in signal.items() if key != "stamp"})
+                else:
+                    retained.append(signal)
+            if retained:
+                self._voice_signals[connection_id] = retained
+            else:
+                self._voice_signals.pop(connection_id, None)
+            return selected
+
     def reconcile_permissions(self, access_lookup, authorization_lookup, user_id=None):
         """Immediately stop live activity invalidated by an administration change."""
         with self._lock:
@@ -457,9 +544,10 @@ def transmit_start():
         message = "RX ONLY" if access == "LISTEN" else "ACCESS RESTRICTED"
         return jsonify(error=message, access=access), 403
     mode = request.form.get("mode", "").upper()
-    if mode not in {"CW", "SSTV"}:
-        return jsonify(error="Select CW or SSTV mode."), 400
-    if not transmission_authorized(g.user["id"], frequency, mode):
+    if mode not in {"CW", "SSTV", "VOICE"}:
+        return jsonify(error="Select CW, SSTV, or VOICE mode."), 400
+    transmission_type = "LIVE_VOICE" if mode == "VOICE" else mode
+    if not transmission_authorized(g.user["id"], frequency, transmission_type):
         return jsonify(error="Transmission is not permitted on this frequency."), 403
     metadata = {}
     if mode == "CW":
@@ -467,14 +555,16 @@ def transmit_start():
         if tone_hz is None or not 400 <= tone_hz <= 1000:
             return jsonify(error="CW tone must be between 400 and 1000 Hz."), 400
         metadata["tone_hz"] = tone_hz
-    else:
+    elif mode == "SSTV":
         width, height = request.form.get("width", type=int), request.form.get("height", type=int)
         if not width or not height or not (1 <= width <= SSTV_MAX_WIDTH) or not (1 <= height <= SSTV_MAX_HEIGHT):
             return jsonify(error=f"SSTV pictures are limited to {SSTV_MAX_WIDTH} x {SSTV_MAX_HEIGHT} pixels."), 400
         metadata.update(width=width, height=height)
     try:
-        transmission_id, event = _store().start(session["connection_id"], g.user["id"], frequency,
-                                                 g.user["callsign"], mode, **metadata)
+        transmission_id, event = _store().start(
+            session["connection_id"], g.user["id"], frequency,
+            g.user["callsign"], mode, transmission_type=transmission_type, **metadata
+        )
     except ValueError as problem:
         return jsonify(error=str(problem)), 409
     except RuntimeError as problem:
@@ -528,3 +618,56 @@ def scan():
     return jsonify(found=True, frequency=format_frequency(found),
                    band=_band_payload(find_band(found), g.user["id"], found),
                    access=effective_access(g.user["id"], found), cursor=cursor)
+
+
+@bp.get("/voice/peers")
+@login_required
+def voice_peers():
+    transmission_id = request.args.get("transmission_id", type=int)
+    try:
+        peers = _store().voice_peers(session["connection_id"], transmission_id)
+    except LookupError as problem:
+        return jsonify(error=str(problem)), 409
+    allowed = []
+    for peer in peers:
+        receiver = _store().receiver_frequency(peer["peer_id"])
+        if receiver is not None and effective_access(peer["user_id"], receiver) != "DENIED":
+            allowed.append({"peer_id": peer["peer_id"]})
+    return jsonify(peers=allowed)
+
+
+@bp.route("/voice/signals", methods=("GET", "POST"))
+@login_required
+def voice_signals():
+    if request.method == "GET":
+        transmission_id = request.args.get("transmission_id", type=int)
+        try:
+            signals = _store().voice_signals(session["connection_id"], transmission_id)
+        except LookupError as problem:
+            return jsonify(error=str(problem)), 409
+        return jsonify(signals=signals)
+
+    validate_csrf()
+    transmission_id = request.form.get("transmission_id", type=int)
+    target = request.form.get("target", "")
+    kind = request.form.get("type", "")
+    raw_payload = request.form.get("payload", "")
+    if kind not in VOICE_SIGNAL_TYPES or not target:
+        return jsonify(error="Invalid voice signaling message."), 400
+    if len(raw_payload.encode("utf-8")) > VOICE_SIGNAL_MAX_BYTES:
+        return jsonify(error="Voice signaling message is too large."), 413
+    try:
+        payload = json.loads(raw_payload)
+    except (TypeError, json.JSONDecodeError):
+        return jsonify(error="Invalid voice signaling payload."), 400
+    if not isinstance(payload, dict):
+        return jsonify(error="Invalid voice signaling payload."), 400
+    try:
+        _store().voice_signal(
+            session["connection_id"], transmission_id, target, kind, payload
+        )
+    except LookupError as problem:
+        return jsonify(error=str(problem)), 409
+    except PermissionError as problem:
+        return jsonify(error=str(problem)), 403
+    return jsonify(relayed=True)

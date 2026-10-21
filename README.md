@@ -1,6 +1,6 @@
 # StationNet
 
-StationNet is a self-hosted, browser-accessible communications station inspired by BBS software, monochrome terminals, early computer networks, and amateur radio. Milestone 3 provides local station setup, accounts, a responsive terminal workspace, community services, and an ephemeral shared radio with configurable bands, live Morse/CW keying, and simplified SSTV picture transmissions. It requires no Docker, domain, cloud account, or external database.
+StationNet is a self-hosted, browser-accessible communications station inspired by BBS software, monochrome terminals, early computer networks, and amateur radio. It provides local station setup, accounts, a responsive terminal workspace, community services, and an ephemeral shared radio with configurable bands, live Morse/CW keying, simplified SSTV picture transmissions, and half-duplex WebRTC voice. It requires no Docker, domain, cloud account, or external database.
 
 ## Why this stack
 
@@ -55,7 +55,7 @@ Back up the data directory to preserve station identity, accounts, messages, mai
 
 Guests can read bulletins when guest access is enabled and can always read station announcements. Registered users can join the persistent public chat, open temporary direct chats with online users, exchange persistent private mail, use the shared file archive, maintain a profile, and operate the radio from every authenticated station page. Radio signal events and direct traffic are held only in server memory and are discarded after expiry or server restart. The SYSOP can manage announcements, archive policy, radio band ranges and transmission capabilities, and independent multi-group radio permissions under **SYSOP CONTROL**. Every account belongs to the permanent `DEFAULT` radio group; additional groups combine with explicit `DENIED` taking precedence over `FULL`, then `LISTEN`. `HOST BROADCASTS` is a separate group capability and is effective only alongside `FULL` access. `/` focuses service navigation when not typing; Escape releases focus.
 
-The radio uses lightweight HTTP polling and is intended for one local StationNet process. A frequency admits one live transmitter at a time, independent of transmission type. CW key transitions and SSTV scanlines are relayed as short-lived signal events; they are never stored as messages or made available as history. Each receiving browser synthesizes audio from those events while the oscilloscope monitors the actual audio path. Browsers require a click or tap before allowing sound. Bands can be marked as supporting future live voice and hosted broadcasts without restricting normal tuning. Voice audio, propagation/interference simulation, automated broadcasts, and cross-station radio are not part of this milestone.
+The radio uses lightweight HTTP polling for control and WebRTC for live voice media, and is intended for one local StationNet process. A frequency admits one live transmitter at a time, independent of transmission type. Hold the on-screen PTT control (or hold **V** while focus is outside a text field) to talk; releasing it immediately stops the microphone track and clears the frequency. Callsigns, carrier state, and WebRTC negotiation messages are short-lived memory-only state. Voice audio travels directly between browsers and is never recorded, uploaded, or stored. CW key transitions and SSTV scanlines are likewise relayed as short-lived signal events and are never made available as history. The oscilloscope monitors the actual received or transmitted audio path. Browsers require a click or tap before allowing sound.
 
 ## Tests and layout
 
@@ -68,7 +68,20 @@ python -m pytest
 
 ## Networking and future work
 
-HTTP is intentional for localhost, LAN, and direct-IP access. It does not protect credentials from observers, so only use plain HTTP on trusted networks. Browsers generally require a secure context (normally HTTPS) for microphone access, so the future radio/voice milestone will need optional HTTPS deployment. This milestone does not attempt certificates, NAT traversal, or internet discovery.
+Plain HTTP is supported for `localhost`, which browsers treat as a secure context for microphone access. Browsers do **not** normally allow microphones on an HTTP LAN address such as `http://192.168.1.20:8080`; StationNet reports this instead of silently failing.
 
-Later milestones may add voice, scheduled broadcasts, MUD hosting, controlled federation, and more detailed radio behavior. Those systems are intentionally outside this milestone.
+For voice access from other computers, put StationNet behind an HTTPS reverse proxy with a certificate trusted by every client. For example, run StationNet on loopback with `STATIONNET_HOST=127.0.0.1` and `STATIONNET_HTTPS=1`, then use a Caddy configuration like:
+
+```caddyfile
+stationnet.lan {
+    tls internal
+    reverse_proxy 127.0.0.1:8080
+}
+```
+
+Make `stationnet.lan` resolve to the station computer and install Caddy's local root certificate as trusted on each client before opening `https://stationnet.lan`. A publicly trusted certificate can be used instead. Do not bypass certificate warnings: an untrusted certificate is not a supported microphone configuration. `STATIONNET_HTTPS=1` marks the login cookie secure, so enable it only when clients use the HTTPS URL.
+
+Voice uses direct peer-to-peer ICE candidates and no external STUN/TURN service. It is designed for clients on the same reachable LAN. Routed/VLAN-isolated clients, restrictive endpoint firewalls, carrier-grade NAT, and internet use may require a separately operated TURN service, which StationNet does not currently configure. Hosted/automated broadcasts, music streaming, uploads, playlists, scheduling, propagation simulation, and cross-station radio remain out of scope.
+
+Later milestones may add scheduled broadcasts, MUD hosting, controlled federation, and more detailed radio behavior. Those systems are intentionally outside this milestone.
 

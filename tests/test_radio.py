@@ -1,4 +1,5 @@
 import base64
+import json
 import time
 import pytest
 
@@ -203,6 +204,67 @@ def test_one_transmitter_per_frequency_and_other_frequencies_are_independent(app
     assert end(alice, first.get_json()["transmission_id"]).status_code == 200
     assert end(bob, separate.get_json()["transmission_id"]).status_code == 200
     assert start(initialized, "14.50", tone_hz="650").status_code == 201
+
+
+def test_live_voice_half_duplex_signaling_alternating_speakers_and_disconnect(app, initialized):
+    alice = register(app, "voicealice")
+    bob = register(app, "voicebob")
+    for client in (initialized, alice, bob):
+        assert tune(client, "145.20").status_code == 200
+
+    opened = start(alice, "145.20", mode="VOICE")
+    assert opened.status_code == 201
+    transmission_id = opened.get_json()["transmission_id"]
+    assert opened.get_json()["event"]["transmission_type"] == "LIVE_VOICE"
+    assert opened.get_json()["event"]["mode"] == "VOICE"
+    assert start(bob, "145.20", mode="VOICE").status_code == 409
+
+    with initialized.session_transaction() as listener_session:
+        listener_peer = listener_session["connection_id"]
+    peers = alice.get(f"/radio/voice/peers?transmission_id={transmission_id}")
+    assert peers.status_code == 200
+    assert listener_peer in {peer["peer_id"] for peer in peers.get_json()["peers"]}
+
+    offer = {"type": "offer", "sdp": "test offer without media content"}
+    relayed = alice.post(
+        "/radio/voice/signals",
+        data={"csrf_token": csrf(alice, "/terminal"), "transmission_id": transmission_id,
+              "target": listener_peer, "type": "offer", "payload": json.dumps(offer)},
+    )
+    assert relayed.status_code == 200
+    inbox = initialized.get(
+        f"/radio/voice/signals?transmission_id={transmission_id}"
+    ).get_json()["signals"]
+    assert inbox[0]["type"] == "offer"
+    assert inbox[0]["payload"] == offer
+    assert "stamp" not in inbox[0]
+    assert initialized.get(
+        f"/radio/voice/signals?transmission_id={transmission_id}"
+    ).get_json()["signals"] == []
+
+    assert end(alice, transmission_id).status_code == 200
+    bob_voice = start(bob, "145.20", mode="VOICE")
+    assert bob_voice.status_code == 201
+    bob_id = bob_voice.get_json()["transmission_id"]
+    bob.post("/radio/power-off", data={"csrf_token": csrf(bob, "/terminal")})
+    assert bob_id not in app.extensions["radio"]._transmissions
+    assert start(initialized, "145.20", mode="VOICE").status_code == 201
+
+
+def test_live_voice_requires_voice_capable_band_and_valid_signaling_peer(app, initialized):
+    alice = register(app, "voicecap")
+    assert tune(alice, "14.50").status_code == 200
+    assert start(alice, "14.50", mode="VOICE").status_code == 403
+
+    assert tune(alice, "145.20").status_code == 200
+    opened = start(alice, "145.20", mode="VOICE").get_json()
+    rejected = alice.post(
+        "/radio/voice/signals",
+        data={"csrf_token": csrf(alice, "/terminal"),
+              "transmission_id": opened["transmission_id"], "target": "not-a-peer",
+              "type": "offer", "payload": json.dumps({"type": "offer", "sdp": "x"})},
+    )
+    assert rejected.status_code == 403
 
 
 def test_late_listener_only_gets_subsequent_signal_events(app, initialized):

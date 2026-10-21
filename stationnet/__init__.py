@@ -61,6 +61,7 @@ def create_app(test_config=None):
     def headers(response):
         response.headers.update({
             "X-Content-Type-Options": "nosniff", "X-Frame-Options": "DENY", "Referrer-Policy": "same-origin",
+            "Permissions-Policy": "microphone=(self)",
             "Content-Security-Policy": "default-src 'self'; style-src 'self'; script-src 'self'; img-src 'self' data: blob:; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'",
         })
         if g.get("user") is not None and request.endpoint != "static":

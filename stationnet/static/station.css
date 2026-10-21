@@ -272,6 +272,11 @@ button:disabled { opacity: .5; cursor: not-allowed; }
 .radio-occupancy { align-self: center; color: var(--cyan); font-size: .6rem; text-align: right; }
 .radio-mode-panel { margin-top: .55rem; padding-top: .55rem; border-top: 1px dotted var(--green-dim); }
 .radio-mode-panel[hidden] { display: none; }
+.radio-voice-controls { display: grid; grid-template-columns: minmax(12rem, 18rem) 1fr; gap: .8rem; align-items: center; }
+.radio-voice-controls div { display: grid; gap: .3rem; }
+.radio-voice-controls small { color: var(--green-dim); }
+.radio-ptt { min-height: 3.2rem; touch-action: none; user-select: none; }
+.radio-ptt.active { color: #000; background: var(--amber); border-color: var(--amber); box-shadow: 0 0 1rem color-mix(in srgb, var(--amber) 45%, transparent); }
 .radio-cw-controls { display: grid; grid-template-columns: auto minmax(9rem,1fr) 7rem 7rem auto; gap: .5rem; align-items: end; }
 .radio-key { touch-action: none; user-select: none; }
 .radio-key.active { color: #000; background: var(--amber); border-color: var(--amber); }
@@ -338,5 +343,5 @@ button:disabled { opacity: .5; cursor: not-allowed; }
   .radio-controls { grid-template-columns: 1fr 1fr; }
   .radio-controls label { grid-column: 1 / -1; grid-row: 1; }
   .radio-controls [data-radio-scan] { grid-column: 1 / -1; }
-  .radio-operation, .radio-cw-controls, .radio-pictures { grid-template-columns: 1fr; }
+  .radio-operation, .radio-cw-controls, .radio-pictures, .radio-voice-controls { grid-template-columns: 1fr; }
 }
