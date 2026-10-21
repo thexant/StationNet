@@ -1,12 +1,14 @@
 """Native MUD service and server-authoritative action dispatch."""
 from dataclasses import dataclass, field
+from datetime import datetime, timedelta, timezone
 import json
+import math
 import re
 import shlex
 import sqlite3
 import uuid
 
-from flask import Blueprint, abort, g, jsonify, render_template, request
+from flask import Blueprint, abort, g, jsonify, render_template, request, session
 
 from .auth import login_required
 from .db import get_db
@@ -14,6 +16,13 @@ from .security import validate_csrf
 
 bp = Blueprint("mud", __name__, url_prefix="/mud")
 REQUEST_ID_RE = re.compile(r"^[A-Za-z0-9_-]{8,80}$")
+CLIENT_ID_RE = re.compile(r"^[A-Za-z0-9_-]{12,80}$")
+PRESENCE_SECONDS = 45
+DISCONNECT_GRACE_SECONDS = 4
+PROGRESSION_TRACKS = frozenset({"shared", "traditional", "procedural"})
+ACTIVE_PROGRESSION_TRACK = "shared"
+HEALTH_PER_LEVEL = 10
+MAX_EXPERIENCE = 2**63 - 1
 
 
 class ActionError(ValueError):
@@ -30,6 +39,7 @@ class EventDraft:
     event_type: str = "system"
     audience_type: str = "private"
     audience_key: str | None = None
+    recipient_ids: tuple[int, ...] | None = None
 
 
 @dataclass(frozen=True)
@@ -50,6 +60,7 @@ class ActionRequest:
     parameters: dict = field(default_factory=dict)
     input_method: str = "context"
     request_id: str = field(default_factory=lambda: uuid.uuid4().hex)
+    client_id: str = ""
 
 
 class ActionRegistry:
@@ -122,10 +133,127 @@ def _authorized(definition, user):
     )
 
 
+def experience_for_level(level):
+    """Return the cumulative experience floor for a level."""
+    if not isinstance(level, int) or isinstance(level, bool) or level < 1:
+        raise ValueError("Level must be a positive integer.")
+    return 100 * (level - 1) ** 2
+
+
+def level_for_experience(experience):
+    """Resolve a level from cumulative experience without trusting a client."""
+    if not isinstance(experience, int) or isinstance(experience, bool) or experience < 0:
+        raise ValueError("Experience must be a non-negative integer.")
+    return math.isqrt(experience // 100) + 1
+
+
+def _character_row(database, user_id, track_key=ACTIVE_PROGRESSION_TRACK):
+    if track_key not in PROGRESSION_TRACKS:
+        raise ValueError("Unknown progression track.")
+    character_id = f"stationnet:character:{user_id}"
+    user = database.execute(
+        "SELECT callsign FROM users WHERE id=?", (user_id,)
+    ).fetchone()
+    if user is None:
+        raise ValueError("Unknown StationNet account.")
+    database.execute(
+        "INSERT OR IGNORE INTO mud_characters(id,user_id,display_name) VALUES(?,?,?)",
+        (character_id, user_id, user["callsign"]),
+    )
+    database.execute(
+        "INSERT OR IGNORE INTO mud_character_progression(character_id,track_key) "
+        "VALUES(?,?)", (character_id, track_key),
+    )
+    return database.execute(
+        "SELECT c.id,c.user_id,c.display_name,p.track_key,p.level,p.experience,"
+        "p.current_health,p.maximum_health,p.strength,p.agility,p.intellect,p.vitality "
+        "FROM mud_characters AS c JOIN mud_character_progression AS p "
+        "ON p.character_id=c.id WHERE c.user_id=? AND p.track_key=?",
+        (user_id, track_key),
+    ).fetchone()
+
+
+def character_state(database, user_id, track_key=ACTIVE_PROGRESSION_TRACK):
+    """Return the authoritative identity and selected progression track."""
+    row = _character_row(database, user_id, track_key)
+    level_floor = experience_for_level(row["level"])
+    next_floor = experience_for_level(row["level"] + 1)
+    return {
+        "id": row["id"],
+        "user_id": row["user_id"],
+        "name": row["display_name"],
+        "progression_track": row["track_key"],
+        "progression_label": {
+            "shared": "Shared progression",
+            "traditional": "Traditional progression",
+            "procedural": "Procedural progression",
+        }[row["track_key"]],
+        "level": row["level"],
+        "experience": row["experience"],
+        "experience_into_level": row["experience"] - level_floor,
+        "experience_for_next_level": next_floor - level_floor,
+        "experience_to_next_level": next_floor - row["experience"],
+        "health": row["current_health"],
+        "maximum_health": row["maximum_health"],
+        "attributes": {
+            "strength": row["strength"],
+            "agility": row["agility"],
+            "intellect": row["intellect"],
+            "vitality": row["vitality"],
+        },
+    }
+
+
+def award_experience(database, user_id, amount, track_key=ACTIVE_PROGRESSION_TRACK):
+    """Award XP on a track; the caller owns the surrounding transaction."""
+    if not isinstance(amount, int) or isinstance(amount, bool) or amount <= 0:
+        raise ValueError("Experience award must be a positive integer.")
+    before = character_state(database, user_id, track_key)
+    experience = before["experience"] + amount
+    if experience > MAX_EXPERIENCE:
+        raise ValueError("Experience total exceeds the supported range.")
+    level = level_for_experience(experience)
+    levels_gained = level - before["level"]
+    maximum_health = before["maximum_health"] + levels_gained * HEALTH_PER_LEVEL
+    current_health = min(
+        maximum_health, before["health"] + levels_gained * HEALTH_PER_LEVEL
+    )
+    database.execute(
+        "UPDATE mud_character_progression SET experience=?,level=?,current_health=?,"
+        "maximum_health=?,updated_at=CURRENT_TIMESTAMP "
+        "WHERE character_id=? AND track_key=?",
+        (experience, level, current_health, maximum_health, before["id"], track_key),
+    )
+    return {
+        "amount": amount,
+        "levels_gained": levels_gained,
+        "previous_level": before["level"],
+        "character": character_state(database, user_id, track_key),
+    }
+
+
 def _status_action(_database, _user, parameters):
     if parameters.get("arguments"):
         raise ActionError("The status action does not accept arguments.")
     return [EventDraft("MUD service online. Persistent world navigation is available.")]
+
+
+def _character_action(database, user, parameters):
+    if parameters.get("arguments"):
+        raise ActionError("The character action does not accept arguments.")
+    character = character_state(database, user["id"])
+    attributes = character["attributes"]
+    return [EventDraft(
+        f"{character['name']} — Level {character['level']}\n"
+        f"Health: {character['health']}/{character['maximum_health']}\n"
+        f"Experience: {character['experience_into_level']}/"
+        f"{character['experience_for_next_level']} "
+        f"({character['experience_to_next_level']} to next level)\n"
+        f"Strength {attributes['strength']} · Agility {attributes['agility']} · "
+        f"Intellect {attributes['intellect']} · Vitality {attributes['vitality']}\n"
+        f"Track: {character['progression_label']}",
+        event_type="character",
+    )]
 
 
 def _help_action(_database, _user, parameters):
@@ -137,7 +265,9 @@ def _help_action(_database, _user, parameters):
         "/exits — list routes from this room\n"
         "/go <exit> (or /move, /walk) — travel through an exit\n"
         "/north, /south, /east, /west, /up, /down, /in, /out — direction shortcuts\n"
-        "/status — check the MUD service"
+        "/status — check the MUD service\n"
+        "/character (or /stats) — view your character and progression\n"
+        "Text without a leading slash is spoken to everyone in your room."
     )]
 
 
@@ -200,6 +330,37 @@ def _room_exits(database, room_id):
     ).fetchall()
 
 
+def _timestamp_before(seconds):
+    return (datetime.now(timezone.utc) - timedelta(seconds=seconds)).replace(
+        microsecond=0
+    ).isoformat()
+
+
+def _occupant_ids(database, room_id, exclude_user_id=None):
+    parameters = [room_id]
+    exclusion = ""
+    if exclude_user_id is not None:
+        exclusion = " AND user_id<>?"
+        parameters.append(exclude_user_id)
+    rows = database.execute(
+        "SELECT DISTINCT user_id FROM mud_presence WHERE room_id=?" + exclusion,
+        parameters,
+    ).fetchall()
+    return tuple(row["user_id"] for row in rows)
+
+
+def _room_occupants(database, room_id, viewer_id):
+    return [dict(row) for row in database.execute(
+        "SELECT DISTINCT u.id,u.username,u.callsign,c.id AS character_id,"
+        "COALESCE(c.display_name,u.callsign) AS character_name FROM mud_presence AS p "
+        "JOIN users AS u ON u.id=p.user_id "
+        "LEFT JOIN mud_characters AS c ON c.user_id=u.id "
+        "WHERE p.room_id=? AND p.user_id<>? "
+        "ORDER BY character_name COLLATE NOCASE,u.id",
+        (room_id, viewer_id),
+    ).fetchall()]
+
+
 def _exit_label(exit_row):
     route = exit_row["direction"] or exit_row["name"]
     return f"{route.upper()} — {exit_row['destination_name']}"
@@ -221,13 +382,19 @@ def _room_state(database, user_id):
             }
             for exit_row in _room_exits(database, room["id"])
         ],
+        "occupants": _room_occupants(database, room["id"], user_id),
     }
 
 
-def _describe_room(database, room):
+def _describe_room(database, room, viewer_id=None):
     exits = _room_exits(database, room["id"])
     routes = ", ".join(_exit_label(item) for item in exits) if exits else "none"
-    return f"{room['name']}\n{room['description']}\n\nExits: {routes}"
+    occupants = _room_occupants(database, room["id"], viewer_id) if viewer_id else []
+    people = ", ".join(item["character_name"] for item in occupants) if occupants else "none"
+    return (
+        f"{room['name']}\n{room['description']}\n\n"
+        f"Exits: {routes}\nOther players: {people}"
+    )
 
 
 class ExaminationRegistry:
@@ -252,7 +419,7 @@ examinations = ExaminationRegistry()
 
 def _examine_surroundings(database, _user, room, target):
     if target.casefold() in {"", "room", "here", "around", "surroundings", room["name"].casefold()}:
-        return _describe_room(database, room)
+        return _describe_room(database, room, _user["id"])
     return None
 
 
@@ -284,6 +451,7 @@ def _exits_action(database, user, parameters):
 
 
 def _go_action(database, user, parameters):
+    character = character_state(database, user["id"])
     room = _current_room(database, user["id"])
     exit_id = str(parameters.get("exit_id", "")).strip()
     arguments = parameters.get("arguments", [])
@@ -312,8 +480,13 @@ def _go_action(database, user, parameters):
     if len(matches) > 1:
         raise ActionError(f'More than one exit matches "{destination}". Use an exit name or direction.')
     chosen = matches[0]
+    old_recipients = _occupant_ids(database, room["id"], user["id"])
     database.execute(
         "UPDATE mud_world_locations SET room_id=?,updated_at=CURRENT_TIMESTAMP WHERE user_id=?",
+        (chosen["to_room_id"], user["id"]),
+    )
+    database.execute(
+        "UPDATE mud_presence SET room_id=? WHERE user_id=?",
         (chosen["to_room_id"], user["id"]),
     )
     destination_room = database.execute(
@@ -321,9 +494,42 @@ def _go_action(database, user, parameters):
         (chosen["to_room_id"],),
     ).fetchone()
     route = chosen["direction"] or chosen["name"]
+    new_recipients = _occupant_ids(database, destination_room["id"], user["id"])
+    return [
+        EventDraft(
+            f"You go {route}.\n\n{_describe_room(database, destination_room, user['id'])}",
+            event_type="movement",
+        ),
+        EventDraft(
+            f"{character['name']} leaves via {route}.",
+            event_type="departure", audience_type="room", audience_key=room["id"],
+            recipient_ids=old_recipients,
+        ),
+        EventDraft(
+            f"{character['name']} arrives.",
+            event_type="arrival", audience_type="room",
+            audience_key=destination_room["id"], recipient_ids=new_recipients,
+        ),
+    ]
+
+
+def _say_action(database, user, parameters):
+    body = str(parameters.get("message", "")).strip()
+    if not 1 <= len(body) <= 1000:
+        raise ActionError("Messages must be between 1 and 1000 characters.")
+    room = _current_room(database, user["id"])
+    if database.execute(
+        "SELECT 1 FROM mud_presence WHERE user_id=? AND room_id=? LIMIT 1",
+        (user["id"], room["id"]),
+    ).fetchone() is None:
+        raise ActionError("Reconnect to the MUD before speaking in this room.", 409)
+    recipients = set(_occupant_ids(database, room["id"]))
+    recipients.add(user["id"])
+    character = character_state(database, user["id"])
     return [EventDraft(
-        f"You go {route}.\n\n{_describe_room(database, destination_room)}",
-        event_type="movement",
+        f"{character['name']}: {body}", event_type="chat",
+        audience_type="room", audience_key=room["id"],
+        recipient_ids=tuple(sorted(recipients)),
     )]
 
 
@@ -332,6 +538,17 @@ actions.register(ActionDefinition(
     key="status", label="SYSTEM STATUS",
     description="Check the current MUD service state.",
     commands=("status",), handler=_status_action,
+))
+actions.register(ActionDefinition(
+    key="character", label="VIEW STATS",
+    description="View your character identity, health, attributes, and progression.",
+    commands=("character", "stats"), handler=_character_action,
+    group="CHARACTER",
+))
+actions.register(ActionDefinition(
+    key="say", label="SAY",
+    description="Speak to the other players in this room.",
+    handler=_say_action, show_context=False,
 ))
 actions.register(ActionDefinition(
     key="help", label="COMMAND HELP",
@@ -386,6 +603,117 @@ def _navigation_actions(database, user):
 actions.register_context_provider(_navigation_actions)
 
 
+def _insert_event(database, draft, default_user_id=None, action_id=None):
+    audience_key = draft.audience_key or str(default_user_id)
+    cursor = database.execute(
+        "INSERT INTO mud_events(action_id,audience_type,audience_key,event_type,body) "
+        "VALUES(?,?,?,?,?)",
+        (action_id, draft.audience_type, audience_key, draft.event_type, draft.body),
+    )
+    recipients = draft.recipient_ids
+    if draft.audience_type == "room" and recipients is None:
+        recipients = _occupant_ids(database, audience_key)
+    if recipients:
+        database.executemany(
+            "INSERT OR IGNORE INTO mud_event_recipients(event_id,user_id) VALUES(?,?)",
+            ((cursor.lastrowid, user_id) for user_id in recipients),
+        )
+    return database.execute(
+        "SELECT id,event_type,body,created_at FROM mud_events WHERE id=?",
+        (cursor.lastrowid,),
+    ).fetchone()
+
+
+def _events_for_user(database, user_id, after=0, action_id=None, limit=200):
+    filters = ["e.id>?"]
+    parameters = [after]
+    if action_id is not None:
+        filters.append("e.action_id=?")
+        parameters.append(action_id)
+    filters.append(
+        "((e.audience_type='private' AND e.audience_key=?) OR EXISTS ("
+        "SELECT 1 FROM mud_event_recipients AS r "
+        "WHERE r.event_id=e.id AND r.user_id=?))"
+    )
+    parameters.extend((str(user_id), user_id, limit))
+    return database.execute(
+        "SELECT e.id,e.event_type,e.body,e.created_at FROM mud_events AS e WHERE "
+        + " AND ".join(filters) + " ORDER BY e.id LIMIT ?",
+        parameters,
+    ).fetchall()
+
+
+def _prune_presence(database):
+    expired = database.execute(
+        "SELECT p.user_id,p.room_id,COALESCE(c.display_name,u.callsign) AS character_name "
+        "FROM mud_presence AS p "
+        "JOIN users AS u ON u.id=p.user_id "
+        "LEFT JOIN mud_characters AS c ON c.user_id=u.id "
+        "WHERE p.last_seen<? OR (p.disconnected_at IS NOT NULL AND p.disconnected_at<?)",
+        (_timestamp_before(PRESENCE_SECONDS), _timestamp_before(DISCONNECT_GRACE_SECONDS)),
+    ).fetchall()
+    if not expired:
+        return
+    affected = {}
+    for row in expired:
+        affected[row["user_id"]] = (row["room_id"], row["character_name"])
+    database.execute(
+        "DELETE FROM mud_presence WHERE last_seen<? "
+        "OR (disconnected_at IS NOT NULL AND disconnected_at<?)",
+        (_timestamp_before(PRESENCE_SECONDS), _timestamp_before(DISCONNECT_GRACE_SECONDS)),
+    )
+    for user_id, (room_id, character_name) in affected.items():
+        if room_id is None or database.execute(
+            "SELECT 1 FROM mud_presence WHERE user_id=? LIMIT 1", (user_id,)
+        ).fetchone() is not None:
+            continue
+        _insert_event(database, EventDraft(
+            f"{character_name} disconnects.", event_type="departure",
+            audience_type="room", audience_key=room_id,
+            recipient_ids=_occupant_ids(database, room_id, user_id),
+        ))
+
+
+def _connection_id(database, user_id):
+    row = database.execute(
+        "SELECT connection_id FROM users WHERE id=?", (user_id,)
+    ).fetchone()
+    connection_id = session.get("connection_id")
+    if not connection_id or row is None or row["connection_id"] != connection_id:
+        raise ActionError("This session was replaced by a newer login.", 409)
+    return connection_id
+
+
+def _register_presence(database, user, client_id):
+    if not CLIENT_ID_RE.fullmatch(client_id):
+        raise ActionError("Invalid MUD client identifier.")
+    connection_id = _connection_id(database, user["id"])
+    character = character_state(database, user["id"])
+    _prune_presence(database)
+    room = _current_room(database, user["id"])
+    already_present = database.execute(
+        "SELECT 1 FROM mud_presence WHERE user_id=? LIMIT 1", (user["id"],)
+    ).fetchone() is not None
+    # A new login supersedes older cookies without producing a duplicate player.
+    database.execute(
+        "DELETE FROM mud_presence WHERE user_id=? AND connection_id<>?",
+        (user["id"], connection_id),
+    )
+    now = datetime.now(timezone.utc).replace(microsecond=0).isoformat()
+    database.execute(
+        "INSERT INTO mud_presence(user_id,connection_id,client_id,room_id,last_seen) "
+        "VALUES(?,?,?,?,?) ON CONFLICT(user_id,connection_id,client_id) DO UPDATE SET "
+        "room_id=excluded.room_id,last_seen=excluded.last_seen,disconnected_at=NULL",
+        (user["id"], connection_id, client_id, room["id"], now),
+    )
+    if not already_present:
+        _insert_event(database, EventDraft(
+            f"{character['name']} arrives.", event_type="arrival",
+            audience_type="room", audience_key=room["id"],
+            recipient_ids=_occupant_ids(database, room["id"], user["id"]),
+        ))
+
+
 class MudService:
     """Normalizes, authorizes, executes, and records MUD actions atomically."""
 
@@ -395,12 +723,18 @@ class MudService:
     def normalize(self, form):
         command = form.get("command", "").strip()
         action_key = form.get("action", "").strip()
-        if bool(command) == bool(action_key):
-            raise ActionError("Submit exactly one command or contextual action.")
+        message = form.get("message", "").strip()
+        if sum(bool(value) for value in (command, action_key, message)) != 1:
+            raise ActionError("Submit exactly one message, command, or contextual action.")
         request_id = form.get("request_id", "").strip() or uuid.uuid4().hex
         if not REQUEST_ID_RE.fullmatch(request_id):
             raise ActionError("Invalid action request identifier.")
-        if command:
+        if message:
+            definition = self.registry.get("say")
+            parameters = {"message": message}
+            # The original schema uses "command" for all text-entry actions.
+            method = "command"
+        elif command:
             definition, parameters = self.registry.from_command(command)
             method = "command"
         else:
@@ -417,7 +751,10 @@ class MudService:
                 raise ActionError("Action parameters are invalid.") from problem
             if not isinstance(parameters, dict):
                 raise ActionError("Action parameters must be an object.")
-        return ActionRequest(definition, parameters, method, request_id)
+        client_id = form.get("client_id", "").strip()
+        if client_id and not CLIENT_ID_RE.fullmatch(client_id):
+            raise ActionError("Invalid MUD client identifier.")
+        return ActionRequest(definition, parameters, method, request_id, client_id)
 
     def execute(self, action_request, user):
         if not _authorized(action_request.definition, user):
@@ -425,6 +762,11 @@ class MudService:
         database = get_db()
         try:
             database.execute("BEGIN IMMEDIATE")
+            if action_request.client_id:
+                _register_presence(database, user, action_request.client_id)
+            else:
+                _connection_id(database, user["id"])
+                _prune_presence(database)
             prior = database.execute(
                 "SELECT id,action_key FROM mud_action_log WHERE actor_id=? AND request_id=?",
                 (user["id"], action_request.request_id),
@@ -432,10 +774,9 @@ class MudService:
             if prior is not None:
                 if prior["action_key"] != action_request.definition.key:
                     raise ActionError("That action request identifier was already used.", 409)
-                events = database.execute(
-                    "SELECT id,event_type,body,created_at FROM mud_events "
-                    "WHERE action_id=? ORDER BY id", (prior["id"],),
-                ).fetchall()
+                events = _events_for_user(
+                    database, user["id"], action_id=prior["id"]
+                )
                 database.commit()
                 return prior["action_key"], [dict(row) for row in events]
 
@@ -453,17 +794,15 @@ class MudService:
             )
             event_rows = []
             for draft in drafts:
-                audience_key = draft.audience_key or str(user["id"])
-                event_cursor = database.execute(
-                    "INSERT INTO mud_events(action_id,audience_type,audience_key,event_type,body) "
-                    "VALUES(?,?,?,?,?)",
-                    (cursor.lastrowid, draft.audience_type, audience_key,
-                     draft.event_type, draft.body),
+                event = _insert_event(
+                    database, draft, default_user_id=user["id"],
+                    action_id=cursor.lastrowid,
                 )
-                event_rows.append(database.execute(
-                    "SELECT id,event_type,body,created_at FROM mud_events WHERE id=?",
-                    (event_cursor.lastrowid,),
-                ).fetchone())
+                visible = draft.audience_type == "private" or (
+                    draft.recipient_ids is not None and user["id"] in draft.recipient_ids
+                )
+                if visible:
+                    event_rows.append(event)
             database.commit()
             return action_request.definition.key, [dict(row) for row in event_rows]
         except (ActionError, sqlite3.Error):
@@ -479,11 +818,15 @@ def _require_enabled():
         abort(404)
 
 
-def _recent_events(user_id):
-    rows = get_db().execute(
-        "SELECT * FROM (SELECT id,event_type,body,created_at FROM mud_events "
-        "WHERE audience_type='private' AND audience_key=? ORDER BY id DESC LIMIT 100) "
-        "ORDER BY id", (str(user_id),),
+def _recent_events(database, user_id):
+    rows = database.execute(
+        "SELECT * FROM (SELECT e.id,e.event_type,e.body,e.created_at "
+        "FROM mud_events AS e WHERE "
+        "(e.audience_type='private' AND e.audience_key=?) OR EXISTS ("
+        "SELECT 1 FROM mud_event_recipients AS r "
+        "WHERE r.event_id=e.id AND r.user_id=?) "
+        "ORDER BY e.id DESC LIMIT 100) ORDER BY id",
+        (str(user_id), user_id),
     ).fetchall()
     return [dict(row) for row in rows]
 
@@ -493,13 +836,62 @@ def _recent_events(user_id):
 def index():
     _require_enabled()
     database = get_db()
+    database.execute("BEGIN IMMEDIATE")
+    _prune_presence(database)
     room = _room_state(database, g.user["id"])
+    character = character_state(database, g.user["id"])
     mud_actions = actions.contextual(g.user, database)
+    events = _recent_events(database, g.user["id"])
     database.commit()
     return render_template(
-        "mud/index.html", events=_recent_events(g.user["id"]),
-        mud_actions=mud_actions, room=room,
+        "mud/index.html", events=events,
+        mud_actions=mud_actions, room=room, character=character,
     )
+
+
+@bp.get("/updates")
+@login_required
+def updates():
+    _require_enabled()
+    client_id = request.args.get("client_id", "").strip()
+    after = max(0, request.args.get("after", 0, type=int))
+    database = get_db()
+    try:
+        database.execute("BEGIN IMMEDIATE")
+        _register_presence(database, g.user, client_id)
+        events = [dict(row) for row in _events_for_user(
+            database, g.user["id"], after=after
+        )]
+        room = _room_state(database, g.user["id"])
+        character = character_state(database, g.user["id"])
+        available = actions.contextual(g.user, database)
+        database.commit()
+    except (ActionError, sqlite3.Error) as problem:
+        database.rollback()
+        if isinstance(problem, ActionError):
+            return jsonify(error=str(problem)), problem.status
+        raise
+    return jsonify(events=events, room=room, character=character, actions=available)
+
+
+@bp.post("/disconnect")
+@login_required
+def disconnect():
+    _require_enabled()
+    validate_csrf()
+    client_id = request.form.get("client_id", "").strip()
+    if not CLIENT_ID_RE.fullmatch(client_id):
+        return jsonify(error="Invalid MUD client identifier."), 400
+    database = get_db()
+    connection_id = session.get("connection_id", "")
+    database.execute(
+        "UPDATE mud_presence SET disconnected_at=? "
+        "WHERE user_id=? AND connection_id=? AND client_id=?",
+        (datetime.now(timezone.utc).replace(microsecond=0).isoformat(),
+         g.user["id"], connection_id, client_id),
+    )
+    database.commit()
+    return ("", 204)
 
 
 @bp.post("/actions")
@@ -513,14 +905,18 @@ def perform_action():
     except ActionError as problem:
         database = get_db()
         room = _room_state(database, g.user["id"])
+        character = character_state(database, g.user["id"])
         available = actions.contextual(g.user, database)
         database.commit()
-        return jsonify(error=str(problem), room=room, actions=available), problem.status
+        return jsonify(
+            error=str(problem), room=room, character=character, actions=available
+        ), problem.status
     database = get_db()
     room = _room_state(database, g.user["id"])
+    character = character_state(database, g.user["id"])
     available = actions.contextual(g.user, database)
     database.commit()
     return jsonify(
         action=action_key, events=events,
-        actions=available, room=room,
+        actions=available, room=room, character=character,
     )

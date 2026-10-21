@@ -152,6 +152,28 @@ CREATE TABLE IF NOT EXISTS application_states (
  application_slug TEXT PRIMARY KEY,
  enabled INTEGER NOT NULL DEFAULT 1 CHECK(enabled IN (0,1)),
  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);
+CREATE TABLE IF NOT EXISTS mud_characters (
+ id TEXT PRIMARY KEY,
+ user_id INTEGER NOT NULL UNIQUE REFERENCES users(id) ON DELETE CASCADE,
+ display_name TEXT NOT NULL COLLATE NOCASE,
+ created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+ updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);
+CREATE TABLE IF NOT EXISTS mud_character_progression (
+ character_id TEXT NOT NULL REFERENCES mud_characters(id) ON DELETE CASCADE,
+ track_key TEXT NOT NULL CHECK(track_key IN ('shared','traditional','procedural')),
+ level INTEGER NOT NULL DEFAULT 1 CHECK(level>=1),
+ experience INTEGER NOT NULL DEFAULT 0 CHECK(experience>=0),
+ current_health INTEGER NOT NULL DEFAULT 100 CHECK(current_health>=0),
+ maximum_health INTEGER NOT NULL DEFAULT 100 CHECK(maximum_health>=1),
+ strength INTEGER NOT NULL DEFAULT 10 CHECK(strength>=1),
+ agility INTEGER NOT NULL DEFAULT 10 CHECK(agility>=1),
+ intellect INTEGER NOT NULL DEFAULT 10 CHECK(intellect>=1),
+ vitality INTEGER NOT NULL DEFAULT 10 CHECK(vitality>=1),
+ updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+ PRIMARY KEY(character_id,track_key),
+ CHECK(current_health<=maximum_health));
+CREATE INDEX IF NOT EXISTS idx_mud_character_progression_track
+ ON mud_character_progression(track_key,level,experience);
 CREATE TABLE IF NOT EXISTS mud_action_log (
  id INTEGER PRIMARY KEY AUTOINCREMENT,
  request_id TEXT NOT NULL,
@@ -172,6 +194,12 @@ CREATE TABLE IF NOT EXISTS mud_events (
  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);
 CREATE INDEX IF NOT EXISTS idx_mud_events_audience
  ON mud_events(audience_type,audience_key,id);
+CREATE TABLE IF NOT EXISTS mud_event_recipients (
+ event_id INTEGER NOT NULL REFERENCES mud_events(id) ON DELETE CASCADE,
+ user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+ PRIMARY KEY(event_id,user_id));
+CREATE INDEX IF NOT EXISTS idx_mud_event_recipients_user
+ ON mud_event_recipients(user_id,event_id);
 CREATE TABLE IF NOT EXISTS mud_world_rooms (
  id TEXT PRIMARY KEY,
  name TEXT NOT NULL,
@@ -196,11 +224,35 @@ CREATE TABLE IF NOT EXISTS mud_world_locations (
  user_id INTEGER PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
  room_id TEXT REFERENCES mud_world_rooms(id) ON DELETE SET NULL,
  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);
+CREATE TABLE IF NOT EXISTS mud_presence (
+ user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+ connection_id TEXT NOT NULL,
+ client_id TEXT NOT NULL,
+ room_id TEXT REFERENCES mud_world_rooms(id) ON DELETE CASCADE,
+ last_seen TEXT NOT NULL,
+ disconnected_at TEXT,
+ PRIMARY KEY(user_id,connection_id,client_id));
+CREATE INDEX IF NOT EXISTS idx_mud_presence_room
+ ON mud_presence(room_id,user_id);
+CREATE INDEX IF NOT EXISTS idx_mud_presence_seen
+ ON mud_presence(last_seen,disconnected_at);
 CREATE TRIGGER IF NOT EXISTS radio_default_membership_after_user_insert
 AFTER INSERT ON users
 BEGIN
  INSERT OR IGNORE INTO radio_group_memberships(user_id,group_id)
  SELECT NEW.id,id FROM radio_permission_groups WHERE is_default=1;
+END;
+CREATE TRIGGER IF NOT EXISTS mud_character_after_user_insert
+AFTER INSERT ON users
+BEGIN
+ INSERT OR IGNORE INTO mud_characters(id,user_id,display_name)
+ VALUES('stationnet:character:' || NEW.id,NEW.id,NEW.callsign);
+ INSERT OR IGNORE INTO mud_character_progression(character_id,track_key)
+ VALUES('stationnet:character:' || NEW.id,'shared');
+ INSERT OR IGNORE INTO mud_character_progression(character_id,track_key)
+ VALUES('stationnet:character:' || NEW.id,'traditional');
+ INSERT OR IGNORE INTO mud_character_progression(character_id,track_key)
+ VALUES('stationnet:character:' || NEW.id,'procedural');
 END;
 """
 
@@ -250,6 +302,7 @@ def init_db():
     _migrate_hosted_broadcast_fields(database)
     _migrate_broadcast_identity_fields(database)
     _migrate_mud_settings(database)
+    _initialize_mud_characters(database)
     _initialize_mud_world(database)
     _migrate_legacy_callsigns(database)
     _migrate_factory_radio_bands(database)
@@ -279,6 +332,20 @@ def init_db():
             "UPDATE radio_permission_groups SET host_broadcasts=1 WHERE name='OPERATORS'"
         )
     database.commit()
+
+
+def _initialize_mud_characters(database):
+    """Backfill one identity and non-destructive mode-ready tracks per account."""
+    database.execute(
+        "INSERT OR IGNORE INTO mud_characters(id,user_id,display_name) "
+        "SELECT 'stationnet:character:' || id,id,callsign FROM users"
+    )
+    database.execute(
+        "INSERT OR IGNORE INTO mud_character_progression(character_id,track_key) "
+        "SELECT c.id,t.track_key FROM mud_characters AS c CROSS JOIN ("
+        "SELECT 'shared' AS track_key UNION ALL SELECT 'traditional' "
+        "UNION ALL SELECT 'procedural') AS t"
+    )
 
 
 def _initialize_mud_world(database):

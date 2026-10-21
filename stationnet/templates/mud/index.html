@@ -1,7 +1,7 @@
 {% extends 'base.html' %}
 {% block title %}Station MUD{% endblock %}
 {% block content %}
-<section class="mud-shell" data-mud data-action-url="{{ url_for('mud.perform_action') }}" data-csrf="{{ session.csrf_token }}">
+<section class="mud-shell" data-mud data-action-url="{{ url_for('mud.perform_action') }}" data-updates-url="{{ url_for('mud.updates') }}" data-disconnect-url="{{ url_for('mud.disconnect') }}" data-csrf="{{ session.csrf_token }}">
   <header class="mud-header">
     <div>
       <p class="eyebrow">NATIVE SERVICE / SERVER-AUTHORITATIVE LINK</p>
@@ -17,6 +17,10 @@
         <h2 data-mud-room-name>{{ room.name }}</h2>
         <p data-mud-room-description>{{ room.description }}</p>
         <p class="mud-room-exits"><span>EXITS</span> <span data-mud-room-exits>{% if room.exits %}{% for exit in room.exits %}{{ exit.direction or exit.name }}{% if not loop.last %}, {% endif %}{% endfor %}{% else %}none{% endif %}</span></p>
+        <div class="mud-occupants" data-mud-occupants aria-label="Other players in this room">
+          <span>PLAYERS</span>
+          <div>{% if room.occupants %}{% for player in room.occupants %}<span class="mud-entity" data-player-id="{{ player.id }}" data-character-id="{{ player.character_id or '' }}" title="{{ player.username }}">{{ player.character_name or player.callsign }}</span>{% endfor %}{% else %}<span class="muted" data-mud-no-occupants>none</span>{% endif %}</div>
+        </div>
       </section>
       <div class="mud-events" data-mud-events role="log" aria-live="polite" aria-label="MUD events">
         <article class="mud-event mud-event-system">
@@ -43,12 +47,12 @@
       </section>
 
       <form class="mud-command" data-mud-command>
-        <label for="mud-command-input">COMMAND INPUT</label>
+        <label for="mud-command-input">ROOM CHAT / COMMAND INPUT</label>
         <div>
-          <input id="mud-command-input" name="command" data-command-input maxlength="500" autocomplete="off" spellcheck="false" placeholder="/help" aria-describedby="mud-command-help" required>
+          <input id="mud-command-input" name="command" data-command-input maxlength="1000" autocomplete="off" placeholder="Say something, or use /help" aria-describedby="mud-command-help" required>
           <button>TRANSMIT</button>
         </div>
-        <small id="mud-command-help">Use /help to list commands. Context buttons and commands share the same server action pipeline.</small>
+        <small id="mud-command-help">Plain text is heard in this room. Start gameplay commands with /.</small>
         <span class="mud-error" data-mud-error role="alert"></span>
       </form>
     </section>
@@ -60,7 +64,26 @@
           <span class="collapsible-panel-chevron" aria-hidden="true"></span>
         </button>
         <div id="mud-character-panel" data-panel-content>
-          <p class="muted">Character identity and progression will appear here in a later chunk.</p>
+          <div class="mud-character-heading">
+            <strong data-character-name>{{ character.name }}</strong>
+            <span data-character-level>LEVEL {{ character.level }}</span>
+          </div>
+          <p class="mud-character-track" data-character-track>{{ character.progression_label }}</p>
+          <div class="mud-character-meter">
+            <span><span>HEALTH</span><output data-character-health>{{ character.health }} / {{ character.maximum_health }}</output></span>
+            <progress data-character-health-bar value="{{ character.health }}" max="{{ character.maximum_health }}">{{ character.health }} / {{ character.maximum_health }}</progress>
+          </div>
+          <div class="mud-character-meter">
+            <span><span>EXPERIENCE</span><output data-character-experience>{{ character.experience_into_level }} / {{ character.experience_for_next_level }}</output></span>
+            <progress data-character-experience-bar value="{{ character.experience_into_level }}" max="{{ character.experience_for_next_level }}">{{ character.experience_into_level }} / {{ character.experience_for_next_level }}</progress>
+            <small data-character-experience-remaining>{{ character.experience_to_next_level }} XP to next level</small>
+          </div>
+          <dl class="mud-attributes">
+            <div><dt>STR</dt><dd data-character-attribute="strength">{{ character.attributes.strength }}</dd></div>
+            <div><dt>AGI</dt><dd data-character-attribute="agility">{{ character.attributes.agility }}</dd></div>
+            <div><dt>INT</dt><dd data-character-attribute="intellect">{{ character.attributes.intellect }}</dd></div>
+            <div><dt>VIT</dt><dd data-character-attribute="vitality">{{ character.attributes.vitality }}</dd></div>
+          </dl>
         </div>
       </section>
       <section class="mud-panel collapsible-panel" data-collapsible-panel data-panel-key="mud-inventory">

@@ -145,6 +145,11 @@ def logout():
         current_app.extensions["radio"].disconnect(connection_id)
         database = get_db()
         database.execute(
+            "UPDATE mud_presence SET disconnected_at=? "
+            "WHERE user_id=? AND connection_id=?",
+            (utc_now(), g.user["id"], connection_id),
+        )
+        database.execute(
             "UPDATE users SET last_seen=NULL,connection_id=NULL WHERE id=? AND connection_id=?",
             (g.user["id"], connection_id),
         )
