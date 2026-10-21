@@ -139,12 +139,25 @@
         const rows = (Array.isArray(component.rows) ? component.rows : []).slice(0, 50);
         const width = Math.min(LIMITS.columns, rows.reduce((largest, row) => Math.max(largest, Array.isArray(row) ? row.length : 0), 0));
         node.style.setProperty("--app-grid-columns", String(Math.max(1, width)));
-        let drawing = false;
+        let drawing = false, lastCell = null;
         const cursor = component.cursor && typeof component.cursor === "object" ? component.cursor : {};
-        const activate = (cell, drag) => interact(text(component.action, 80), {
+        const brush = component.brush && typeof component.brush === "object" ? {
+          char: Array.from(String(component.brush.char == null ? " " : component.brush.char))[0] || " ",
+          fg: Math.trunc(number(component.brush.fg, 7, 0, 15)), bg: Math.trunc(number(component.brush.bg, 0, 0, 15))
+        } : null;
+        const preview = (cell) => {
+          if (!brush) return;
+          for (let index = 0; index < 16; index += 1) cell.classList.remove(`app-fg-${index}`, `app-bg-${index}`);
+          cell.classList.add(`app-fg-${brush.fg}`, `app-bg-${brush.bg}`); cell.textContent = brush.char;
+        };
+        const activate = (cell, phase) => {
+          if (phase !== "end") { lastCell = cell; preview(cell); }
+          interact(text(component.action, 80), {
           value: `${cell.dataset.x},${cell.dataset.y}`,
-          x: Number(cell.dataset.x), y: Number(cell.dataset.y), drag
-        });
+          x: Number(cell.dataset.x), y: Number(cell.dataset.y), drag: phase === "move", phase
+          });
+        };
+        const finish = () => { if (!drawing || !lastCell) return; drawing = false; activate(lastCell, "end"); };
         rows.forEach((row, y) => (Array.isArray(row) ? row : []).slice(0, width).forEach((cell, x) => {
           const value = cell && typeof cell === "object" ? cell : {};
           const button = document.createElement("button"); button.type = "button"; button.className = "app-cell";
@@ -154,14 +167,14 @@
           if (Number(cursor.x) === x && Number(cursor.y) === y) button.classList.add("app-cell-cursor");
           button.dataset.x = String(x); button.dataset.y = String(y); button.textContent = character;
           button.setAttribute("role", "gridcell"); button.setAttribute("aria-label", `Column ${x + 1}, row ${y + 1}, ${character === " " ? "blank" : character}`);
-          button.addEventListener("pointerdown", (event) => { if (event.button !== 0) return; event.preventDefault(); drawing = true; button.focus(); activate(button, false); });
-          button.addEventListener("pointerenter", () => { if (drawing) activate(button, true); });
-          button.addEventListener("click", (event) => { if (event.detail === 0) activate(button, false); });
+          button.addEventListener("pointerdown", (event) => { if (event.button !== 0) return; event.preventDefault(); drawing = true; button.focus(); activate(button, "start"); });
+          button.addEventListener("pointerenter", () => { if (drawing) activate(button, "move"); });
+          button.addEventListener("click", (event) => { if (event.detail === 0) { activate(button, "start"); activate(button, "end"); } });
           node.append(button);
         }));
-        node.addEventListener("pointerup", () => { drawing = false; });
-        node.addEventListener("pointercancel", () => { drawing = false; });
-        node.addEventListener("pointerleave", () => { drawing = false; });
+        node.addEventListener("pointerup", finish);
+        node.addEventListener("pointercancel", finish);
+        node.addEventListener("pointerleave", finish);
         break;
       }
       default: return null;
@@ -251,6 +264,31 @@
         const link = document.createElement("a"); link.href = url; link.download = filename; link.hidden = true;
         document.body.append(link); link.click(); link.remove(); setTimeout(() => URL.revokeObjectURL(url), 1000);
         capabilityResult(request, true, true); return;
+      }
+      if (message.operation === "download-cell-image") {
+        const rows = (Array.isArray(message.rows) ? message.rows : []).slice(0, 50);
+        const columns = Math.min(LIMITS.columns, rows.reduce((largest, row) => Math.max(largest, Array.isArray(row) ? row.length : 0), 0));
+        if (!rows.length || !columns) throw new Error("Image grid is empty");
+        const cellWidth = Math.trunc(number(message.cellWidth, 20, 8, 32));
+        const cellHeight = Math.trunc(number(message.cellHeight, 24, 8, 40));
+        const fontSize = Math.trunc(number(message.fontSize, 18, 6, cellHeight));
+        const ansi = ["#000000", "#aa0000", "#00aa00", "#aa5500", "#0000aa", "#aa00aa", "#00aaaa", "#aaaaaa", "#555555", "#ff5555", "#55ff55", "#ffff55", "#5555ff", "#ff55ff", "#55ffff", "#ffffff"];
+        const canvas = document.createElement("canvas"); canvas.width = columns * cellWidth; canvas.height = rows.length * cellHeight;
+        const context = canvas.getContext("2d"); context.textAlign = "center"; context.textBaseline = "middle"; context.font = `${fontSize}px monospace`;
+        rows.forEach((row, y) => Array.from({ length: columns }, (_, x) => Array.isArray(row) ? row[x] : null).forEach((raw, x) => {
+          const cell = raw && typeof raw === "object" ? raw : {};
+          const fg = Math.trunc(number(cell.fg, 7, 0, 15)), bg = Math.trunc(number(cell.bg, 0, 0, 15));
+          const character = Array.from(String(cell.char == null ? " " : cell.char))[0] || " ";
+          context.fillStyle = ansi[bg]; context.fillRect(x * cellWidth, y * cellHeight, cellWidth, cellHeight);
+          context.fillStyle = ansi[fg]; context.fillText(character, x * cellWidth + cellWidth / 2, y * cellHeight + cellHeight / 2);
+        }));
+        const blob = await new Promise((resolve) => canvas.toBlob(resolve, "image/png"));
+        if (!blob) throw new Error("Image encoding failed");
+        const requested = text(message.filename, 120).replace(/[^a-zA-Z0-9._-]/g, "-");
+        const filename = requested && !requested.startsWith(".") ? requested : "stationnet-art.png";
+        const url = URL.createObjectURL(blob); const link = document.createElement("a");
+        link.href = url; link.download = filename; link.hidden = true; document.body.append(link); link.click(); link.remove();
+        setTimeout(() => URL.revokeObjectURL(url), 1000); capabilityResult(request, true, true); return;
       }
       throw new Error("Unsupported capability request");
     } catch (error) { capabilityResult(request, false, false, error); }

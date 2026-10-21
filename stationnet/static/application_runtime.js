@@ -133,7 +133,8 @@
       const opts = options(settings);
       return identified({
         type: "cell-grid", action: action(opts.onCell), cursor: opts.cursor,
-        label: String(opts.label || "Character art canvas"), rows: Array.isArray(rows) ? rows : []
+        brush: opts.brush, label: String(opts.label || "Character art canvas"),
+        rows: Array.isArray(rows) ? rows : []
       }, opts);
     },
     render(...components) {
@@ -164,7 +165,14 @@
       writeText(value) { return capability("copy-text", { text: String(value) }); }
     }),
     download: Object.freeze({
-      text(filename, value) { return capability("download-text", { filename: String(filename), text: String(value) }); }
+      text(filename, value) { return capability("download-text", { filename: String(filename), text: String(value) }); },
+      cellImage(filename, rows, settings) {
+        const opts = options(settings);
+        return capability("download-cell-image", {
+          filename: String(filename), rows: Array.isArray(rows) ? rows : [],
+          cellWidth: opts.cellWidth, cellHeight: opts.cellHeight, fontSize: opts.fontSize
+        });
+      }
     }),
     start(handler) {
       if (typeof handler !== "function") throw new TypeError("StationNet.start expects a function");
@@ -200,7 +208,7 @@
         key: message.key, code: message.code,
         ctrlKey: Boolean(message.ctrlKey), altKey: Boolean(message.altKey),
         shiftKey: Boolean(message.shiftKey), metaKey: Boolean(message.metaKey),
-        x: message.x, y: message.y, drag: Boolean(message.drag)
+        x: message.x, y: message.y, drag: Boolean(message.drag), phase: message.phase
       }));
     } catch (error) { fail(error); }
   }

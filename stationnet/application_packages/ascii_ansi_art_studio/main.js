@@ -27,6 +27,7 @@ StationNet.start(async (ui) => {
   }
   function refreshCanvas(message) {
     canvasComponent.rows = cellRows(); canvasComponent.cursor = { ...cursor };
+    canvasComponent.brush = tool === "pencil" || tool === "erase" ? currentCell() : null;
     ui.update("art-canvas", canvasComponent); updateInfo();
     if (message) setStatus(message);
   }
@@ -36,7 +37,7 @@ StationNet.start(async (ui) => {
   }
   function cancelConfirmation() { confirmation = ""; }
 
-  function paintAt(x, y, drag) {
+  function paintAt(x, y, drag, deferRefresh = false) {
     x = Math.trunc(x); y = Math.trunc(y);
     if (x < 0 || y < 0 || x >= width || y >= height) return;
     cursor = { x, y }; cancelConfirmation();
@@ -54,7 +55,7 @@ StationNet.start(async (ui) => {
     if (!drag) remember();
     const replacement = currentCell();
     if (!sameCell(cells[y][x], replacement)) { cells[y][x] = replacement; dirty = true; }
-    refreshCanvas();
+    if (!deferRefresh) refreshCanvas();
   }
   function sameCell(a, b) { return a.char === b.char && a.fg === b.fg && a.bg === b.bg; }
   function drawLine(x0, y0, x1, y1, value) {
@@ -76,7 +77,10 @@ StationNet.start(async (ui) => {
       queue.push([x - 1, y], [x + 1, y], [x, y - 1], [x, y + 1]);
     }
   }
-  function onCell(event) { paintAt(event.x, event.y, event.drag); }
+  function onCell(event) {
+    if (event.phase === "end") { refreshCanvas(); return; }
+    paintAt(event.x, event.y, event.drag, event.phase === "start" || event.phase === "move");
+  }
 
   function undo() {
     if (!undoStack.length) return setStatus("Nothing to undo.");
@@ -195,11 +199,16 @@ StationNet.start(async (ui) => {
     try { await ui.download.text(`${name}.${kind === "ansi" ? "ans" : "txt"}`, kind === "ansi" ? ansiText() : plainText()); setStatus("Export download started."); }
     catch (error) { setStatus(`Download failed: ${error.message}`); }
   }
+  async function downloadImage() {
+    const name = (projectName || "artwork").replace(/[^a-zA-Z0-9_-]+/g, "-").replace(/^-|-$/g, "") || "artwork";
+    try { await ui.download.cellImage(`${name}.png`, cellRows(), { cellWidth: 20, cellHeight: 24, fontSize: 18 }); setStatus("PNG image download started."); }
+    catch (error) { setStatus(`Image download failed: ${error.message}`); }
+  }
 
-  function chooseTool(event) { tool = event.value; lineStart = null; cancelConfirmation(); updateInfo(); setStatus(`${tool[0].toUpperCase() + tool.slice(1)} tool selected.`); }
-  function chooseCharacter(event) { selectedChar = event.value; tool = "pencil"; lineStart = null; updateInfo(); setStatus(`Drawing character set to ${selectedChar === " " ? "SPACE" : selectedChar}.`); }
+  function chooseTool(event) { tool = event.value; lineStart = null; cancelConfirmation(); refreshCanvas(`${tool[0].toUpperCase() + tool.slice(1)} tool selected.`); }
+  function chooseCharacter(event) { selectedChar = event.value; tool = "pencil"; lineStart = null; refreshCanvas(`Drawing character set to ${selectedChar === " " ? "SPACE" : selectedChar}.`); }
   function customCharacter(event) {
-    selectedChar = oneCharacter(event.values.customChar); tool = "pencil"; lineStart = null; updateInfo(); setStatus(`Drawing character set to ${selectedChar === " " ? "SPACE" : selectedChar}.`);
+    selectedChar = oneCharacter(event.values.customChar); tool = "pencil"; lineStart = null; refreshCanvas(`Drawing character set to ${selectedChar === " " ? "SPACE" : selectedChar}.`);
   }
   function onKey(event) {
     const moves = { ArrowLeft: [-1, 0], ArrowRight: [1, 0], ArrowUp: [0, -1], ArrowDown: [0, 1] };
@@ -213,7 +222,7 @@ StationNet.start(async (ui) => {
 
   function renderMain(message) {
     status = message || status; confirmation = "";
-    canvasComponent = ui.cellGrid(cellRows(), { id: "art-canvas", cursor: { ...cursor }, onCell, label: "ASCII and ANSI drawing canvas" });
+    canvasComponent = ui.cellGrid(cellRows(), { id: "art-canvas", cursor: { ...cursor }, brush: tool === "pencil" || tool === "erase" ? currentCell() : null, onCell, label: "ASCII and ANSI drawing canvas" });
     const savedItems = projects.length ? projects.map((item) => ({ label: item.name, value: item.id })) : [{ label: "No saved projects", value: "" }];
     ui.render(
       ui.title("ASCII/ANSI Art Studio"),
@@ -222,8 +231,8 @@ StationNet.start(async (ui) => {
       ui.menu("CHARACTER PALETTE", CHARACTERS.map((value) => ({ label: value === " " ? "SP" : value, value })), chooseCharacter),
       ui.input("customChar", "Custom character", { maxLength: 2, placeholder: "Type one character" }),
       ui.button("Use Custom Character", customCharacter, { variant: "secondary" }),
-      ui.select("foreground", "Foreground color", COLORS.map((label, value) => ({ label, value: String(value) })), { value: String(foreground), onChange: (event) => { foreground = Number(event.value); updateInfo(); } }),
-      ui.select("background", "Background color", COLORS.map((label, value) => ({ label, value: String(value) })), { value: String(background), onChange: (event) => { background = Number(event.value); updateInfo(); } }),
+      ui.select("foreground", "Foreground color", COLORS.map((label, value) => ({ label, value: String(value) })), { value: String(foreground), onChange: (event) => { foreground = Number(event.value); refreshCanvas(); } }),
+      ui.select("background", "Background color", COLORS.map((label, value) => ({ label, value: String(value) })), { value: String(background), onChange: (event) => { background = Number(event.value); refreshCanvas(); } }),
       ui.text("", { id: "canvas-info", tone: "muted" }), canvasComponent,
       ui.menu("EDIT", [{ label: "UNDO (U)", value: "undo" }, { label: "REDO (R)", value: "redo" }, { label: "CLEAR", value: "clear" }], (event) => event.value === "undo" ? undo() : event.value === "redo" ? redo() : clearCanvas()),
       ui.heading("Canvas", 3),
@@ -238,7 +247,7 @@ StationNet.start(async (ui) => {
       ui.heading("Export", 3),
       ui.menu("FORMAT", [{ label: "PREPARE TEXT", value: "text" }, { label: "PREPARE ANSI", value: "ansi" }], (event) => showExport(event.value)),
       ui.textarea("exportOutput", "Export output", { id: "export-output", value: plainText(), maxLength: 120000 }),
-      ui.menu("EXPORT ACTIONS", [{ label: "COPY", value: "copy" }, { label: "DOWNLOAD .TXT", value: "text" }, { label: "DOWNLOAD .ANS", value: "ansi" }], (event) => event.value === "copy" ? copyExport(event) : downloadExport(event.value)),
+      ui.menu("EXPORT ACTIONS", [{ label: "COPY", value: "copy" }, { label: "DOWNLOAD .TXT", value: "text" }, { label: "DOWNLOAD .ANS", value: "ansi" }, { label: "DOWNLOAD .PNG", value: "png" }], (event) => event.value === "copy" ? copyExport(event) : event.value === "png" ? downloadImage() : downloadExport(event.value)),
       ui.text("Keyboard: arrows move; Space/Enter draws; type a character to draw it; Delete erases; U/R undo and redo.", { tone: "muted" })
     );
     updateInfo();

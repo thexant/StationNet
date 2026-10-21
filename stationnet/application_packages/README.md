@@ -87,10 +87,14 @@ Interactive character canvases can use `cellGrid(rows, options)`. Each cell is
 an object such as `{ char: "#", fg: 7, bg: 0 }`, where foreground and background
 are controlled 0–15 ANSI palette indexes. `options.onCell` receives bounded
 `x`, `y`, and `drag` values; the host always renders characters as text.
+The event also includes a `phase` (`start`, `move`, or `end`), and an optional
+`options.brush` provides immediate, safely rendered feedback during dragging.
 
 Two bounded browser conveniences are also available: `ui.clipboard.writeText(text)`
 and `ui.download.text(filename, text)`. They return promises and accept text only;
 applications do not receive general browser, DOM, network, or filesystem access.
+Colored cell grids can be exported as a controlled PNG with
+`ui.download.cellImage(filename, rows, options)`.
 
 Persistent JSON-compatible values are available asynchronously through
 `ui.storage.get`, `set`, `delete`, and `keys`. Storage is private to the current

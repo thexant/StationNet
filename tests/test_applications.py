@@ -123,9 +123,11 @@ def test_ascii_ansi_art_studio_is_discovered_and_uses_public_capabilities(initia
     assert b"ui.storage.set" in source.data
     assert b"ui.clipboard.writeText" in source.data
     assert b"ui.download.text" in source.data
+    assert b"ui.download.cellImage" in source.data
     assert b"floodFill" in source.data
     assert b"undoStack" in source.data
     assert b"\\u001b[" in source.data
+    assert b'DOWNLOAD .PNG' in source.data
 
 
 def test_bundled_folder_discovery_tracks_add_remove_and_restore(monkeypatch, app):
@@ -254,9 +256,12 @@ def test_expanded_runtime_and_demo_exercise_updates_timers_and_storage(initializ
     runtime = initialized.get("/static/application_runtime.js")
     assert b"textarea" in runtime.data
     assert b"storage-result" in runtime.data
+    assert b"download-cell-image" in runtime.data
     host = initialized.get("/static/application_host.js")
     assert b"PROGRAM STATUS / ERROR" in host.data
     assert b"data-app-component" in host.data
+    assert b'canvas.toBlob(resolve, "image/png")' in host.data
+    assert b'phase === "move"' in host.data
 
 
 def test_sysop_can_install_disable_restart_enable_and_uninstall_demo(app, initialized):
