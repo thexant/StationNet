@@ -55,6 +55,7 @@ def test_compact_radio_is_in_shared_shell_and_console_has_advanced_controls(app,
     assert b"data-radio-player" not in console.data
     assert b"data-radio-power" in console.data
     assert b"data-radio-scope" in console.data
+    assert b"data-radio-mode" not in console.data
     assert b"BEGIN CW TRANSMISSION" in console.data
     assert b"TRANSMIT PICTURE" in console.data
 
@@ -156,9 +157,8 @@ def test_range_permissions_apply_outside_presets_and_manual_entry_cannot_bypass_
     tuned = tune(alice, "6.00").get_json()
     assert tuned["band"]["name"] == "OUTSIDE DEFINED BAND"
     assert tuned["access"] == "FULL"
-    opened = start(alice, "6.00", tone_hz="650")
-    assert opened.status_code == 201
-    assert end(alice, opened.get_json()["transmission_id"]).status_code == 200
+    # FULL permission does not invent a transmission capability outside configured bands.
+    assert start(alice, "6.00", tone_hz="650").status_code == 403
 
     restricted = tune(alice, "6.50").get_json()
     assert restricted["frequency"] == "6.50"
@@ -256,7 +256,11 @@ def test_live_voice_requires_voice_capable_band_and_valid_signaling_peer(app, in
     assert tune(alice, "14.50").status_code == 200
     assert start(alice, "14.50", mode="VOICE").status_code == 403
 
+    # FULL access alone cannot bypass the configured operation capabilities.
     assert tune(alice, "145.20").status_code == 200
+    assert start(alice, "145.20", mode="CW", tone_hz="650").status_code == 403
+    assert start(alice, "145.20", mode="SSTV", width="2", height="2").status_code == 403
+
     opened = start(alice, "145.20", mode="VOICE").get_json()
     rejected = alice.post(
         "/radio/voice/signals",
@@ -284,23 +288,23 @@ def test_late_listener_only_gets_subsequent_signal_events(app, initialized):
 
 def test_sstv_scanlines_are_validated_and_received_progressively(app, initialized):
     alice = register(app, "alice")
-    assert tune(initialized, "145.20").status_code == 200
-    assert tune(alice, "145.20").status_code == 200
+    assert tune(initialized, "28.20").status_code == 200
+    assert tune(alice, "28.20").status_code == 200
     cursor = initialized.get("/radio/state").get_json()["cursor"]
-    opened = start(alice, "145.20", mode="SSTV", width="2", height="2")
+    opened = start(alice, "28.20", mode="SSTV", width="2", height="2")
     assert opened.status_code == 201
     transmission_id = opened.get_json()["transmission_id"]
     first = base64.b64encode(bytes((255, 0, 0, 0, 255, 0))).decode()
     second = base64.b64encode(bytes((0, 0, 255, 255, 255, 255))).decode()
     assert signal(alice, transmission_id, "scanline", row="1", pixels=second).status_code == 400
     assert signal(alice, transmission_id, "scanline", row="0", pixels=first).status_code == 200
-    partial = initialized.get(f"/radio/receive?frequency=145.20&after={cursor}").get_json()
+    partial = initialized.get(f"/radio/receive?frequency=28.20&after={cursor}").get_json()
     assert [event["kind"] for event in partial["events"]] == ["start", "scanline"]
     assert partial["active"]["mode"] == "SSTV"
     assert signal(alice, transmission_id, "scanline", row="1", pixels=second).status_code == 200
     assert end(alice, transmission_id).status_code == 200
     complete = initialized.get(
-        f"/radio/receive?frequency=145.20&after={partial['cursor']}"
+        f"/radio/receive?frequency=28.20&after={partial['cursor']}"
     ).get_json()["events"]
     assert [event["kind"] for event in complete] == ["scanline", "end"]
     assert base64.b64decode(complete[0]["pixels"]) == base64.b64decode(second)
@@ -608,6 +612,12 @@ def test_broadcast_hosting_requires_capability_full_access_and_no_denial(app, in
 def test_band_transmission_capabilities_are_configurable_without_locking_tuning(app, initialized):
     state = initialized.get("/radio/state").get_json()
     by_name = {band["name"]: band for band in state["bands"]}
+    assert by_name["MORSE / CW"]["supports_cw"] == 1
+    assert by_name["MORSE / CW"]["supports_sstv"] == 0
+    assert by_name["DATA TRANSMISSIONS"]["supports_cw"] == 0
+    assert by_name["DATA TRANSMISSIONS"]["supports_sstv"] == 1
+    assert by_name["EXPERIMENTAL / UNRESTRICTED"]["supports_cw"] == 1
+    assert by_name["EXPERIMENTAL / UNRESTRICTED"]["supports_sstv"] == 1
     assert by_name["GENERAL COMMUNICATION"]["supports_live_voice"] == 1
     assert by_name["GENERAL COMMUNICATION"]["supports_hosted_broadcasts"] == 0
     assert by_name["BROADCASTS"]["supports_live_voice"] == 0

@@ -129,12 +129,16 @@ def transmission_authorized(user_id, khz, transmission_type):
         return False
     band = find_band(khz)
     kind = transmission_type.upper()
+    if kind == "CW":
+        return bool(band and band["supports_cw"])
+    if kind == "SSTV":
+        return bool(band and band["supports_sstv"])
     if kind == "LIVE_VOICE":
         return bool(band and band["supports_live_voice"])
     if kind == "HOSTED_BROADCAST":
         return bool(band and band["supports_hosted_broadcasts"] and
                     can_host_broadcast(user_id, khz))
-    return kind in {"CW", "SSTV"}
+    return False
 
 
 class RadioStore:
@@ -619,7 +623,8 @@ def receive():
         events, cursor, active = _store().receive(session["connection_id"], g.user["id"], frequency, after)
     except ValueError as problem:
         return jsonify(error=str(problem), access=access), 409
-    return jsonify(events=events, cursor=cursor, active=active, access=access)
+    return jsonify(events=events, cursor=cursor, active=active, access=access,
+                   band=_band_payload(find_band(frequency), g.user["id"], frequency))
 
 
 @bp.post("/transmit/start")

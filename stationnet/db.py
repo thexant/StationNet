@@ -58,6 +58,8 @@ CREATE TABLE IF NOT EXISTS announcements (
 CREATE TABLE IF NOT EXISTS radio_bands (
  id INTEGER PRIMARY KEY, name TEXT NOT NULL,
  start_khz INTEGER NOT NULL, end_khz INTEGER NOT NULL,
+ supports_cw INTEGER NOT NULL DEFAULT 0 CHECK(supports_cw IN (0,1)),
+ supports_sstv INTEGER NOT NULL DEFAULT 0 CHECK(supports_sstv IN (0,1)),
  supports_live_voice INTEGER NOT NULL DEFAULT 0 CHECK(supports_live_voice IN (0,1)),
  supports_hosted_broadcasts INTEGER NOT NULL DEFAULT 0 CHECK(supports_hosted_broadcasts IN (0,1)),
  allow_open_broadcasts INTEGER NOT NULL DEFAULT 0 CHECK(allow_open_broadcasts IN (0,1)),
@@ -146,11 +148,11 @@ END;
 """
 
 DEFAULT_RADIO_BANDS = (
-    (1, "GENERAL COMMUNICATION", 145000, 432990, "members", 1, 0, 0),
-    (2, "BROADCASTS", 7000, 13990, "admins", 0, 1, 0),
-    (3, "MORSE / CW", 14000, 27990, "members", 0, 0, 0),
-    (4, "DATA TRANSMISSIONS", 28000, 144990, "members", 0, 0, 0),
-    (5, "EXPERIMENTAL / UNRESTRICTED", 433000, 999990, "members", 0, 0, 1),
+    (1, "GENERAL COMMUNICATION", 145000, 432990, "members", 0, 0, 1, 0, 0),
+    (2, "BROADCASTS", 7000, 13990, "admins", 0, 0, 0, 1, 0),
+    (3, "MORSE / CW", 14000, 27990, "members", 1, 0, 0, 0, 0),
+    (4, "DATA TRANSMISSIONS", 28000, 144990, "members", 0, 1, 0, 0, 0),
+    (5, "EXPERIMENTAL / UNRESTRICTED", 433000, 999990, "members", 1, 1, 0, 0, 1),
 )
 
 NARROW_DEFAULT_RADIO_BANDS = (
@@ -192,10 +194,12 @@ def init_db():
     _migrate_legacy_callsigns(database)
     _migrate_factory_radio_bands(database)
     _align_radio_bands_to_display_precision(database)
-    added_band_capabilities, added_group_capability = _migrate_radio_capability_columns(database)
+    added_band_capabilities, added_signal_capabilities, added_group_capability = \
+        _migrate_radio_capability_columns(database)
     database.executemany(
         "INSERT OR IGNORE INTO radio_bands(id,name,start_khz,end_khz,tx_permission,"
-        "supports_live_voice,supports_hosted_broadcasts,allow_open_broadcasts) VALUES(?,?,?,?,?,?,?,?)",
+        "supports_cw,supports_sstv,supports_live_voice,supports_hosted_broadcasts,"
+        "allow_open_broadcasts) VALUES(?,?,?,?,?,?,?,?,?,?)",
         DEFAULT_RADIO_BANDS,
     )
     _migrate_radio_permissions(database)
@@ -203,6 +207,12 @@ def init_db():
         database.execute(
             "UPDATE radio_bands SET supports_live_voice=(name='GENERAL COMMUNICATION'),"
             "supports_hosted_broadcasts=(name='BROADCASTS')"
+        )
+    if added_signal_capabilities:
+        database.execute(
+            "UPDATE radio_bands SET supports_cw="
+            "(name IN ('MORSE / CW','EXPERIMENTAL / UNRESTRICTED'))"
+            ",supports_sstv=(name IN ('DATA TRANSMISSIONS','EXPERIMENTAL / UNRESTRICTED'))"
         )
     if added_group_capability:
         database.execute(
@@ -215,6 +225,17 @@ def _migrate_radio_capability_columns(database):
     """Add voice/broadcast preparation fields without resetting later sysop choices."""
     band_columns = {row["name"] for row in database.execute("PRAGMA table_info(radio_bands)")}
     added_bands = "supports_live_voice" not in band_columns
+    added_signals = "supports_cw" not in band_columns or "supports_sstv" not in band_columns
+    if "supports_cw" not in band_columns:
+        database.execute(
+            "ALTER TABLE radio_bands ADD COLUMN supports_cw INTEGER NOT NULL DEFAULT 0 "
+            "CHECK(supports_cw IN (0,1))"
+        )
+    if "supports_sstv" not in band_columns:
+        database.execute(
+            "ALTER TABLE radio_bands ADD COLUMN supports_sstv INTEGER NOT NULL DEFAULT 0 "
+            "CHECK(supports_sstv IN (0,1))"
+        )
     if added_bands:
         database.execute(
             "ALTER TABLE radio_bands ADD COLUMN supports_live_voice INTEGER NOT NULL DEFAULT 0 "
@@ -234,7 +255,7 @@ def _migrate_radio_capability_columns(database):
             "ALTER TABLE radio_permission_groups ADD COLUMN host_broadcasts INTEGER NOT NULL DEFAULT 0 "
             "CHECK(host_broadcasts IN (0,1))"
         )
-    return added_bands, added_groups
+    return added_bands, added_signals, added_groups
 
 
 def _migrate_factory_radio_bands(database):
@@ -248,7 +269,8 @@ def _migrate_factory_radio_bands(database):
     database.executemany(
         "UPDATE radio_bands SET name=?,start_khz=?,end_khz=?,tx_permission=? WHERE id=?",
         [(name, start, end, permission, band_id)
-         for band_id, name, start, end, permission, _voice, _broadcast, _open in DEFAULT_RADIO_BANDS],
+         for band_id, name, start, end, permission, _cw, _sstv, _voice, _broadcast, _open
+         in DEFAULT_RADIO_BANDS],
     )
 
 

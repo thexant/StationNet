@@ -332,7 +332,7 @@ button:disabled { opacity: .5; cursor: not-allowed; }
 .radio-monitor-label, .radio-monitor strong { position: absolute; top: .35rem; z-index: 1; padding: .15rem .3rem; background: #000c; font-size: .55rem; letter-spacing: .08em; }
 .radio-monitor-label { left: .4rem; color: var(--green-dim); }
 .radio-monitor strong { right: .4rem; color: var(--amber); font-weight: 400; }
-.radio-operation { display: grid; grid-template-columns: 10rem minmax(8rem,1fr) auto minmax(12rem,auto); gap: .5rem; align-items: end; }
+.radio-operation { display: grid; grid-template-columns: minmax(8rem,1fr) auto minmax(12rem,auto); gap: .5rem; align-items: end; }
 .radio-operation input, .radio-operation select, .radio-mode-panel input { padding-block: .45rem; }
 .radio-occupancy { align-self: center; color: var(--cyan); font-size: .6rem; text-align: right; }
 .radio-mode-panel { margin-top: .55rem; padding-top: .55rem; border-top: 1px dotted var(--green-dim); }

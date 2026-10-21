@@ -181,9 +181,11 @@ def _save_radio_bands():
         if error:
             break
         supports_voice = request.form.get(f"band_{band_id}_live_voice") == "on"
+        supports_cw = request.form.get(f"band_{band_id}_cw") == "on"
+        supports_sstv = request.form.get(f"band_{band_id}_sstv") == "on"
         supports_broadcasts = request.form.get(f"band_{band_id}_hosted_broadcasts") == "on"
         allow_open = request.form.get(f"band_{band_id}_open_broadcasts") == "on"
-        proposed.append((start, end, name, row["tx_permission"], supports_voice,
+        proposed.append((start, end, name, row["tx_permission"], supports_cw, supports_sstv, supports_voice,
                          supports_broadcasts, allow_open, band_id))
     ordered = sorted(proposed)
     if not error and any(left[1] >= right[0] for left, right in zip(ordered, ordered[1:])):
@@ -193,7 +195,8 @@ def _save_radio_bands():
     else:
         database.executemany(
             "UPDATE radio_bands SET start_khz=?,end_khz=?,name=?,tx_permission=?,"
-            "supports_live_voice=?,supports_hosted_broadcasts=?,allow_open_broadcasts=? WHERE id=?",
+            "supports_cw=?,supports_sstv=?,supports_live_voice=?,"
+            "supports_hosted_broadcasts=?,allow_open_broadcasts=? WHERE id=?",
             proposed,
         )
         database.commit()

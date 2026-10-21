@@ -86,6 +86,8 @@
         <label>Start MHz<input type="number" inputmode="decimal" step="0.01" min="0.10" max="999.99" name="band_{{ band.id }}_start" required value="{{ format_frequency(band.start_khz) }}"></label>
         <label>End MHz<input type="number" inputmode="decimal" step="0.01" min="0.10" max="999.99" name="band_{{ band.id }}_end" required value="{{ format_frequency(band.end_khz) }}"></label>
       </div>
+      <label class="switch"><input type="checkbox" name="band_{{ band.id }}_cw" {% if band.supports_cw %}checked{% endif %}> SUPPORT MORSE / CW</label>
+      <label class="switch"><input type="checkbox" name="band_{{ band.id }}_sstv" {% if band.supports_sstv %}checked{% endif %}> SUPPORT PICTURE / SSTV</label>
       <label class="switch"><input type="checkbox" name="band_{{ band.id }}_live_voice" {% if band.supports_live_voice %}checked{% endif %}> SUPPORT LIVE VOICE</label>
       <label class="switch"><input type="checkbox" name="band_{{ band.id }}_hosted_broadcasts" {% if band.supports_hosted_broadcasts %}checked{% endif %}> SUPPORT HOSTED BROADCASTS</label>
       <label class="switch"><input type="checkbox" name="band_{{ band.id }}_open_broadcasts" {% if band.allow_open_broadcasts %}checked{% endif %}> ALLOW OPEN BROADCASTS</label>
