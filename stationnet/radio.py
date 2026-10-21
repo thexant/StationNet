@@ -323,6 +323,13 @@ class RadioStore:
                     return True
             return False
 
+    def current(self, frequency):
+        """Return the current authoritative transmission at a frequency."""
+        with self._lock:
+            self._prune(monotonic())
+            transmission_id = self._frequency_owners.get(frequency)
+            return self._public_transmission(self._transmissions.get(transmission_id))
+
     def signal(self, connection_id, transmission_id, kind, **payload):
         now = monotonic()
         with self._lock:
@@ -404,6 +411,8 @@ class RadioStore:
             result["hosted"] = True
             result["playlist_name"] = transmission.get("playlist_name")
             result["track_name"] = transmission.get("track_name")
+            result["track_title"] = transmission.get("track_title") or transmission.get("track_name")
+            result["track_artist"] = transmission.get("track_artist") or ""
             result["audio_file_id"] = transmission.get("audio_file_id")
             result["track_offset"] = transmission.get("track_offset", 0)
             result["track_serial"] = transmission.get("track_serial", 0)
@@ -572,6 +581,33 @@ def broadcast_identity(frequency):
     }
 
 
+def broadcast_status(identity, active):
+    """Describe live content separately from a frequency's registered identity."""
+    if active and active.get("hosted"):
+        return {
+            "kind": "automated", "label": "AUTOMATED PLAYBACK",
+            "active": True, "title": active.get("track_title") or active.get("track_name") or "Untitled track",
+            "artist": active.get("track_artist") or "",
+        }
+    if active:
+        transmission_type = active.get("transmission_type")
+        if transmission_type == "LIVE_VOICE":
+            kind, label = "live_voice", "LIVE VOICE TRANSMISSION"
+        elif active.get("mode") == "MUSIC":
+            kind, label = "live_music", "LIVE MUSIC"
+        else:
+            kind, label = "live_transmission", "LIVE TRANSMISSION"
+        return {"kind": kind, "label": label, "active": True, "title": "", "artist": ""}
+    return {"kind": "inactive", "label": "OFF AIR" if identity else "NO ACTIVE BROADCAST",
+            "active": False, "title": "", "artist": ""}
+
+
+def _frequency_snapshot(frequency, allowed=True):
+    identity = broadcast_identity(frequency) if allowed else None
+    active = _store().current(frequency) if allowed else None
+    return identity, active, broadcast_status(identity, active) if allowed else None
+
+
 def reconcile_radio_permissions(user_id=None):
     _store().reconcile_permissions(effective_access, transmission_authorized, user_id)
     current_app.extensions["hosted_broadcasts"].refresh(user_id)
@@ -597,12 +633,14 @@ def state():
     access = effective_access(g.user["id"], frequency)
     # Merely reading configuration must not activate reception.
     cursor = _store().cursor()
+    identity, active, broadcast = _frequency_snapshot(
+        frequency, already_tuned and access != "DENIED"
+    )
     return jsonify(frequency=format_frequency(frequency) if frequency else None,
                    band=_band_payload(band, g.user["id"], frequency) if frequency else None,
                    bands=_bands_payload(g.user["id"]), cursor=cursor,
                    access=access, powered=already_tuned, step_khz=TUNING_STEP_KHZ,
-                   identity=(broadcast_identity(frequency)
-                             if already_tuned and access != "DENIED" else None))
+                   identity=identity, active=active, broadcast=broadcast)
 
 
 @bp.post("/power-off")
@@ -617,6 +655,7 @@ def power_off():
 @login_required
 def tune():
     validate_csrf()
+    current_app.extensions["hosted_broadcasts"].refresh()
     frequency = parse_frequency(request.form.get("frequency"))
     band = find_band(frequency)
     if frequency is None:
@@ -625,9 +664,10 @@ def tune():
     _store().disconnect(session["connection_id"])
     cursor = (_store().tune(session["connection_id"], g.user["id"], frequency)
               if access != "DENIED" else _store().cursor())
+    identity, active, broadcast = _frequency_snapshot(frequency, access != "DENIED")
     return jsonify(frequency=format_frequency(frequency),
                    band=_band_payload(band, g.user["id"], frequency), cursor=cursor, access=access,
-                   identity=broadcast_identity(frequency) if access != "DENIED" else None)
+                   identity=identity, active=active, broadcast=broadcast)
 
 
 @bp.get("/receive")
@@ -647,9 +687,10 @@ def receive():
         events, cursor, active = _store().receive(session["connection_id"], g.user["id"], frequency, after)
     except ValueError as problem:
         return jsonify(error=str(problem), access=access), 409
+    identity = broadcast_identity(frequency)
     return jsonify(events=events, cursor=cursor, active=active, access=access,
                    band=_band_payload(find_band(frequency), g.user["id"], frequency),
-                   identity=broadcast_identity(frequency))
+                   identity=identity, broadcast=broadcast_status(identity, active))
 
 
 @bp.post("/transmit/start")
@@ -736,10 +777,11 @@ def scan():
     found, cursor = _store().scan(session["connection_id"], g.user["id"], current, direction, allocations)
     if found is None:
         return jsonify(found=False, cursor=cursor)
+    identity, active, broadcast = _frequency_snapshot(found)
     return jsonify(found=True, frequency=format_frequency(found),
                    band=_band_payload(find_band(found), g.user["id"], found),
                    access=effective_access(g.user["id"], found), cursor=cursor,
-                   identity=broadcast_identity(found))
+                   identity=identity, active=active, broadcast=broadcast)
 
 
 @bp.get("/voice/peers")

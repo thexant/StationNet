@@ -41,6 +41,8 @@ def test_compact_radio_is_in_shared_shell_and_console_has_advanced_controls(app,
         response = initialized.get(path)
         assert b"data-radio-player" in response.data
         assert b"data-radio-player-toggle" in response.data
+        assert b"data-radio-broadcast-status" in response.data
+        assert b"data-radio-now-playing-artist" in response.data
         assert b'class="radio-player minimized"' in response.data
         assert b"POWER: OFF" in response.data
         assert b"OPEN RADIO" in response.data
@@ -54,6 +56,7 @@ def test_compact_radio_is_in_shared_shell_and_console_has_advanced_controls(app,
     assert b"data-radio-console" in console.data
     assert b"data-radio-player" not in console.data
     assert b"data-radio-power" in console.data
+    assert b"data-radio-now-playing-block" in console.data
     assert b"data-radio-scope" in console.data
     assert b"data-radio-mode" not in console.data
     assert b"BEGIN CW TRANSMISSION" in console.data

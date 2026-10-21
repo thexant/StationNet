@@ -305,6 +305,10 @@ button:disabled { opacity: .5; cursor: not-allowed; }
 .radio-player-state output { min-width: 4.2rem; color: var(--green-bright); font-size: .82rem; letter-spacing: .08em; text-align: right; }
 .radio-player-state > span { color: var(--grey); font-size: .52rem; }
 .radio-player-state .radio-player-status { min-width: 4.5rem; color: var(--amber); text-align: center; }
+.radio-player-state .radio-broadcast-status { color: var(--cyan); }
+.radio-player-state .radio-now-playing, .radio-player-state .radio-now-playing-artist { min-width: 0; max-width: 14rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-align: left; }
+.radio-player-state .radio-now-playing { color: var(--green-bright); }
+.radio-player-state .radio-now-playing-artist { color: var(--grey); }
 .radio-player button, .radio-player .button { min-height: 1.8rem; padding: .25rem .42rem; font-size: .55rem; white-space: nowrap; }
 .radio-player .radio-power.active { color: #000; border-color: var(--green); background: var(--green); }
 .radio-player-controls { justify-content: flex-end; }
@@ -325,6 +329,12 @@ button:disabled { opacity: .5; cursor: not-allowed; }
 .radio-display output { color: var(--green-bright); font-size: 1.45rem; line-height: 1.2; letter-spacing: .1em; text-shadow: 0 0 .55rem var(--green-dim); }
 .radio-display > strong { color: var(--cyan); font-size: .7rem; letter-spacing: .05em; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .radio-display small { color: var(--amber); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.radio-now-playing-block { display: grid; min-width: 0; margin: .25rem 0; padding: .25rem 0; border-block: 1px dotted var(--green-dim); }
+.radio-now-playing-block[hidden] { display: none; }
+.radio-now-playing-block span { color: var(--cyan); }
+.radio-now-playing-block b, .radio-now-playing-block small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.radio-now-playing-block b { color: var(--green-bright); font-size: .72rem; font-weight: 400; }
+.radio-now-playing-block small { color: var(--grey); }
 .radio-controls { display: grid; grid-template-columns: auto minmax(8rem,1fr) auto auto auto; gap: .45rem; align-items: end; }
 .radio-controls button { min-height: 2.35rem; padding-inline: .6rem; white-space: nowrap; }
 .radio-controls input { padding-block: .45rem; }

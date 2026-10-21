@@ -94,6 +94,7 @@ CREATE TABLE IF NOT EXISTS radio_audio_files (
  display_name TEXT NOT NULL, stored_name TEXT NOT NULL UNIQUE,
  media_type TEXT NOT NULL, size_bytes INTEGER NOT NULL CHECK(size_bytes>0),
  duration_seconds REAL NOT NULL DEFAULT 180 CHECK(duration_seconds>0),
+ title TEXT NOT NULL DEFAULT '', artist TEXT NOT NULL DEFAULT '',
  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);
 CREATE INDEX IF NOT EXISTS idx_radio_audio_owner ON radio_audio_files(owner_id,id);
 CREATE TABLE IF NOT EXISTS radio_playlists (
@@ -402,6 +403,14 @@ def _migrate_hosted_broadcast_fields(database):
     if "duration_seconds" not in audio_columns:
         database.execute(
             "ALTER TABLE radio_audio_files ADD COLUMN duration_seconds REAL NOT NULL DEFAULT 180"
+        )
+    if "title" not in audio_columns:
+        database.execute(
+            "ALTER TABLE radio_audio_files ADD COLUMN title TEXT NOT NULL DEFAULT ''"
+        )
+    if "artist" not in audio_columns:
+        database.execute(
+            "ALTER TABLE radio_audio_files ADD COLUMN artist TEXT NOT NULL DEFAULT ''"
         )
     playlist_columns = {row["name"] for row in database.execute("PRAGMA table_info(radio_playlists)")}
     if "shuffle_enabled" not in playlist_columns:

@@ -2,6 +2,7 @@
 import secrets
 import sqlite3
 import random
+import struct
 from threading import RLock, Timer
 from time import monotonic
 from functools import wraps
@@ -28,6 +29,7 @@ AUDIO_FORMATS = {
 }
 BROADCAST_NAME_MAX_LENGTH = 80
 BROADCAST_MESSAGE_MAX_LENGTH = 240
+TRACK_METADATA_MAX_LENGTH = 240
 
 
 class HostedBroadcastStore:
@@ -172,6 +174,8 @@ class HostedBroadcastStore:
                 track = position[1]
                 self.radio.update_hosted(
                     user_id, playlist_name=item["playlist_name"], track_name=track["name"],
+                    track_title=track.get("title") or Path(track["name"]).stem,
+                    track_artist=track.get("artist") or "",
                     audio_file_id=track["file_id"], track_offset=round(position[2], 3),
                     track_serial=item["track_serial"],
                 )
@@ -197,7 +201,9 @@ class HostedBroadcastStore:
                 index, track, offset = position
                 item.update(track_index=index, elapsed=elapsed)
                 self.radio.update_hosted(owner_id, playlist_name=item["playlist_name"],
-                                         track_name=track["name"], audio_file_id=track["file_id"],
+                                         track_name=track["name"],
+                                         track_title=track.get("title") or Path(track["name"]).stem,
+                                         track_artist=track.get("artist") or "", audio_file_id=track["file_id"],
                                          track_offset=round(offset, 3),
                                          track_serial=item["track_serial"])
 
@@ -220,7 +226,8 @@ class HostedBroadcastStore:
             first = item["current_track"]
             transmission_id, _event = self.radio.start_hosted(
                 user_id, frequency, callsign, playlist_name=playlist_name,
-                track_name=first["name"], audio_file_id=first["file_id"], track_offset=0,
+                track_name=first["name"], track_title=first.get("title") or Path(first["name"]).stem,
+                track_artist=first.get("artist") or "", audio_file_id=first["file_id"], track_offset=0,
                 track_serial=item["track_serial"],
             )
             item["transmission_id"] = transmission_id
@@ -260,6 +267,8 @@ class HostedBroadcastStore:
             transmission_id, _event = self.radio.start_hosted(
                 user_id, item["frequency"], item["callsign"],
                 playlist_name=item["playlist_name"], track_name=first["name"],
+                track_title=first.get("title") or Path(first["name"]).stem,
+                track_artist=first.get("artist") or "",
                 audio_file_id=first["file_id"], track_offset=item.get("track_offset", 0),
                 track_serial=item["track_serial"],
             )
@@ -308,6 +317,8 @@ class HostedBroadcastStore:
                     track = position[1]
                     self.radio.update_hosted(
                         user_id, playlist_name=playlist_name, track_name=track["name"],
+                        track_title=track.get("title") or Path(track["name"]).stem,
+                        track_artist=track.get("artist") or "",
                         audio_file_id=track["file_id"], track_offset=round(position[2], 3),
                         track_serial=item["track_serial"],
                     )
@@ -330,7 +341,32 @@ class HostedBroadcastStore:
             track = item["current_track"]
             self.radio.update_hosted(
                 user_id, playlist_name=item["playlist_name"], track_name=track["name"],
+                track_title=track.get("title") or Path(track["name"]).stem,
+                track_artist=track.get("artist") or "",
                 audio_file_id=track["file_id"], track_offset=0,
+                track_serial=item["track_serial"],
+            )
+            self._schedule_end(item)
+            return True
+
+    def correct_duration(self, user_id, file_id, track_serial, duration):
+        """Align the server clock with duration metadata decoded by a listener."""
+        with self._lock:
+            item = self._sessions.get(user_id)
+            if (not item or item["current_track"]["file_id"] != file_id or
+                    item["track_serial"] != track_serial):
+                return False
+            for track in item["tracks"]:
+                if track["file_id"] == file_id:
+                    track["duration"] = duration
+            position, _elapsed, reason = self._position(item)
+            if reason:
+                self.stop(user_id, reason)
+                return True
+            track = position[1]
+            self.radio.update_hosted(
+                user_id, playlist_name=item["playlist_name"], track_name=track["name"],
+                audio_file_id=track["file_id"], track_offset=round(position[2], 3),
                 track_serial=item["track_serial"],
             )
             self._schedule_end(item)
@@ -368,6 +404,8 @@ class HostedBroadcastStore:
                 "frequency": format_frequency(item["frequency"]),
                 "frequency_khz": item["frequency"], "playlist_id": item["playlist_id"],
                 "playlist_name": item["playlist_name"], "track_name": track["name"],
+                "track_title": track.get("title") or Path(track["name"]).stem,
+                "track_artist": track.get("artist") or "",
                 "audio_file_id": track["file_id"], "track_offset": round(offset, 3),
                 "track_serial": item["track_serial"],
                 "status": "paused" if paused else "playing", "remaining_seconds": remaining,
@@ -445,6 +483,83 @@ def _audio_duration(payload, suffix):
     return 180.0
 
 
+def _clean_metadata(value):
+    """Normalize embedded text for compact, safe listener display."""
+    if not value:
+        return ""
+    value = " ".join(str(value).replace("\x00", " ").split())
+    return value[:TRACK_METADATA_MAX_LENGTH]
+
+
+def _decode_id3_text(payload):
+    if not payload:
+        return ""
+    encoding = payload[0]
+    raw = payload[1:]
+    codecs = {0: "latin-1", 1: "utf-16", 2: "utf-16-be", 3: "utf-8"}
+    try:
+        return _clean_metadata(raw.decode(codecs.get(encoding, "utf-8"), errors="replace"))
+    except (LookupError, UnicodeError):
+        return ""
+
+
+def _audio_metadata(payload, suffix, filename):
+    """Read common embedded title/artist tags without requiring an external service."""
+    title = artist = ""
+    if suffix == ".mp3" and payload.startswith(b"ID3") and len(payload) >= 10:
+        version = payload[3]
+        tag_size = sum(value << shift for value, shift in zip(payload[6:10], (21, 14, 7, 0)))
+        offset, limit = 10, min(len(payload), 10 + tag_size)
+        while offset + (6 if version == 2 else 10) <= limit:
+            if version == 2:
+                frame_id = payload[offset:offset + 3].decode("latin-1")
+                size = int.from_bytes(payload[offset + 3:offset + 6], "big")
+                header_size = 6
+            else:
+                frame_id = payload[offset:offset + 4].decode("latin-1")
+                size_bytes = payload[offset + 4:offset + 8]
+                size = (sum(value << shift for value, shift in zip(size_bytes, (21, 14, 7, 0)))
+                        if version == 4 else int.from_bytes(size_bytes, "big"))
+                header_size = 10
+            if not frame_id.strip("\x00") or size <= 0 or offset + header_size + size > limit:
+                break
+            value = _decode_id3_text(payload[offset + header_size:offset + header_size + size])
+            if frame_id in {"TIT2", "TT2"}:
+                title = value
+            elif frame_id in {"TPE1", "TP1"}:
+                artist = value
+            offset += header_size + size
+    elif suffix == ".ogg":
+        # Vorbis comments are UTF-8 length-prefixed fields. Searching within the
+        # validated container also tolerates Opus/Vorbis packet layout differences.
+        upper = payload.upper()
+        for key, target in ((b"TITLE=", "title"), (b"ARTIST=", "artist")):
+            marker = upper.find(key)
+            if marker >= 0:
+                field_size = int.from_bytes(payload[marker - 4:marker], "little") if marker >= 4 else 0
+                end = marker + field_size
+                if field_size < len(key) or end > len(payload):
+                    end = payload.find(b"\x00", marker, min(len(payload), marker + 1024))
+                    end = end if end >= 0 else min(len(payload), marker + 1024)
+                raw = payload[marker + len(key):end]
+                value = _clean_metadata(raw.decode("utf-8", errors="replace"))
+                if target == "title":
+                    title = value
+                else:
+                    artist = value
+    elif suffix == ".wav":
+        for chunk, target in ((b"INAM", "title"), (b"IART", "artist")):
+            marker = payload.find(chunk, 12)
+            if marker >= 0 and marker + 8 <= len(payload):
+                size = struct.unpack_from("<I", payload, marker + 4)[0]
+                value = _clean_metadata(payload[marker + 8:marker + 8 + size].decode("latin-1", errors="replace"))
+                if target == "title":
+                    title = value
+                else:
+                    artist = value
+    return title or _clean_metadata(Path(filename).stem) or "Untitled track", artist
+
+
 def _quota(database, user_id):
     row = database.execute(
         "SELECT u.radio_quota_mb,s.radio_default_quota_mb FROM users u CROSS JOIN station s "
@@ -471,7 +586,7 @@ def _owned_playlist(database, playlist_id):
 def _available_tracks(database, playlist_id):
     rows = database.execute(
         "SELECT t.id entry_id,t.position,t.display_name,f.id file_id,f.owner_id,"
-        "f.stored_name,f.duration_seconds FROM radio_playlist_tracks t "
+        "f.stored_name,f.duration_seconds,f.title,f.artist FROM radio_playlist_tracks t "
         "JOIN radio_audio_files f ON f.id=t.audio_file_id "
         "WHERE t.playlist_id=? ORDER BY t.position,t.id", (playlist_id,),
     ).fetchall()
@@ -482,6 +597,8 @@ def _available_tracks(database, playlist_id):
             result.append({
                 "entry_id": row["entry_id"], "position": row["position"],
                 "file_id": row["file_id"], "name": row["display_name"],
+                "title": row["title"] or Path(row["display_name"]).stem or "Untitled track",
+                "artist": row["artist"] or "",
                 "duration": max(.1, float(row["duration_seconds"])),
             })
     return result
@@ -611,6 +728,7 @@ def upload_audio():
             "filename": filename, "suffix": suffix, "payload": payload,
             "stored_name": f"{secrets.token_hex(20)}{suffix}",
             "duration": _audio_duration(payload, suffix),
+            "metadata": _audio_metadata(payload, suffix, filename),
         })
 
     destinations = []
@@ -631,10 +749,11 @@ def upload_audio():
             destination.write_bytes(item["payload"])
             destinations.append(destination)
             database.execute(
-                "INSERT INTO radio_audio_files(owner_id,display_name,stored_name,media_type,size_bytes,duration_seconds) "
-                "VALUES(?,?,?,?,?,?)",
+                "INSERT INTO radio_audio_files(owner_id,display_name,stored_name,media_type,size_bytes,duration_seconds,title,artist) "
+                "VALUES(?,?,?,?,?,?,?,?)",
                 (g.user["id"], item["filename"], item["stored_name"],
-                 AUDIO_FORMATS[item["suffix"]], len(item["payload"]), item["duration"]),
+                 AUDIO_FORMATS[item["suffix"]], len(item["payload"]), item["duration"],
+                 item["metadata"][0], item["metadata"][1]),
             )
         database.commit()
     except Exception:
@@ -843,8 +962,10 @@ def status():
                     "message": row["broadcast_message"],
                     "frequency": format_frequency(row["frequency_khz"]),
                     "broadcasting": row["user_id"] in active and active[row["user_id"]]["status"] == "playing",
-                    "now_playing": active.get(row["user_id"], {}).get("track_name")}
-                   for row in directory],
+                    "now_playing": (active.get(row["user_id"], {}).get("track_title") or
+                                    active.get(row["user_id"], {}).get("track_name"))}
+                   for row in directory
+                   if effective_access(g.user["id"], row["frequency_khz"]) != "DENIED"],
     )
 
 
@@ -897,6 +1018,16 @@ def stop_broadcast():
     return jsonify(stopped=True)
 
 
+def _tuned_broadcast(file_id, track_serial):
+    tuned = current_app.extensions["radio"].receiver_frequency(session["connection_id"])
+    if tuned is None or effective_access(g.user["id"], tuned) == "DENIED":
+        return None
+    return next((item for item in _store().all_public().values()
+                 if item and item["status"] == "playing" and
+                 item["frequency_khz"] == tuned and item["audio_file_id"] == file_id and
+                 item["track_serial"] == track_serial), None)
+
+
 @bp.post("/advance")
 @login_required
 def advance_broadcast():
@@ -904,18 +1035,33 @@ def advance_broadcast():
     validate_csrf()
     file_id = request.form.get("file_id", type=int)
     track_serial = request.form.get("track_serial", type=int)
-    tuned = current_app.extensions["radio"].receiver_frequency(session["connection_id"])
-    if tuned is None or effective_access(g.user["id"], tuned) == "DENIED":
-        return jsonify(error="Tune to the active broadcast first."), 403
-    sessions = _store().all_public()
-    match = next((item for item in sessions.values()
-                  if item and item["status"] == "playing" and
-                  item["frequency_khz"] == tuned and item["audio_file_id"] == file_id and
-                  item["track_serial"] == track_serial), None)
+    match = _tuned_broadcast(file_id, track_serial)
     if not match:
         return jsonify(advanced=False), 200
     advanced = _store().advance(match["user_id"], file_id, track_serial)
     return jsonify(advanced=advanced)
+
+
+@bp.post("/timing")
+@login_required
+def broadcast_timing():
+    """Use browser-decoded metadata to correct approximate container durations."""
+    validate_csrf()
+    file_id = request.form.get("file_id", type=int)
+    track_serial = request.form.get("track_serial", type=int)
+    duration = request.form.get("duration", type=float)
+    if duration is None or not .1 <= duration <= 24 * 60 * 60:
+        return jsonify(error="Invalid audio duration."), 400
+    match = _tuned_broadcast(file_id, track_serial)
+    if not match:
+        return jsonify(updated=False), 200
+    updated = _store().correct_duration(match["user_id"], file_id, track_serial, duration)
+    if updated:
+        get_db().execute(
+            "UPDATE radio_audio_files SET duration_seconds=? WHERE id=?", (duration, file_id),
+        )
+        get_db().commit()
+    return jsonify(updated=updated)
 
 
 @bp.get("/audio/<int:file_id>")

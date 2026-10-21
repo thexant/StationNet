@@ -52,6 +52,18 @@ def test_store_sequential_progression_and_single_track_repeat(monkeypatch):
     store.stop(8)
 
 
+def test_browser_duration_correction_advances_an_overdue_track(monkeypatch):
+    monkeypatch.setattr("stationnet.radio.transmission_authorized", lambda *_args: True)
+    store = HostedBroadcastStore(FakeRadio())
+    store.start(11, "HOST", 7540, 5, "TIMED", sample_tracks(), True, 9999)
+    item = store._sessions[11]
+    item["clock_started"] -= 10
+    assert store.correct_duration(11, 1, item["track_serial"], 5.0)
+    assert item["current_track"]["file_id"] == 2
+    assert item["track_offset"] < 5.1
+    store.stop(11)
+
+
 def test_shuffle_cycles_do_not_mutate_saved_order_or_repeat_boundary(monkeypatch):
     monkeypatch.setattr("stationnet.radio.transmission_authorized", lambda *_args: True)
     monkeypatch.setattr("stationnet.broadcast.random.shuffle", lambda values: values.reverse())
@@ -114,6 +126,17 @@ def prepare_playlist(app, client, username="alice"):
         data={"csrf_token": csrf(client, "/radio/manage"), "audio_file_id": audio_id},
     )
     return playlist_id, audio_id
+
+
+def tagged_mp3(title, artist):
+    def frame(name, value):
+        encoded = b"\x03" + value.encode("utf-8")
+        return name.encode("ascii") + len(encoded).to_bytes(4, "big") + b"\0\0" + encoded
+
+    tag = frame("TIT2", title) + frame("TPE1", artist)
+    size = bytes(((len(tag) >> 21) & 0x7f, (len(tag) >> 14) & 0x7f,
+                  (len(tag) >> 7) & 0x7f, len(tag) & 0x7f))
+    return b"ID3\x03\0\0" + size + tag + b"\xff\xfb\x90\x64" + b"\0" * 256
 
 
 def assign(sysop, user_id, frequency="7.50"):
@@ -275,6 +298,18 @@ def test_server_hosted_start_join_disconnect_pause_resume_and_release(app, initi
     assert charlie.get("/radio/receive?frequency=7.50&after=0").get_json()["active"]["hosted"]
     assert charlie.get(f"/radio/manage/audio/{audio_id}").status_code == 200
 
+    timing_active = bob.get("/radio/receive?frequency=7.50&after=0").get_json()["active"]
+    timing = bob.post(
+        "/radio/manage/timing",
+        data={"csrf_token": csrf(bob, "/radio/"), "file_id": audio_id,
+              "track_serial": timing_active["track_serial"], "duration": "599.5"},
+    )
+    assert timing.get_json()["updated"] is True
+    with app.app_context():
+        assert get_db().execute(
+            "SELECT duration_seconds FROM radio_audio_files WHERE id=?", (audio_id,),
+        ).fetchone()[0] == 599.5
+
     # A real media-ended report advances the one shared session. A stale report
     # from another listener cannot advance it a second time.
     before = bob.get("/radio/receive?frequency=7.50&after=0").get_json()["active"]
@@ -320,6 +355,113 @@ def test_server_hosted_start_join_disconnect_pause_resume_and_release(app, initi
     )
     assert stopped.status_code == 200
     assert 7500 not in app.extensions["radio"].active_frequencies()
+
+
+def test_receiver_now_playing_uses_embedded_metadata_and_clears_on_stop(app, initialized):
+    alice = register(app, "alice")
+    bob = register(app, "bob")
+    charlie = register(app, "charlie")
+    alice_id, _ = authorize_host(app, "alice")
+    assign(initialized, alice_id)
+    upload(alice, "fallback-name.mp3", tagged_mp3("Midnight Signal", "The Relays"))
+    alice.post(
+        "/radio/manage/playlists",
+        data={"csrf_token": csrf(alice, "/radio/manage"), "name": "Metadata Hour"},
+    )
+    with app.app_context():
+        database = get_db()
+        audio = database.execute(
+            "SELECT id,title,artist FROM radio_audio_files WHERE owner_id=?", (alice_id,),
+        ).fetchone()
+        playlist_id = database.execute(
+            "SELECT id FROM radio_playlists WHERE owner_id=?", (alice_id,),
+        ).fetchone()["id"]
+        assert (audio["title"], audio["artist"]) == ("Midnight Signal", "The Relays")
+    alice.post(
+        f"/radio/manage/playlists/{playlist_id}/tracks",
+        data={"csrf_token": csrf(alice, "/radio/manage"), "audio_file_id": audio["id"]},
+    )
+    alice.post(
+        "/radio/manage/start",
+        data={"csrf_token": csrf(alice, "/radio/"), "playlist_id": playlist_id},
+    )
+
+    # Tuning returns the authoritative current item immediately; polling does not
+    # have to wait for a transition before the display can be populated.
+    tuned = bob.post(
+        "/radio/tune", data={"csrf_token": csrf(bob, "/radio/"), "frequency": "7.50"},
+    ).get_json()
+    assert tuned["broadcast"] == {
+        "active": True, "artist": "The Relays", "kind": "automated",
+        "label": "AUTOMATED PLAYBACK", "title": "Midnight Signal",
+    }
+    assert tuned["active"]["track_title"] == "Midnight Signal"
+    assert tuned["active"]["track_artist"] == "The Relays"
+
+    with app.app_context():
+        database = get_db()
+        charlie_id = database.execute(
+            "SELECT id FROM users WHERE username='charlie'"
+        ).fetchone()["id"]
+        denied_group = database.execute(
+            "INSERT INTO radio_permission_groups(name) VALUES('NOW PLAYING DENY')"
+        ).lastrowid
+        database.execute(
+            "INSERT INTO radio_group_memberships(user_id,group_id) VALUES(?,?)",
+            (charlie_id, denied_group),
+        )
+        database.execute(
+            "INSERT INTO radio_permission_rules(group_id,scope_type,start_khz,end_khz,permission) "
+            "VALUES(?,'frequency',7500,7500,'DENIED')", (denied_group,),
+        )
+        database.commit()
+    denied = charlie.post(
+        "/radio/tune", data={"csrf_token": csrf(charlie, "/radio/"), "frequency": "7.50"},
+    ).get_json()
+    assert denied["access"] == "DENIED"
+    assert denied["active"] is denied["broadcast"] is denied["identity"] is None
+    assert all(item["frequency"] != "7.50"
+               for item in charlie.get("/radio/manage/status").get_json()["directory"])
+
+    alice.post("/radio/manage/stop", data={"csrf_token": csrf(alice, "/radio/")})
+    stopped = bob.get("/radio/receive?frequency=7.50&after=0").get_json()
+    assert stopped["active"] is None
+    assert stopped["broadcast"] == {
+        "active": False, "artist": "", "kind": "inactive",
+        "label": "OFF AIR", "title": "",
+    }
+
+    restarted = create_app({
+        "TESTING": True, "DATA_DIR": app.config["DATA_DIR"], "SECRET_KEY": "restart-secret",
+    })
+    restarted_bob = restarted.test_client()
+    login(restarted_bob, "bob")
+    after_restart = restarted_bob.post(
+        "/radio/tune",
+        data={"csrf_token": csrf(restarted_bob, "/radio/"), "frequency": "7.50"},
+    ).get_json()
+    assert after_restart["active"] is None
+    assert after_restart["broadcast"]["kind"] == "inactive"
+    assert after_restart["broadcast"]["title"] == ""
+
+
+def test_live_voice_is_identified_without_track_metadata(app, initialized):
+    alice = register(app, "voicealice")
+    for client in (alice, initialized):
+        client.post(
+            "/radio/tune",
+            data={"csrf_token": csrf(client, "/radio/"), "frequency": "145.20"},
+        )
+    started = alice.post(
+        "/radio/transmit/start",
+        data={"csrf_token": csrf(alice, "/radio/"), "frequency": "145.20", "mode": "VOICE"},
+    )
+    assert started.status_code == 201
+    received = initialized.get("/radio/receive?frequency=145.20&after=0").get_json()
+    assert received["broadcast"] == {
+        "active": True, "artist": "", "kind": "live_voice",
+        "label": "LIVE VOICE TRANSMISSION", "title": "",
+    }
 
 
 def test_duration_and_permission_revocation_terminate_session(app, initialized):
