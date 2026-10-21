@@ -1,8 +1,10 @@
 import base64
 import time
+import pytest
 
 from stationnet.db import get_db
-from stationnet.radio import effective_access, parse_frequency
+from stationnet.radio import (can_host_broadcast, effective_access, parse_frequency,
+                              transmission_authorized)
 
 from .conftest import csrf
 from .test_community import register
@@ -447,3 +449,167 @@ def test_builtin_operators_group_rules_save_and_change_effective_access(app, ini
             "WHERE group_id=? AND scope_type='band' AND band_id=?",
             (operator_group, general_band),
         ).fetchone()["permission"] == "FULL"
+
+
+def test_broadcast_hosting_requires_capability_full_access_and_no_denial(app, initialized):
+    alice = register(app, "alice")
+    with app.app_context():
+        database = get_db()
+        user_id = database.execute(
+            "SELECT id FROM users WHERE username='alice'"
+        ).fetchone()["id"]
+        broadcast_band = database.execute(
+            "SELECT id FROM radio_bands WHERE name='BROADCASTS'"
+        ).fetchone()["id"]
+
+    created = initialized.post(
+        "/sysop/radio/groups",
+        data={"csrf_token": csrf(initialized, "/sysop/settings"),
+              "name": "Broadcast Hosts", "host_broadcasts": "on"},
+    )
+    assert created.status_code == 302
+    with app.app_context():
+        database = get_db()
+        host_group = database.execute(
+            "SELECT id,host_broadcasts FROM radio_permission_groups WHERE name='BROADCAST HOSTS'"
+        ).fetchone()
+        full_group = database.execute(
+            "INSERT INTO radio_permission_groups(name) VALUES('BROADCAST FULL')"
+        ).lastrowid
+        denied_group = database.execute(
+            "INSERT INTO radio_permission_groups(name) VALUES('BROADCAST DENIED')"
+        ).lastrowid
+        database.execute(
+            "INSERT INTO radio_permission_rules(group_id,scope_type,band_id,permission) "
+            "VALUES(?,'band',?,'FULL')", (full_group, broadcast_band),
+        )
+        database.execute(
+            "INSERT INTO radio_permission_rules(group_id,scope_type,band_id,permission) "
+            "VALUES(?,'band',?,'DENIED')", (denied_group, broadcast_band),
+        )
+        database.commit()
+        assert host_group["host_broadcasts"] == 1
+
+    initialized.post(
+        f"/sysop/radio/users/{user_id}",
+        data={"csrf_token": csrf(initialized, "/sysop/settings"),
+              "group_id": [str(host_group["id"])]},
+    )
+    with app.app_context():
+        assert effective_access(user_id, 7000) == "LISTEN"
+        assert can_host_broadcast(user_id, 7000) is False
+
+    initialized.post(
+        f"/sysop/radio/users/{user_id}",
+        data={"csrf_token": csrf(initialized, "/sysop/settings"),
+              "group_id": [str(host_group["id"]), str(full_group)]},
+    )
+    with app.app_context():
+        assert effective_access(user_id, 7000) == "FULL"
+        assert can_host_broadcast(user_id, 7000) is True
+        assert transmission_authorized(user_id, 7000, "HOSTED_BROADCAST") is True
+
+    with alice.session_transaction() as user_session:
+        connection_id = user_session["connection_id"]
+    store = app.extensions["radio"]
+    store.tune(connection_id, user_id, 7000)
+    hosted_id, _opened = store.start(
+        connection_id, user_id, 7000, "ALICE", "HOSTED_BROADCAST"
+    )
+    initialized.post(
+        f"/sysop/radio/groups/{host_group['id']}/capabilities",
+        data={"csrf_token": csrf(initialized, "/sysop/settings")},
+    )
+    assert hosted_id not in store._transmissions
+    initialized.post(
+        f"/sysop/radio/groups/{host_group['id']}/capabilities",
+        data={"csrf_token": csrf(initialized, "/sysop/settings"), "host_broadcasts": "on"},
+    )
+
+    initialized.post(
+        f"/sysop/radio/users/{user_id}",
+        data={"csrf_token": csrf(initialized, "/sysop/settings"),
+              "group_id": [str(host_group["id"]), str(full_group), str(denied_group)]},
+    )
+    with app.app_context():
+        assert effective_access(user_id, 7000) == "DENIED"
+        assert can_host_broadcast(user_id, 7000) is False
+        assert transmission_authorized(user_id, 7000, "HOSTED_BROADCAST") is False
+
+    with app.app_context():
+        assert get_db().execute(
+            "SELECT host_broadcasts FROM radio_permission_groups WHERE id=?",
+            (host_group["id"],),
+        ).fetchone()["host_broadcasts"] == 1
+
+
+def test_band_transmission_capabilities_are_configurable_without_locking_tuning(app, initialized):
+    state = initialized.get("/radio/state").get_json()
+    by_name = {band["name"]: band for band in state["bands"]}
+    assert by_name["GENERAL COMMUNICATION"]["supports_live_voice"] == 1
+    assert by_name["GENERAL COMMUNICATION"]["supports_hosted_broadcasts"] == 0
+    assert by_name["BROADCASTS"]["supports_live_voice"] == 0
+    assert by_name["BROADCASTS"]["supports_hosted_broadcasts"] == 1
+
+    with app.app_context():
+        bands = [dict(row) for row in get_db().execute(
+            "SELECT * FROM radio_bands ORDER BY id"
+        )]
+    form = {"csrf_token": csrf(initialized, "/sysop/settings"), "settings_section": "radio"}
+    for band in bands:
+        prefix = f"band_{band['id']}"
+        form[f"{prefix}_name"] = band["name"]
+        form[f"{prefix}_start"] = f"{band['start_khz'] / 1000:.2f}"
+        form[f"{prefix}_end"] = f"{band['end_khz'] / 1000:.2f}"
+    general = next(band for band in bands if band["name"] == "GENERAL COMMUNICATION")
+    form[f"band_{general['id']}_hosted_broadcasts"] = "on"
+    response = initialized.post("/sysop/settings", data=form)
+    assert response.status_code == 302
+
+    with app.app_context():
+        sysop_id = get_db().execute("SELECT id FROM users WHERE is_admin=1").fetchone()["id"]
+        assert transmission_authorized(sysop_id, 145000, "LIVE_VOICE") is False
+        assert transmission_authorized(sysop_id, 145000, "HOSTED_BROADCAST") is True
+    # Capability flags govern future transmit modes, not continuous receiver tuning.
+    assert tune(initialized, "145.00").status_code == 200
+    assert tune(initialized, "144.50").status_code == 200
+
+
+def test_occupancy_reports_type_owner_frequency_and_lifecycle_for_all_types(app):
+    store = app.extensions["radio"]
+    store.tune("voice-owner", 10, 145000)
+    store.tune("broadcast-owner", 20, 145000)
+    store.tune("listener", 30, 145000)
+    transmission_id, opened = store.start(
+        "voice-owner", 10, 145000, "VOICE1", "LIVE_VOICE"
+    )
+    assert opened["transmission_type"] == "LIVE_VOICE"
+    assert opened["owner"] == {"user_id": 10, "callsign": "VOICE1"}
+    assert opened["frequency_khz"] == 145000
+    assert opened["state"] == "active"
+    assert opened["started_at"]
+
+    with pytest.raises(RuntimeError, match="Frequency busy"):
+        store.start("broadcast-owner", 20, 145000, "HOST20", "HOSTED_BROADCAST")
+    with pytest.raises(LookupError):
+        store.signal("broadcast-owner", transmission_id, "heartbeat")
+    with pytest.raises(LookupError):
+        store.end("broadcast-owner", transmission_id)
+
+    _events, _cursor, active = store.receive("listener", 30, 145000, 0)
+    assert active == {
+        "id": transmission_id,
+        "mode": "LIVE_VOICE",
+        "transmission_type": "LIVE_VOICE",
+        "owner": {"user_id": 10, "callsign": "VOICE1"},
+        "callsign": "VOICE1",
+        "frequency_khz": 145000,
+        "frequency": "145.00",
+        "started_at": active["started_at"],
+        "state": "active",
+    }
+    closed = store.end("voice-owner", transmission_id)
+    assert closed["kind"] == "end"
+    assert closed["state"] == "ended"
+    assert closed["ended_at"]
+    assert store.active_frequencies() == []

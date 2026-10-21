@@ -7,6 +7,7 @@ import base64
 import binascii
 import re
 from collections import deque
+from datetime import datetime, timezone
 from threading import RLock
 from time import monotonic
 
@@ -77,6 +78,32 @@ def effective_access(user_id, khz):
     return "DENIED"
 
 
+def can_host_broadcast(user_id, khz):
+    """Return whether group capabilities and frequency access permit hosting."""
+    if effective_access(user_id, khz) != "FULL":
+        return False
+    return get_db().execute(
+        "SELECT 1 FROM radio_permission_groups g "
+        "JOIN radio_group_memberships m ON m.group_id=g.id "
+        "WHERE m.user_id=? AND g.host_broadcasts=1 LIMIT 1", (user_id,),
+    ).fetchone() is not None
+
+
+def transmission_authorized(user_id, khz, transmission_type):
+    """Central server-side policy for current and planned transmission types."""
+    access = effective_access(user_id, khz)
+    if access != "FULL":
+        return False
+    band = find_band(khz)
+    kind = transmission_type.upper()
+    if kind == "LIVE_VOICE":
+        return bool(band and band["supports_live_voice"])
+    if kind == "HOSTED_BROADCAST":
+        return bool(band and band["supports_hosted_broadcasts"] and
+                    can_host_broadcast(user_id, khz))
+    return kind in {"CW", "SSTV"}
+
+
 class RadioStore:
     """Thread-safe receivers, frequency occupancy, and transient signal events."""
 
@@ -102,7 +129,12 @@ class RadioStore:
             "id": self._next_event_id,
             "transmission_id": transmission["id"],
             "frequency_khz": transmission["frequency"],
-            "mode": transmission["mode"], "callsign": transmission["callsign"],
+            "mode": transmission["mode"],
+            "transmission_type": transmission["transmission_type"],
+            "callsign": transmission["callsign"],
+            "owner": {"user_id": transmission["user_id"], "callsign": transmission["callsign"]},
+            "state": "ended" if kind == "end" else "active",
+            "started_at": transmission["started_at"],
             "kind": kind, "stamp": monotonic(),
             "owner_connection": transmission["connection_id"], **payload,
         }
@@ -118,7 +150,10 @@ class RadioStore:
             transmission["key_down"] = None
             transmission["last_key_up"] = monotonic()
             self._append_event(transmission, "key_up", duration_ms=duration)
-        event = self._append_event(transmission, "end", reason=reason)
+        event = self._append_event(
+            transmission, "end", reason=reason,
+            ended_at=datetime.now(timezone.utc).isoformat(),
+        )
         del self._transmissions[transmission["id"]]
         self._frequency_owners.pop(transmission["frequency"], None)
         return event
@@ -171,7 +206,9 @@ class RadioStore:
             transmission = {
                 "id": self._next_transmission_id, "connection_id": connection_id,
                 "user_id": user_id, "frequency": frequency, "callsign": callsign,
-                "mode": mode, "started": now, "last_seen": now,
+                "mode": mode, "transmission_type": mode,
+                "started": now, "started_at": datetime.now(timezone.utc).isoformat(),
+                "state": "active", "last_seen": now,
                 "key_down": None, "last_key_up": None, "next_row": 0, **metadata,
             }
             self._next_transmission_id += 1
@@ -249,7 +286,17 @@ class RadioStore:
     def _public_transmission(transmission):
         if not transmission:
             return None
-        return {"id": transmission["id"], "mode": transmission["mode"], "callsign": transmission["callsign"]}
+        return {
+            "id": transmission["id"],
+            "mode": transmission["mode"],
+            "transmission_type": transmission["transmission_type"],
+            "owner": {"user_id": transmission["user_id"], "callsign": transmission["callsign"]},
+            "callsign": transmission["callsign"],
+            "frequency_khz": transmission["frequency"],
+            "frequency": format_frequency(transmission["frequency"]),
+            "started_at": transmission["started_at"],
+            "state": transmission["state"],
+        }
 
     def scan(self, connection_id, user_id, current, direction, allocations):
         now = monotonic()
@@ -282,13 +329,14 @@ class RadioStore:
                 return None
             return dict(item)
 
-    def reconcile_permissions(self, access_lookup, user_id=None):
+    def reconcile_permissions(self, access_lookup, authorization_lookup, user_id=None):
         """Immediately stop live activity invalidated by an administration change."""
         with self._lock:
             self._prune(monotonic())
             for transmission in list(self._transmissions.values()):
-                if (user_id is None or transmission["user_id"] == user_id) and \
-                        access_lookup(transmission["user_id"], transmission["frequency"]) != "FULL":
+                if (user_id is None or transmission["user_id"] == user_id) and not \
+                        authorization_lookup(transmission["user_id"], transmission["frequency"],
+                                             transmission["transmission_type"]):
                     self._finish_locked(transmission, "permission_revoked")
             for connection_id, receiver in list(self._receivers.items()):
                 if (user_id is None or receiver["user_id"] == user_id) and \
@@ -328,7 +376,7 @@ def _default_frequency(user_id=None):
 
 
 def reconcile_radio_permissions(user_id=None):
-    _store().reconcile_permissions(effective_access, user_id)
+    _store().reconcile_permissions(effective_access, transmission_authorized, user_id)
 
 
 @bp.get("/")
@@ -411,6 +459,8 @@ def transmit_start():
     mode = request.form.get("mode", "").upper()
     if mode not in {"CW", "SSTV"}:
         return jsonify(error="Select CW or SSTV mode."), 400
+    if not transmission_authorized(g.user["id"], frequency, mode):
+        return jsonify(error="Transmission is not permitted on this frequency."), 403
     metadata = {}
     if mode == "CW":
         tone_hz = request.form.get("tone_hz", type=int)
@@ -439,7 +489,8 @@ def transmit_signal():
     transmission_id = request.form.get("transmission_id", type=int)
     kind = request.form.get("kind", "")
     transmission = _store().transmission(session["connection_id"], transmission_id)
-    if transmission and effective_access(g.user["id"], transmission["frequency"]) != "FULL":
+    if transmission and not transmission_authorized(
+            g.user["id"], transmission["frequency"], transmission["transmission_type"]):
         _store().disconnect(session["connection_id"])
         return jsonify(error="Radio permission was revoked."), 403
     try:

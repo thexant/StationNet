@@ -3,7 +3,8 @@ import sqlite3
 from flask import Blueprint, flash, g, redirect, render_template, request, url_for
 from .auth import admin_required
 from .db import get_db
-from .radio import effective_access, format_frequency, parse_frequency, reconcile_radio_permissions
+from .radio import (can_host_broadcast, effective_access, format_frequency,
+                    parse_frequency, reconcile_radio_permissions)
 from .security import validate_csrf
 bp = Blueprint("station", __name__)
 
@@ -97,10 +98,15 @@ def settings():
     )} for user in users}
     effective = {user["id"]: {band["id"]: effective_access(user["id"], band["start_khz"])
                               for band in bands} for user in users}
+    broadcast_hosts = {user["id"]: any(
+        can_host_broadcast(user["id"], band["start_khz"])
+        for band in bands if band["supports_hosted_broadcasts"]
+    ) for user in users}
     rules_by_group = {group["id"]: [rule for rule in rules if rule["group_id"] == group["id"]]
                       for group in groups}
     return render_template("settings.html", bands=bands, groups=groups, users=users,
                            memberships=memberships, effective=effective,
+                           broadcast_hosts=broadcast_hosts,
                            rules_by_group=rules_by_group, format_frequency=format_frequency)
 
 
@@ -120,7 +126,10 @@ def _save_radio_bands():
             error = "Each radio band requires a valid start and end frequency."
         if error:
             break
-        proposed.append((start, end, name, row["tx_permission"], band_id))
+        supports_voice = request.form.get(f"band_{band_id}_live_voice") == "on"
+        supports_broadcasts = request.form.get(f"band_{band_id}_hosted_broadcasts") == "on"
+        proposed.append((start, end, name, row["tx_permission"], supports_voice,
+                         supports_broadcasts, band_id))
     ordered = sorted(proposed)
     if not error and any(left[1] >= right[0] for left, right in zip(ordered, ordered[1:])):
         error = "Radio band allocations cannot overlap."
@@ -128,7 +137,8 @@ def _save_radio_bands():
         flash(error, "error")
     else:
         database.executemany(
-            "UPDATE radio_bands SET start_khz=?,end_khz=?,name=?,tx_permission=? WHERE id=?",
+            "UPDATE radio_bands SET start_khz=?,end_khz=?,name=?,tx_permission=?,"
+            "supports_live_voice=?,supports_hosted_broadcasts=? WHERE id=?",
             proposed,
         )
         database.commit()
@@ -151,7 +161,10 @@ def create_radio_group():
         flash("Group names must be 2–40 characters and cannot use DEFAULT.", "error")
     else:
         try:
-            get_db().execute("INSERT INTO radio_permission_groups(name) VALUES(?)", (name,))
+            get_db().execute(
+                "INSERT INTO radio_permission_groups(name,host_broadcasts) VALUES(?,?)",
+                (name, request.form.get("host_broadcasts") == "on"),
+            )
             get_db().commit()
             flash(f"Radio group {name} created.", "success")
         except sqlite3.IntegrityError:
@@ -181,6 +194,29 @@ def rename_radio_group(group_id):
             except sqlite3.IntegrityError:
                 flash("A radio group with that name already exists.", "error")
     return _radio_permissions_redirect()
+
+
+@bp.post("/sysop/radio/groups/<int:group_id>/capabilities")
+@admin_required
+def save_radio_group_capabilities(group_id):
+    validate_csrf()
+    database = get_db()
+    group = database.execute(
+        "SELECT name FROM radio_permission_groups WHERE id=?", (group_id,)
+    ).fetchone()
+    if group is None:
+        flash("Radio group not found.", "error")
+    else:
+        enabled = request.form.get("host_broadcasts") == "on"
+        database.execute(
+            "UPDATE radio_permission_groups SET host_broadcasts=? WHERE id=?",
+            (enabled, group_id),
+        )
+        database.commit()
+        reconcile_radio_permissions()
+        state = "enabled" if enabled else "disabled"
+        flash(f"{group['name']}: HOST BROADCASTS {state}.", "success")
+    return _radio_permissions_redirect(group_id)
 
 
 @bp.post("/sysop/radio/groups/<int:group_id>/delete")
