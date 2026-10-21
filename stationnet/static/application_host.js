@@ -9,7 +9,7 @@
   if (!frame || !surface || !status) return;
 
   const PROTOCOL = "stationnet-app-v1";
-  const LIMITS = { components: 100, text: 8000, items: 100, columns: 12, rows: 100 };
+  const LIMITS = { components: 100, text: 8000, items: 100, columns: 80, rows: 100, capabilityText: 200000 };
   const keyboardActions = new Set();
   let eventWindow = [];
   let totalEvents = 0;
@@ -91,8 +91,8 @@
         node = document.createElement("label"); node.textContent = text(component.label, 200);
         const input = document.createElement("textarea"); input.dataset.appInput = "";
         input.name = text(component.name, 80).replace(/[^a-zA-Z0-9_-]/g, "_");
-        input.value = text(component.value, 8000); input.placeholder = text(component.placeholder, 200);
-        input.maxLength = number(component.maxLength, 8000, 1, 8000); node.append(input); break;
+        input.value = text(component.value, LIMITS.capabilityText); input.placeholder = text(component.placeholder, 200);
+        input.maxLength = number(component.maxLength, 8000, 1, LIMITS.capabilityText); node.append(input); break;
       }
       case "select": {
         node = document.createElement("label"); node.textContent = text(component.label, 200);
@@ -133,6 +133,37 @@
       case "pre": case "grid":
         node = document.createElement("pre"); node.className = component.type === "grid" ? "app-grid" : "app-pre";
         node.textContent = component.type === "grid" ? (Array.isArray(component.rows) ? component.rows : []).slice(0, LIMITS.rows).map((row) => text(row, 300)).join("\n") : text(component.text); break;
+      case "cell-grid": {
+        node = document.createElement("div"); node.className = "app-cell-grid";
+        node.setAttribute("role", "grid"); node.setAttribute("aria-label", text(component.label, 200));
+        const rows = (Array.isArray(component.rows) ? component.rows : []).slice(0, 50);
+        const width = Math.min(LIMITS.columns, rows.reduce((largest, row) => Math.max(largest, Array.isArray(row) ? row.length : 0), 0));
+        node.style.setProperty("--app-grid-columns", String(Math.max(1, width)));
+        let drawing = false;
+        const cursor = component.cursor && typeof component.cursor === "object" ? component.cursor : {};
+        const activate = (cell, drag) => interact(text(component.action, 80), {
+          value: `${cell.dataset.x},${cell.dataset.y}`,
+          x: Number(cell.dataset.x), y: Number(cell.dataset.y), drag
+        });
+        rows.forEach((row, y) => (Array.isArray(row) ? row : []).slice(0, width).forEach((cell, x) => {
+          const value = cell && typeof cell === "object" ? cell : {};
+          const button = document.createElement("button"); button.type = "button"; button.className = "app-cell";
+          const character = Array.from(String(value.char == null ? " " : value.char))[0] || " ";
+          const foreground = Math.trunc(number(value.fg, 7, 0, 15)); const background = Math.trunc(number(value.bg, 0, 0, 15));
+          button.classList.add(`app-fg-${foreground}`, `app-bg-${background}`);
+          if (Number(cursor.x) === x && Number(cursor.y) === y) button.classList.add("app-cell-cursor");
+          button.dataset.x = String(x); button.dataset.y = String(y); button.textContent = character;
+          button.setAttribute("role", "gridcell"); button.setAttribute("aria-label", `Column ${x + 1}, row ${y + 1}, ${character === " " ? "blank" : character}`);
+          button.addEventListener("pointerdown", (event) => { if (event.button !== 0) return; event.preventDefault(); drawing = true; button.focus(); activate(button, false); });
+          button.addEventListener("pointerenter", () => { if (drawing) activate(button, true); });
+          button.addEventListener("click", (event) => { if (event.detail === 0) activate(button, false); });
+          node.append(button);
+        }));
+        node.addEventListener("pointerup", () => { drawing = false; });
+        node.addEventListener("pointercancel", () => { drawing = false; });
+        node.addEventListener("pointerleave", () => { drawing = false; });
+        break;
+      }
       default: return null;
     }
     if (component.id != null) node.dataset.appComponent = text(component.id, 80).replace(/[^a-zA-Z0-9_.:-]/g, "_");
@@ -142,7 +173,7 @@
   function render(message) {
     const components = Array.isArray(message.components) ? message.components.slice(0, LIMITS.components) : [];
     try {
-      if (JSON.stringify(components).length > 100000) throw new Error("content limit exceeded");
+      if (JSON.stringify(components).length > 250000) throw new Error("content limit exceeded");
     } catch (_) {
       status.textContent = "PROGRAM STATUS / REQUEST REJECTED";
       return;
@@ -192,6 +223,39 @@
     }
   }
 
+  function capabilityResult(request, ok, value, error) {
+    if (frame.contentWindow) frame.contentWindow.postMessage({
+      protocol: PROTOCOL, type: "capability-result", request: text(request, 80), ok,
+      value, error: error ? text(error.message || error, 500) : undefined
+    }, "*");
+  }
+
+  async function capability(message) {
+    const request = message.request;
+    const value = text(message.text, LIMITS.capabilityText);
+    try {
+      if (message.operation === "copy-text") {
+        if (navigator.clipboard && navigator.clipboard.writeText) await navigator.clipboard.writeText(value);
+        else {
+          const input = document.createElement("textarea"); input.value = value; input.style.position = "fixed"; input.style.opacity = "0";
+          document.body.append(input); input.select();
+          if (!document.execCommand("copy")) throw new Error("Copy is unavailable in this browser");
+          input.remove();
+        }
+        capabilityResult(request, true, true); return;
+      }
+      if (message.operation === "download-text") {
+        const requested = text(message.filename, 120).replace(/[^a-zA-Z0-9._-]/g, "-");
+        const filename = requested && !requested.startsWith(".") ? requested : "stationnet-export.txt";
+        const url = URL.createObjectURL(new Blob([value], { type: "text/plain;charset=utf-8" }));
+        const link = document.createElement("a"); link.href = url; link.download = filename; link.hidden = true;
+        document.body.append(link); link.click(); link.remove(); setTimeout(() => URL.revokeObjectURL(url), 1000);
+        capabilityResult(request, true, true); return;
+      }
+      throw new Error("Unsupported capability request");
+    } catch (error) { capabilityResult(request, false, false, error); }
+  }
+
   addEventListener("message", (event) => {
     if (event.source !== frame.contentWindow || !event.data || event.data.protocol !== PROTOCOL || !allowedEvent()) return;
     const message = event.data;
@@ -199,6 +263,7 @@
     else if (message.type === "ready") status.textContent = "PROGRAM STATUS / RUNNING";
     else if (message.type === "render") render(message);
     else if (message.type === "storage") storage(message);
+    else if (message.type === "capability") capability(message);
     else if (message.type === "keyboard") {
       const id = text(message.action, 80); message.enabled ? keyboardActions.add(id) : keyboardActions.delete(id);
       if (message.enabled) surface.tabIndex = 0;
@@ -210,7 +275,12 @@
 
   surface.addEventListener("keydown", (event) => {
     if (["INPUT", "TEXTAREA", "SELECT"].includes(event.target.tagName)) return;
-    keyboardActions.forEach((action) => interact(action, { key: text(event.key, 40), code: text(event.code, 40) }));
+    if (event.target.tagName === "BUTTON" && ["Enter", " "].includes(event.key)) return;
+    if (["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown", " ", "Backspace", "Delete"].includes(event.key)) event.preventDefault();
+    keyboardActions.forEach((action) => interact(action, {
+      key: text(event.key, 40), code: text(event.code, 40),
+      ctrlKey: event.ctrlKey, altKey: event.altKey, shiftKey: event.shiftKey, metaKey: event.metaKey
+    }));
   });
 
   function terminate() {

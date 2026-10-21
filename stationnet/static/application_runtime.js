@@ -7,6 +7,7 @@
   const actions = new Map();
   const cleanups = [];
   const storageRequests = new Map();
+  const capabilityRequests = new Map();
   let nextAction = 1;
   let nextRequest = 1;
   let messagesSent = 0;
@@ -50,6 +51,14 @@
         storageRequests.delete(request);
         reject(new Error("Storage values must be JSON-compatible"));
       }
+    });
+  }
+
+  function capability(operation, payload) {
+    const request = `capability-${nextRequest++}`;
+    return new Promise((resolve, reject) => {
+      capabilityRequests.set(request, { resolve, reject });
+      send("capability", { request, operation, ...payload });
     });
   }
 
@@ -120,6 +129,13 @@
     },
     preformatted(content, settings) { return identified({ type: "pre", text: String(content) }, settings); },
     grid(rows, settings) { return identified({ type: "grid", rows: (Array.isArray(rows) ? rows : []).map(String) }, settings); },
+    cellGrid(rows, settings) {
+      const opts = options(settings);
+      return identified({
+        type: "cell-grid", action: action(opts.onCell), cursor: opts.cursor,
+        label: String(opts.label || "Character art canvas"), rows: Array.isArray(rows) ? rows : []
+      }, opts);
+    },
     render(...components) {
       send("render", { mode: "replace", components: components.length === 1 && Array.isArray(components[0]) ? components[0] : components });
     },
@@ -144,6 +160,12 @@
       delete(key, settings) { return storage("delete", String(key), undefined, settings); },
       keys(settings) { return storage("keys", undefined, undefined, settings); }
     }),
+    clipboard: Object.freeze({
+      writeText(value) { return capability("copy-text", { text: String(value) }); }
+    }),
+    download: Object.freeze({
+      text(filename, value) { return capability("download-text", { filename: String(filename), text: String(value) }); }
+    }),
     start(handler) {
       if (typeof handler !== "function") throw new TypeError("StationNet.start expects a function");
       Promise.resolve().then(() => handler(api)).catch(fail);
@@ -161,6 +183,13 @@
       message.ok ? pending.resolve(message.value) : pending.reject(new Error(message.error || "Storage request failed"));
       return;
     }
+    if (message.type === "capability-result") {
+      const pending = capabilityRequests.get(message.request);
+      if (!pending) return;
+      capabilityRequests.delete(message.request);
+      message.ok ? pending.resolve(message.value) : pending.reject(new Error(message.error || "Capability request failed"));
+      return;
+    }
     if (message.type !== "interaction") return;
     const handler = actions.get(message.action);
     if (!handler) return;
@@ -168,8 +197,10 @@
       await handler(Object.freeze({
         value: message.value,
         values: Object.freeze(message.values || {}),
-        key: message.key,
-        code: message.code
+        key: message.key, code: message.code,
+        ctrlKey: Boolean(message.ctrlKey), altKey: Boolean(message.altKey),
+        shiftKey: Boolean(message.shiftKey), metaKey: Boolean(message.metaKey),
+        x: message.x, y: message.y, drag: Boolean(message.drag)
       }));
     } catch (error) { fail(error); }
   }
@@ -179,6 +210,8 @@
     cleanups.splice(0).forEach((handler) => { try { handler(); } catch (_) {} });
     storageRequests.forEach(({ reject }) => reject(new Error("Application terminated")));
     storageRequests.clear();
+    capabilityRequests.forEach(({ reject }) => reject(new Error("Application terminated")));
+    capabilityRequests.clear();
     actions.clear();
     send("terminated");
     stopped = true;

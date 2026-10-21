@@ -246,6 +246,18 @@ button:hover, .button:hover { color: #000; background: var(--green); }
 .app-list { padding-left: 1.5rem; color: var(--white); font-size: .76rem; line-height: 1.7; }
 .app-pre, .app-grid { padding: .75rem; overflow: auto; color: var(--green-bright); border: 1px dotted var(--green-dim); background: #010401; font: inherit; font-size: .75rem; line-height: 1.35; white-space: pre; }
 .app-grid { width: fit-content; letter-spacing: .04em; }
+.app-cell-grid { display: grid; grid-template-columns: repeat(var(--app-grid-columns),1.35rem); width: fit-content; max-width: 100%; max-height: 34rem; overflow: auto; padding: .55rem; border: 1px dotted var(--green-dim); background: #000; touch-action: none; }
+.app-cell { display: grid; place-items: center; width: 1.35rem; min-width: 1.35rem; height: 1.55rem; min-height: 1.55rem; margin: 0; padding: 0; border: 0; border-radius: 0; font: 400 .82rem/1 var(--mono); text-transform: none; box-shadow: none; }
+.app-cell:hover { outline: 1px solid var(--cyan); outline-offset: -1px; filter: brightness(1.25); }
+.app-cell:focus, .app-cell-cursor { z-index: 1; outline: 2px solid var(--cyan); outline-offset: -2px; }
+.app-fg-0 { color: #000; } .app-fg-1 { color: #aa0000; } .app-fg-2 { color: #00aa00; } .app-fg-3 { color: #aa5500; }
+.app-fg-4 { color: #0000aa; } .app-fg-5 { color: #aa00aa; } .app-fg-6 { color: #00aaaa; } .app-fg-7 { color: #aaaaaa; }
+.app-fg-8 { color: #555555; } .app-fg-9 { color: #ff5555; } .app-fg-10 { color: #55ff55; } .app-fg-11 { color: #ffff55; }
+.app-fg-12 { color: #5555ff; } .app-fg-13 { color: #ff55ff; } .app-fg-14 { color: #55ffff; } .app-fg-15 { color: #ffffff; }
+.app-bg-0 { background: #000; } .app-bg-1 { background: #aa0000; } .app-bg-2 { background: #00aa00; } .app-bg-3 { background: #aa5500; }
+.app-bg-4 { background: #0000aa; } .app-bg-5 { background: #aa00aa; } .app-bg-6 { background: #00aaaa; } .app-bg-7 { background: #aaaaaa; }
+.app-bg-8 { background: #555555; } .app-bg-9 { background: #ff5555; } .app-bg-10 { background: #55ff55; } .app-bg-11 { background: #ffff55; }
+.app-bg-12 { background: #5555ff; } .app-bg-13 { background: #ff55ff; } .app-bg-14 { background: #55ffff; } .app-bg-15 { background: #ffffff; }
 .app-table-wrap { overflow-x: auto; }
 .app-table-wrap table { width: 100%; border-collapse: collapse; color: var(--white); font-size: .7rem; }
 .app-table-wrap th, .app-table-wrap td { padding: .5rem; border: 1px dotted var(--green-dim); text-align: left; }

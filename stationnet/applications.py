@@ -61,6 +61,7 @@ class Application:
 
 
 _catalog: dict[str, Application] = {}
+_bundled_cache: dict[str, tuple[tuple[int, int], Application]] = {}
 
 
 def _package_root() -> Path:
@@ -102,9 +103,42 @@ def register(application: Application) -> None:
     _catalog[application.slug] = application
 
 
+def _discover_bundled() -> tuple[Application, ...]:
+    """Discover bundled packages from disk using the public package layout."""
+    discovered: list[Application] = []
+    seen: set[str] = set()
+    root = _package_root()
+    if not root.is_dir():
+        return ()
+    for folder in sorted((item for item in root.iterdir() if item.is_dir()), key=lambda item: item.name):
+        manifest = folder / "manifest.json"
+        if not manifest.is_file():
+            continue
+        try:
+            signature = (manifest.stat().st_mtime_ns, manifest.stat().st_size)
+            cached = _bundled_cache.get(folder.name)
+            application = cached[1] if cached and cached[0] == signature else _load_package(folder.name)
+            if application.slug in seen or application.slug in _catalog:
+                raise ValueError(f"Duplicate application identifier: {application.slug}")
+            if _entrypoint(application) is None:
+                raise ValueError(f"Application entrypoint is missing: {manifest}")
+        except (OSError, ValueError, json.JSONDecodeError) as error:
+            if has_app_context():
+                current_app.logger.warning("Ignoring invalid bundled application %s: %s", folder, error)
+            continue
+        _bundled_cache[folder.name] = (signature, application)
+        discovered.append(application)
+        seen.add(application.slug)
+    for folder in tuple(_bundled_cache):
+        if not (root / folder / "manifest.json").is_file():
+            _bundled_cache.pop(folder, None)
+    return tuple(discovered)
+
+
 def catalog() -> tuple[Application, ...]:
     """Return bundled and installed applications in stable display order."""
-    bundled = tuple(_catalog.values())
+    bundled = (*_catalog.values(), *_discover_bundled())
+    bundled_slugs = {item.slug for item in bundled}
     if not has_app_context():
         return bundled
     database = get_db()
@@ -117,7 +151,7 @@ def catalog() -> tuple[Application, ...]:
         "SELECT slug,name,description,author,version,category,entrypoint "
         "FROM installed_applications ORDER BY installed_at,slug"
     ):
-        if row["slug"] in _catalog:
+        if row["slug"] in bundled_slugs:
             continue
         applications.append(Application(
             slug=row["slug"], name=row["name"], description=row["description"],
@@ -133,9 +167,11 @@ def find(slug: str) -> Application | None:
 
 
 def _load_package(folder: str) -> Application:
-    """Load one explicitly bundled package from its public manifest."""
+    """Load one bundled package from its public manifest."""
     manifest_path = _package_root() / folder / "manifest.json"
     data = json.loads(manifest_path.read_text(encoding="utf-8"))
+    if type(data.get("package_format")) is not int or data["package_format"] != PACKAGE_FORMAT:
+        raise ValueError(f"Unsupported package format: {manifest_path}")
     required = ("slug", "name", "description", "author", "version", "category", "entrypoint")
     if any(not isinstance(data.get(key), str) for key in required):
         raise ValueError(f"Invalid application manifest: {manifest_path}")
@@ -154,7 +190,6 @@ for _application in (
         description="A future word game built for quick rounds and high scores.",
         author="StationNet Core", version="0.0.1", category=GAMES,
     ),
-    _load_package("number_guess"),
     Application(
         slug="event-board", name="Event Board [Placeholder]",
         description="A future utility for organizing community events and sign-ups.",
@@ -261,7 +296,7 @@ def validate_package(package_bytes: bytes) -> tuple[Application, dict[str, bytes
 def install_package(package_bytes: bytes) -> Application:
     """Atomically install and register one validated third-party package."""
     application, files = validate_package(package_bytes)
-    if application.slug in _catalog:
+    if application.slug in _catalog or any(item.slug == application.slug for item in _discover_bundled()):
         raise PackageError(f"Identifier '{application.slug}' belongs to a built-in application.")
     database = get_db()
     if database.execute("SELECT 1 FROM installed_applications WHERE slug=?", (application.slug,)).fetchone():

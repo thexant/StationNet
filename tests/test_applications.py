@@ -1,8 +1,10 @@
 import json
 import io
+import shutil
 import zipfile
 from pathlib import Path
 
+from stationnet import applications
 from stationnet import create_app
 from stationnet.applications import APPS, GAMES, catalog, find
 from stationnet.db import get_db
@@ -108,6 +110,59 @@ def test_number_guess_uses_isolated_runtime_and_public_api(initialized):
     assert source.status_code == 200
     assert source.mimetype == "application/javascript"
     assert b"ui.numberInput" in source.data
+
+
+def test_ascii_ansi_art_studio_is_discovered_and_uses_public_capabilities(initialized):
+    directory = initialized.get("/games-apps")
+    assert b"ASCII/ANSI Art Studio" in directory.data
+    assert initialized.get("/games-apps/ascii-ansi-art-studio").status_code == 200
+
+    source = initialized.get("/games-apps/ascii-ansi-art-studio/source.js")
+    assert source.status_code == 200
+    assert b"ui.cellGrid" in source.data
+    assert b"ui.storage.set" in source.data
+    assert b"ui.clipboard.writeText" in source.data
+    assert b"ui.download.text" in source.data
+    assert b"floodFill" in source.data
+    assert b"undoStack" in source.data
+    assert b"\\u001b[" in source.data
+
+
+def test_bundled_folder_discovery_tracks_add_remove_and_restore(monkeypatch, app):
+    root = Path(app.config["DATA_DIR"]) / "discovery-packages"
+    shutil.rmtree(root, ignore_errors=True)
+    package = root / "portable_art"
+    package.mkdir(parents=True)
+    manifest = {
+        "package_format": 1, "slug": "portable-art", "name": "Portable Art",
+        "description": "A dynamically discovered test application.", "author": "Tests",
+        "version": "1.0.0", "category": "Apps", "entrypoint": "main.js",
+    }
+    (package / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
+    script = package / "main.js"
+    script.write_text("StationNet.start((ui) => ui.render(ui.text('ok')));", encoding="utf-8")
+    monkeypatch.setattr(applications, "_package_root", lambda: root.resolve())
+    applications._bundled_cache.clear()
+
+    assert applications.find("portable-art") is not None
+    held = Path(app.config["DATA_DIR"]) / "discovery-package-held"
+    shutil.rmtree(held, ignore_errors=True)
+    package.rename(held)
+    assert applications.find("portable-art") is None
+    held.rename(package)
+    assert applications.find("portable-art") is not None
+    shutil.rmtree(root)
+
+
+def test_art_studio_folder_is_a_valid_distributable_package():
+    folder = Path(__file__).parent.parent / "stationnet" / "application_packages" / "ascii_ansi_art_studio"
+    output = io.BytesIO()
+    with zipfile.ZipFile(output, "w", zipfile.ZIP_DEFLATED) as archive:
+        archive.write(folder / "manifest.json", "manifest.json")
+        archive.write(folder / "main.js", "main.js")
+    application, files = applications.validate_package(output.getvalue())
+    assert application.slug == "ascii-ansi-art-studio"
+    assert set(files) == {"manifest.json", "main.js"}
 
 
 def test_placeholder_has_no_runtime(initialized):

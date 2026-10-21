@@ -83,6 +83,15 @@ include `button`, `menu`, `input`, `numberInput`, `textarea`, `select`,
 `checkbox`, and `onKey`. Timers use `timeout` and `interval`; register cleanup
 with `onCleanup`.
 
+Interactive character canvases can use `cellGrid(rows, options)`. Each cell is
+an object such as `{ char: "#", fg: 7, bg: 0 }`, where foreground and background
+are controlled 0–15 ANSI palette indexes. `options.onCell` receives bounded
+`x`, `y`, and `drag` values; the host always renders characters as text.
+
+Two bounded browser conveniences are also available: `ui.clipboard.writeText(text)`
+and `ui.download.text(filename, text)`. They return promises and accept text only;
+applications do not receive general browser, DOM, network, or filesystem access.
+
 Persistent JSON-compatible values are available asynchronously through
 `ui.storage.get`, `set`, `delete`, and `keys`. Storage is private to the current
 user and app by default; pass `{ scope: "shared" }` for community data. Apps
