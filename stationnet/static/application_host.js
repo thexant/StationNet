@@ -9,8 +9,9 @@
   if (!frame || !surface || !status) return;
 
   const PROTOCOL = "stationnet-app-v1";
-  const LIMITS = { components: 100, text: 8000, items: 100, columns: 80, rows: 100, capabilityText: 200000 };
+  const LIMITS = { components: 100, text: 8000, items: 100, columns: 80, rows: 100, canvasCommands: 600, capabilityText: 200000 };
   const keyboardActions = new Set();
+  const lifecycleActions = new Set();
   let eventWindow = [];
   let totalEvents = 0;
   let closed = false;
@@ -38,6 +39,39 @@
   function interact(action, extra = {}) {
     if (!action || closed || !frame.contentWindow) return;
     frame.contentWindow.postMessage({ protocol: PROTOCOL, type: "interaction", action, values: collectValues(), ...extra }, "*");
+  }
+
+  const canvasColor = (value, fallback = "#00ed45") => {
+    const color = String(value || "");
+    return /^(#[0-9a-f]{3,8}|rgb\(\s*\d+\s*,\s*\d+\s*,\s*\d+\s*\))$/i.test(color) ? color : fallback;
+  };
+
+  function drawCanvas(canvas, component) {
+    const width = Math.trunc(number(component.width, 640, 80, 1200));
+    const height = Math.trunc(number(component.height, 400, 80, 800));
+    canvas.width = width; canvas.height = height;
+    canvas.dataset.logicalWidth = String(width); canvas.dataset.logicalHeight = String(height);
+    if (component.action) canvas.dataset.canvasAction = text(component.action, 80);
+    if (component.hover != null) canvas.dataset.canvasHover = component.hover ? "1" : "0";
+    canvas.setAttribute("aria-label", text(component.label, 200));
+    const context = canvas.getContext("2d");
+    context.clearRect(0, 0, width, height); context.fillStyle = "#010401"; context.fillRect(0, 0, width, height);
+    (Array.isArray(component.commands) ? component.commands : []).slice(0, LIMITS.canvasCommands).forEach((command) => {
+      if (!command || typeof command !== "object") return;
+      const x = number(command.x, 0, -width, width * 2), y = number(command.y, 0, -height, height * 2);
+      if (command.type === "rect") {
+        const w = number(command.width, 1, 0, width * 2), h = number(command.height, 1, 0, height * 2);
+        context.fillStyle = canvasColor(command.color); context.fillRect(x, y, w, h);
+      } else if (command.type === "circle") {
+        context.beginPath(); context.arc(x, y, number(command.radius, 2, 0, Math.max(width, height)), 0, Math.PI * 2);
+        context.fillStyle = canvasColor(command.color); context.fill();
+      } else if (command.type === "text") {
+        context.fillStyle = canvasColor(command.color, "#ffffff");
+        context.font = `${Math.trunc(number(command.size, 18, 8, 72))}px monospace`;
+        context.textAlign = ["left", "center", "right"].includes(command.align) ? command.align : "left";
+        context.textBaseline = "middle"; context.fillText(text(command.text, 200), x, y);
+      }
+    });
   }
 
   function renderComponent(component) {
@@ -177,6 +211,20 @@
         node.addEventListener("pointerleave", finish);
         break;
       }
+      case "canvas": {
+        node = document.createElement("canvas"); node.className = "app-canvas"; node.tabIndex = 0;
+        node.setAttribute("role", "img"); drawCanvas(node, component);
+        const point = (event, phase) => {
+          const bounds = node.getBoundingClientRect();
+          const x = (event.clientX - bounds.left) * Number(node.dataset.logicalWidth) / Math.max(1, bounds.width);
+          const y = (event.clientY - bounds.top) * Number(node.dataset.logicalHeight) / Math.max(1, bounds.height);
+          interact(node.dataset.canvasAction, { x, y, phase });
+        };
+        node.addEventListener("pointerdown", (event) => { event.preventDefault(); node.setPointerCapture(event.pointerId); point(event, "start"); });
+        node.addEventListener("pointermove", (event) => { if (event.buttons || event.pointerType === "touch" || node.dataset.canvasHover === "1") point(event, "move"); });
+        node.addEventListener("pointerup", (event) => point(event, "end"));
+        break;
+      }
       default: return null;
     }
     if (component.id != null) node.dataset.appComponent = text(component.id, 80).replace(/[^a-zA-Z0-9_.:-]/g, "_");
@@ -201,6 +249,9 @@
     }
     if (message.mode === "update") {
       const target = targetComponent();
+      if (target && target.tagName === "CANVAS" && components[0] && components[0].type === "canvas") {
+        drawCanvas(target, components[0]); return;
+      }
       const replacement = renderComponent(components[0]);
       if (target && replacement) target.replaceWith(replacement);
       return;
@@ -214,8 +265,8 @@
   function allowedEvent() {
     const now = Date.now(); eventWindow = eventWindow.filter((time) => now - time < 1000);
     totalEvents += 1;
-    if (totalEvents > 10000) { terminate(); return false; }
-    if (eventWindow.length >= 40) return false;
+    if (totalEvents > 1000000) { terminate(); return false; }
+    if (eventWindow.length >= 90) return false;
     eventWindow.push(now); return true;
   }
 
@@ -233,6 +284,23 @@
       if (frame.contentWindow) frame.contentWindow.postMessage({ protocol: PROTOCOL, type: "storage-result", request: requestId, ok: true, value: result.value }, "*");
     } catch (error) {
       if (frame.contentWindow) frame.contentWindow.postMessage({ protocol: PROTOCOL, type: "storage-result", request: requestId, ok: false, error: text(error.message || error, 500) }, "*");
+    }
+  }
+
+  async function scores(message) {
+    const requestId = text(message.request, 80);
+    try {
+      const submitting = message.operation === "submit";
+      const response = await fetch(surface.dataset.appScoresUrl, {
+        method: submitting ? "POST" : "GET", credentials: "same-origin",
+        headers: submitting ? { "Content-Type": "application/json", "X-CSRF-Token": surface.dataset.appCsrf } : {},
+        body: submitting ? JSON.stringify({ score: message.score }) : undefined
+      });
+      const result = await response.json();
+      if (!response.ok || !result.ok) throw new Error(result.error || `Score request failed (${response.status})`);
+      if (frame.contentWindow) frame.contentWindow.postMessage({ protocol: PROTOCOL, type: "scores-result", request: requestId, ok: true, value: result }, "*");
+    } catch (error) {
+      if (frame.contentWindow) frame.contentWindow.postMessage({ protocol: PROTOCOL, type: "scores-result", request: requestId, ok: false, error: text(error.message || error, 500) }, "*");
     }
   }
 
@@ -301,10 +369,14 @@
     else if (message.type === "ready") status.textContent = "PROGRAM STATUS / RUNNING";
     else if (message.type === "render") render(message);
     else if (message.type === "storage") storage(message);
+    else if (message.type === "scores") scores(message);
     else if (message.type === "capability") capability(message);
     else if (message.type === "keyboard") {
       const id = text(message.action, 80); message.enabled ? keyboardActions.add(id) : keyboardActions.delete(id);
       if (message.enabled) surface.tabIndex = 0;
+    } else if (message.type === "lifecycle") {
+      const id = text(message.action, 80); message.enabled ? lifecycleActions.add(id) : lifecycleActions.delete(id);
+      if (message.enabled) interact(id, { value: document.hidden || !document.hasFocus() ? "hidden" : "visible" });
     } else if (message.type === "error") {
       status.textContent = "PROGRAM STATUS / ERROR";
       const error = document.createElement("p"); error.className = "app-error"; error.textContent = `PROGRAM ERROR: ${text(message.message, 500)}`; surface.replaceChildren(error);
@@ -321,11 +393,18 @@
     }));
   });
 
+  const reportVisibility = () => lifecycleActions.forEach((action) => interact(action, {
+    value: document.hidden || !document.hasFocus() ? "hidden" : "visible"
+  }));
+  document.addEventListener("visibilitychange", reportVisibility);
+  addEventListener("blur", reportVisibility);
+  addEventListener("focus", reportVisibility);
+
   function terminate() {
     if (closed) return; closed = true;
     clearTimeout(startupTimer);
     if (frame.contentWindow) frame.contentWindow.postMessage({ protocol: PROTOCOL, type: "terminate" }, "*");
-    frame.remove(); keyboardActions.clear();
+    frame.remove(); keyboardActions.clear(); lifecycleActions.clear();
   }
   addEventListener("pagehide", terminate, { once: true });
 })();

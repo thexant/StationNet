@@ -130,6 +130,33 @@ def test_ascii_ansi_art_studio_is_discovered_and_uses_public_capabilities(initia
     assert b'DOWNLOAD .PNG' in source.data
 
 
+def test_snake_and_breakout_are_discovered_as_independent_game_packages(initialized):
+    directory = initialized.get("/games-apps")
+    assert b"Snake" in directory.data
+    assert b"Breakout / Brick Breaker" in directory.data
+    for slug, marker in (("snake", b"ui.scores.submit"), ("breakout", b"makeBricks")):
+        assert initialized.get(f"/games-apps/{slug}").status_code == 200
+        source = initialized.get(f"/games-apps/{slug}/source.js")
+        assert source.status_code == 200
+        assert marker in source.data
+        assert b"ui.canvas" in source.data
+        assert b"ui.onVisibility" in source.data
+
+
+def test_game_package_folders_are_valid_distributable_packages():
+    root = Path(__file__).parent.parent / "stationnet" / "application_packages"
+    for folder_name, slug in (("snake", "snake"), ("breakout", "breakout")):
+        folder = root / folder_name
+        output = io.BytesIO()
+        with zipfile.ZipFile(output, "w", zipfile.ZIP_DEFLATED) as archive:
+            archive.write(folder / "manifest.json", "manifest.json")
+            archive.write(folder / "main.js", "main.js")
+        application, files = applications.validate_package(output.getvalue())
+        assert application.slug == slug
+        assert application.category == GAMES
+        assert set(files) == {"manifest.json", "main.js"}
+
+
 def test_bundled_folder_discovery_tracks_add_remove_and_restore(monkeypatch, app):
     root = Path(app.config["DATA_DIR"]) / "discovery-packages"
     shutil.rmtree(root, ignore_errors=True)
@@ -247,6 +274,47 @@ def test_application_storage_enforces_tokens_keys_and_limits(initialized):
     assert initialized.get("/terminal").status_code == 200
 
 
+def test_application_scores_are_authenticated_monotonic_and_app_local(app, initialized):
+    headers = {"X-CSRF-Token": _csrf(initialized), "Content-Type": "application/json"}
+    snake = "/games-apps/snake/scores"
+    assert initialized.post(snake, json={"score": 120}, headers=headers).get_json()["personal_best"] == 120
+    assert initialized.post(snake, json={"score": 40}, headers=headers).get_json()["personal_best"] == 120
+    assert initialized.get("/games-apps/breakout/scores").get_json()["leaderboard"] == []
+    assert initialized.post(snake, json={"score": 1}).status_code == 400
+    assert initialized.post(snake, json={"score": -1}, headers=headers).status_code == 400
+
+    with app.app_context():
+        member_id = get_db().execute(
+            "INSERT INTO users(username,callsign,password_hash) VALUES('player-two','PLY-002','unused')"
+        ).lastrowid
+        get_db().commit()
+    with initialized.session_transaction() as browser_session:
+        browser_session["user_id"] = member_id
+    member_headers = {"X-CSRF-Token": _csrf(initialized), "Content-Type": "application/json"}
+    result = initialized.post(snake, json={"score": 250}, headers=member_headers).get_json()
+    assert result["personal_best"] == 250
+    assert result["leaderboard"] == [
+        {"username": "player-two", "score": 250},
+        {"username": "sysop", "score": 120},
+    ]
+    with app.app_context():
+        rows = get_db().execute(
+            "SELECT application_slug,best_score FROM application_scores ORDER BY best_score DESC"
+        ).fetchall()
+        assert [(row["application_slug"], row["best_score"]) for row in rows] == [
+            ("snake", 250), ("snake", 120)
+        ]
+    restarted = create_app({
+        "TESTING": True, "DATA_DIR": app.config["DATA_DIR"],
+        "APPLICATIONS_DIR": app.config["APPLICATIONS_DIR"], "SECRET_KEY": "score-restart-secret",
+    })
+    with restarted.app_context():
+        assert get_db().execute(
+            "SELECT best_score FROM application_scores WHERE application_slug='snake' AND user_id=?",
+            (member_id,),
+        ).fetchone()["best_score"] == 250
+
+
 def test_expanded_runtime_and_demo_exercise_updates_timers_and_storage(initialized):
     source = initialized.get("/games-apps/number-guess/source.js")
     assert b'ui.storage.get("best-score")' in source.data
@@ -257,11 +325,15 @@ def test_expanded_runtime_and_demo_exercise_updates_timers_and_storage(initializ
     assert b"textarea" in runtime.data
     assert b"storage-result" in runtime.data
     assert b"download-cell-image" in runtime.data
+    assert b"onVisibility" in runtime.data
+    assert b"scores-result" in runtime.data
     host = initialized.get("/static/application_host.js")
     assert b"PROGRAM STATUS / ERROR" in host.data
     assert b"data-app-component" in host.data
     assert b'canvas.toBlob(resolve, "image/png")' in host.data
     assert b'phase === "move"' in host.data
+    assert b"drawCanvas" in host.data
+    assert b"data-app-scores-url" in initialized.get("/games-apps/snake").data
 
 
 def test_sysop_can_install_disable_restart_enable_and_uninstall_demo(app, initialized):
@@ -319,6 +391,10 @@ def test_sysop_can_install_disable_restart_enable_and_uninstall_demo(app, initia
             "INSERT INTO application_storage(application_slug,storage_scope,owner_key,storage_key,value_json,size_bytes) "
             "VALUES('portable-number-guess','shared','shared','wins','3',1)"
         )
+        database.execute(
+            "INSERT INTO application_scores(application_slug,user_id,best_score) "
+            "VALUES('portable-number-guess',?,77)", (member_id,),
+        )
         database.commit()
     removed = restarted.post(
         "/sysop/applications/portable-number-guess/uninstall",
@@ -333,6 +409,9 @@ def test_sysop_can_install_disable_restart_enable_and_uninstall_demo(app, initia
         assert get_db().execute(
             "SELECT value_json FROM application_storage WHERE application_slug='portable-number-guess'"
         ).fetchone()["value_json"] == "3"
+        assert get_db().execute(
+            "SELECT best_score FROM application_scores WHERE application_slug='portable-number-guess'"
+        ).fetchone()["best_score"] == 77
 
 
 def test_application_management_is_admin_only_and_protects_builtins(app, initialized):

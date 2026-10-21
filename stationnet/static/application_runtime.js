@@ -7,6 +7,7 @@
   const actions = new Map();
   const cleanups = [];
   const storageRequests = new Map();
+  const scoreRequests = new Map();
   const capabilityRequests = new Map();
   let nextAction = 1;
   let nextRequest = 1;
@@ -14,7 +15,7 @@
   let stopped = false;
 
   function send(type, payload = {}) {
-    if (stopped || ++messagesSent > 10000) return;
+    if (stopped || ++messagesSent > 1000000) return;
     postMessage({ protocol: PROTOCOL, type, ...payload });
   }
 
@@ -59,6 +60,14 @@
     return new Promise((resolve, reject) => {
       capabilityRequests.set(request, { resolve, reject });
       send("capability", { request, operation, ...payload });
+    });
+  }
+
+  function scores(operation, score) {
+    const request = `score-${nextRequest++}`;
+    return new Promise((resolve, reject) => {
+      scoreRequests.set(request, { resolve, reject });
+      send("scores", { request, operation, score });
     });
   }
 
@@ -137,6 +146,13 @@
         rows: Array.isArray(rows) ? rows : []
       }, opts);
     },
+    canvas(width, height, commands, settings) {
+      const opts = options(settings);
+      return identified({
+        type: "canvas", width, height, commands: Array.isArray(commands) ? commands : [],
+        action: action(opts.onPointer), hover: Boolean(opts.hover), label: String(opts.label || "Game playfield")
+      }, opts);
+    },
     render(...components) {
       send("render", { mode: "replace", components: components.length === 1 && Array.isArray(components[0]) ? components[0] : components });
     },
@@ -152,6 +168,11 @@
       send("keyboard", { action: id, enabled: true });
       return () => { actions.delete(id); send("keyboard", { action: id, enabled: false }); };
     },
+    onVisibility(handler) {
+      const id = action(handler);
+      send("lifecycle", { action: id, enabled: true });
+      return () => { actions.delete(id); send("lifecycle", { action: id, enabled: false }); };
+    },
     onCleanup(handler) { if (typeof handler === "function") cleanups.push(handler); },
     timeout(handler, delay) { return scheduled(handler, delay, false); },
     interval(handler, delay) { return scheduled(handler, delay, true); },
@@ -160,6 +181,10 @@
       get(key, settings) { return storage("get", String(key), undefined, settings); },
       delete(key, settings) { return storage("delete", String(key), undefined, settings); },
       keys(settings) { return storage("keys", undefined, undefined, settings); }
+    }),
+    scores: Object.freeze({
+      submit(score) { return scores("submit", score); },
+      leaderboard() { return scores("list"); }
     }),
     clipboard: Object.freeze({
       writeText(value) { return capability("copy-text", { text: String(value) }); }
@@ -191,6 +216,13 @@
       message.ok ? pending.resolve(message.value) : pending.reject(new Error(message.error || "Storage request failed"));
       return;
     }
+    if (message.type === "scores-result") {
+      const pending = scoreRequests.get(message.request);
+      if (!pending) return;
+      scoreRequests.delete(message.request);
+      message.ok ? pending.resolve(message.value) : pending.reject(new Error(message.error || "Score request failed"));
+      return;
+    }
     if (message.type === "capability-result") {
       const pending = capabilityRequests.get(message.request);
       if (!pending) return;
@@ -218,6 +250,8 @@
     cleanups.splice(0).forEach((handler) => { try { handler(); } catch (_) {} });
     storageRequests.forEach(({ reject }) => reject(new Error("Application terminated")));
     storageRequests.clear();
+    scoreRequests.forEach(({ reject }) => reject(new Error("Application terminated")));
+    scoreRequests.clear();
     capabilityRequests.forEach(({ reject }) => reject(new Error("Application terminated")));
     capabilityRequests.clear();
     actions.clear();

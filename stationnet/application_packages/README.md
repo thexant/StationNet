@@ -83,6 +83,13 @@ include `button`, `menu`, `input`, `numberInput`, `textarea`, `select`,
 `checkbox`, and `onKey`. Timers use `timeout` and `interval`; register cleanup
 with `onCleanup`.
 
+Animated applications can use `ui.canvas(width, height, commands, options)` with
+bounded `rect`, `circle`, and `text` drawing commands. `options.onPointer`
+receives scaled `x`, `y`, and `phase` values; `options.hover` enables desktop
+pointer tracking. Use `ui.onVisibility(handler)` to pause continuous activity
+when its value changes to `"hidden"`. The host updates an existing canvas in
+place and keeps rendering and input inside the same isolated runtime.
+
 Interactive character canvases can use `cellGrid(rows, options)`. Each cell is
 an object such as `{ char: "#", fg: 7, bg: 0 }`, where foreground and background
 are controlled 0–15 ANSI palette indexes. `options.onCell` receives bounded
@@ -100,3 +107,8 @@ Persistent JSON-compatible values are available asynchronously through
 `ui.storage.get`, `set`, `delete`, and `keys`. Storage is private to the current
 user and app by default; pass `{ scope: "shared" }` for community data. Apps
 cannot choose another user or application namespace.
+
+Games can use `ui.scores.submit(score)` and `ui.scores.leaderboard()` for a
+station-local leaderboard. StationNet derives the player identity from the
+authenticated session, stores only an improved personal best, and returns the
+top ten usernames and scores. Applications cannot submit for another account.

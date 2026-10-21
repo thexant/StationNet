@@ -130,6 +130,14 @@ CREATE TABLE IF NOT EXISTS application_storage (
  PRIMARY KEY(application_slug,storage_scope,owner_key,storage_key));
 CREATE INDEX IF NOT EXISTS idx_application_storage_namespace
  ON application_storage(application_slug,storage_scope,owner_key,storage_key);
+CREATE TABLE IF NOT EXISTS application_scores (
+ application_slug TEXT NOT NULL,
+ user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+ best_score INTEGER NOT NULL CHECK(best_score>=0),
+ updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+ PRIMARY KEY(application_slug,user_id));
+CREATE INDEX IF NOT EXISTS idx_application_scores_leaderboard
+ ON application_scores(application_slug,best_score DESC,updated_at,user_id);
 CREATE TABLE IF NOT EXISTS installed_applications (
  slug TEXT PRIMARY KEY,
  name TEXT NOT NULL,

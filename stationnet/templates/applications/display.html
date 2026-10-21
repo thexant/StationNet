@@ -15,6 +15,7 @@
     <div class="application-status" data-app-status>PROGRAM STATUS / INITIALIZING</div>
     <div class="application-surface" data-app-surface aria-live="polite"
       data-app-storage-url="{{ url_for('applications.storage', slug=application.slug) }}"
+      data-app-scores-url="{{ url_for('applications.scores', slug=application.slug) }}"
       data-app-csrf="{{ session.csrf_token }}">
       <p class="muted">Establishing isolated program session...</p>
     </div>

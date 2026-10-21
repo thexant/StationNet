@@ -1,0 +1,10 @@
+{
+  "package_format": 1,
+  "slug": "breakout",
+  "name": "Breakout / Brick Breaker",
+  "description": "Break the signal wall, protect your lives, and advance through faster levels.",
+  "author": "StationNet Core",
+  "version": "1.0.0",
+  "category": "Games",
+  "entrypoint": "main.js"
+}

@@ -37,6 +37,7 @@ STORAGE_MAX_KEYS = 100
 STORAGE_MAX_VALUE_BYTES = 64 * 1024
 STORAGE_USER_BYTES = 512 * 1024
 STORAGE_SHARED_BYTES = 2 * 1024 * 1024
+SCORE_MAX = 1_000_000_000
 
 
 class PackageError(ValueError):
@@ -530,6 +531,48 @@ def storage(slug):
     )
     database.commit()
     return jsonify(ok=True, value=True)
+
+
+@bp.route("/<slug>/scores", methods=("GET", "POST"))
+@login_required
+def scores(slug):
+    """Store an authenticated user's best and return this station's top ten."""
+    application = find(slug)
+    if application is None or not application.enabled or not application.runnable:
+        abort(404)
+    database = get_db()
+    if request.method == "POST":
+        token = request.headers.get("X-CSRF-Token", "")
+        if not session.get("csrf_token") or not hmac.compare_digest(token, session["csrf_token"]):
+            return _storage_error("Invalid or expired request token.", 400)
+        data = request.get_json(silent=True)
+        score = data.get("score") if isinstance(data, dict) else None
+        if type(score) is not int or not 0 <= score <= SCORE_MAX:
+            return _storage_error(f"Score must be a whole number from 0 to {SCORE_MAX}.")
+        database.execute(
+            "INSERT INTO application_scores(application_slug,user_id,best_score) VALUES(?,?,?) "
+            "ON CONFLICT(application_slug,user_id) DO UPDATE SET "
+            "best_score=MAX(application_scores.best_score,excluded.best_score),"
+            "updated_at=CASE WHEN excluded.best_score>application_scores.best_score "
+            "THEN CURRENT_TIMESTAMP ELSE application_scores.updated_at END",
+            (slug, g.user["id"], score),
+        )
+        database.commit()
+    personal = database.execute(
+        "SELECT best_score FROM application_scores WHERE application_slug=? AND user_id=?",
+        (slug, g.user["id"]),
+    ).fetchone()
+    leaders = database.execute(
+        "SELECT u.username,s.best_score AS score FROM application_scores s "
+        "JOIN users u ON u.id=s.user_id WHERE s.application_slug=? "
+        "ORDER BY s.best_score DESC,s.updated_at,u.username COLLATE NOCASE LIMIT 10",
+        (slug,),
+    ).fetchall()
+    return jsonify(
+        ok=True,
+        personal_best=personal["best_score"] if personal else 0,
+        leaderboard=[{"username": row["username"], "score": row["score"]} for row in leaders],
+    )
 
 
 @bp.get("/<slug>/runtime")
