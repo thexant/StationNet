@@ -1,7 +1,30 @@
 import json
+import io
+import zipfile
+from pathlib import Path
 
+from stationnet import create_app
 from stationnet.applications import APPS, GAMES, catalog, find
 from stationnet.db import get_db
+
+
+def _demo_package(slug="portable-number-guess", extra=None, entrypoint="main.js"):
+    manifest = json.loads((
+        Path(__file__).parent.parent
+        / "stationnet" / "application_packages" / "number_guess" / "manifest.json"
+    ).read_text(encoding="utf-8"))
+    manifest.update({"slug": slug, "name": "Portable Number Guess", "entrypoint": entrypoint})
+    script = (
+        Path(__file__).parent.parent
+        / "stationnet" / "application_packages" / "number_guess" / "main.js"
+    ).read_bytes()
+    output = io.BytesIO()
+    with zipfile.ZipFile(output, "w", zipfile.ZIP_DEFLATED) as archive:
+        archive.writestr("manifest.json", json.dumps(manifest))
+        archive.writestr(entrypoint, script)
+        for name, value in (extra or {}).items():
+            archive.writestr(name, value)
+    return output.getvalue()
 
 
 def test_catalog_is_centralized_and_contains_both_categories():
@@ -179,6 +202,118 @@ def test_expanded_runtime_and_demo_exercise_updates_timers_and_storage(initializ
     host = initialized.get("/static/application_host.js")
     assert b"PROGRAM STATUS / ERROR" in host.data
     assert b"data-app-component" in host.data
+
+
+def test_sysop_can_install_disable_restart_enable_and_uninstall_demo(app, initialized):
+    token = _csrf(initialized, "/sysop/applications")
+    installed = initialized.post(
+        "/sysop/applications/install",
+        data={"csrf_token": token, "package": (io.BytesIO(_demo_package()), "number-guess.zip")},
+        content_type="multipart/form-data", follow_redirects=True,
+    )
+    assert installed.status_code == 200
+    assert b"Portable Number Guess 1.1.0 installed and enabled" in installed.data
+    assert b"THIRD-PARTY" in installed.data
+    assert initialized.get("/games-apps/portable-number-guess").status_code == 200
+    assert b"ui.numberInput" in initialized.get(
+        "/games-apps/portable-number-guess/source.js"
+    ).data
+
+    disabled = initialized.post(
+        "/sysop/applications/portable-number-guess/state",
+        data={"csrf_token": token, "enabled": "0"}, follow_redirects=True,
+    )
+    assert b"is now disabled" in disabled.data
+    with app.app_context():
+        database = get_db()
+        member_id = database.execute(
+            "INSERT INTO users(username,callsign,password_hash) VALUES('app-member','APP-001','unused')"
+        ).lastrowid
+        database.commit()
+    with initialized.session_transaction() as browser_session:
+        browser_session["user_id"] = member_id
+    assert b"Portable Number Guess" not in initialized.get("/games-apps").data
+    assert initialized.get("/games-apps/portable-number-guess").status_code == 404
+    assert initialized.get("/games-apps/portable-number-guess/runtime").status_code == 404
+
+    restarted = create_app({
+        "TESTING": True, "DATA_DIR": app.config["DATA_DIR"],
+        "APPLICATIONS_DIR": app.config["APPLICATIONS_DIR"], "SECRET_KEY": "restart-secret",
+    }).test_client()
+    restarted.post("/login", data={
+        "csrf_token": _csrf(restarted, "/login"), "username": "sysop",
+        "password": "correct horse battery staple",
+    })
+    assert b"Portable Number Guess" in restarted.get("/sysop/applications").data
+    assert restarted.get("/games-apps/portable-number-guess").status_code == 404
+    restart_token = _csrf(restarted, "/sysop/applications")
+    restarted.post(
+        "/sysop/applications/portable-number-guess/state",
+        data={"csrf_token": restart_token, "enabled": "1"},
+    )
+    assert restarted.get("/games-apps/portable-number-guess").status_code == 200
+
+    with app.app_context():
+        database = get_db()
+        database.execute(
+            "INSERT INTO application_storage(application_slug,storage_scope,owner_key,storage_key,value_json,size_bytes) "
+            "VALUES('portable-number-guess','shared','shared','wins','3',1)"
+        )
+        database.commit()
+    removed = restarted.post(
+        "/sysop/applications/portable-number-guess/uninstall",
+        data={"csrf_token": restart_token, "confirm": "portable-number-guess"},
+        follow_redirects=True,
+    )
+    assert b"was uninstalled" in removed.data
+    assert b"saved user data was retained" in removed.data
+    assert restarted.get("/games-apps/portable-number-guess").status_code == 404
+    assert not (Path(app.config["APPLICATIONS_DIR"]) / "portable-number-guess").exists()
+    with app.app_context():
+        assert get_db().execute(
+            "SELECT value_json FROM application_storage WHERE application_slug='portable-number-guess'"
+        ).fetchone()["value_json"] == "3"
+
+
+def test_application_management_is_admin_only_and_protects_builtins(app, initialized):
+    token = _csrf(initialized, "/sysop/applications")
+    protected = initialized.post(
+        "/sysop/applications/number-guess/uninstall",
+        data={"csrf_token": token, "confirm": "number-guess"}, follow_redirects=True,
+    )
+    assert b"Built-in applications cannot be uninstalled" in protected.data
+    assert initialized.get("/games-apps/number-guess").status_code == 200
+    with app.app_context():
+        database = get_db()
+        user_id = database.execute(
+            "INSERT INTO users(username,callsign,password_hash) VALUES('member','TST-099','unused')"
+        ).lastrowid
+        database.commit()
+    with initialized.session_transaction() as browser_session:
+        browser_session["user_id"] = user_id
+    assert initialized.get("/sysop/applications").status_code == 302
+    assert initialized.post("/sysop/applications/install", data={}).status_code == 302
+
+
+def test_invalid_application_packages_are_rejected_without_partial_install(app, initialized):
+    token = _csrf(initialized, "/sysop/applications")
+    invalid_packages = (
+        (b"not a zip", b"not a valid ZIP"),
+        (_demo_package(extra={"tool.exe": b"MZ"}), b"Unsupported package file"),
+        (_demo_package(extra={"../escape.js": b"bad"}), b"Unsafe archive path"),
+        (_demo_package(slug="number-guess"), b"belongs to a built-in application"),
+    )
+    for package, message in invalid_packages:
+        response = initialized.post(
+            "/sysop/applications/install",
+            data={"csrf_token": token, "package": (io.BytesIO(package), "invalid.zip")},
+            content_type="multipart/form-data", follow_redirects=True,
+        )
+        assert message in response.data
+    with app.app_context():
+        assert get_db().execute("SELECT COUNT(*) AS count FROM installed_applications").fetchone()["count"] == 0
+    root = Path(app.config["APPLICATIONS_DIR"])
+    assert not root.exists() or not tuple(root.iterdir())
 
 
 def _csrf(client, path="/terminal"):

@@ -32,6 +32,7 @@
     <label>Total archive storage (MB)<input type="number" name="file_storage_limit_mb" min="1" max="10240" required value="{{ g.station.file_storage_limit_mb }}"></label>
     <label>Maximum file size (MB)<input type="number" name="file_size_limit_mb" min="1" max="64" required value="{{ g.station.file_size_limit_mb }}"></label>
     <p><a href="{{ url_for('announcements.index') }}">MANAGE STATION ANNOUNCEMENTS</a></p>
+    <p><a href="{{ url_for('application_admin.manage') }}">MANAGE GAMES AND APPS</a></p>
     <button>COMMIT PARAMETERS</button>
   </form>
 </section>

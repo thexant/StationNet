@@ -124,6 +124,19 @@ CREATE TABLE IF NOT EXISTS application_storage (
  PRIMARY KEY(application_slug,storage_scope,owner_key,storage_key));
 CREATE INDEX IF NOT EXISTS idx_application_storage_namespace
  ON application_storage(application_slug,storage_scope,owner_key,storage_key);
+CREATE TABLE IF NOT EXISTS installed_applications (
+ slug TEXT PRIMARY KEY,
+ name TEXT NOT NULL,
+ description TEXT NOT NULL,
+ author TEXT NOT NULL,
+ version TEXT NOT NULL,
+ category TEXT NOT NULL CHECK(category IN ('Games','Apps')),
+ entrypoint TEXT NOT NULL,
+ installed_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);
+CREATE TABLE IF NOT EXISTS application_states (
+ application_slug TEXT PRIMARY KEY,
+ enabled INTEGER NOT NULL DEFAULT 1 CHECK(enabled IN (0,1)),
+ updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);
 CREATE TRIGGER IF NOT EXISTS radio_default_membership_after_user_insert
 AFTER INSERT ON users
 BEGIN

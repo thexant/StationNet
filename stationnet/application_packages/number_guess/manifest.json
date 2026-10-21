@@ -1,4 +1,5 @@
 {
+  "package_format": 1,
   "slug": "number-guess",
   "name": "Number Guess",
   "description": "Find the hidden number, keep a personal best, and add to the community win count.",

@@ -218,6 +218,11 @@ button:hover, .button:hover { color: #000; background: var(--green); }
 .application-copy h3 { margin: .4rem 0; color: var(--green-bright); font-size: .9rem; font-weight: 400; letter-spacing: .06em; text-transform: uppercase; }
 .application-copy p { margin: 0 0 .7rem; color: var(--grey); font-size: .72rem; }
 .application-card .button { align-self: start; }
+.application-admin-list { display: grid; gap: .75rem; margin-top: 1rem; }
+.application-admin-row { display: grid; grid-template-columns: minmax(0,1fr) auto; gap: 1rem; padding: 1rem; border: 1px solid var(--green-dim); }
+.application-admin-actions { display: grid; justify-items: end; align-content: start; gap: .65rem; min-width: 12rem; }
+.application-admin-actions form { margin: 0; }
+.uninstall-form { display: grid; justify-items: end; gap: .45rem; padding-top: .55rem; border-top: 1px dotted var(--green-dim); }
 .application-display { border: 1px solid var(--cyan); background: #000; }
 .application-display-header { display: flex; justify-content: space-between; align-items: end; gap: 1rem; padding: 1rem; border-bottom: 1px solid var(--cyan); }
 .application-display-header h1, .application-display-header p { margin-bottom: 0; }
@@ -377,6 +382,8 @@ button:disabled { opacity: .5; cursor: not-allowed; }
   .file-row, .user-card { flex-direction: column; }
   .application-list { grid-template-columns: 1fr; }
   .application-display-header { align-items: stretch; flex-direction: column; }
+  .application-admin-row { grid-template-columns: 1fr; }
+  .application-admin-actions, .uninstall-form { justify-items: start; }
   .application-display-header .button { align-self: start; }
   .file-row .button-row, .user-card .button-row { justify-content: start; }
   .radio-receiver { grid-template-columns: 1fr; }

@@ -1,0 +1,56 @@
+{% extends 'base.html' %}
+{% block title %}Manage Games and Apps{% endblock %}
+{% block content %}
+<header class="board-head">
+  <div>
+    <p class="eyebrow">SYSOP CONTROL / APPLICATION REGISTRY</p>
+    <h1>Manage games and apps</h1>
+    <p class="muted">Install portable StationNet ZIP packages and control station availability.</p>
+  </div>
+  <a class="button secondary" href="{{ url_for('station.settings') }}">&lt; SYSOP CONTROL</a>
+</header>
+
+<section class="terminal-card settings-section">
+  <p class="eyebrow">PACKAGE RECEIVER / FORMAT 01</p>
+  <h2>Install application</h2>
+  <p class="muted">Packages may contain only a root manifest and its JavaScript entrypoint. Maximum upload: 2 MiB.</p>
+  <form method="post" action="{{ url_for('application_admin.install') }}" enctype="multipart/form-data" class="form-grid">
+    <input type="hidden" name="csrf_token" value="{{ session.csrf_token }}">
+    <label>StationNet application ZIP<input type="file" name="package" accept=".zip,application/zip" required></label>
+    <button>VALIDATE + INSTALL</button>
+  </form>
+</section>
+
+<section class="terminal-card settings-section">
+  <p class="eyebrow">APPLICATION REGISTRY / {{ applications|length }} RECORDS</p>
+  <h2>Installed applications</h2>
+  <div class="application-admin-list">
+    {% for application in applications %}
+    <article class="application-admin-row">
+      <div class="application-copy">
+        <span>{{ 'BUILT-IN' if application.builtin else 'THIRD-PARTY' }} / {{ application.category|upper }} / V{{ application.version }}</span>
+        <h3>{{ application.name }}</h3>
+        <p>{{ application.description }}</p>
+        <small>ID: {{ application.slug }} / AUTHOR: {{ application.author }} / STATUS: {{ 'ENABLED' if application.enabled else 'DISABLED' }}</small>
+      </div>
+      <div class="application-admin-actions">
+        <form method="post" action="{{ url_for('application_admin.set_state',slug=application.slug) }}">
+          <input type="hidden" name="csrf_token" value="{{ session.csrf_token }}">
+          <input type="hidden" name="enabled" value="{{ '0' if application.enabled else '1' }}">
+          <button class="secondary">{{ 'DISABLE' if application.enabled else 'ENABLE' }}</button>
+        </form>
+        {% if not application.builtin %}
+        <form method="post" action="{{ url_for('application_admin.uninstall',slug=application.slug) }}" class="uninstall-form">
+          <input type="hidden" name="csrf_token" value="{{ session.csrf_token }}">
+          <label class="switch"><input type="checkbox" name="confirm" value="{{ application.slug }}" required> CONFIRM UNINSTALL</label>
+          <button class="danger">UNINSTALL</button>
+        </form>
+        {% else %}
+        <span class="muted">BUNDLED FILES PROTECTED</span>
+        {% endif %}
+      </div>
+    </article>
+    {% endfor %}
+  </div>
+</section>
+{% endblock %}

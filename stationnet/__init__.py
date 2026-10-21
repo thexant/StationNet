@@ -23,6 +23,7 @@ def create_app(test_config=None):
     data_dir.mkdir(parents=True, exist_ok=True)
     app.config.from_mapping(
         DATABASE=str(data_dir / "station.db"), DATA_DIR=str(data_dir), SECRET_KEY=_secret(data_dir),
+        APPLICATIONS_DIR=str(data_dir / "applications"),
         SESSION_COOKIE_HTTPONLY=True, SESSION_COOKIE_SAMESITE="Lax",
         SESSION_COOKIE_SECURE=os.environ.get("STATIONNET_HTTPS") == "1", MAX_CONTENT_LENGTH=128 * 1024 * 1024,
     )
@@ -41,6 +42,7 @@ def create_app(test_config=None):
     app.register_blueprint(users.bp)
     app.register_blueprint(announcements.bp)
     app.register_blueprint(applications.bp)
+    app.register_blueprint(applications.admin_bp)
     app.register_blueprint(radio.bp)
     app.register_blueprint(broadcast.bp)
     with app.app_context():

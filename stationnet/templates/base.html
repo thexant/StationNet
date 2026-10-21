@@ -43,7 +43,7 @@
         <i>*</i><a href="{{ url_for('applications.index') }}" {% if request.blueprint=='applications' %}aria-current="page"{% endif %}>GAMES + APPS</a>
         <i>*</i><a href="{{ url_for('radio.console') }}" {% if request.endpoint=='radio.console' %}aria-current="page"{% endif %}>RADIO</a>
         {% endif %}
-        {% if g.user and g.user.is_admin %}<i>*</i><a href="{{ url_for('station.settings') }}" {% if request.endpoint=='station.settings' %}aria-current="page"{% endif %}>SYSOP CONTROL</a>{% endif %}
+        {% if g.user and g.user.is_admin %}<i>*</i><a href="{{ url_for('station.settings') }}" {% if request.endpoint=='station.settings' or request.blueprint=='application_admin' %}aria-current="page"{% endif %}>SYSOP CONTROL</a>{% endif %}
       </nav>
       {% endif %}
     </header>
