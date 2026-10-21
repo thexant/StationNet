@@ -56,6 +56,23 @@ def test_station_name_and_callsign_appear_in_descriptive_identity(initialized, a
     assert f"STATION: {callsign}".encode() in response.data
     assert f"STATION: Test Relay - [{callsign}]".encode() not in response.data
 
+
+def test_sysop_settings_use_independent_accessible_collapsible_sections(initialized):
+    page = initialized.get("/sysop/settings")
+
+    assert page.data.count(b"data-collapsible-panel") == 7
+    for content_id in (
+        "station-parameters-content", "access-policy-content", "radio-storage-content",
+        "radio-spectrum-content", "broadcast-frequencies-content",
+        "radio-permissions-content", "radio-users-content",
+    ):
+        assert f'aria-controls="{content_id}"'.encode() in page.data
+        assert f'id="{content_id}" data-panel-content'.encode() in page.data
+    assert page.data.count(b'aria-expanded="true"') >= 7
+    assert b"COMMIT PARAMETERS" in page.data
+    assert b"SAVE ACCESS POLICY" in page.data
+    assert b"ADD / UPDATE RULE" in page.data
+
 def test_landing_message_reflects_guest_access(initialized):
     response = initialized.get("/")
     assert b"Explore the station as a visitor" in response.data

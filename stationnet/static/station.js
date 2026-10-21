@@ -5,6 +5,23 @@ if(clock){const tick=()=>{const now=new Date();clock.textContent=now.toLocaleTim
 document.addEventListener("keydown",e=>{const editing=e.target instanceof HTMLInputElement||e.target instanceof HTMLTextAreaElement;if(e.key==="/"&&!editing){e.preventDefault();document.querySelector("#service-nav")?.focus()}if(e.key==="Escape"&&document.activeElement instanceof HTMLElement)document.activeElement.blur()});
 for(const form of document.querySelectorAll("form[data-confirm]"))form.addEventListener("submit",e=>{if(!confirm(form.dataset.confirm))e.preventDefault()});
 
+for(const panel of document.querySelectorAll("[data-collapsible-panel]")){
+  const toggle=panel.querySelector(":scope > [data-panel-toggle]");
+  const content=panel.querySelector(":scope > [data-panel-content]");
+  if(!toggle||!content)continue;
+  const storageKey=`stationnet.panel.${panel.dataset.panelKey||content.id}`;
+  let expanded=true;
+  try{expanded=localStorage.getItem(storageKey)!=="collapsed"}catch(_){}
+  const setExpanded=value=>{
+    expanded=value;
+    toggle.setAttribute("aria-expanded",String(expanded));
+    content.hidden=!expanded;
+    try{localStorage.setItem(storageKey,expanded?"expanded":"collapsed")}catch(_){}
+  };
+  setExpanded(expanded);
+  toggle.addEventListener("click",()=>setExpanded(!expanded));
+}
+
 if(document.body.dataset.presenceUrl){
   setInterval(()=>fetch(document.body.dataset.presenceUrl,{cache:"no-store"}).catch(()=>{}),20000);
 }

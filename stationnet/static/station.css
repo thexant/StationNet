@@ -282,6 +282,17 @@ button:hover, .button:hover { color: #000; background: var(--green); }
 button:disabled { opacity: .5; cursor: not-allowed; }
 
 .settings-section { margin-top: 1.5rem; }
+.collapsible-panel-toggle { width: 100%; min-height: 0; padding: 0 0 .55rem; color: inherit; border: 0; border-bottom: 1px solid var(--green-dim); background: transparent; text-align: left; }
+.collapsible-panel-toggle:hover { color: inherit; background: rgba(0,237,69,.045); }
+.collapsible-panel-toggle:focus-visible { outline: 1px solid var(--green-bright); outline-offset: .25rem; }
+.collapsible-panel-heading { display: grid; min-width: 0; gap: .2rem; }
+.collapsible-panel-heading .eyebrow { margin: 0; color: var(--cyan); font-size: .7rem; font-weight: 400; letter-spacing: .09em; }
+.collapsible-panel-title { color: var(--green-bright); font-size: 1rem; font-weight: 400; letter-spacing: .07em; text-transform: none; }
+.collapsible-panel-title.page-title { font-size: clamp(1.25rem,4vw,2rem); line-height: 1.15; letter-spacing: .08em; text-transform: uppercase; }
+.collapsible-panel-chevron { flex: 0 0 auto; width: .65rem; height: .65rem; margin-right: .25rem; border-right: 2px solid var(--cyan); border-bottom: 2px solid var(--cyan); transform: rotate(45deg); transition: transform .12s ease; }
+.collapsible-panel-toggle[aria-expanded="false"] .collapsible-panel-chevron { transform: rotate(-45deg); }
+.collapsible-panel [data-panel-content] { padding-top: .8rem; }
+.collapsible-panel [data-panel-content][hidden] { display: none; }
 .band-settings { display: grid; gap: .75rem; }
 .frequency-fields { display: grid; grid-template-columns: 1fr 1fr; gap: .75rem; }
 .radio-group-settings { margin-top: 1rem; }
@@ -367,6 +378,16 @@ button:disabled { opacity: .5; cursor: not-allowed; }
 .radio-error { min-height: 1em; margin: .35rem 0 0; }
 
 .broadcast-section { width: 100%; margin-top: 1.5rem; }
+.radio-broadcast-directory { display: grid; grid-template-columns: minmax(12rem,.4fr) minmax(0,1fr); gap: .75rem 1.25rem; align-items: start; margin-top: .75rem; padding: .65rem .75rem; border: 1px dotted var(--cyan); background: rgba(0,216,207,.035); }
+.radio-broadcast-directory .eyebrow { margin-bottom: .15rem; color: var(--cyan); font-size: .55rem; }
+.radio-broadcast-directory h2 { margin: 0; font-size: .75rem; }
+.radio-broadcast-directory ul { display: grid; grid-template-columns: repeat(auto-fit,minmax(13rem,1fr)); gap: .25rem .75rem; margin: 0; padding: 0; list-style: none; }
+.radio-broadcast-directory li { display: grid; grid-template-columns: auto minmax(0,1fr) auto; gap: .45rem; align-items: baseline; min-width: 0; padding: .2rem 0; border-bottom: 1px dotted var(--green-dim); font-size: .58rem; }
+.radio-broadcast-directory li > * { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.radio-broadcast-directory .broadcast-frequency { color: var(--cyan); }
+.radio-broadcast-directory .broadcast-name { color: var(--green-bright); }
+.radio-broadcast-directory .broadcast-state { color: var(--grey); text-align: right; }
+.radio-broadcast-directory .broadcast-state.on-air { color: var(--amber); }
 .quota-readout { display: flex; flex-wrap: wrap; justify-content: space-between; gap: .5rem 1rem; color: var(--grey); font-size: .62rem; }
 .quota-meter { height: .6rem; margin: .45rem 0 1rem; border: 1px solid var(--green-dim); background: #020702; }
 .quota-meter i { display: block; height: 100%; background: var(--cyan); }
@@ -440,6 +461,7 @@ button:disabled { opacity: .5; cursor: not-allowed; }
   .radio-player-controls label { order: 5; width: 100%; }
   .radio-player .radio-open { flex: 1; justify-content: center; }
   .radio-console-page { padding: .5rem; }
+  .radio-broadcast-directory { grid-template-columns: 1fr; }
   .radio-controls { grid-template-columns: 1fr 1fr; }
   .radio-controls label { grid-column: 1 / -1; grid-row: 1; }
   .radio-controls [data-radio-scan] { grid-column: 1 / -1; }

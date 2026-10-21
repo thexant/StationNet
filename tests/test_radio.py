@@ -79,6 +79,25 @@ def test_compact_radio_is_in_shared_shell_and_console_has_advanced_controls(app,
     assert app.extensions["radio"].receiver_frequency(connection_id) is None
 
 
+def test_broadcast_directory_is_separate_from_collapsible_host_controls(app, initialized):
+    host_console = initialized.get("/radio/")
+    assert b'class="radio-broadcast-directory"' in host_console.data
+    assert b'data-radio-broadcast-directory' in host_console.data
+    assert b'data-radio-broadcast-panel data-collapsible-panel' in host_console.data
+    assert b'aria-controls="broadcast-management-content"' in host_console.data
+    assert host_console.data.index(b'data-radio-broadcast-directory') < host_console.data.index(
+        b'data-radio-broadcast-panel'
+    )
+
+    listener = register(app, "listener")
+    listener_console = listener.get("/radio/")
+    assert b'data-radio-broadcast-directory' in listener_console.data
+    assert b'data-radio-broadcast-panel' not in listener_console.data
+    status = listener.get("/radio/manage/status")
+    assert status.status_code == 200
+    assert "directory" in status.get_json()
+
+
 def test_power_off_disconnects_receiver_and_ends_transmission(app, initialized):
     assert tune(initialized, "14.50").status_code == 200
     opened = start(initialized, "14.50", tone_hz="650").get_json()

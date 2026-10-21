@@ -24,6 +24,10 @@
     <button type="button" class="secondary" data-radio-mute aria-pressed="false">MUTE: OFF</button>
     <span class="radio-occupancy" data-radio-occupancy>RECEIVER OFF</span>
   </div>
+  <aside class="radio-broadcast-directory" aria-labelledby="broadcast-directory-title">
+    <div><p class="eyebrow">AVAILABLE PROGRAMMING</p><h2 id="broadcast-directory-title">Station broadcast directory</h2></div>
+    <ul data-radio-broadcast-directory><li class="muted">LOADING DIRECTORY...</li></ul>
+  </aside>
   <section class="radio-mode-panel" data-radio-cw hidden>
     <div class="radio-cw-controls">
       <button type="button" data-radio-cw-tx data-radio-cw-transmit disabled>BEGIN CW TRANSMISSION</button>
@@ -54,9 +58,13 @@
     <p class="muted" data-radio-voice-help>Microphone access requires HTTPS when connecting from another computer. Localhost may use HTTP.</p>
   </section>
   <p class="chat-error radio-error" data-radio-error aria-live="polite"></p>
-  <section class="terminal-card broadcast-section" data-radio-broadcast-panel>
-    <p class="eyebrow">HOSTED MUSIC / SERVER PLAYBACK</p>
-    <h2>Music broadcast</h2>
+  {% if can_manage_broadcasts %}
+  <section class="terminal-card broadcast-section collapsible-panel" data-radio-broadcast-panel data-collapsible-panel data-panel-key="radio-broadcast-management">
+    <button type="button" class="collapsible-panel-toggle" data-panel-toggle aria-expanded="true" aria-controls="broadcast-management-content">
+      <span class="collapsible-panel-heading"><span class="eyebrow">HOSTED MUSIC / SERVER PLAYBACK</span><span class="collapsible-panel-title" role="heading" aria-level="2">Music broadcast</span></span>
+      <span class="collapsible-panel-chevron" aria-hidden="true"></span>
+    </button>
+    <div id="broadcast-management-content" data-panel-content>
     <p>Assigned frequency: <strong data-radio-broadcast-frequency>NONE</strong></p>
     <div class="form-grid">
       <label>Playlist <select data-radio-broadcast-playlist><option value="">NO PLAYLISTS</option></select></label>
@@ -66,8 +74,8 @@
       <div class="button-row"><button type="button" data-radio-broadcast-start>START BROADCAST</button><button type="button" class="danger" data-radio-broadcast-stop disabled>STOP</button></div>
       <small data-radio-broadcast-help>An assigned frequency is required unless the tuned band allows open broadcasts.</small>
     </div>
-    <h3>Station broadcast directory</h3>
-    <div data-radio-broadcast-directory><p class="muted">LOADING DIRECTORY...</p></div>
+    </div>
   </section>
+  {% endif %}
 </section>
 {% endblock %}

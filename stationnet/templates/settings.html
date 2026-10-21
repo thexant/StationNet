@@ -1,9 +1,12 @@
 {% extends 'base.html' %}
 {% block title %}SYSOP Settings{% endblock %}
 {% block content %}
-<section class="narrow terminal-card">
-  <p class="eyebrow">SYSOP CONTROL / STATION PARAMETERS</p>
-  <h1>Station settings</h1>
+<section class="narrow terminal-card collapsible-panel" data-collapsible-panel data-panel-key="sysop-station-parameters">
+  <button type="button" class="collapsible-panel-toggle" data-panel-toggle aria-expanded="true" aria-controls="station-parameters-content">
+    <span class="collapsible-panel-heading"><span class="eyebrow">SYSOP CONTROL / STATION PARAMETERS</span><span class="collapsible-panel-title page-title" role="heading" aria-level="1">Station settings</span></span>
+    <span class="collapsible-panel-chevron" aria-hidden="true"></span>
+  </button>
+  <div id="station-parameters-content" data-panel-content>
   <p>Station identity: <strong>{{ g.station.name }} - [{{ g.station.callsign }}]</strong></p>
   <form method="post" class="form-grid">
     <input type="hidden" name="csrf_token" value="{{ session.csrf_token }}">
@@ -35,11 +38,15 @@
     <p><a href="{{ url_for('application_admin.manage') }}">MANAGE GAMES AND APPS</a></p>
     <button>COMMIT PARAMETERS</button>
   </form>
+  </div>
 </section>
 
-<section class="narrow terminal-card settings-section" id="access-policy">
-  <p class="eyebrow">SYSOP CONTROL / PUBLIC ACCESS</p>
-  <h2>Registration and guest access</h2>
+<section class="narrow terminal-card settings-section collapsible-panel" id="access-policy" data-collapsible-panel data-panel-key="sysop-access-policy">
+  <button type="button" class="collapsible-panel-toggle" data-panel-toggle aria-expanded="true" aria-controls="access-policy-content">
+    <span class="collapsible-panel-heading"><span class="eyebrow">SYSOP CONTROL / PUBLIC ACCESS</span><span class="collapsible-panel-title" role="heading" aria-level="2">Registration and guest access</span></span>
+    <span class="collapsible-panel-chevron" aria-hidden="true"></span>
+  </button>
+  <div id="access-policy-content" data-panel-content>
   <p class="muted">These controls save independently so an error in another station setting cannot prevent an access change.</p>
   <form method="post" action="{{ url_for('station.access_settings') }}" class="form-grid">
     <input type="hidden" name="csrf_token" value="{{ session.csrf_token }}">
@@ -47,11 +54,15 @@
     <label class="switch"><input type="checkbox" name="guest_access" {% if g.station.guest_access %}checked{% endif %}> Allow guests to read bulletins</label>
     <button>SAVE ACCESS POLICY</button>
   </form>
+  </div>
 </section>
 
-<section class="narrow terminal-card settings-section" id="radio-storage">
-  <p class="eyebrow">SYSOP CONTROL / RADIO STORAGE</p>
-  <h2>Broadcaster library quotas</h2>
+<section class="narrow terminal-card settings-section collapsible-panel" id="radio-storage" data-collapsible-panel data-panel-key="sysop-radio-storage">
+  <button type="button" class="collapsible-panel-toggle" data-panel-toggle aria-expanded="true" aria-controls="radio-storage-content">
+    <span class="collapsible-panel-heading"><span class="eyebrow">SYSOP CONTROL / RADIO STORAGE</span><span class="collapsible-panel-title" role="heading" aria-level="2">Broadcaster library quotas</span></span>
+    <span class="collapsible-panel-chevron" aria-hidden="true"></span>
+  </button>
+  <div id="radio-storage-content" data-panel-content>
   <p class="muted">Quotas are available for administration regardless of your personal broadcast permissions. Blank user overrides inherit the station default.</p>
   <form method="post" action="{{ url_for('station.save_radio_default_quota') }}" class="form-grid">
     <input type="hidden" name="csrf_token" value="{{ session.csrf_token }}">
@@ -67,11 +78,15 @@
     </form>
     {% endfor %}
   </div>
+  </div>
 </section>
 
-<section class="narrow terminal-card settings-section" id="radio-spectrum">
-  <p class="eyebrow">SYSOP CONTROL / RADIO SPECTRUM</p>
-  <h2>Band allocations</h2>
+<section class="narrow terminal-card settings-section collapsible-panel" id="radio-spectrum" data-collapsible-panel data-panel-key="sysop-radio-spectrum">
+  <button type="button" class="collapsible-panel-toggle" data-panel-toggle aria-expanded="true" aria-controls="radio-spectrum-content">
+    <span class="collapsible-panel-heading"><span class="eyebrow">SYSOP CONTROL / RADIO SPECTRUM</span><span class="collapsible-panel-title" role="heading" aria-level="2">Band allocations</span></span>
+    <span class="collapsible-panel-chevron" aria-hidden="true"></span>
+  </button>
+  <div id="radio-spectrum-content" data-panel-content>
   <p class="muted">Set each band's purpose, limits, and future transmission capabilities. These capabilities do not restrict normal tuning.</p>
   <form method="post" class="form-grid">
     <input type="hidden" name="csrf_token" value="{{ session.csrf_token }}">
@@ -95,11 +110,15 @@
     {% endfor %}
     <button>COMMIT RADIO SPECTRUM</button>
   </form>
+  </div>
 </section>
 
-<section class="terminal-card settings-section" id="broadcast-frequencies">
-  <p class="eyebrow">SYSOP CONTROL / HOSTED BROADCAST FREQUENCIES</p>
-  <h2>Frequency assignments</h2>
+<section class="terminal-card settings-section collapsible-panel" id="broadcast-frequencies" data-collapsible-panel data-panel-key="sysop-broadcast-frequencies">
+  <button type="button" class="collapsible-panel-toggle" data-panel-toggle aria-expanded="true" aria-controls="broadcast-frequencies-content">
+    <span class="collapsible-panel-heading"><span class="eyebrow">SYSOP CONTROL / HOSTED BROADCAST FREQUENCIES</span><span class="collapsible-panel-title" role="heading" aria-level="2">Frequency assignments</span></span>
+    <span class="collapsible-panel-chevron" aria-hidden="true"></span>
+  </button>
+  <div id="broadcast-frequencies-content" data-panel-content>
   <p class="muted">One reserved hosted-programming frequency per operator. Assignments remain idle until a broadcast begins.</p>
   <form method="post" action="{{ url_for('station.save_broadcast_limit') }}" class="inline-form">
     <input type="hidden" name="csrf_token" value="{{ session.csrf_token }}">
@@ -125,11 +144,15 @@
     {% endif %}
   </article>
   {% endfor %}
+  </div>
 </section>
 
-<section class="terminal-card settings-section" id="radio-permissions">
-  <p class="eyebrow">SYSOP CONTROL / RADIO PERMISSIONS</p>
-  <h2>Permission groups</h2>
+<section class="terminal-card settings-section collapsible-panel" id="radio-permissions" data-collapsible-panel data-panel-key="sysop-radio-permissions">
+  <button type="button" class="collapsible-panel-toggle" data-panel-toggle aria-expanded="true" aria-controls="radio-permissions-content">
+    <span class="collapsible-panel-heading"><span class="eyebrow">SYSOP CONTROL / RADIO PERMISSIONS</span><span class="collapsible-panel-title" role="heading" aria-level="2">Permission groups</span></span>
+    <span class="collapsible-panel-chevron" aria-hidden="true"></span>
+  </button>
+  <div id="radio-permissions-content" data-panel-content>
   <p class="muted">Within a group, frequency rules override ranges, and ranges override bands. Across a user's groups: DENIED overrides FULL, FULL overrides LISTEN, and an absent rule is UNSET. HOST BROADCASTS is a separate group capability; a host still needs effective FULL access.</p>
   <form method="post" action="{{ url_for('station.create_radio_group') }}" class="inline-form">
     <input type="hidden" name="csrf_token" value="{{ session.csrf_token }}">
@@ -195,11 +218,15 @@
     </form>
   </article>
   {% endfor %}
+  </div>
 </section>
 
-<section class="terminal-card settings-section" id="radio-users">
-  <p class="eyebrow">SYSOP CONTROL / USER RADIO GROUPS</p>
-  <h2>Assignments and effective access</h2>
+<section class="terminal-card settings-section collapsible-panel" id="radio-users" data-collapsible-panel data-panel-key="sysop-radio-users">
+  <button type="button" class="collapsible-panel-toggle" data-panel-toggle aria-expanded="true" aria-controls="radio-users-content">
+    <span class="collapsible-panel-heading"><span class="eyebrow">SYSOP CONTROL / USER RADIO GROUPS</span><span class="collapsible-panel-title" role="heading" aria-level="2">Assignments and effective access</span></span>
+    <span class="collapsible-panel-chevron" aria-hidden="true"></span>
+  </button>
+  <div id="radio-users-content" data-panel-content>
   {% for user in users %}
   <article class="band-settings">
     <h3>{{ user.callsign }} / {{ user.username }}</h3>
@@ -217,6 +244,7 @@
     </div>
   </article>
   {% endfor %}
+  </div>
 </section>
 {% endblock %}
 
