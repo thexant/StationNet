@@ -11,7 +11,7 @@ from pathlib import Path
 from flask import (Blueprint, abort, current_app, flash, g, jsonify, redirect,
                    render_template, request, send_file, session, url_for)
 
-from .auth import login_required
+from .auth import admin_required, login_required
 from .db import get_db
 from .radio import (can_manage_broadcasts, effective_access, find_band,
                     format_frequency, parse_frequency, transmission_authorized)
@@ -34,11 +34,13 @@ TRACK_METADATA_MAX_LENGTH = 240
 
 class HostedBroadcastStore:
     """Server-owned playlist clocks; browsers are synchronized renderers only."""
-    def __init__(self, radio_store):
+    def __init__(self, radio_store, app=None):
         self.radio = radio_store
+        self.app = app
         self._lock = RLock()
         self._sessions = {}
         self._paused = {}
+        self._waiting = {}
 
     @staticmethod
     def _elapsed(item, now=None):
@@ -86,6 +88,8 @@ class HostedBroadcastStore:
                 ]
 
         if current and len(tracks) == 1:
+            if not item["loop"]:
+                return False
             self._set_current(item, tracks[0])
             item["shuffle_remaining"] = []
             return True
@@ -156,10 +160,70 @@ class HostedBroadcastStore:
         if not item["indefinite"]:
             deadlines.append(item["limit_seconds"] - elapsed)
         delay = max(.01, min(deadlines))
-        timer = Timer(delay, self._expire, args=(item["user_id"], item["transmission_id"]))
+        timer = Timer(delay, self._expire, args=(item["owner_key"], item["transmission_id"]))
         timer.daemon = True
         item["timer"] = timer
         timer.start()
+
+    def _finish_or_wait(self, owner_key, item, reason):
+        self.radio.end_hosted(owner_key, reason)
+        timer = item.pop("timer", None)
+        if timer:
+            timer.cancel()
+        self._sessions.pop(owner_key, None)
+        if item.get("delay_seconds", 0) and reason in {"playlist_complete", "duration_limit"}:
+            item.update(current_track=None, track_offset=0, timeline_elapsed=0,
+                        resume_elapsed=0, track_serial=-1)
+            item["shuffle_remaining"] = []
+            if self._advance_track(item):
+                item["waiting_started"] = monotonic()
+                timer = Timer(item["delay_seconds"], self._restart_waiting, args=(owner_key,))
+                timer.daemon = True
+                item["timer"] = timer
+                self._waiting[owner_key] = item
+                timer.start()
+
+    def _restart_waiting(self, owner_key):
+        with self._lock:
+            item = self._waiting.get(owner_key)
+            if not item:
+                return
+            if self.app is not None:
+                from .radio import transmission_authorized
+                with self.app.app_context():
+                    allowed = transmission_authorized(
+                        item.get("permission_user_id", owner_key), item["frequency"],
+                        "HOSTED_BROADCAST",
+                    )
+                if not allowed:
+                    self._waiting.pop(owner_key, None)
+                    return
+            first = item["current_track"]
+            try:
+                transmission_id, _event = self.radio.start_hosted(
+                    owner_key, item["frequency"], item["callsign"],
+                    public_user_id=item.get("public_user_id"),
+                    playlist_name=item["playlist_name"], track_name=first["name"],
+                    track_title=first.get("title") or Path(first["name"]).stem,
+                    track_artist=first.get("artist") or "", audio_file_id=first["file_id"],
+                    track_offset=0, track_serial=item["track_serial"],
+                    automated=item.get("automated", False),
+                )
+            except RuntimeError:
+                # A temporarily occupied frequency must not disable automation.
+                item["waiting_started"] = monotonic()
+                timer = Timer(min(30, max(1, item["delay_seconds"])),
+                              self._restart_waiting, args=(owner_key,))
+                timer.daemon = True
+                item["timer"] = timer
+                timer.start()
+                return
+            item.update(transmission_id=transmission_id, clock_started=monotonic(),
+                        resume_elapsed=0, timeline_elapsed=0, track_offset=0)
+            item.pop("waiting_started", None)
+            self._waiting.pop(owner_key, None)
+            self._sessions[owner_key] = item
+            self._schedule_end(item)
 
     def _expire(self, user_id, transmission_id):
         with self._lock:
@@ -168,8 +232,7 @@ class HostedBroadcastStore:
                 return
             position, _elapsed, reason = self._position(item)
             if reason:
-                self.radio.end_hosted(user_id, reason)
-                self._sessions.pop(user_id, None)
+                self._finish_or_wait(user_id, item, reason)
             elif position:
                 track = position[1]
                 self.radio.update_hosted(
@@ -190,13 +253,12 @@ class HostedBroadcastStore:
                 if user_id is not None and owner_id != user_id:
                     continue
                 position, elapsed, reason = self._position(item)
-                if not reason and not transmission_authorized(owner_id, item["frequency"], "HOSTED_BROADCAST"):
+                if not reason and not transmission_authorized(
+                        item.get("permission_user_id", owner_id), item["frequency"],
+                        "HOSTED_BROADCAST"):
                     reason = "permission_revoked"
                 if reason:
-                    self.radio.end_hosted(owner_id, reason)
-                    if item.get("timer"):
-                        item["timer"].cancel()
-                    self._sessions.pop(owner_id, None)
+                    self._finish_or_wait(owner_id, item, reason)
                     continue
                 index, track, offset = position
                 item.update(track_index=index, elapsed=elapsed)
@@ -208,14 +270,21 @@ class HostedBroadcastStore:
                                          track_serial=item["track_serial"])
 
     def start(self, user_id, callsign, frequency, playlist_id, playlist_name,
-              tracks, loop, limit_seconds, shuffle=False):
+              tracks, loop, limit_seconds, shuffle=False, delay_seconds=0,
+              permission_user_id=None, public_user_id=None, automated=False):
         with self._lock:
             self.refresh(user_id)
             if user_id in self._sessions:
                 raise RuntimeError("You already have an active hosted broadcast.")
-            item = {"user_id": user_id, "callsign": callsign, "frequency": frequency,
+            item = {"user_id": user_id, "owner_key": user_id,
+                    "permission_user_id": permission_user_id or user_id,
+                    "public_user_id": (user_id if public_user_id is None and not automated
+                                       else public_user_id),
+                    "automated": bool(automated), "delay_seconds": max(0, delay_seconds),
+                    "callsign": callsign, "frequency": frequency,
                     "playlist_id": playlist_id, "playlist_name": playlist_name,
-                    "tracks": tracks, "loop": bool(loop), "shuffle": bool(shuffle),
+                    "tracks": tracks, "loop": bool(loop) if not delay_seconds else False,
+                    "shuffle": bool(shuffle),
                     "pending_shuffle": None, "shuffle_remaining": [],
                     "limit_seconds": limit_seconds,
                     "indefinite": False, "base_loop": bool(loop),
@@ -225,10 +294,11 @@ class HostedBroadcastStore:
                 raise RuntimeError("This playlist has no available audio tracks.")
             first = item["current_track"]
             transmission_id, _event = self.radio.start_hosted(
-                user_id, frequency, callsign, playlist_name=playlist_name,
+                user_id, frequency, callsign, public_user_id=item["public_user_id"],
+                playlist_name=playlist_name,
                 track_name=first["name"], track_title=first.get("title") or Path(first["name"]).stem,
                 track_artist=first.get("artist") or "", audio_file_id=first["file_id"], track_offset=0,
-                track_serial=item["track_serial"],
+                track_serial=item["track_serial"], automated=bool(automated),
             )
             item["transmission_id"] = transmission_id
             self._sessions[user_id] = item
@@ -237,7 +307,8 @@ class HostedBroadcastStore:
 
     def stop(self, user_id, reason="ended"):
         with self._lock:
-            existed = self._sessions.pop(user_id, None) or self._paused.pop(user_id, None)
+            existed = (self._sessions.pop(user_id, None) or self._paused.pop(user_id, None)
+                       or self._waiting.pop(user_id, None))
             if existed and existed.get("timer"):
                 existed["timer"].cancel()
             self.radio.end_hosted(user_id, reason)
@@ -266,11 +337,12 @@ class HostedBroadcastStore:
             first = item["current_track"]
             transmission_id, _event = self.radio.start_hosted(
                 user_id, item["frequency"], item["callsign"],
+                public_user_id=item.get("public_user_id"),
                 playlist_name=item["playlist_name"], track_name=first["name"],
                 track_title=first.get("title") or Path(first["name"]).stem,
                 track_artist=first.get("artist") or "",
                 audio_file_id=first["file_id"], track_offset=item.get("track_offset", 0),
-                track_serial=item["track_serial"],
+                track_serial=item["track_serial"], automated=item.get("automated", False),
             )
             item["transmission_id"] = transmission_id
             item["clock_started"] = monotonic()
@@ -284,7 +356,8 @@ class HostedBroadcastStore:
     def sync_playlist(self, user_id, playlist_id, playlist_name, tracks, loop, shuffle):
         """Apply playlist edits without restarting the current audio unnecessarily."""
         with self._lock:
-            item = self._sessions.get(user_id) or self._paused.get(user_id)
+            item = (self._sessions.get(user_id) or self._paused.get(user_id)
+                    or self._waiting.get(user_id))
             if not item or item["playlist_id"] != playlist_id:
                 return False
             current = item.get("current_track")
@@ -300,7 +373,7 @@ class HostedBroadcastStore:
             if not current or current["entry_id"] not in valid_ids:
                 item["current_track"] = current
                 if not self._advance_track(item):
-                    self.stop(user_id, "playlist_complete")
+                    self._finish_or_wait(user_id, item, "playlist_complete")
                     return True
                 item["track_offset"] = 0
                 item["timeline_elapsed"] = (item["resume_elapsed"] if user_id in self._paused
@@ -312,7 +385,7 @@ class HostedBroadcastStore:
             if user_id in self._sessions:
                 position, _elapsed, reason = self._position(item)
                 if reason:
-                    self.stop(user_id, reason)
+                    self._finish_or_wait(user_id, item, reason)
                 else:
                     track = position[1]
                     self.radio.update_hosted(
@@ -336,7 +409,7 @@ class HostedBroadcastStore:
             item["timeline_elapsed"] = elapsed
             item["track_offset"] = 0
             if not self._advance_track(item):
-                self.stop(user_id, "playlist_complete")
+                self._finish_or_wait(user_id, item, "playlist_complete")
                 return True
             track = item["current_track"]
             self.radio.update_hosted(
@@ -361,7 +434,7 @@ class HostedBroadcastStore:
                     track["duration"] = duration
             position, _elapsed, reason = self._position(item)
             if reason:
-                self.stop(user_id, reason)
+                self._finish_or_wait(user_id, item, reason)
                 return True
             track = position[1]
             self.radio.update_hosted(
@@ -374,7 +447,8 @@ class HostedBroadcastStore:
 
     def set_indefinite(self, user_id, enabled):
         with self._lock:
-            item = self._sessions.get(user_id) or self._paused.get(user_id)
+            item = (self._sessions.get(user_id) or self._paused.get(user_id)
+                    or self._waiting.get(user_id))
             if not item:
                 return False
             item["indefinite"] = bool(enabled)
@@ -385,7 +459,7 @@ class HostedBroadcastStore:
 
     def active_user(self, user_id):
         self.refresh(user_id)
-        return user_id in self._sessions
+        return user_id in self._sessions or user_id in self._paused or user_id in self._waiting
 
     def public(self, user_id):
         self.refresh(user_id)
@@ -394,13 +468,19 @@ class HostedBroadcastStore:
         if not item:
             item = self._paused.get(user_id)
             paused = item is not None
+        waiting = False
+        if not item:
+            item = self._waiting.get(user_id)
+            waiting = item is not None
         if not item:
             return None
-        position, elapsed, _reason = self._position(item) if not paused else (None, item["resume_elapsed"], None)
+        position, elapsed, _reason = (self._position(item) if not paused and not waiting
+                                      else (None, item.get("resume_elapsed", 0), None))
         track = position[1] if position else item["current_track"]
         offset = position[2] if position else item.get("track_offset", 0)
         remaining = None if item["indefinite"] else max(0, item["limit_seconds"] - elapsed)
-        return {"user_id": user_id, "callsign": item["callsign"],
+        return {"user_id": item.get("public_user_id"), "session_key": user_id,
+                "callsign": item["callsign"],
                 "frequency": format_frequency(item["frequency"]),
                 "frequency_khz": item["frequency"], "playlist_id": item["playlist_id"],
                 "playlist_name": item["playlist_name"], "track_name": track["name"],
@@ -408,12 +488,17 @@ class HostedBroadcastStore:
                 "track_artist": track.get("artist") or "",
                 "audio_file_id": track["file_id"], "track_offset": round(offset, 3),
                 "track_serial": item["track_serial"],
-                "status": "paused" if paused else "playing", "remaining_seconds": remaining,
+                "status": "waiting" if waiting else ("paused" if paused else "playing"),
+                "remaining_seconds": remaining,
+                "next_run_seconds": (max(0, item["delay_seconds"] -
+                                          (monotonic() - item["waiting_started"]))
+                                     if waiting else None),
+                "automated": item.get("automated", False),
                 "indefinite": item["indefinite"], "shuffle": item["shuffle"]}
 
     def all_public(self):
         self.refresh()
-        user_ids = set(self._sessions) | set(self._paused)
+        user_ids = set(self._sessions) | set(self._paused) | set(self._waiting)
         return {user_id: self.public(user_id) for user_id in user_ids}
 
 
@@ -612,6 +697,192 @@ def _sync_playlist(database, playlist_id):
             _available_tracks(database, playlist_id), playlist["loop_enabled"],
             playlist["shuffle_enabled"],
         )
+        for automated in database.execute(
+                "SELECT a.id,a.delay_minutes,p.loop_enabled,p.shuffle_enabled "
+                "FROM radio_automated_broadcasts a JOIN radio_playlists p ON p.id=a.playlist_id "
+                "WHERE a.playlist_id=?", (playlist_id,)):
+            _store().sync_playlist(
+                _automated_key(automated["id"]), playlist["id"], playlist["name"],
+                _available_tracks(database, playlist_id),
+                automated["loop_enabled"] if not automated["delay_minutes"] else False,
+                automated["shuffle_enabled"],
+            )
+
+
+def _automated_key(broadcast_id):
+    return f"automated:{broadcast_id}"
+
+
+def _automated_redirect(broadcast_id=None):
+    anchor = f"#automated-{broadcast_id}" if broadcast_id else ""
+    return redirect(url_for("broadcast.automated") + anchor)
+
+
+def _automated_values(database, broadcast_id=None):
+    name = request.form.get("name", "").strip()
+    message = request.form.get("message", "").strip()
+    frequency = parse_frequency(request.form.get("frequency"))
+    playlist_id = request.form.get("playlist_id", type=int)
+    runtime = request.form.get("runtime_minutes", type=int)
+    delay = request.form.get("delay_minutes", type=int)
+    if not 1 <= len(name) <= BROADCAST_NAME_MAX_LENGTH:
+        return None, "Broadcast names must be between 1 and 80 characters."
+    if len(message) > BROADCAST_MESSAGE_MAX_LENGTH or "\n" in name or "\r" in name:
+        return None, "Enter a one-line name and a message no longer than 240 characters."
+    if any(ord(character) < 32 and character not in "\t\n\r" for character in name + message):
+        return None, "Broadcast information cannot contain control characters."
+    band = find_band(frequency)
+    if frequency is None or not band or not band["supports_hosted_broadcasts"]:
+        return None, "Choose a frequency inside a band that supports hosted broadcasts."
+    if effective_access(g.user["id"], frequency) != "FULL":
+        return None, "Your radio groups must grant FULL access at that frequency."
+    assignment = database.execute(
+        "SELECT 1 FROM radio_broadcast_assignments WHERE frequency_khz=?", (frequency,),
+    ).fetchone()
+    duplicate = database.execute(
+        "SELECT 1 FROM radio_automated_broadcasts WHERE frequency_khz=? AND id<>?",
+        (frequency, broadcast_id or 0),
+    ).fetchone()
+    if assignment or duplicate:
+        return None, "That frequency is already reserved for another broadcast."
+    playlist = database.execute(
+        "SELECT p.* FROM radio_playlists p JOIN users u ON u.id=p.owner_id "
+        "WHERE p.id=? AND u.is_admin=1 AND (p.owner_id=? OR (? IS NOT NULL AND EXISTS("
+        "SELECT 1 FROM radio_automated_broadcasts a WHERE a.id=? AND a.playlist_id=p.id)))",
+        (playlist_id, g.user["id"], broadcast_id, broadcast_id),
+    ).fetchone()
+    if not playlist:
+        return None, "Choose one of your prepared playlists."
+    if runtime is None or not 1 <= runtime <= 1440:
+        return None, "Runtime must be between 1 and 1440 minutes."
+    if delay is None or not 0 <= delay <= 10080:
+        return None, "Delay must be between 0 and 10080 minutes."
+    return (name, message, frequency, playlist_id, runtime, delay), None
+
+
+@bp.get("/automated")
+@admin_required
+def automated():
+    database = get_db()
+    definitions = database.execute(
+        "SELECT a.*,p.name playlist_name,u.username creator_username,u.callsign creator_callsign "
+        "FROM radio_automated_broadcasts a JOIN radio_playlists p ON p.id=a.playlist_id "
+        "JOIN users u ON u.id=a.created_by ORDER BY a.frequency_khz,a.name COLLATE NOCASE"
+    ).fetchall()
+    playlists = database.execute(
+        "SELECT p.id,p.name,COUNT(t.id) track_count FROM radio_playlists p "
+        "LEFT JOIN radio_playlist_tracks t ON t.playlist_id=p.id "
+        "WHERE p.owner_id=? GROUP BY p.id ORDER BY p.name", (g.user["id"],),
+    ).fetchall()
+    return render_template(
+        "radio/automated.html", definitions=definitions, playlists=playlists,
+        sessions=_store().all_public(), format_frequency=format_frequency,
+    )
+
+
+@bp.post("/automated")
+@admin_required
+def create_automated():
+    validate_csrf()
+    database = get_db()
+    values, error = _automated_values(database)
+    if error:
+        flash(error, "error")
+    else:
+        try:
+            database.execute(
+                "INSERT INTO radio_automated_broadcasts"
+                "(created_by,name,message,frequency_khz,playlist_id,runtime_minutes,delay_minutes) "
+                "VALUES(?,?,?,?,?,?,?)", (g.user["id"], *values),
+            )
+            database.commit()
+            flash("Automated broadcast created.", "success")
+        except sqlite3.IntegrityError:
+            database.rollback()
+            flash("That frequency or playlist is no longer available.", "error")
+    return _automated_redirect()
+
+
+@bp.post("/automated/<int:broadcast_id>")
+@admin_required
+def update_automated(broadcast_id):
+    validate_csrf()
+    database = get_db()
+    if database.execute("SELECT 1 FROM radio_automated_broadcasts WHERE id=?", (broadcast_id,)).fetchone() is None:
+        abort(404)
+    values, error = _automated_values(database, broadcast_id)
+    if error:
+        flash(error, "error")
+    else:
+        _store().stop(_automated_key(broadcast_id), "configuration_changed")
+        try:
+            database.execute(
+                "UPDATE radio_automated_broadcasts SET name=?,message=?,frequency_khz=?,"
+                "playlist_id=?,runtime_minutes=?,delay_minutes=?,"
+                "created_by=(SELECT owner_id FROM radio_playlists WHERE id=?),"
+                "updated_at=CURRENT_TIMESTAMP WHERE id=?", (*values, values[3], broadcast_id),
+            )
+            database.commit()
+            flash("Automated broadcast updated. Restart it to use the new settings.", "success")
+        except sqlite3.IntegrityError:
+            database.rollback()
+            flash("That frequency or playlist is no longer available.", "error")
+    return _automated_redirect(broadcast_id)
+
+
+@bp.post("/automated/<int:broadcast_id>/delete")
+@admin_required
+def delete_automated(broadcast_id):
+    validate_csrf()
+    _store().stop(_automated_key(broadcast_id), "deleted")
+    changed = get_db().execute("DELETE FROM radio_automated_broadcasts WHERE id=?", (broadcast_id,))
+    get_db().commit()
+    if not changed.rowcount:
+        abort(404)
+    flash("Automated broadcast deleted.", "success")
+    return _automated_redirect()
+
+
+@bp.post("/automated/<int:broadcast_id>/control")
+@admin_required
+def control_automated(broadcast_id):
+    validate_csrf()
+    database = get_db()
+    definition = database.execute(
+        "SELECT a.*,p.name playlist_name,p.loop_enabled,p.shuffle_enabled "
+        "FROM radio_automated_broadcasts a "
+        "JOIN radio_playlists p ON p.id=a.playlist_id WHERE a.id=?", (broadcast_id,),
+    ).fetchone()
+    if not definition:
+        abort(404)
+    key = _automated_key(broadcast_id)
+    action = request.form.get("action")
+    if action == "stop":
+        changed = _store().stop(key, "sysop_stopped")
+        flash("Automated broadcast stopped." if changed else "Automated broadcast was already stopped.",
+              "success" if changed else "warning")
+        return _automated_redirect(broadcast_id)
+    if action != "start":
+        abort(400)
+    if not transmission_authorized(g.user["id"], definition["frequency_khz"], "HOSTED_BROADCAST"):
+        flash("Your radio groups do not authorize hosted broadcasts at that frequency.", "error")
+        return _automated_redirect(broadcast_id)
+    tracks = _available_tracks(database, definition["playlist_id"])
+    if not tracks:
+        flash("The selected playlist has no available audio tracks.", "error")
+        return _automated_redirect(broadcast_id)
+    try:
+        _store().start(
+            key, definition["name"], definition["frequency_khz"], definition["playlist_id"],
+            definition["playlist_name"], tracks, definition["loop_enabled"],
+            definition["runtime_minutes"] * 60, definition["shuffle_enabled"],
+            delay_seconds=definition["delay_minutes"] * 60,
+            permission_user_id=g.user["id"], public_user_id=None, automated=True,
+        )
+        flash("Automated broadcast started.", "success")
+    except RuntimeError as problem:
+        flash(str(problem), "error")
+    return _automated_redirect(broadcast_id)
 
 
 @bp.get("")
@@ -843,6 +1114,10 @@ def delete_playlist(playlist_id):
     validate_csrf()
     database = get_db()
     playlist = _owned_playlist(database, playlist_id)
+    if database.execute(
+            "SELECT 1 FROM radio_automated_broadcasts WHERE playlist_id=?", (playlist_id,)).fetchone():
+        flash("This playlist is assigned to an automated broadcast and cannot be deleted.", "error")
+        return _redirect(playlist_id)
     database.execute("DELETE FROM radio_playlists WHERE id=?", (playlist_id,))
     database.commit()
     _store().sync_playlist(playlist["owner_id"], playlist_id, playlist["name"], [], False, False)
@@ -949,7 +1224,33 @@ def status():
         "FROM radio_broadcast_assignments a "
         "JOIN users u ON u.id=a.user_id ORDER BY a.frequency_khz"
     ).fetchall()
+    automated_directory = database.execute(
+        "SELECT id,name,message,frequency_khz FROM radio_automated_broadcasts "
+        "ORDER BY frequency_khz"
+    ).fetchall()
     active = _store().all_public()
+    directory_payload = [{"user_id": row["user_id"], "callsign": row["callsign"],
+                          "username": row["username"],
+                          "name": row["broadcast_name"] or
+                                  f"{row['username']} - [{row['callsign']}]",
+                          "message": row["broadcast_message"],
+                          "frequency": format_frequency(row["frequency_khz"]),
+                          "broadcasting": row["user_id"] in active and active[row["user_id"]]["status"] == "playing",
+                          "now_playing": (active.get(row["user_id"], {}).get("track_title") or
+                                          active.get(row["user_id"], {}).get("track_name"))}
+                         for row in directory
+                         if effective_access(g.user["id"], row["frequency_khz"]) != "DENIED"]
+    for row in automated_directory:
+        live = active.get(_automated_key(row["id"]), {})
+        if effective_access(g.user["id"], row["frequency_khz"]) != "DENIED":
+            directory_payload.append({
+                "user_id": None, "callsign": "STATION AUTOMATION", "username": None,
+                "name": row["name"], "message": row["message"],
+                "frequency": format_frequency(row["frequency_khz"]),
+                "broadcasting": live.get("status") == "playing",
+                "now_playing": live.get("track_title") or live.get("track_name"),
+            })
+    directory_payload.sort(key=lambda item: (float(item["frequency"]), item["name"].casefold()))
     return jsonify(
         assignment=format_frequency(assignment["frequency_khz"]) if assignment else None,
         assignment_khz=assignment["frequency_khz"] if assignment else None,
@@ -959,17 +1260,7 @@ def status():
                    "message": assignment["broadcast_message"]} if assignment else None),
         session=_store().public(g.user["id"]),
         playlists=[dict(row) for row in playlists],
-        directory=[{"user_id": row["user_id"], "callsign": row["callsign"],
-                    "username": row["username"],
-                    "name": row["broadcast_name"] or
-                            f"{row['username']} - [{row['callsign']}]",
-                    "message": row["broadcast_message"],
-                    "frequency": format_frequency(row["frequency_khz"]),
-                    "broadcasting": row["user_id"] in active and active[row["user_id"]]["status"] == "playing",
-                    "now_playing": (active.get(row["user_id"], {}).get("track_title") or
-                                    active.get(row["user_id"], {}).get("track_name"))}
-                   for row in directory
-                   if effective_access(g.user["id"], row["frequency_khz"]) != "DENIED"],
+        directory=directory_payload,
     )
 
 
@@ -1042,7 +1333,7 @@ def advance_broadcast():
     match = _tuned_broadcast(file_id, track_serial)
     if not match:
         return jsonify(advanced=False), 200
-    advanced = _store().advance(match["user_id"], file_id, track_serial)
+    advanced = _store().advance(match["session_key"], file_id, track_serial)
     return jsonify(advanced=advanced)
 
 
@@ -1059,7 +1350,7 @@ def broadcast_timing():
     match = _tuned_broadcast(file_id, track_serial)
     if not match:
         return jsonify(updated=False), 200
-    updated = _store().correct_duration(match["user_id"], file_id, track_serial, duration)
+    updated = _store().correct_duration(match["session_key"], file_id, track_serial, duration)
     if updated:
         get_db().execute(
             "UPDATE radio_audio_files SET duration_seconds=? WHERE id=?", (duration, file_id),

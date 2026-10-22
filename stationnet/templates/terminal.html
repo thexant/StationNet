@@ -73,7 +73,7 @@
         </a>
         <a class="activity-item activity-broadcasts" href="{{ url_for('radio.console') }}">
           <span>ACTIVE BROADCASTS</span>
-          {% for broadcast in activity.broadcasts %}<div class="activity-broadcast"><strong>{{ broadcast.name }}</strong><small>{{ broadcast.frequency }} MHz / {{ broadcast.username }} - [{{ broadcast.callsign }}]</small>{% if broadcast.message %}<p>{{ broadcast.message }}</p>{% endif %}<em>{{ broadcast.track_title }}{% if broadcast.track_artist %} / {{ broadcast.track_artist }}{% endif %}</em></div>{% else %}<em>NO AUTHORIZED BROADCASTS ON AIR</em>{% endfor %}
+          {% for broadcast in activity.broadcasts %}<div class="activity-broadcast"><strong>{{ broadcast.name }}</strong><small>{{ broadcast.frequency }} MHz / {% if broadcast.automated %}STATION AUTOMATION{% else %}{{ broadcast.username }} - [{{ broadcast.callsign }}]{% endif %}</small>{% if broadcast.message %}<p>{{ broadcast.message }}</p>{% endif %}<em>{{ broadcast.track_title }}{% if broadcast.track_artist %} / {{ broadcast.track_artist }}{% endif %}</em></div>{% else %}<em>NO AUTHORIZED BROADCASTS ON AIR</em>{% endfor %}
         </a>
       </div>
     </aside>

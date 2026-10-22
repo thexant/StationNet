@@ -87,7 +87,8 @@ def terminal():
             )
         }
         broadcasts = []
-        for user_id, session_info in current_app.extensions["hosted_broadcasts"].all_public().items():
+        live_broadcasts = current_app.extensions["hosted_broadcasts"].all_public()
+        for user_id, session_info in live_broadcasts.items():
             assignment = assignments.get(user_id)
             if (session_info and session_info["status"] == "playing" and assignment
                     and assignment["frequency_khz"] == session_info["frequency_khz"]):
@@ -97,6 +98,16 @@ def terminal():
                             f"{assignment['username']} - [{assignment['callsign']}]",
                     "username": assignment["username"],
                     "message": assignment["broadcast_message"],
+                })
+        automated = {f"automated:{row['id']}": row for row in database.execute(
+            "SELECT id,name,message,frequency_khz FROM radio_automated_broadcasts"
+        )}
+        for key, definition in automated.items():
+            session_info = live_broadcasts.get(key)
+            if session_info and session_info["status"] == "playing":
+                broadcasts.append({
+                    **session_info, "name": definition["name"], "username": None,
+                    "message": definition["message"],
                 })
         broadcasts.sort(key=lambda item: (item["frequency_khz"], item["name"].casefold()))
         activity = {
@@ -407,6 +418,9 @@ def save_broadcast_frequency(user_id):
                  if row["start_khz"] <= (frequency or 0) <= row["end_khz"]), None)
     if frequency is None or not band or not band["supports_hosted_broadcasts"]:
         flash("Choose a valid frequency inside a band that supports hosted broadcasts.", "error")
+    elif database.execute(
+            "SELECT 1 FROM radio_automated_broadcasts WHERE frequency_khz=?", (frequency,)).fetchone():
+        flash("That frequency is reserved for an automated broadcast.", "error")
     elif not can_host_broadcast(user_id, frequency):
         flash("That user needs effective FULL access and HOST BROADCASTS permission there.", "error")
     else:

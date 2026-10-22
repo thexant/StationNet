@@ -275,20 +275,23 @@ class RadioStore:
             )
             return transmission["id"], event
 
-    def start_hosted(self, user_id, frequency, callsign, **metadata):
+    def start_hosted(self, owner_key, frequency, callsign, public_user_id=None, **metadata):
         """Reserve a frequency for server-owned playback, independent of a browser."""
         now = monotonic()
-        connection_id = f"hosted:{user_id}"
+        connection_id = f"hosted:{owner_key}"
+        if public_user_id is None and isinstance(owner_key, int):
+            public_user_id = owner_key
         with self._lock:
             self._prune(now)
             if frequency in self._frequency_owners:
                 raise RuntimeError("Frequency busy.")
-            if any(item["user_id"] == user_id and item.get("server_hosted")
+            if any(item.get("hosted_owner_key") == owner_key and item.get("server_hosted")
                    for item in self._transmissions.values()):
                 raise RuntimeError("You already have an active hosted broadcast.")
             transmission = {
                 "id": self._next_transmission_id, "connection_id": connection_id,
-                "user_id": user_id, "frequency": frequency, "callsign": callsign,
+                "user_id": public_user_id, "hosted_owner_key": owner_key,
+                "frequency": frequency, "callsign": callsign,
                 "mode": "MUSIC", "transmission_type": "HOSTED_BROADCAST",
                 "started": now, "started_at": datetime.now(timezone.utc).isoformat(),
                 "state": "active", "last_seen": now, "server_hosted": True,
@@ -299,26 +302,26 @@ class RadioStore:
             self._frequency_owners[frequency] = transmission["id"]
             return transmission["id"], self._append_event(transmission, "start")
 
-    def end_hosted(self, user_id, reason="ended"):
+    def end_hosted(self, owner_key, reason="ended"):
         with self._lock:
             self._prune(monotonic())
             for item in list(self._transmissions.values()):
-                if item["user_id"] == user_id and item.get("server_hosted"):
+                if item.get("hosted_owner_key") == owner_key and item.get("server_hosted"):
                     return self._finish_locked(item, reason)
             return None
 
-    def hosted_for_user(self, user_id):
+    def hosted_for_user(self, owner_key):
         with self._lock:
             self._prune(monotonic())
             for item in self._transmissions.values():
-                if item["user_id"] == user_id and item.get("server_hosted"):
+                if item.get("hosted_owner_key") == owner_key and item.get("server_hosted"):
                     return dict(item)
             return None
 
-    def update_hosted(self, user_id, **metadata):
+    def update_hosted(self, owner_key, **metadata):
         with self._lock:
             for item in self._transmissions.values():
-                if item["user_id"] == user_id and item.get("server_hosted"):
+                if item.get("hosted_owner_key") == owner_key and item.get("server_hosted"):
                     item.update(metadata)
                     return True
             return False
@@ -409,6 +412,7 @@ class RadioStore:
         }
         if transmission.get("server_hosted"):
             result["hosted"] = True
+            result["automated"] = bool(transmission.get("automated"))
             result["playlist_name"] = transmission.get("playlist_name")
             result["track_name"] = transmission.get("track_name")
             result["track_title"] = transmission.get("track_title") or transmission.get("track_name")
@@ -599,6 +603,16 @@ def broadcast_identity(frequency):
     """Return the registered assignment label for a frequency, if one exists."""
     if frequency is None:
         return None
+    automated = get_db().execute(
+        "SELECT name,message FROM radio_automated_broadcasts WHERE frequency_khz=?",
+        (frequency,),
+    ).fetchone()
+    if automated is not None:
+        return {
+            "registered": True, "automated": True, "name": automated["name"],
+            "message": automated["message"], "callsign": "STATION AUTOMATION",
+            "username": None, "configured_name": automated["name"],
+        }
     row = get_db().execute(
         "SELECT a.broadcast_name,a.broadcast_message,u.callsign,u.username "
         "FROM radio_broadcast_assignments a JOIN users u ON u.id=a.user_id "
@@ -620,7 +634,8 @@ def broadcast_status(identity, active):
     """Describe live content separately from a frequency's registered identity."""
     if active and active.get("hosted"):
         return {
-            "kind": "automated", "label": "AUTOMATED PLAYBACK",
+            "kind": "automated" if active.get("automated") else "hosted",
+            "label": "AUTOMATED BROADCAST" if active.get("automated") else "HOSTED PLAYBACK",
             "active": True, "title": active.get("track_title") or active.get("track_name") or "Untitled track",
             "artist": active.get("track_artist") or "",
         }

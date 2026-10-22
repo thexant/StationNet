@@ -168,6 +168,7 @@
   </button>
   <div id="broadcast-frequencies-content" data-panel-content>
   <p class="muted">One reserved hosted-programming frequency per operator. Assignments remain idle until a broadcast begins.</p>
+  <p><a class="button" href="{{ url_for('broadcast.automated') }}">MANAGE AUTOMATED BROADCASTS</a></p>
   <form method="post" action="{{ url_for('station.save_broadcast_limit') }}" class="inline-form">
     <input type="hidden" name="csrf_token" value="{{ session.csrf_token }}">
     <label>Maximum continuous session (minutes)<input type="number" min="1" max="1440" name="radio_broadcast_limit_minutes" value="{{ g.station.radio_broadcast_limit_minutes }}" required></label>

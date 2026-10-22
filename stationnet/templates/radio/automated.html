@@ -1,0 +1,57 @@
+{% extends 'base.html' %}
+{% block title %}Automated Broadcasts{% endblock %}
+{% block content %}
+<header class="board-head">
+  <div><p class="eyebrow">SYSOP CONTROL / RADIO AUTOMATION</p><h1>Automated broadcasts</h1><p>Run multiple station-owned playlists without attaching them to an individual operator identity.</p></div>
+  <a class="button secondary" href="{{ url_for('station.settings') }}#broadcast-frequencies">RETURN TO SYSOP SETTINGS</a>
+</header>
+
+<section class="terminal-card broadcast-section">
+  <p class="eyebrow">NEW AUTOMATION / STATION IDENTITY</p>
+  <h2>Create automated broadcast</h2>
+  {% if playlists %}
+  <form method="post" action="{{ url_for('broadcast.create_automated') }}" class="form-grid">
+    <input type="hidden" name="csrf_token" value="{{ session.csrf_token }}">
+    <label>Broadcast name<input name="name" maxlength="80" required placeholder="HOURLY STATION REMINDER"></label>
+    <label>Listener message<textarea name="message" maxlength="240" rows="3" placeholder="Station-owned automated programming."></textarea></label>
+    <label>Frequency (MHz)<input name="frequency" inputmode="decimal" required placeholder="7.10"></label>
+    <label>Playlist<select name="playlist_id" required>{% for playlist in playlists %}<option value="{{ playlist.id }}" {% if not playlist.track_count %}disabled{% endif %}>{{ playlist.name }} / {{ playlist.track_count }} TRACKS</option>{% endfor %}</select><small>Playlists are prepared in your existing broadcast library.</small></label>
+    <label>Maximum runtime (minutes)<input type="number" name="runtime_minutes" min="1" max="1440" value="120" required><small>Maximum on-air time for each cycle.</small></label>
+    <label>Restart delay (minutes)<input type="number" name="delay_minutes" min="0" max="10080" value="0" required><small>Zero plays once. A delay plays the full playlist, clears the frequency, waits, then starts it again.</small></label>
+    <button>CREATE AUTOMATED BROADCAST +</button>
+  </form>
+  {% else %}
+  <p class="muted">Create a playlist in your broadcast library before configuring automation.</p>
+  {% endif %}
+  <p><a href="{{ url_for('broadcast.manage') }}#playlists">OPEN AUDIO LIBRARY AND PLAYLISTS</a></p>
+</section>
+
+{% for item in definitions %}
+{% set live = sessions.get('automated:' ~ item.id) %}
+<section class="terminal-card broadcast-section" id="automated-{{ item.id }}">
+  <div class="split-heading"><div><p class="eyebrow">{{ format_frequency(item.frequency_khz) }} MHz / {{ live.status|upper if live else 'STOPPED' }}</p><h2>{{ item.name }}</h2></div>
+    <form method="post" action="{{ url_for('broadcast.control_automated',broadcast_id=item.id) }}"><input type="hidden" name="csrf_token" value="{{ session.csrf_token }}"><input type="hidden" name="action" value="{{ 'stop' if live else 'start' }}"><button class="{{ 'danger' if live else '' }}">{{ 'STOP AUTOMATION' if live else 'START AUTOMATION' }}</button></form>
+  </div>
+  {% if live %}<p><strong>{{ live.status|upper }}</strong> / {{ live.track_title }}{% if live.track_artist %} / {{ live.track_artist }}{% endif %}{% if live.status == 'waiting' %} / RESTART IN {{ (live.next_run_seconds / 60)|round(1) }} MIN{% endif %}</p>{% endif %}
+  <form method="post" action="{{ url_for('broadcast.update_automated',broadcast_id=item.id) }}" class="form-grid">
+    <input type="hidden" name="csrf_token" value="{{ session.csrf_token }}">
+    <label>Broadcast name<input name="name" maxlength="80" required value="{{ item.name }}"></label>
+    <label>Listener message<textarea name="message" maxlength="240" rows="3">{{ item.message }}</textarea></label>
+    <label>Frequency (MHz)<input name="frequency" inputmode="decimal" required value="{{ format_frequency(item.frequency_khz) }}"></label>
+    <label>Playlist<select name="playlist_id" required>
+      {% if item.created_by != g.user.id %}<option value="{{ item.playlist_id }}">{{ item.playlist_name }} / CURRENT SYSOP LIBRARY</option>{% endif %}
+      {% for playlist in playlists %}<option value="{{ playlist.id }}" {% if playlist.id == item.playlist_id %}selected{% endif %} {% if not playlist.track_count %}disabled{% endif %}>{{ playlist.name }} / {{ playlist.track_count }} TRACKS</option>{% endfor %}
+    </select></label>
+    <label>Maximum runtime (minutes)<input type="number" name="runtime_minutes" min="1" max="1440" required value="{{ item.runtime_minutes }}"></label>
+    <label>Restart delay (minutes)<input type="number" name="delay_minutes" min="0" max="10080" required value="{{ item.delay_minutes }}"></label>
+    <button class="secondary">SAVE CONFIGURATION</button>
+  </form>
+  <p class="muted">Created from {{ item.creator_username }} - [{{ item.creator_callsign }}]'s library. Listeners see only the station broadcast identity above.</p>
+  <form method="post" action="{{ url_for('broadcast.delete_automated',broadcast_id=item.id) }}" data-confirm="Delete automated broadcast {{ item.name }}?">
+    <input type="hidden" name="csrf_token" value="{{ session.csrf_token }}"><button class="danger">DELETE AUTOMATION</button>
+  </form>
+</section>
+{% else %}
+<div class="empty-state"><span class="empty-signal">~</span><p>No automated broadcasts configured.</p></div>
+{% endfor %}
+{% endblock %}

@@ -139,6 +139,19 @@ CREATE TABLE IF NOT EXISTS radio_broadcast_assignments (
  broadcast_message TEXT NOT NULL DEFAULT '',
  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);
+CREATE TABLE IF NOT EXISTS radio_automated_broadcasts (
+ id INTEGER PRIMARY KEY AUTOINCREMENT,
+ created_by INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+ name TEXT NOT NULL,
+ message TEXT NOT NULL DEFAULT '',
+ frequency_khz INTEGER NOT NULL UNIQUE CHECK(frequency_khz BETWEEN 100 AND 999990),
+ playlist_id INTEGER NOT NULL REFERENCES radio_playlists(id) ON DELETE RESTRICT,
+ runtime_minutes INTEGER NOT NULL DEFAULT 120 CHECK(runtime_minutes BETWEEN 1 AND 1440),
+ delay_minutes INTEGER NOT NULL DEFAULT 0 CHECK(delay_minutes BETWEEN 0 AND 10080),
+ created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+ updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);
+CREATE INDEX IF NOT EXISTS idx_radio_automated_playlist
+ ON radio_automated_broadcasts(playlist_id);
 CREATE TABLE IF NOT EXISTS application_storage (
  application_slug TEXT NOT NULL,
  storage_scope TEXT NOT NULL CHECK(storage_scope IN ('user','shared')),
