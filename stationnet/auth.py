@@ -13,6 +13,50 @@ from .realtime import ONLINE_SECONDS, utc_now
 bp = Blueprint("auth", __name__)
 
 
+def generate_temporary_password():
+    """Return a random password that satisfies the station password policy."""
+    return secrets.token_urlsafe(18)
+
+
+def reset_password_for_user(database, user):
+    """Reset an account and privately notify every SYSOP in one transaction."""
+    sysops = database.execute(
+        "SELECT id FROM users WHERE is_admin=1 ORDER BY id"
+    ).fetchall()
+    if not sysops:
+        return False
+
+    temporary_password = generate_temporary_password()
+    subject = f"SYSTEM: Password reset for {user['username']}"
+    body = (
+        "SYSTEM-GENERATED PASSWORD RESET\n\n"
+        f"User: {user['username']} - [{user['callsign']}]\n"
+        f"Temporary password: {temporary_password}\n\n"
+        "Give this password to the user manually. After signing in, they should "
+        "change it from Edit Profile."
+    )
+    try:
+        database.execute("BEGIN IMMEDIATE")
+        database.execute(
+            "UPDATE users SET password_hash=? WHERE id=?",
+            (hash_password(temporary_password), user["id"]),
+        )
+        for sysop in sysops:
+            cursor = database.execute(
+                "INSERT INTO mail(sender_id,recipient_id,subject,body,sender_deleted) "
+                "VALUES(?,?,?,?,1)",
+                (user["id"], sysop["id"], subject, body),
+            )
+            database.execute(
+                "UPDATE mail SET thread_id=id WHERE id=?", (cursor.lastrowid,)
+            )
+        database.commit()
+    except Exception:
+        database.rollback()
+        raise
+    return True
+
+
 def invitation_digest(code):
     """Return a keyed, non-reversible lookup value for an invitation code."""
     key = current_app.config["SECRET_KEY"]
@@ -190,9 +234,29 @@ def register():
 @bp.route("/login", methods=("GET", "POST"))
 def login():
     if request.method == "POST":
-        validate_csrf(); username = request.form.get("username", "").strip(); password = request.form.get("password", "")
-        user = get_db().execute("SELECT * FROM users WHERE username=?", (username,)).fetchone()
-        if user is None or not check_password(user["password_hash"], password): flash("Invalid username or password.", "error")
+        validate_csrf(); username = request.form.get("username", "").strip()
+        database = get_db()
+        user = database.execute(
+            "SELECT * FROM users WHERE username=?", (username,)
+        ).fetchone()
+        if request.form.get("action") == "forgot_password":
+            if user is None:
+                flash("No registered user has that username.", "error")
+                return render_template("login.html", login_failed=True)
+            if not reset_password_for_user(database, user):
+                flash("No SYSOP is available to receive the reset message.", "error")
+                return render_template("login.html", login_failed=True)
+            flash(
+                "A temporary password was generated and sent privately to the SYSOP(s). "
+                "Contact a SYSOP to receive it.",
+                "success",
+            )
+            return redirect(url_for("auth.login"))
+
+        password = request.form.get("password", "")
+        if user is None or not check_password(user["password_hash"], password):
+            flash("Invalid username or password.", "error")
+            return render_template("login.html", login_failed=True)
         else:
             remember_me = request.form.get("remember_me") == "on"
             session.clear(); session.permanent = remember_me; session["user_id"] = user["id"]; establish_connection(user["id"])

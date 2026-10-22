@@ -16,7 +16,11 @@
       <label>Username<input name="username" required autofocus autocomplete="username" value="{{ request.form.username or '' }}"></label>
       <label>Password<input type="password" name="password" required autocomplete="current-password"></label>
       <label class="switch"><input type="checkbox" name="remember_me" {% if request.form.get('remember_me') == 'on' %}checked{% endif %}> Remember me on this device</label>
-      <button class="auth-submit">LOGIN<span aria-hidden="true">-&gt;</span></button>
+      <div class="button-row">
+        <button class="auth-submit">LOGIN<span aria-hidden="true">-&gt;</span></button>
+        {% if login_failed %}<button class="secondary" type="submit" name="action" value="forgot_password" formnovalidate>FORGOT PASSWORD</button>{% endif %}
+      </div>
+      {% if login_failed %}<small>The reset password will be sent to the station SYSOP(s), who must give it to you manually.</small>{% endif %}
     </form>
   </div>
 

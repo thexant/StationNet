@@ -18,4 +18,17 @@
     <div class="button-row"><button>UPDATE MY PROFILE</button><a class="button secondary" href="{{ url_for('users.profile',user_id=profile.id) }}">RETURN TO PROFILE</a></div>
   </form>
 </section>
+
+<section class="narrow terminal-card settings-section" id="change-password">
+  <p class="eyebrow">USER PROFILE / SECURITY</p>
+  <h2>Change password</h2>
+  <p class="muted">Confirm your existing password before choosing a new one.</p>
+  <form method="post" action="{{ url_for('users.change_password',user_id=profile.id) }}" class="form-grid">
+    <input type="hidden" name="csrf_token" value="{{ session.csrf_token }}">
+    <label>Existing password<input type="password" name="current_password" required autocomplete="current-password"></label>
+    <label>New password<input type="password" name="new_password" minlength="10" maxlength="128" required autocomplete="new-password"></label>
+    <label>Confirm new password<input type="password" name="confirm_password" minlength="10" maxlength="128" required autocomplete="new-password"></label>
+    <div class="button-row"><button>CHANGE PASSWORD</button></div>
+  </form>
+</section>
 {% endblock %}

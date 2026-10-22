@@ -12,7 +12,7 @@ from PIL import Image, ImageOps, UnidentifiedImageError
 
 from .auth import login_required
 from .db import get_db
-from .security import validate_csrf
+from .security import check_password, hash_password, validate_csrf, validate_password
 
 bp = Blueprint("users", __name__, url_prefix="/users")
 PROFILE_PHOTO_MAX_BYTES = 10 * 1024 * 1024
@@ -177,6 +177,44 @@ def edit_profile(user_id):
             flash("Profile updated.", "success")
             return redirect(url_for("users.profile", user_id=user_id))
     return render_template("users/edit.html", profile=profile_user)
+
+
+@bp.post("/<int:user_id>/password")
+@login_required
+def change_password(user_id):
+    if user_id != g.user["id"]:
+        abort(403)
+    validate_csrf()
+    current_password = request.form.get("current_password", "")
+    new_password = request.form.get("new_password", "")
+    confirm_password = request.form.get("confirm_password", "")
+    database = get_db()
+    user = database.execute(
+        "SELECT password_hash FROM users WHERE id=?", (user_id,)
+    ).fetchone()
+    if user is None:
+        abort(404)
+
+    error = None
+    if not check_password(user["password_hash"], current_password):
+        error = "Existing password is incorrect."
+    elif new_password != confirm_password:
+        error = "New passwords do not match."
+    else:
+        error = validate_password(new_password)
+        if error is None and check_password(user["password_hash"], new_password):
+            error = "New password must be different from the existing password."
+
+    if error:
+        flash(error, "error")
+    else:
+        database.execute(
+            "UPDATE users SET password_hash=? WHERE id=?",
+            (hash_password(new_password), user_id),
+        )
+        database.commit()
+        flash("Password changed.", "success")
+    return redirect(url_for("users.edit_profile", user_id=user_id) + "#change-password")
 
 
 @bp.get("/<int:user_id>/photo")
