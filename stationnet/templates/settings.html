@@ -74,8 +74,8 @@
     <div class="invite-list">
       {% for invite in invitations %}
       <article class="invite-row">
-        <div><strong>INV-{{ '%04d'|format(invite.id) }} / …{{ invite.code_hint }}</strong><small>CREATED {{ invite.created_at }}{% if invite.creator_callsign %} BY {{ invite.creator_callsign }}{% endif %}</small></div>
-        {% if invite.used_at %}<span class="invite-state used">USED{% if invite.used_callsign %} / {{ invite.used_callsign }}{% endif %}</span>
+        <div><strong>INV-{{ '%04d'|format(invite.id) }} / …{{ invite.code_hint }}</strong><small>CREATED {{ invite.created_at }}{% if invite.creator_callsign %} BY {{ invite.creator_username }} - [{{ invite.creator_callsign }}]{% endif %}</small></div>
+        {% if invite.used_at %}<span class="invite-state used">USED{% if invite.used_callsign %} / {{ invite.used_username }} - [{{ invite.used_callsign }}]{% endif %}</span>
         {% elif invite.revoked_at %}<span class="invite-state revoked">REVOKED</span>
         {% else %}
         <span class="invite-state active">ACTIVE</span>

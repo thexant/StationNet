@@ -192,6 +192,7 @@ def test_registered_broadcast_identity_is_owner_scoped_persistent_and_live(app, 
         data={"csrf_token": csrf(alice, "/radio/"), "frequency": "7.50"},
     ).get_json()["identity"]
     assert fallback["name"] == fallback["callsign"]
+    assert fallback["username"] == "alice"
     assert fallback["configured_name"] == ""
 
     saved = alice.post(

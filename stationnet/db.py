@@ -26,7 +26,7 @@ CREATE TABLE IF NOT EXISTS users (
  is_admin INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
  tagline TEXT NOT NULL DEFAULT '', about TEXT NOT NULL DEFAULT '', birthday TEXT,
  gender TEXT NOT NULL DEFAULT '', last_seen TEXT, connection_id TEXT,
- radio_quota_mb INTEGER);
+ radio_quota_mb INTEGER, profile_photo_filename TEXT);
 CREATE TABLE IF NOT EXISTS registration_invites (
  id INTEGER PRIMARY KEY AUTOINCREMENT,
  token_hash TEXT NOT NULL UNIQUE,
@@ -583,6 +583,7 @@ def _migrate_community_fields(database):
         "last_seen": "TEXT",
         "connection_id": "TEXT",
         "radio_quota_mb": "INTEGER",
+        "profile_photo_filename": "TEXT",
     }
     for name, declaration in user_additions.items():
         if name not in user_columns:

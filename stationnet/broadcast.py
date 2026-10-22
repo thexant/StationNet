@@ -944,7 +944,8 @@ def status():
         "WHERE p.owner_id=? GROUP BY p.id ORDER BY p.name", (g.user["id"],),
     ).fetchall()
     directory = database.execute(
-        "SELECT a.user_id,a.frequency_khz,a.broadcast_name,a.broadcast_message,u.callsign "
+        "SELECT a.user_id,a.frequency_khz,a.broadcast_name,a.broadcast_message,"
+        "u.callsign,u.username "
         "FROM radio_broadcast_assignments a "
         "JOIN users u ON u.id=a.user_id ORDER BY a.frequency_khz"
     ).fetchall()
@@ -952,13 +953,16 @@ def status():
     return jsonify(
         assignment=format_frequency(assignment["frequency_khz"]) if assignment else None,
         assignment_khz=assignment["frequency_khz"] if assignment else None,
-        identity=({"name": assignment["broadcast_name"] or g.user["callsign"],
+        identity=({"name": assignment["broadcast_name"] or
+                           f"{g.user['username']} - [{g.user['callsign']}]",
                    "configured_name": assignment["broadcast_name"],
                    "message": assignment["broadcast_message"]} if assignment else None),
         session=_store().public(g.user["id"]),
         playlists=[dict(row) for row in playlists],
         directory=[{"user_id": row["user_id"], "callsign": row["callsign"],
-                    "name": row["broadcast_name"] or row["callsign"],
+                    "username": row["username"],
+                    "name": row["broadcast_name"] or
+                            f"{row['username']} - [{row['callsign']}]",
                     "message": row["broadcast_message"],
                     "frequency": format_frequency(row["frequency_khz"]),
                     "broadcasting": row["user_id"] in active and active[row["user_id"]]["status"] == "playing",

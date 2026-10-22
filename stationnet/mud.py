@@ -1217,7 +1217,7 @@ def builder_permission(user_id):
     validate_csrf()
     database = get_db()
     user = database.execute(
-        "SELECT id,callsign,is_admin FROM users WHERE id=?", (user_id,)
+        "SELECT id,username,callsign,is_admin FROM users WHERE id=?", (user_id,)
     ).fetchone()
     if user is None:
         abort(404)
@@ -1235,7 +1235,8 @@ def builder_permission(user_id):
         flash("Station operators already have world-builder access.", "success")
     else:
         flash(
-            f"World-builder access {'granted to' if enabled else 'revoked from'} {user['callsign']}.",
+            f"World-builder access {'granted to' if enabled else 'revoked from'} "
+            f"{user['username']} - [{user['callsign']}].",
             "success",
         )
     return _builder_redirect()

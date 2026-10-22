@@ -561,12 +561,46 @@ def _default_frequency(user_id=None):
     return rows[0]["start_khz"] if rows else None
 
 
+def _with_username(item):
+    """Attach the account name to an ephemeral radio identity for display."""
+    if not item:
+        return item
+    public = dict(item)
+    user_id = (public.get("owner") or {}).get("user_id")
+    if user_id is not None:
+        user = get_db().execute(
+            "SELECT username FROM users WHERE id=?", (user_id,)
+        ).fetchone()
+        if user:
+            public["username"] = user["username"]
+    return public
+
+
+def _events_with_usernames(events):
+    usernames = {}
+    for event in events:
+        user_id = (event.get("owner") or {}).get("user_id")
+        if user_id is not None and user_id not in usernames:
+            row = get_db().execute(
+                "SELECT username FROM users WHERE id=?", (user_id,)
+            ).fetchone()
+            usernames[user_id] = row["username"] if row else None
+    result = []
+    for event in events:
+        public = dict(event)
+        username = usernames.get((event.get("owner") or {}).get("user_id"))
+        if username:
+            public["username"] = username
+        result.append(public)
+    return result
+
+
 def broadcast_identity(frequency):
     """Return the registered assignment label for a frequency, if one exists."""
     if frequency is None:
         return None
     row = get_db().execute(
-        "SELECT a.broadcast_name,a.broadcast_message,u.callsign "
+        "SELECT a.broadcast_name,a.broadcast_message,u.callsign,u.username "
         "FROM radio_broadcast_assignments a JOIN users u ON u.id=a.user_id "
         "WHERE a.frequency_khz=?", (frequency,),
     ).fetchone()
@@ -577,6 +611,7 @@ def broadcast_identity(frequency):
         "name": row["broadcast_name"] or row["callsign"],
         "message": row["broadcast_message"],
         "callsign": row["callsign"],
+        "username": row["username"],
         "configured_name": row["broadcast_name"],
     }
 
@@ -640,7 +675,7 @@ def state():
                    band=_band_payload(band, g.user["id"], frequency) if frequency else None,
                    bands=_bands_payload(g.user["id"]), cursor=cursor,
                    access=access, powered=already_tuned, step_khz=TUNING_STEP_KHZ,
-                   identity=identity, active=active, broadcast=broadcast)
+                   identity=identity, active=_with_username(active), broadcast=broadcast)
 
 
 @bp.post("/power-off")
@@ -667,7 +702,7 @@ def tune():
     identity, active, broadcast = _frequency_snapshot(frequency, access != "DENIED")
     return jsonify(frequency=format_frequency(frequency),
                    band=_band_payload(band, g.user["id"], frequency), cursor=cursor, access=access,
-                   identity=identity, active=active, broadcast=broadcast)
+                   identity=identity, active=_with_username(active), broadcast=broadcast)
 
 
 @bp.get("/receive")
@@ -688,7 +723,8 @@ def receive():
     except ValueError as problem:
         return jsonify(error=str(problem), access=access), 409
     identity = broadcast_identity(frequency)
-    return jsonify(events=events, cursor=cursor, active=active, access=access,
+    return jsonify(events=_events_with_usernames(events), cursor=cursor,
+                   active=_with_username(active), access=access,
                    band=_band_payload(find_band(frequency), g.user["id"], frequency),
                    identity=identity, broadcast=broadcast_status(identity, active))
 
@@ -730,7 +766,7 @@ def transmit_start():
         return jsonify(error=str(problem)), 409
     except RuntimeError as problem:
         return jsonify(error=str(problem)), 409
-    return jsonify(transmission_id=transmission_id, event=event), 201
+    return jsonify(transmission_id=transmission_id, event=_with_username(event)), 201
 
 
 @bp.post("/transmit/signal")
@@ -781,7 +817,7 @@ def scan():
     return jsonify(found=True, frequency=format_frequency(found),
                    band=_band_payload(find_band(found), g.user["id"], found),
                    access=effective_access(g.user["id"], found), cursor=cursor,
-                   identity=identity, active=active, broadcast=broadcast)
+                   identity=identity, active=_with_username(active), broadcast=broadcast)
 
 
 @bp.get("/voice/peers")

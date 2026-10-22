@@ -81,7 +81,8 @@ def terminal():
 
         assignments = {
             row["user_id"]: row for row in database.execute(
-                "SELECT a.user_id,a.frequency_khz,a.broadcast_name,a.broadcast_message,u.callsign "
+                "SELECT a.user_id,a.frequency_khz,a.broadcast_name,a.broadcast_message,"
+                "u.callsign,u.username "
                 "FROM radio_broadcast_assignments a JOIN users u ON u.id=a.user_id"
             )
         }
@@ -92,7 +93,9 @@ def terminal():
                     and assignment["frequency_khz"] == session_info["frequency_khz"]):
                 broadcasts.append({
                     **session_info,
-                    "name": assignment["broadcast_name"] or assignment["callsign"],
+                    "name": assignment["broadcast_name"] or
+                            f"{assignment['username']} - [{assignment['callsign']}]",
+                    "username": assignment["username"],
                     "message": assignment["broadcast_message"],
                 })
         broadcasts.sort(key=lambda item: (item["frequency_khz"], item["name"].casefold()))
@@ -318,7 +321,8 @@ def settings():
                       for group in groups}
     invitations = database.execute(
         "SELECT i.id,i.code_hint,i.created_at,i.used_at,i.revoked_at,"
-        "creator.callsign AS creator_callsign,recipient.callsign AS used_callsign "
+        "creator.callsign AS creator_callsign,creator.username AS creator_username,"
+        "recipient.callsign AS used_callsign,recipient.username AS used_username "
         "FROM registration_invites i "
         "LEFT JOIN users creator ON creator.id=i.created_by "
         "LEFT JOIN users recipient ON recipient.id=i.used_by "
@@ -378,7 +382,9 @@ def _save_radio_bands():
 def save_broadcast_frequency(user_id):
     validate_csrf()
     database = get_db()
-    user = database.execute("SELECT callsign FROM users WHERE id=?", (user_id,)).fetchone()
+    user = database.execute(
+        "SELECT username,callsign FROM users WHERE id=?", (user_id,)
+    ).fetchone()
     if not user:
         flash("User not found.", "error")
         return redirect(url_for("station.settings") + "#broadcast-frequencies")
@@ -391,7 +397,10 @@ def save_broadcast_frequency(user_id):
         database.execute("DELETE FROM radio_broadcast_assignments WHERE user_id=?", (user_id,))
         database.commit()
         hosted.stop(user_id, "assignment_revoked")
-        flash(f"{user['callsign']} broadcast assignment revoked.", "success")
+        flash(
+            f"{user['username']} - [{user['callsign']}] broadcast assignment revoked.",
+            "success",
+        )
         return redirect(url_for("station.settings") + "#broadcast-frequencies")
     frequency = parse_frequency(raw)
     band = next((row for row in database.execute("SELECT * FROM radio_bands")
@@ -409,7 +418,11 @@ def save_broadcast_frequency(user_id):
             )
             database.commit()
             hosted.stop(user_id, "assignment_changed")
-            flash(f"{user['callsign']} assigned {format_frequency(frequency)} MHz.", "success")
+            flash(
+                f"{user['username']} - [{user['callsign']}] assigned "
+                f"{format_frequency(frequency)} MHz.",
+                "success",
+            )
         except sqlite3.IntegrityError:
             flash("That frequency is already assigned to another broadcaster.", "error")
     return redirect(url_for("station.settings") + "#broadcast-frequencies")

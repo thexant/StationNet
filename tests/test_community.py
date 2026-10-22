@@ -1,4 +1,7 @@
 import io
+from pathlib import Path
+
+from PIL import Image
 
 from stationnet import create_app
 from stationnet.db import get_db
@@ -82,7 +85,10 @@ def test_mail_folders_privacy_and_delete(app, initialized):
         follow_redirects=True,
     )
     assert b"Private mail delivered" in response.data
-    assert b"Private subject" in bob.get("/mail").data
+    inbox = bob.get("/mail")
+    assert b"Private subject" in inbox.data
+    assert b"alice - [" in inbox.data
+    assert b"bob - [" in alice.get("/mail/sent").data
     assert initialized.get("/mail/1").status_code == 404
     bob.get("/mail/1")
     with app.app_context():
@@ -90,6 +96,31 @@ def test_mail_folders_privacy_and_delete(app, initialized):
     bob.post("/mail/1/delete", data={"csrf_token": csrf(bob, "/mail")})
     assert b"Private subject" not in bob.get("/mail").data
     assert b"Private subject" in alice.get("/mail/sent").data
+
+
+def test_mail_notifications_report_only_messages_after_the_browser_baseline(app, initialized):
+    alice = register(app, "alice")
+    bob = register(app, "bob")
+    with app.app_context():
+        ids = {row["username"]: row["id"] for row in get_db().execute("SELECT id,username FROM users")}
+
+    baseline = bob.get("/terminal")
+    assert b'data-mail-notifications-url="/mail/notifications"' in baseline.data
+    assert b'data-mail-latest-id="0"' in baseline.data
+
+    alice.post(
+        "/mail/compose",
+        data={
+            "csrf_token": csrf(alice, "/mail/compose"),
+            "recipient_id": ids["bob"], "subject": "Live traffic", "body": "Arriving now.",
+        },
+    )
+
+    notification = bob.get("/mail/notifications?after=0").get_json()
+    assert notification == {"latest_id": 1, "new_count": 1}
+    assert bob.get("/mail/notifications?after=1").get_json()["new_count"] == 0
+    assert alice.get("/mail/notifications?after=0").get_json()["new_count"] == 0
+    assert b'data-mail-latest-id="1"' in bob.get("/terminal").data
 
 
 def test_mail_replies_form_a_private_conversation(app, initialized):
@@ -142,19 +173,81 @@ def test_profiles_owner_only_and_directory_status(app, initialized):
     with app.app_context():
         alice_id = get_db().execute("SELECT id FROM users WHERE username='alice'").fetchone()[0]
     response = alice.post(
-        f"/users/{alice_id}",
+        f"/users/{alice_id}/edit",
         data={
-            "csrf_token": csrf(alice, f"/users/{alice_id}"), "tagline": "Listening closely",
+            "csrf_token": csrf(alice, f"/users/{alice_id}/edit"), "tagline": "Listening closely",
             "about": "Local operator", "birthday": "1990-05-04", "gender": "Optional text",
         }, follow_redirects=True,
     )
     assert b"Profile updated" in response.data
-    assert b"Listening closely" in initialized.get(f"/users/{alice_id}").data
+    owner_profile = alice.get(f"/users/{alice_id}")
+    assert b"Listening closely" in owner_profile.data
+    assert f'/users/{alice_id}/edit'.encode() in owner_profile.data
+    assert b"UPDATE MY PROFILE" not in owner_profile.data
+    assert f'/users/{alice_id}/edit'.encode() not in initialized.get(f"/users/{alice_id}").data
     assert initialized.post(
-        f"/users/{alice_id}", data={"csrf_token": csrf(initialized, f"/users/{alice_id}"), "tagline": "No"}
+        f"/users/{alice_id}/edit",
+        data={"csrf_token": csrf(initialized, f"/users/{alice_id}"), "tagline": "No"},
     ).status_code == 403
+    assert initialized.get(f"/users/{alice_id}/edit").status_code == 403
     directory = initialized.get("/users")
     assert b"alice" in directory.data and b"ONLINE" in directory.data
+    assert directory.data.count(b'class="user-avatar empty"') == 2
+
+
+def test_profile_photo_is_resized_served_and_replaced(app, initialized):
+    alice = register(app, "alice")
+    with app.app_context():
+        alice_id = get_db().execute("SELECT id FROM users WHERE username='alice'").fetchone()[0]
+
+    first_upload = io.BytesIO()
+    Image.new("RGB", (300, 200), "red").save(first_upload, "PNG")
+    first_upload.seek(0)
+    response = alice.post(
+        f"/users/{alice_id}/edit",
+        data={
+            "csrf_token": csrf(alice, f"/users/{alice_id}/edit"),
+            "profile_photo": (first_upload, "portrait.png"),
+        },
+        content_type="multipart/form-data",
+        follow_redirects=True,
+    )
+    assert b"Profile updated" in response.data
+    assert f'/users/{alice_id}/photo'.encode() in response.data
+    directory = initialized.get("/users")
+    assert f'/users/{alice_id}/photo'.encode() in directory.data
+    assert directory.data.count(b'class="user-avatar empty"') == 1
+    photo = alice.get(f"/users/{alice_id}/photo")
+    assert photo.status_code == 200
+    with Image.open(io.BytesIO(photo.data)) as image:
+        assert image.format == "PNG"
+        assert image.size == (128, 85)
+    photo.close()
+
+    with app.app_context():
+        first_name = get_db().execute(
+            "SELECT profile_photo_filename FROM users WHERE id=?", (alice_id,)
+        ).fetchone()[0]
+    first_path = Path(app.config["DATA_DIR"], "profile_photos", first_name)
+
+    second_upload = io.BytesIO()
+    Image.new("RGB", (64, 64), "blue").save(second_upload, "JPEG")
+    second_upload.seek(0)
+    alice.post(
+        f"/users/{alice_id}/edit",
+        data={
+            "csrf_token": csrf(alice, f"/users/{alice_id}/edit"),
+            "profile_photo": (second_upload, "replacement.jpg"),
+        },
+        content_type="multipart/form-data",
+    )
+    assert not first_path.exists()
+    with app.app_context():
+        second_name = get_db().execute(
+            "SELECT profile_photo_filename FROM users WHERE id=?", (alice_id,)
+        ).fetchone()[0]
+    assert second_name != first_name
+    Path(app.config["DATA_DIR"], "profile_photos", second_name).unlink()
 
 
 def test_archive_upload_download_policy_and_ownership(app, initialized):
@@ -170,7 +263,9 @@ def test_archive_upload_download_policy_and_ownership(app, initialized):
     download = initialized.get("/files/1/download")
     assert download.data == b"station data"
     download.close()
-    assert b"notes.txt" in initialized.get("/files").data
+    archive = initialized.get("/files")
+    assert b"notes.txt" in archive.data
+    assert b"UPLOADED BY alice - [" in archive.data
 
     initialized.post(
         "/sysop/settings",
@@ -193,6 +288,7 @@ def test_announcement_management_is_admin_only(app, initialized):
         follow_redirects=True,
     )
     assert b"Maintenance" in response.data
+    assert b"sysop - [" in response.data
     initialized.post(
         "/announcements/1/edit",
         data={"csrf_token": csrf(initialized, "/announcements/1/edit"), "title": "Maintenance moved", "body": "At dawn."},

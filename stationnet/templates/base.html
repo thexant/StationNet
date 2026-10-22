@@ -9,7 +9,7 @@
   <script src="{{ url_for('static',filename='station.js') }}" defer></script>
   <script src="{{ url_for('static',filename='radio.js') }}" defer></script>
 </head>
-<body{% if g.user %} data-presence-url="{{ url_for('users.presence') }}" data-radio-state-url="{{ url_for('radio.state') }}" data-radio-tune-url="{{ url_for('radio.tune') }}" data-radio-receive-url="{{ url_for('radio.receive') }}" data-radio-power-off-url="{{ url_for('radio.power_off') }}" data-radio-start-url="{{ url_for('radio.transmit_start') }}" data-radio-signal-url="{{ url_for('radio.transmit_signal') }}" data-radio-end-url="{{ url_for('radio.transmit_end') }}" data-radio-scan-url="{{ url_for('radio.scan') }}" data-radio-voice-peers-url="{{ url_for('radio.voice_peers') }}" data-radio-voice-signals-url="{{ url_for('radio.voice_signals') }}" data-broadcast-status-url="{{ url_for('broadcast.status') }}" data-broadcast-start-url="{{ url_for('broadcast.start_broadcast') }}" data-broadcast-stop-url="{{ url_for('broadcast.stop_broadcast') }}" data-broadcast-advance-url="{{ url_for('broadcast.advance_broadcast') }}" data-broadcast-timing-url="{{ url_for('broadcast.broadcast_timing') }}" data-broadcast-audio-url="{{ url_for('broadcast.broadcast_audio',file_id=0) }}" data-radio-csrf="{{ session.csrf_token }}"{% endif %}>
+<body data-sfx-base="{{ url_for('static',filename='sfx/') }}"{% if g.user %} data-user-id="{{ g.user.id }}" data-mail-latest-id="{{ g.mail_latest_id }}" data-mail-notifications-url="{{ url_for('mail.notifications') }}" data-presence-url="{{ url_for('users.presence') }}" data-radio-state-url="{{ url_for('radio.state') }}" data-radio-tune-url="{{ url_for('radio.tune') }}" data-radio-receive-url="{{ url_for('radio.receive') }}" data-radio-power-off-url="{{ url_for('radio.power_off') }}" data-radio-start-url="{{ url_for('radio.transmit_start') }}" data-radio-signal-url="{{ url_for('radio.transmit_signal') }}" data-radio-end-url="{{ url_for('radio.transmit_end') }}" data-radio-scan-url="{{ url_for('radio.scan') }}" data-radio-voice-peers-url="{{ url_for('radio.voice_peers') }}" data-radio-voice-signals-url="{{ url_for('radio.voice_signals') }}" data-broadcast-status-url="{{ url_for('broadcast.status') }}" data-broadcast-start-url="{{ url_for('broadcast.start_broadcast') }}" data-broadcast-stop-url="{{ url_for('broadcast.stop_broadcast') }}" data-broadcast-advance-url="{{ url_for('broadcast.advance_broadcast') }}" data-broadcast-timing-url="{{ url_for('broadcast.broadcast_timing') }}" data-broadcast-audio-url="{{ url_for('broadcast.broadcast_audio',file_id=0) }}" data-radio-csrf="{{ session.csrf_token }}"{% endif %}>
   <a class="skip-link" href="#main">Skip to content</a>
   <div class="station-shell">
     <header class="station-header">
@@ -22,6 +22,7 @@
       <div class="node-line">
         <span>YOUR STATION: <b>{{ g.station.name }} - [{{ g.station.callsign }}]</b></span>
         <span>SYSTEM DATE/TIME: <b data-date>--- -- ----</b> <b data-clock>--:--:--</b></span>
+        <button type="button" class="sfx-toggle" data-sfx-toggle aria-pressed="true" aria-label="Disable interface sound effects">SFX: ON</button>
       </div>
       <nav class="service-nav" id="service-nav" aria-label="Station services" tabindex="-1">
         <a href="{{ url_for('station.terminal') }}" {% if request.endpoint=='station.terminal' %}aria-current="page"{% endif %}>STATION</a>
@@ -54,7 +55,7 @@
 
     <footer class="statusbar">
       <span>STATION: {{ g.station.callsign if g.station else 'OFFLINE' }}</span>
-      <span>{% if g.user %}USER: {{ g.user.callsign }} / {{ 'SYSOP' if g.user.is_admin else 'MEMBER' }}{% else %}USER: UNIDENTIFIED{% endif %}</span>
+      <span>{% if g.user %}USER: {{ g.user.username }} - [{{ g.user.callsign }}] / {{ 'SYSOP' if g.user.is_admin else 'MEMBER' }}{% else %}USER: UNIDENTIFIED{% endif %}</span>
       <span class="carrier"><i aria-hidden="true"></i> CARRIER</span>
     </footer>
   </div>

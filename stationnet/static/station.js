@@ -1,4 +1,78 @@
 "use strict";
+const sfxStorageKey="stationnet.sfx.enabled";
+let sfxEnabled=true;
+try{sfxEnabled=localStorage.getItem(sfxStorageKey)!=="false"}catch(_){}
+const sfxBase=document.body.dataset.sfxBase||"";
+const sfxFiles={click:"click.ogg",emailsent:"emailsent.ogg",newchat:"newchat.ogg",newmail:"newmail.ogg","ptt-on":"ptt-on.ogg","ptt-off":"ptt-off.ogg"};
+const sfxAudio=Object.fromEntries(Object.entries(sfxFiles).map(([name,file])=>{const audio=new Audio(`${sfxBase}${file}`);audio.preload="auto";return[name,audio]}));
+const playSfx=name=>{
+  if(!sfxEnabled||!sfxAudio[name])return null;
+  const audio=sfxAudio[name].cloneNode();
+  audio.volume=.7;
+  audio.play().catch(()=>{});
+  return audio;
+};
+window.StationNetSfx={play:playSfx,isEnabled:()=>sfxEnabled};
+
+const sfxToggle=document.querySelector("[data-sfx-toggle]");
+const renderSfxToggle=()=>{
+  if(!sfxToggle)return;
+  sfxToggle.textContent=`SFX: ${sfxEnabled?"ON":"OFF"}`;
+  sfxToggle.setAttribute("aria-pressed",String(sfxEnabled));
+  sfxToggle.setAttribute("aria-label",`${sfxEnabled?"Disable":"Enable"} interface sound effects`);
+};
+renderSfxToggle();
+sfxToggle?.addEventListener("click",()=>{
+  if(sfxEnabled)playSfx("click");
+  sfxEnabled=!sfxEnabled;
+  try{localStorage.setItem(sfxStorageKey,String(sfxEnabled))}catch(_){}
+  renderSfxToggle();
+  if(sfxEnabled)playSfx("click");
+});
+document.addEventListener("click",event=>{
+  if(!(event.target instanceof Element))return;
+  const control=event.target.closest('a,button,summary,[role="button"],[role="menuitem"],input[type="button"],input[type="submit"],input[type="reset"],input[type="checkbox"],input[type="radio"],input[type="file"],select,option');
+  if(!control||control===sfxToggle||control.matches(":disabled,[aria-disabled='true']"))return;
+  playSfx("click");
+});
+for(const form of document.querySelectorAll("form[data-sfx-submit]"))form.addEventListener("submit",event=>{
+  if(form.dataset.sfxSubmitting||!sfxEnabled)return;
+  event.preventDefault();
+  form.dataset.sfxSubmitting="true";
+  playSfx(form.dataset.sfxSubmit);
+  setTimeout(()=>form.requestSubmit(),180);
+});
+
+const mailNotificationsUrl=document.body.dataset.mailNotificationsUrl;
+if(mailNotificationsUrl){
+  const mailCursorKey=`stationnet.mail.cursor.${document.body.dataset.userId}`;
+  const storedMailCursor=sessionStorage.getItem(mailCursorKey);
+  let mailCursor=storedMailCursor===null?Number(document.body.dataset.mailLatestId):Number(storedMailCursor);
+  if(!Number.isFinite(mailCursor))mailCursor=0;
+  sessionStorage.setItem(mailCursorKey,String(mailCursor));
+  let mailPollBusy=false;
+  const pollMail=async()=>{
+    if(mailPollBusy)return;
+    mailPollBusy=true;
+    try{
+      const response=await fetch(`${mailNotificationsUrl}?after=${mailCursor}`,{headers:{Accept:"application/json"},cache:"no-store"});
+      if(response.status===401||response.redirected)return;
+      if(!response.ok)throw new Error("Mail notification link unavailable.");
+      const payload=await response.json();
+      const latestId=Math.max(mailCursor,Number(payload.latest_id)||0);
+      if(latestId!==mailCursor){mailCursor=latestId;sessionStorage.setItem(mailCursorKey,String(mailCursor))}
+      if(Number(payload.new_count)>0)playSfx("newmail");
+    }catch(_){}finally{mailPollBusy=false}
+  };
+  pollMail();
+  setInterval(pollMail,5000);
+}else{
+  for(let index=sessionStorage.length-1;index>=0;index--){
+    const key=sessionStorage.key(index);
+    if(key?.startsWith("stationnet.mail.cursor."))sessionStorage.removeItem(key);
+  }
+}
+
 const clock=document.querySelector("[data-clock]");
 const dateReadout=document.querySelector("[data-date]");
 if(clock){const tick=()=>{const now=new Date();clock.textContent=now.toLocaleTimeString([],{hour12:false});if(dateReadout)dateReadout.textContent=now.toLocaleDateString([],{weekday:"short",month:"short",day:"2-digit",year:"numeric"}).toUpperCase()};tick();setInterval(tick,1000)}
@@ -58,6 +132,7 @@ for(const chat of document.querySelectorAll("[data-live-chat]")){
   const url=chat.dataset.messagesUrl;
   let lastId=0;
   let busy=false;
+  let initialized=false;
 
   const addMessage=message=>{
     chat.querySelector("[data-chat-empty]")?.remove();
@@ -80,7 +155,10 @@ for(const chat of document.querySelectorAll("[data-live-chat]")){
       const response=await fetch(`${url}?after=${lastId}`,{headers:{"Accept":"application/json"},cache:"no-store"});
       if(response.status===401||response.redirected){location.reload();return}
       const payload=await response.json();
-      for(const message of payload.messages||[])addMessage(message);
+      const messages=payload.messages||[];
+      for(const message of messages)addMessage(message);
+      if(initialized&&messages.some(message=>!message.mine))playSfx("newchat");
+      initialized=true;
       if(payload.active===false){
         error.textContent="LINK CLOSED: USER OFFLINE";
         form.querySelector("textarea").disabled=true;

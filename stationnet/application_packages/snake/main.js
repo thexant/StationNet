@@ -98,7 +98,7 @@ StationNet.start(async (ui) => {
     ui.text("SCORE 0   PERSONAL BEST 0", { id: "hud", emphasis: true }),
     ui.text("READY", { id: "game-status", tone: "accent" }),
     ui.canvas(COLS * CELL, ROWS * CELL, [], { id: "playfield", onPointer: pointer, label: "Snake playfield" }),
-    ui.menu("Touch controls", [{ label: "▲", value: "up" }, { label: "◀", value: "left" }, { label: "▼", value: "down" }, { label: "▶", value: "right" }], ({ value }) => setDirection({ up: [0, -1], left: [-1, 0], down: [0, 1], right: [1, 0] }[value]), { layout: "dpad" }),
+    ui.menu("Touch controls", [{ label: "▲", value: "up" }, { label: "◀", value: "left" }, { label: "▼", value: "down" }, { label: "▶", value: "right" }], ({ value }) => setDirection({ up: [0, -1], left: [-1, 0], down: [0, 1], right: [1, 0] }[value]), { id: "game-controls", layout: "dpad" }),
     ui.button("Pause", togglePause, { id: "pause" }),
     ui.heading("Station leaderboard", 3),
     ui.table(["#", "Player", "Score"], [["—", "Loading…", "—"]], { id: "leaderboard" })

@@ -270,7 +270,11 @@
       const target = targetComponent();
       if (target && target.classList.contains("app-canvas-wrap") && components[0] && components[0].type === "canvas") {
         drawCanvas(target.querySelector("canvas"), components[0]);
-        if (Object.prototype.hasOwnProperty.call(components[0], "controls")) drawCanvasControls(target, components[0].controls);
+        // A canvas update that only redraws its commands must leave an existing
+        // contextual overlay in place. The runtime serializes omitted options as
+        // undefined, so checking only for the property removed START as soon as
+        // Breakout sent its first hover update.
+        if (components[0].controls !== undefined) drawCanvasControls(target, components[0].controls);
         return;
       }
       const replacement = renderComponent(components[0]);
@@ -404,7 +408,10 @@
     } else if (message.type === "terminated") status.textContent = "PROGRAM STATUS / TERMINATED";
   });
 
-  surface.addEventListener("keydown", (event) => {
+  // Contextual controls are replaced after activation, which can move focus
+  // back to the document body. Listen at the window so game keys continue to
+  // work without requiring the player to refocus the application surface.
+  addEventListener("keydown", (event) => {
     if (["INPUT", "TEXTAREA", "SELECT"].includes(event.target.tagName)) return;
     if (event.target.tagName === "BUTTON" && ["Enter", " "].includes(event.key)) return;
     if (["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown", " ", "Backspace", "Delete"].includes(event.key)) event.preventDefault();

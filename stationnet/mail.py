@@ -1,11 +1,27 @@
 """Persistent private BBS mail."""
-from flask import Blueprint, abort, flash, g, redirect, render_template, request, url_for
+from flask import Blueprint, abort, flash, g, jsonify, redirect, render_template, request, url_for
 
 from .auth import login_required
 from .db import get_db
 from .security import validate_csrf
 
 bp = Blueprint("mail", __name__, url_prefix="/mail")
+
+
+@bp.get("/notifications")
+@login_required
+def notifications():
+    after = max(0, request.args.get("after", 0, type=int))
+    database = get_db()
+    latest_id = database.execute(
+        "SELECT COALESCE(MAX(id),0) FROM mail WHERE recipient_id=?",
+        (g.user["id"],),
+    ).fetchone()[0]
+    new_count = database.execute(
+        "SELECT COUNT(*) FROM mail WHERE recipient_id=? AND recipient_deleted=0 AND id>?",
+        (g.user["id"], after),
+    ).fetchone()[0]
+    return jsonify(latest_id=latest_id, new_count=new_count)
 
 
 @bp.get("")

@@ -120,7 +120,10 @@ def setup():
                     (cursor.lastrowid,),
                 )
                 database.commit(); session.clear(); session["user_id"] = cursor.lastrowid; establish_connection(cursor.lastrowid)
-                flash(f"Station initialized. Operator callsign: {user_callsign}", "success")
+                flash(
+                    f"Station initialized. Operator: {username} - [{user_callsign}]",
+                    "success",
+                )
                 return redirect(url_for("station.terminal"))
             except sqlite3.IntegrityError:
                 database.rollback(); flash("Station setup could not be saved. Please retry.", "error")
@@ -177,7 +180,7 @@ def register():
                         flash("That invitation is invalid or no longer available.", "error")
                         return render_template("register.html", invite_code=invite_code)
                 database.commit(); session.clear(); session["user_id"] = cursor.lastrowid; establish_connection(cursor.lastrowid)
-                flash(f"Account linked. Your callsign is {callsign}.", "success")
+                flash(f"Account linked: {username} - [{callsign}].", "success")
                 return redirect(url_for("station.terminal"))
             except sqlite3.IntegrityError:
                 database.rollback()
@@ -193,7 +196,10 @@ def login():
         else:
             remember_me = request.form.get("remember_me") == "on"
             session.clear(); session.permanent = remember_me; session["user_id"] = user["id"]; establish_connection(user["id"])
-            flash(f"Link established. Welcome, {user['callsign']}.", "success")
+            flash(
+                f"Link established. Welcome, {user['username']} - [{user['callsign']}].",
+                "success",
+            )
             destination = request.args.get("next", "")
             if not destination.startswith("/") or destination.startswith("//"): destination = url_for("station.terminal")
             return redirect(destination)

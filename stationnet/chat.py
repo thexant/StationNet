@@ -35,17 +35,20 @@ def station_messages():
     database = get_db()
     if after:
         rows = database.execute(
-            "SELECT m.id,m.body,m.created_at,u.callsign,u.username FROM station_chat_messages m "
+            "SELECT m.id,m.author_id,m.body,m.created_at,u.callsign,u.username FROM station_chat_messages m "
             "JOIN users u ON u.id=m.author_id WHERE m.id>? ORDER BY m.id LIMIT 200",
             (after,),
         ).fetchall()
     else:
         rows = database.execute(
-            "SELECT * FROM (SELECT m.id,m.body,m.created_at,u.callsign,u.username "
+            "SELECT * FROM (SELECT m.id,m.author_id,m.body,m.created_at,u.callsign,u.username "
             "FROM station_chat_messages m JOIN users u ON u.id=m.author_id "
             "ORDER BY m.id DESC LIMIT 100) ORDER BY id"
         ).fetchall()
-    return jsonify(messages=[dict(row) for row in rows])
+    messages = [dict(row) for row in rows]
+    for message in messages:
+        message["mine"] = message.pop("author_id") == g.user["id"]
+    return jsonify(messages=messages)
 
 
 @bp.post("/messages")

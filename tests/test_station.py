@@ -535,7 +535,10 @@ def test_board_reply_guest_read_and_restart(app, initialized):
     assert b"First transmission" in response.data
     initialized.post("/board/1",data={"csrf_token":csrf(initialized,"/board/1"),"body":"Signal received."})
     initialized.post("/logout",data={"csrf_token":csrf(initialized,"/terminal")})
-    assert b"First transmission" in initialized.get("/board").data; assert b"Signal received" in initialized.get("/board/1").data
+    board = initialized.get("/board")
+    assert b"First transmission" in board.data
+    assert b"sysop - [" in board.data
+    assert b"Signal received" in initialized.get("/board/1").data
     restarted=create_app({"TESTING":True,"DATA_DIR":app.config["DATA_DIR"],"SECRET_KEY":"new-process"}).test_client()
     assert b"First transmission" in restarted.get("/board").data
 

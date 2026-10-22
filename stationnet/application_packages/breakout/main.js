@@ -106,7 +106,7 @@ StationNet.start(async (ui) => {
     ui.text("SCORE 0   LIVES 3   LEVEL 1   PERSONAL BEST 0", { id: "hud", emphasis: true }),
     ui.text("READY", { id: "game-status", tone: "accent" }),
     ui.canvas(WIDTH, HEIGHT, [], { id: "playfield", onPointer: pointer, hover: true, label: "Breakout playfield" }),
-    ui.menu("Touch paddle", [{ label: "◀ LEFT", value: "left" }, { label: "RIGHT ▶", value: "right" }], ({ value }) => { paddleX += value === "left" ? -70 : 70; paddleX = Math.max(0, Math.min(WIDTH - PADDLE_W, paddleX)); draw(); }),
+    ui.menu("Touch paddle", [{ label: "◀ LEFT", value: "left" }, { label: "RIGHT ▶", value: "right" }], ({ value }) => { paddleX += value === "left" ? -70 : 70; paddleX = Math.max(0, Math.min(WIDTH - PADDLE_W, paddleX)); draw(); }, { id: "game-controls" }),
     ui.button("Pause", togglePause, { id: "pause" }),
     ui.heading("Station leaderboard", 3), ui.table(["#", "Player", "Score"], [["—", "Loading…", "—"]], { id: "leaderboard" })
   );
