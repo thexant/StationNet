@@ -3,7 +3,7 @@
 {% block content %}
 <section class="radio-console-page" data-radio-console>
   <header class="board-head radio-console-head">
-    <div><p class="eyebrow">STATION SERVICE // SHARED RECEIVER</p><h1>Radio Console</h1><p>Advanced receiver and transmission controls. Listening continues while you use other station services.</p></div>
+    <div><p class="eyebrow">STATION SERVICE // SHARED RECEIVER</p><h1>Radio Console</h1><p>Advanced radio controls. Audio continues while you use other station services.</p></div>
     <div class="radio-console-actions">{% if can_manage_broadcasts %}<a class="button secondary" href="{{ url_for('broadcast.manage') }}">MANAGE BROADCASTS</a>{% endif %}<div class="radio-console-power"><span class="radio-console-access" data-radio-access>RADIO OFF</span><button type="button" class="secondary" data-radio-power aria-pressed="false">POWER: OFF</button></div></div>
   </header>
   <div class="radio-receiver">

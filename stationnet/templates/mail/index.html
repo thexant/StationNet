@@ -1,7 +1,7 @@
 {% extends 'base.html' %}
 {% block title %}Private Mail{% endblock %}
 {% block content %}
-<header class="board-head"><div><p class="eyebrow">PRIVATE MAIL</p><h1>{{ 'Inbox' if folder=='inbox' else 'Sent mail' }}</h1><p class="muted">Persistent private correspondence between registered users.</p></div><a class="button" href="{{ url_for('mail.compose') }}">COMPOSE +</a></header>
+<header class="board-head"><div><p class="eyebrow">PRIVATE MAIL</p><h1>{{ 'Inbox' if folder=='inbox' else 'Sent mail' }}</h1><p class="muted">Private mail between registered users.</p></div><a class="button" href="{{ url_for('mail.compose') }}">COMPOSE +</a></header>
 <nav class="subnav"><a href="{{ url_for('mail.inbox') }}" {% if folder=='inbox' %}aria-current="page"{% endif %}>INBOX</a><a href="{{ url_for('mail.sent') }}" {% if folder=='sent' %}aria-current="page"{% endif %}>SENT MAIL</a></nav>
 <section class="traffic-list">
 {% for message in messages %}<a class="traffic-row {% if folder=='inbox' and not message.is_read %}unread{% endif %}" href="{{ url_for('mail.view',message_id=message.id) }}"><span>{{ message.username }} - [{{ message.callsign }}]</span><strong>{{ message.subject }}</strong><time>{{ message.created_at }} UTC</time></a>
