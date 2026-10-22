@@ -28,7 +28,13 @@
     <div><p class="eyebrow">AVAILABLE PROGRAMMING</p><h2 id="broadcast-directory-title">Station broadcast directory</h2></div>
     <ul data-radio-broadcast-directory><li class="muted">LOADING DIRECTORY...</li></ul>
   </aside>
-  <section class="radio-mode-panel" data-radio-cw hidden>
+  <div class="radio-mode-selector" data-radio-mode-chooser hidden>
+    <label>Active mode
+      <select data-radio-mode-select aria-controls="radio-mode-cw radio-mode-sstv radio-mode-voice"></select>
+    </label>
+    <small>Select the controls you want to operate on this band.</small>
+  </div>
+  <section class="radio-mode-panel" id="radio-mode-cw" data-radio-cw hidden>
     <div class="radio-cw-controls">
       <button type="button" data-radio-cw-tx data-radio-cw-transmit disabled>BEGIN CW TRANSMISSION</button>
       <button type="button" class="secondary radio-key" data-radio-key data-radio-cw-transmit disabled>HOLD KEY [SPACE]</button>
@@ -39,7 +45,7 @@
     <output class="radio-decoder" data-radio-decoder-output>DECODER OFF</output>
     <details class="morse-reference"><summary>MORSE REFERENCE</summary><p>A .- &nbsp; B -... &nbsp; C -.-. &nbsp; D -.. &nbsp; E . &nbsp; F ..-. &nbsp; G --. &nbsp; H .... &nbsp; I .. &nbsp; J .--- &nbsp; K -.- &nbsp; L .-.. &nbsp; M -- &nbsp; N -. &nbsp; O --- &nbsp; P .--. &nbsp; Q --.- &nbsp; R .-. &nbsp; S ... &nbsp; T - &nbsp; U ..- &nbsp; V ...- &nbsp; W .-- &nbsp; X -..- &nbsp; Y -.-- &nbsp; Z --.. &nbsp; 0 ----- &nbsp; 1 .---- &nbsp; 2 ..--- &nbsp; 3 ...-- &nbsp; 4 ....- &nbsp; 5 ..... &nbsp; 6 -.... &nbsp; 7 --... &nbsp; 8 ---.. &nbsp; 9 ----.</p></details>
   </section>
-  <section class="radio-mode-panel" data-radio-sstv hidden>
+  <section class="radio-mode-panel" id="radio-mode-sstv" data-radio-sstv hidden>
     <div class="radio-sstv-controls">
       <label data-radio-sstv-transmit>Local image <input data-radio-image type="file" accept="image/png,image/jpeg,image/webp,image/gif"></label>
       <button type="button" data-radio-sstv-tx data-radio-sstv-transmit disabled>TRANSMIT PICTURE</button>
@@ -50,7 +56,7 @@
       <figure><figcaption data-radio-rx-caption>RX PICTURE / NO SIGNAL</figcaption><canvas data-radio-rx-picture width="80" height="60"></canvas></figure>
     </div>
   </section>
-  <section class="radio-mode-panel" data-radio-voice hidden>
+  <section class="radio-mode-panel" id="radio-mode-voice" data-radio-voice hidden>
     <div class="radio-voice-controls">
       <button type="button" class="radio-ptt" data-radio-ptt disabled>HOLD TO TALK [V]</button>
       <div><strong data-radio-voice-status>VOICE STANDBY</strong><small>Hold the button or V while this page is not accepting text input. Release to clear the frequency.</small></div>
