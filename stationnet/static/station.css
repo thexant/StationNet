@@ -290,6 +290,9 @@ button:hover, .button:hover { color: #000; background: var(--green); }
 .traffic-row.unread strong { color: var(--green-bright); font-weight: 700; }
 .traffic-row:hover { background: rgba(0,237,69,.04); }
 .file-row, .user-card { display: flex; justify-content: space-between; gap: 1.25rem; padding: 1rem; border: 1px solid var(--green-dim); }
+.file-details { flex: 1 1 auto; min-width: 0; }
+.file-preview { display: grid; place-items: center; flex: 0 0 160px; width: 160px; height: 112px; border: 1px solid var(--cyan); background: #020702; overflow: hidden; }
+.file-preview img { display: block; width: 100%; height: 100%; object-fit: contain; }
 .file-row h2, .user-card h2 { margin: .2rem 0; }
 .file-row p, .user-card p { margin: .2rem 0; color: var(--grey); font-size: .72rem; }
 .file-row span, .file-row small, .user-card small { color: var(--grey); font-size: var(--text-xs); }
@@ -639,6 +642,7 @@ button:disabled { opacity: .5; cursor: not-allowed; }
   .copy-field { grid-template-columns: 1fr; }
   .traffic-row { grid-template-columns: 1fr; gap: .2rem; }
   .file-row, .user-card { flex-direction: column; }
+  .file-preview { width: min(100%,320px); height: 180px; }
   .application-list { grid-template-columns: 1fr; }
   .application-display-header { align-items: stretch; flex-direction: column; }
   .application-admin-row { grid-template-columns: 1fr; }

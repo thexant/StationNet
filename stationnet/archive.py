@@ -1,8 +1,10 @@
 """Small station-owned shared file archive."""
+import io
 import secrets
 from pathlib import Path
 
-from flask import Blueprint, abort, current_app, flash, g, redirect, render_template, request, send_from_directory, url_for
+from flask import Blueprint, abort, current_app, flash, g, redirect, render_template, request, send_file, send_from_directory, url_for
+from PIL import Image, ImageOps, UnidentifiedImageError
 
 from .auth import login_required
 from .db import get_db
@@ -10,6 +12,9 @@ from .security import validate_csrf
 
 bp = Blueprint("archive", __name__, url_prefix="/files")
 CATEGORIES = ("General", "Documents", "Images", "Software", "Other")
+IMAGE_SUFFIXES = {".gif", ".jpeg", ".jpg", ".png", ".webp"}
+PREVIEW_MAX_SIZE = (480, 320)
+PREVIEW_MAX_SOURCE_PIXELS = 40_000_000
 
 
 def _archive_dir():
@@ -43,6 +48,10 @@ def index():
     return render_template(
         "archive/index.html", files=files, categories=CATEGORIES, category=category,
         can_upload=_can_upload(), used_bytes=used,
+        preview_file_ids={
+            item["id"] for item in files
+            if Path(item["display_name"]).suffix.lower() in IMAGE_SUFFIXES
+        },
     )
 
 
@@ -109,6 +118,36 @@ def download(file_id):
         _archive_dir(), item["stored_name"], as_attachment=True,
         download_name=item["display_name"], mimetype="application/octet-stream",
     )
+
+
+@bp.get("/<int:file_id>/preview")
+@login_required
+def preview(file_id):
+    """Return a bounded, re-encoded raster preview instead of the original file."""
+    item = get_db().execute("SELECT * FROM archive_files WHERE id=?", (file_id,)).fetchone()
+    if item is None or Path(item["display_name"]).suffix.lower() not in IMAGE_SUFFIXES:
+        abort(404)
+
+    try:
+        with Image.open(_archive_dir() / item["stored_name"]) as source:
+            if source.format not in {"GIF", "JPEG", "PNG", "WEBP"}:
+                abort(404)
+            if source.width * source.height > PREVIEW_MAX_SOURCE_PIXELS:
+                abort(404)
+            image = ImageOps.exif_transpose(source)
+            image.thumbnail(PREVIEW_MAX_SIZE)
+            output = io.BytesIO()
+            if image.mode in {"RGBA", "LA"} or "transparency" in image.info:
+                image.convert("RGBA").save(output, "PNG", optimize=True)
+                mimetype = "image/png"
+            else:
+                image.convert("RGB").save(output, "JPEG", quality=82, optimize=True)
+                mimetype = "image/jpeg"
+    except (FileNotFoundError, OSError, UnidentifiedImageError, Image.DecompressionBombError):
+        abort(404)
+
+    output.seek(0)
+    return send_file(output, mimetype=mimetype, max_age=0)
 
 
 @bp.post("/<int:file_id>/delete")
