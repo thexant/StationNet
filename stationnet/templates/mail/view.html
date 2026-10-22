@@ -2,6 +2,13 @@
 {% block title %}{{ message.subject }}{% endblock %}
 {% block content %}
 <p><a href="{{ url_for('mail.inbox') if message.recipient_id==g.user.id else url_for('mail.sent') }}">&larr; RETURN TO MAILBOX</a></p>
-<article class="terminal-card message"><div class="bulletin-meta"><span>FROM {{ message.sender_callsign }} / {{ message.sender_name }}</span><span>TO {{ message.recipient_callsign }} / {{ message.recipient_name }}</span><time>{{ message.created_at }} UTC</time></div><h1>{{ message.subject }}</h1><div class="message-body">{{ message.body }}</div>
-<div class="button-row">{% if message.recipient_id==g.user.id %}<a class="button secondary" href="{{ url_for('mail.compose',to=message.sender_id) }}">REPLY</a>{% endif %}<form method="post" action="{{ url_for('mail.delete',message_id=message.id) }}" data-confirm="Remove this message from your mailbox?"><input type="hidden" name="csrf_token" value="{{ session.csrf_token }}"><button class="danger">DELETE</button></form></div></article>
+<header class="mail-thread-head"><div><p class="eyebrow">PRIVATE MAIL / CONVERSATION</p><h1>{{ message.subject[3:] if message.subject.lower().startswith('re:') else message.subject }}</h1><p class="muted">Conversation with {{ other_user.callsign }} / {{ other_user.username }} &middot; {{ messages|length }} {{ 'message' if messages|length == 1 else 'messages' }}</p></div><a class="button secondary" href="#reply">REPLY</a></header>
+<section class="mail-thread">
+{% for item in messages %}<article class="terminal-card message mail-message{% if item.sender_id==g.user.id %} outgoing{% endif %}" {% if loop.last %}id="message-latest"{% endif %}>
+<div class="bulletin-meta"><span>{{ 'YOU' if item.sender_id==g.user.id else item.sender_callsign + ' / ' + item.sender_name }}</span><span>TO {{ 'YOU' if item.recipient_id==g.user.id else item.recipient_callsign + ' / ' + item.recipient_name }}</span><time>{{ item.created_at }} UTC</time></div>
+<div class="message-body">{{ item.body }}</div>
+<form class="mail-message-delete" method="post" action="{{ url_for('mail.delete',message_id=item.id) }}" data-confirm="Remove this message from your mailbox?"><input type="hidden" name="csrf_token" value="{{ session.csrf_token }}"><button class="text-button">DELETE</button></form>
+</article>{% endfor %}
+</section>
+<section class="terminal-card reply-box" id="reply"><p class="eyebrow">REPLY TO {{ other_user.callsign }}</p><form method="post" action="{{ url_for('mail.reply',message_id=messages[-1].id) }}" class="form-grid"><input type="hidden" name="csrf_token" value="{{ session.csrf_token }}"><label>Message<textarea name="body" maxlength="10000" rows="8" required></textarea></label><div class="button-row"><button>SEND REPLY</button><a class="button secondary" href="{{ url_for('mail.inbox') }}">CANCEL</a></div></form></section>
 {% endblock %}

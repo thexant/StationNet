@@ -81,6 +81,21 @@ def test_compact_radio_is_in_shared_shell_and_console_has_advanced_controls(app,
     assert app.extensions["radio"].receiver_frequency(connection_id) is None
 
 
+def test_radio_tuning_controls_include_mobile_activation_support():
+    from pathlib import Path
+
+    root = Path(__file__).parents[1]
+    script = (root / "stationnet" / "static" / "radio.js").read_text(encoding="utf-8")
+    styles = (root / "stationnet" / "static" / "station.css").read_text(encoding="utf-8")
+    console = (root / "stationnet" / "templates" / "radio" / "console.html").read_text(encoding="utf-8")
+
+    assert 'addEventListener("pointerup"' in script
+    assert 'bandSelect?.addEventListener("input",tuneSelectedBand)' in script
+    assert 'bandSelect?.addEventListener("change",tuneSelectedBand)' in script
+    assert "touch-action: manipulation" in styles
+    assert 'enterkeyhint="go"' in console
+
+
 def test_broadcast_directory_is_separate_from_collapsible_host_controls(app, initialized):
     host_console = initialized.get("/radio/")
     assert b'class="radio-broadcast-directory"' in host_console.data

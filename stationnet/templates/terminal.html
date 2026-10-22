@@ -9,40 +9,75 @@
   </header>
 
   <div class="service-list">
+    <a href="{{ url_for('board.index') }}">
+      <span class="service-number">[01]</span>
+      <span class="service-copy"><strong>BULLETIN BOARD</strong><small>READ AND WRITE POSTS TO THE STATION BULLETIN BOARD</small></span>
+      <span class="service-state">* ONLINE</span>
+    </a>
+    <a href="{{ url_for('announcements.index') }}"><span class="service-number">[02]</span><span class="service-copy"><strong>ANNOUNCEMENTS</strong><small>OFFICIAL STATION NOTICES</small></span><span class="service-state">* ONLINE</span></a>
     {% if g.user %}
     <a href="{{ url_for('chat.station_chat') }}">
-      <span class="service-number">[01]</span>
-      <span class="service-copy"><strong>STATION CHAT</strong><small>LIVE PUBLIC CALLSIGN TRAFFIC</small></span>
+      <span class="service-number">[03]</span>
+      <span class="service-copy"><strong>STATION CHAT</strong><small>LIVE STATION CHAT</small></span>
       <span class="service-state">* ONLINE</span>
     </a>
-    {% endif %}
-    <a href="{{ url_for('board.index') }}">
-      <span class="service-number">[02]</span>
-      <span class="service-copy"><strong>BULLETIN BOARD</strong><small>READ / WRITE LOCAL MESSAGE TRAFFIC</small></span>
+    <a href="{{ url_for('mail.inbox') }}"><span class="service-number">[04]</span><span class="service-copy"><strong>PRIVATE MAIL</strong><small>COMPOSE AND READ PRIVATE MESSAGES</small></span><span class="service-state">* ONLINE</span></a>
+    <a href="{{ url_for('radio.console') }}">
+      <span class="service-number">[05]</span>
+      <span class="service-copy"><strong>RADIO</strong><small>AUDIO RECEIVER AND TRANSMISSION CONSOLE</small></span>
       <span class="service-state">* ONLINE</span>
     </a>
-    <a href="{{ url_for('announcements.index') }}"><span class="service-number">[03]</span><span class="service-copy"><strong>ANNOUNCEMENTS</strong><small>OFFICIAL STATION NOTICES</small></span><span class="service-state">* ONLINE</span></a>
-    {% if g.user %}
-    <a href="{{ url_for('mail.inbox') }}"><span class="service-number">[04]</span><span class="service-copy"><strong>PRIVATE MAIL</strong><small>PERSISTENT USER-TO-USER MESSAGES</small></span><span class="service-state">* ONLINE</span></a>
-    <a href="{{ url_for('archive.index') }}"><span class="service-number">[05]</span><span class="service-copy"><strong>FILE ARCHIVE</strong><small>SHARED STATION FILES</small></span><span class="service-state">* ONLINE</span></a>
-    <a href="{{ url_for('users.directory') }}"><span class="service-number">[06]</span><span class="service-copy"><strong>USER DIRECTORY</strong><small>CALLSIGNS / PROFILES / ONLINE LINKS</small></span><span class="service-state">* ONLINE</span></a>
-    <a href="{{ url_for('applications.index') }}"><span class="service-number">[07]</span><span class="service-copy"><strong>GAMES AND APPS</strong><small>STATION-HOSTED SOFTWARE DIRECTORY</small></span><span class="service-state">* ONLINE</span></a>
+    <a href="{{ url_for('archive.index') }}"><span class="service-number">[06]</span><span class="service-copy"><strong>FILE ARCHIVE</strong><small>SHARED STATION FILES</small></span><span class="service-state">* ONLINE</span></a>
+    <a href="{{ url_for('users.directory') }}"><span class="service-number">[07]</span><span class="service-copy"><strong>USER DIRECTORY</strong><small>LIST OF REGISTERED USERS ON THIS STATION</small></span><span class="service-state">* ONLINE</span></a>
+    <a href="{{ url_for('applications.index') }}"><span class="service-number">[08]</span><span class="service-copy"><strong>GAMES AND APPS</strong><small>STATION-HOSTED SOFTWARE AND GAMES DIRECTORY</small></span><span class="service-state">* ONLINE</span></a>
     {% if g.station.mud_enabled %}
-    <a href="{{ url_for('mud.index') }}"><span class="service-number">[08]</span><span class="service-copy"><strong>STATION MUD</strong><small>NATIVE TEXT WORLD SERVICE</small></span><span class="service-state">* ONLINE</span></a>
+    <a href="{{ url_for('mud.index') }}"><span class="service-number">[09]</span><span class="service-copy"><strong>STATION MUD</strong><small>TEXT BASED MULTIPLAYER RPG</small></span><span class="service-state">* ONLINE</span></a>
     {% endif %}
     {% endif %}
   </div>
 
-  <aside class="operator-block">
-    <h2>&gt; CURRENT OPERATOR</h2>
-    {% if g.user %}
-    <dl><div><dt>CALLSIGN</dt><dd>{{ g.user.callsign }}</dd></div><div><dt>ALIAS</dt><dd>{{ g.user.username }}</dd></div><div><dt>ACCESS</dt><dd>{{ 'SYSOP' if g.user.is_admin else 'MEMBER' }}</dd></div><div><dt>LINK</dt><dd class="positive">AUTHENTICATED</dd></div></dl>
-    <p><a href="{{ url_for('users.profile',user_id=g.user.id) }}">[ EDIT MY PROFILE ]</a></p>
-    <form method="post" action="{{ url_for('auth.logout') }}"><input type="hidden" name="csrf_token" value="{{ session.csrf_token }}"><button class="text-button">[ DISCONNECT ]</button></form>
-    {% else %}
-    <dl><div><dt>CALLSIGN</dt><dd>UNASSIGNED</dd></div><div><dt>ACCESS</dt><dd>READ ONLY</dd></div><div><dt>LINK</dt><dd class="warning-text">ANONYMOUS</dd></div></dl>
-    <a class="button" href="{{ url_for('auth.login') }}">&gt; AUTHENTICATE</a>
+  <div class="directory-sidebar">
+    <aside class="operator-block">
+      <h2>&gt; CURRENT OPERATOR</h2>
+      {% if g.user %}
+      <div class="operator-summary"><strong>{{ g.user.callsign }}</strong><span>{{ g.user.username }} / {{ 'SYSOP' if g.user.is_admin else 'MEMBER' }}</span><small class="positive">* AUTHENTICATED</small></div>
+      <div class="operator-actions"><a href="{{ url_for('users.profile',user_id=g.user.id) }}">[ PROFILE ]</a><form method="post" action="{{ url_for('auth.logout') }}"><input type="hidden" name="csrf_token" value="{{ session.csrf_token }}"><button class="text-button">[ DISCONNECT ]</button></form></div>
+      {% else %}
+      <div class="operator-summary"><strong>UNASSIGNED</strong><span>READ ONLY</span><small class="warning-text">* ANONYMOUS</small></div>
+      <a class="button compact-button" href="{{ url_for('auth.login') }}">&gt; AUTHENTICATE</a>
+      {% endif %}
+    </aside>
+
+    {% if activity %}
+    <aside class="activity-panel" aria-labelledby="activity-heading">
+      <h2 id="activity-heading">&gt; STATION ACTIVITY</h2>
+      <div class="activity-list">
+        <a class="activity-item" href="{{ url_for('board.thread',post_id=activity.bulletin.id) if activity.bulletin else url_for('board.index') }}">
+          <span>MOST RECENT BULLETIN</span>
+          {% if activity.bulletin %}<strong>{{ activity.bulletin.title }}</strong><small>{{ activity.bulletin.username }} / {{ activity.bulletin.callsign }}</small><time datetime="{{ activity.bulletin.created_at|replace(' ', 'T') }}Z" data-local-time>{{ activity.bulletin.created_at }} UTC</time>{% else %}<em>NO BULLETINS POSTED</em>{% endif %}
+        </a>
+        {% if activity.reply %}<a class="activity-item" href="{{ url_for('board.thread',post_id=activity.reply.bulletin_id) }}#reply-{{ activity.reply.id }}">
+          <span>MOST RECENT REPLY</span>
+          <strong>RE: {{ activity.reply.bulletin_title }}</strong><p>{{ activity.reply.body|truncate(120) }}</p><small>{{ activity.reply.username }} / {{ activity.reply.callsign }}</small><time datetime="{{ activity.reply.created_at|replace(' ', 'T') }}Z" data-local-time>{{ activity.reply.created_at }} UTC</time>
+        </a>{% else %}<a class="activity-item" href="{{ url_for('board.index') }}"><span>MOST RECENT REPLY</span><em>NO REPLIES POSTED</em></a>{% endif %}
+        <a class="activity-item" href="{{ url_for('chat.station_chat') }}">
+          <span>MOST RECENT CHAT MESSAGE</span>
+          {% if activity.chat %}<time datetime="{{ activity.chat.created_at|replace(' ', 'T') }}Z" data-local-time>{{ activity.chat.created_at }} UTC</time>{% else %}<em>NO CHAT MESSAGES</em>{% endif %}
+        </a>
+        <a class="activity-item" href="{{ url_for('archive.index') }}{% if activity.file %}#file-{{ activity.file.id }}{% endif %}">
+          <span>NEWEST FILE</span>
+          {% if activity.file %}<strong>{{ activity.file.display_name }}</strong><time datetime="{{ activity.file.created_at|replace(' ', 'T') }}Z" data-local-time>{{ activity.file.created_at }} UTC</time>{% else %}<em>NO FILES UPLOADED</em>{% endif %}
+        </a>
+        <a class="activity-item activity-count" href="{{ url_for('mail.inbox') }}">
+          <span>UNOPENED MESSAGES</span><strong>{{ activity.unread_mail }}</strong><small>{{ 'UNREAD MESSAGE' if activity.unread_mail == 1 else 'UNREAD MESSAGES' }}</small>
+        </a>
+        <a class="activity-item activity-broadcasts" href="{{ url_for('radio.console') }}">
+          <span>ACTIVE BROADCASTS</span>
+          {% for broadcast in activity.broadcasts %}<div class="activity-broadcast"><strong>{{ broadcast.name }}</strong><small>{{ broadcast.frequency }} MHz / {{ broadcast.callsign }}</small>{% if broadcast.message %}<p>{{ broadcast.message }}</p>{% endif %}<em>{{ broadcast.track_title }}{% if broadcast.track_artist %} / {{ broadcast.track_artist }}{% endif %}</em></div>{% else %}<em>NO AUTHORIZED BROADCASTS ON AIR</em>{% endfor %}
+        </a>
+      </div>
+    </aside>
     {% endif %}
-  </aside>
+  </div>
 </section>
 {% endblock %}

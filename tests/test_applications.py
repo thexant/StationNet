@@ -71,16 +71,15 @@ def test_directory_requires_login_and_is_linked_from_navigation(initialized):
 def test_directory_lists_metadata_and_display_uses_station_shell(initialized):
     response = initialized.get("/games-apps")
     assert response.status_code == 200
-    assert b"Word Chain [Placeholder]" in response.data
-    assert b"Event Board [Placeholder]" in response.data
-    assert b"StationNet Core" in response.data
-    assert b"0.0.1" in response.data
+    assert b"[Placeholder]" not in response.data
+    assert b"Word Chain" not in response.data
+    assert b"Event Board" not in response.data
+    assert b"Note Stack" not in response.data
 
-    display = initialized.get("/games-apps/word-chain")
+    display = initialized.get("/games-apps/number-guess")
     assert display.status_code == 200
     assert b"station-shell" in display.data
     assert b"STATION APPLICATION DISPLAY" in display.data
-    assert b"FUNCTIONALITY HAS NOT BEEN IMPLEMENTED YET" in display.data
     assert b"RETURN TO GAMES AND APPS" in display.data
     assert b'aria-current="page"' in display.data
 
@@ -198,7 +197,8 @@ def test_art_studio_folder_is_a_valid_distributable_package():
     assert set(files) == {"manifest.json", "main.js"}
 
 
-def test_placeholder_has_no_runtime(initialized):
+def test_removed_placeholders_are_not_routable(initialized):
+    assert initialized.get("/games-apps/word-chain").status_code == 404
     assert initialized.get("/games-apps/word-chain/runtime").status_code == 404
     assert initialized.get("/games-apps/word-chain/source.js").status_code == 404
 

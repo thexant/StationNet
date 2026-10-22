@@ -50,7 +50,61 @@ def index():
     )
 
 @bp.get("/terminal")
-def terminal(): return render_template("terminal.html")
+def terminal():
+    activity = None
+    if g.user:
+        database = get_db()
+        latest_bulletin = database.execute(
+            "SELECT p.id,p.title,p.created_at,u.username,u.callsign "
+            "FROM posts p JOIN users u ON u.id=p.author_id "
+            "WHERE p.parent_id IS NULL ORDER BY p.created_at DESC,p.id DESC LIMIT 1"
+        ).fetchone()
+        latest_reply = database.execute(
+            "SELECT r.id,r.body,r.created_at,u.username,u.callsign,"
+            "parent.id AS bulletin_id,parent.title AS bulletin_title "
+            "FROM posts r JOIN posts parent ON parent.id=r.parent_id "
+            "JOIN users u ON u.id=r.author_id "
+            "ORDER BY r.created_at DESC,r.id DESC LIMIT 1"
+        ).fetchone()
+        latest_chat = database.execute(
+            "SELECT id,created_at FROM station_chat_messages "
+            "ORDER BY created_at DESC,id DESC LIMIT 1"
+        ).fetchone()
+        newest_file = database.execute(
+            "SELECT id,display_name,created_at FROM archive_files "
+            "ORDER BY created_at DESC,id DESC LIMIT 1"
+        ).fetchone()
+        unread_mail = database.execute(
+            "SELECT COUNT(*) FROM mail WHERE recipient_id=? AND recipient_deleted=0 AND is_read=0",
+            (g.user["id"],),
+        ).fetchone()[0]
+
+        assignments = {
+            row["user_id"]: row for row in database.execute(
+                "SELECT a.user_id,a.frequency_khz,a.broadcast_name,a.broadcast_message,u.callsign "
+                "FROM radio_broadcast_assignments a JOIN users u ON u.id=a.user_id"
+            )
+        }
+        broadcasts = []
+        for user_id, session_info in current_app.extensions["hosted_broadcasts"].all_public().items():
+            assignment = assignments.get(user_id)
+            if (session_info and session_info["status"] == "playing" and assignment
+                    and assignment["frequency_khz"] == session_info["frequency_khz"]):
+                broadcasts.append({
+                    **session_info,
+                    "name": assignment["broadcast_name"] or assignment["callsign"],
+                    "message": assignment["broadcast_message"],
+                })
+        broadcasts.sort(key=lambda item: (item["frequency_khz"], item["name"].casefold()))
+        activity = {
+            "bulletin": latest_bulletin,
+            "reply": latest_reply,
+            "chat": latest_chat,
+            "file": newest_file,
+            "unread_mail": unread_mail,
+            "broadcasts": broadcasts,
+        }
+    return render_template("terminal.html", activity=activity)
 
 @bp.post("/sysop/settings/access")
 @admin_required

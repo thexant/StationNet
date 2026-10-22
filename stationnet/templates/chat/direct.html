@@ -2,14 +2,14 @@
 {% block title %}Direct Chat{% endblock %}
 {% block content %}
 <section class="terminal-card live-chat" data-live-chat data-messages-url="{{ url_for('chat.direct_messages',user_id=peer.id) }}">
-  <p class="eyebrow">DIRECT LINK / {{ peer.callsign }}</p>
+  <p class="eyebrow">DIRECT CHAT / {{ peer.callsign }}</p>
   <h1>{{ peer.username }}</h1>
   <p class="muted">Temporary private channel. Traffic is erased when either connection ends.</p>
-  <div class="chat-log" data-chat-log role="log" aria-live="polite"><p class="muted" data-chat-empty>DIRECT LINK ESTABLISHED. NO TRAFFIC.</p></div>
+  <div class="chat-log" data-chat-log role="log" aria-live="polite"><p class="muted" data-chat-empty>DIRECT COMMUNICATION OPENED.</p></div>
   <form class="chat-compose" data-chat-form>
     <input type="hidden" name="csrf_token" value="{{ session.csrf_token }}">
     <label>Transmit privately as {{ g.user.username }} - [{{ g.user.callsign }}]<textarea name="body" maxlength="1000" rows="3" required></textarea><small>Press Enter to send. Shift+Enter starts a new line.</small></label>
-    <button>SEND DIRECT</button><span class="chat-error" data-chat-error aria-live="polite"></span>
+    <button>SEND</button><span class="chat-error" data-chat-error aria-live="polite"></span>
   </form>
 </section>
 {% endblock %}

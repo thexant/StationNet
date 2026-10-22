@@ -91,15 +91,21 @@
 
   const playerToggle=player?.querySelector("[data-radio-player-toggle]");
   const setPlayerExpanded=expanded=>{if(!player||!playerToggle)return;player.classList.toggle("minimized",!expanded);playerToggle.setAttribute("aria-expanded",String(expanded));playerToggle.setAttribute("aria-label",`${expanded?"Minimize":"Expand"} radio player`);playerToggle.textContent=expanded?"RADIO ▼":"R";sessionStorage.setItem("stationnet.radio.playerExpanded",String(expanded))};
+  const bindPress=(control,action)=>{if(!control)return;let touchedAt=0;control.addEventListener("pointerup",event=>{if(event.pointerType==="mouse")return;touchedAt=Date.now();event.preventDefault();action(event)});control.addEventListener("click",event=>{if(Date.now()-touchedAt<700)return;action(event)})};
   playerToggle?.addEventListener("click",()=>setPlayerExpanded(playerToggle.getAttribute("aria-expanded")!=="true"));
   if(player)setPlayerExpanded(sessionStorage.getItem("stationnet.radio.playerExpanded")==="true");
   every("power").forEach(button=>button.addEventListener("click",()=>powered?powerOff():powerOn()));
-  every("step").forEach(button=>button.addEventListener("click",()=>{const khz=parseKhz(frequency);if(khz!==null)tune(formatKhz(khz+Number(button.dataset.radioStep)))}));
+  every("step").forEach(button=>bindPress(button,()=>{const khz=parseKhz(frequency);if(khz!==null)tune(formatKhz(khz+Number(button.dataset.radioStep)))}));
   every("volume").forEach(control=>control.addEventListener("input",()=>{volumeValue=Number(control.value);localStorage.setItem("stationnet.radio.volume",volumeValue);syncVolume()}));
   every("mute").forEach(button=>button.addEventListener("click",()=>{muted=!muted;sessionStorage.setItem("stationnet.radio.muted",String(muted));syncVolume()}));
-  frequencyInputs.forEach(input=>{input.addEventListener("change",()=>tune(input.value));input.addEventListener("keydown",event=>{if(event.key==="Enter"){event.preventDefault();tune(input.value)}})});
-  bandSelect?.addEventListener("change",()=>{const option=bandSelect.selectedOptions[0];if(option?.dataset.frequency)tune(option.dataset.frequency)});
-  for(const button of consolePanel?.querySelectorAll("[data-radio-scan]")||[])button.addEventListener("click",async()=>{showError("");await endTransmission(true);setStatus("SCANNING");try{const payload=await post(body.dataset.radioScanUrl,{frequency,direction:button.dataset.radioScan});if(payload.found)applyFrequency(payload.frequency,payload.band,payload.cursor,true,payload.access,payload.identity,payload.broadcast,payload.active);else setStatus("NO ACTIVITY")}catch(problem){showError(problem);setStatus("SCAN ERROR")}});
+  let lastFrequencySubmission="",lastFrequencySubmissionAt=0;
+  const tuneFrequencyInput=input=>{const target=input.value,now=Date.now();if(target===lastFrequencySubmission&&now-lastFrequencySubmissionAt<700)return;lastFrequencySubmission=target;lastFrequencySubmissionAt=now;tune(target)};
+  frequencyInputs.forEach(input=>{input.addEventListener("change",()=>tuneFrequencyInput(input));input.addEventListener("keydown",event=>{if(event.key==="Enter"){event.preventDefault();input.blur();tuneFrequencyInput(input)}})});
+  let lastBandSelection="",lastBandSelectionAt=0;
+  const tuneSelectedBand=()=>{const option=bandSelect?.options[bandSelect.selectedIndex],target=option?.dataset.frequency,now=Date.now();if(!target||(target===lastBandSelection&&now-lastBandSelectionAt<700))return;lastBandSelection=target;lastBandSelectionAt=now;tune(target)};
+  bandSelect?.addEventListener("input",tuneSelectedBand);
+  bandSelect?.addEventListener("change",tuneSelectedBand);
+  for(const button of consolePanel?.querySelectorAll("[data-radio-scan]")||[])bindPress(button,async()=>{showError("");await endTransmission(true);setStatus("SCANNING");try{const payload=await post(body.dataset.radioScanUrl,{frequency,direction:button.dataset.radioScan});if(payload.found)applyFrequency(payload.frequency,payload.band,payload.cursor,true,payload.access,payload.identity,payload.broadcast,payload.active);else setStatus("NO ACTIVITY")}catch(problem){showError(problem);setStatus("SCAN ERROR")}});
   cwButton?.addEventListener("click",()=>transmissionId?endTransmission():beginCw());key?.addEventListener("pointerdown",event=>{event.preventDefault();key.setPointerCapture(event.pointerId);keyDown()});key?.addEventListener("pointerup",keyUp);key?.addEventListener("pointercancel",keyUp);
   const typingTarget=target=>target instanceof HTMLInputElement||target instanceof HTMLTextAreaElement||target instanceof HTMLSelectElement||target?.isContentEditable;
   document.addEventListener("keydown",event=>{if(event.code==="Space"&&transmissionMode==="CW"&&!typingTarget(event.target)){event.preventDefault();keyDown()}if(event.code==="KeyV"&&!voicePanel?.hidden&&!event.repeat&&!typingTarget(event.target)){event.preventDefault();beginVoice()}});document.addEventListener("keyup",event=>{if(event.code==="Space"&&keyIsDown){event.preventDefault();keyUp()}if(event.code==="KeyV"&&pttHeld){event.preventDefault();releaseVoice()}});window.addEventListener("blur",()=>{keyUp();releaseVoice()});

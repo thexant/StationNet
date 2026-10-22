@@ -2,6 +2,13 @@
 const clock=document.querySelector("[data-clock]");
 const dateReadout=document.querySelector("[data-date]");
 if(clock){const tick=()=>{const now=new Date();clock.textContent=now.toLocaleTimeString([],{hour12:false});if(dateReadout)dateReadout.textContent=now.toLocaleDateString([],{weekday:"short",month:"short",day:"2-digit",year:"numeric"}).toUpperCase()};tick();setInterval(tick,1000)}
+const localTimestamp=value=>{
+  if(!value)return "";
+  const normalized=/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/.test(value)?`${value.replace(" ","T")}Z`:value;
+  const timestamp=new Date(normalized);
+  return Number.isNaN(timestamp.getTime())?value:timestamp.toLocaleString([],{dateStyle:"medium",timeStyle:"short"});
+};
+for(const time of document.querySelectorAll("[data-local-time]"))time.textContent=localTimestamp(time.dateTime||time.textContent);
 document.addEventListener("keydown",e=>{const editing=e.target instanceof HTMLInputElement||e.target instanceof HTMLTextAreaElement;if(e.key==="/"&&!editing){e.preventDefault();const command=document.querySelector("[data-command-input]");if(command){command.focus();if(!command.value)command.value="/"}else document.querySelector("#service-nav")?.focus()}if(e.key==="Escape"&&document.activeElement instanceof HTMLElement)document.activeElement.blur()});
 for(const form of document.querySelectorAll("form[data-confirm]"))form.addEventListener("submit",e=>{if(!confirm(form.dataset.confirm))e.preventDefault()});
 
@@ -51,16 +58,6 @@ for(const chat of document.querySelectorAll("[data-live-chat]")){
   const url=chat.dataset.messagesUrl;
   let lastId=0;
   let busy=false;
-
-  const localTimestamp=value=>{
-    if(!value)return "";
-    const normalized=/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/.test(value)
-      ? `${value.replace(" ","T")}Z`
-      : value;
-    const timestamp=new Date(normalized);
-    if(Number.isNaN(timestamp.getTime()))return value;
-    return timestamp.toLocaleString([],{dateStyle:"medium",timeStyle:"short"});
-  };
 
   const addMessage=message=>{
     chat.querySelector("[data-chat-empty]")?.remove();

@@ -13,15 +13,9 @@
   <a class="skip-link" href="#main">Skip to content</a>
   <div class="station-shell">
     <header class="station-header">
-      <div class="system-line">
-        <span>StationNet BBS for local networks</span>
-        <span>Version 0.3</span>
-        <span>Copyright 2026 / station-owned</span>
-      </div>
-
       <a class="station-brand" href="{{ url_for('station.index') if g.station else url_for('auth.setup') }}" aria-label="{{ g.station.name if g.station else 'StationNet' }} home">
         <pre class="ansi-logo" aria-hidden="true">{{ g.station_banner }}</pre>
-        <span class="brand-tag">{{ g.station.brand_tagline if g.station else 'H7/dS! // YOUR INDEPENDENT COMMUNITY STATION //' }}</span>
+        <span class="brand-tag">{{ g.station.brand_tagline if g.station else '// YOUR COMMUNITY STATION //' }}</span>
       </a>
 
       {% if g.station %}

@@ -54,6 +54,8 @@ CREATE TABLE IF NOT EXISTS mail (
  id INTEGER PRIMARY KEY AUTOINCREMENT,
  sender_id INTEGER NOT NULL REFERENCES users(id) ON DELETE RESTRICT,
  recipient_id INTEGER NOT NULL REFERENCES users(id) ON DELETE RESTRICT,
+ thread_id INTEGER REFERENCES mail(id) ON DELETE CASCADE,
+ reply_to_id INTEGER REFERENCES mail(id) ON DELETE SET NULL,
  subject TEXT NOT NULL, body TEXT NOT NULL,
  is_read INTEGER NOT NULL DEFAULT 0,
  sender_deleted INTEGER NOT NULL DEFAULT 0,
@@ -321,6 +323,7 @@ def init_db():
     _migrate_station_customization(database)
     _migrate_registration_policy(database)
     _migrate_community_fields(database)
+    _migrate_mail_threads(database)
     _migrate_hosted_broadcast_fields(database)
     _migrate_broadcast_identity_fields(database)
     _migrate_mud_settings(database)
@@ -354,6 +357,19 @@ def init_db():
             "UPDATE radio_permission_groups SET host_broadcasts=1 WHERE name='OPERATORS'"
         )
     database.commit()
+
+
+def _migrate_mail_threads(database):
+    """Turn legacy standalone mail into one-message conversations."""
+    columns = {row["name"] for row in database.execute("PRAGMA table_info(mail)")}
+    if "thread_id" not in columns:
+        database.execute("ALTER TABLE mail ADD COLUMN thread_id INTEGER REFERENCES mail(id)")
+    if "reply_to_id" not in columns:
+        database.execute("ALTER TABLE mail ADD COLUMN reply_to_id INTEGER REFERENCES mail(id)")
+    database.execute("UPDATE mail SET thread_id=id WHERE thread_id IS NULL")
+    database.execute(
+        "CREATE INDEX IF NOT EXISTS idx_mail_thread ON mail(thread_id,created_at,id)"
+    )
 
 
 def _initialize_mud_characters(database):

@@ -185,26 +185,6 @@ def _load_package(folder: str) -> Application:
     return application
 
 
-for _application in (
-    Application(
-        slug="word-chain", name="Word Chain [Placeholder]",
-        description="A future word game built for quick rounds and high scores.",
-        author="StationNet Core", version="0.0.1", category=GAMES,
-    ),
-    Application(
-        slug="event-board", name="Event Board [Placeholder]",
-        description="A future utility for organizing community events and sign-ups.",
-        author="StationNet Core", version="0.0.1", category=APPS,
-    ),
-    Application(
-        slug="note-stack", name="Note Stack [Placeholder]",
-        description="A future utility for keeping small personal notes and lists.",
-        author="StationNet Core", version="0.0.1", category=APPS,
-    ),
-):
-    register(_application)
-
-
 def _safe_archive_name(name: str) -> PurePosixPath:
     if not name or "\\" in name or name.startswith("/"):
         raise PackageError(f"Unsafe archive path: {name or '(empty)'}.")
@@ -339,7 +319,7 @@ def install_package(package_bytes: bytes) -> Application:
 @bp.get("")
 @login_required
 def index():
-    visible = tuple(item for item in catalog() if item.enabled)
+    visible = tuple(item for item in catalog() if item.enabled and item.runnable)
     grouped = {
         category: tuple(item for item in visible if item.category == category)
         for category in CATEGORIES
@@ -351,7 +331,7 @@ def index():
 @login_required
 def display(slug):
     application = find(slug)
-    if application is None or not application.enabled:
+    if application is None or not application.enabled or not application.runnable:
         abort(404)
     return render_template("applications/display.html", application=application)
 

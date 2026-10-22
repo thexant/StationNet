@@ -50,10 +50,11 @@ def compose():
         elif not 1 <= len(body) <= 10000:
             flash("Message must be between 1 and 10000 characters.", "error")
         else:
-            database.execute(
+            cursor = database.execute(
                 "INSERT INTO mail(sender_id,recipient_id,subject,body) VALUES(?,?,?,?)",
                 (g.user["id"], recipient_id, subject, body),
             )
+            database.execute("UPDATE mail SET thread_id=id WHERE id=?", (cursor.lastrowid,))
             database.commit()
             flash("Private mail delivered.", "success")
             return redirect(url_for("mail.sent"))
@@ -77,10 +78,71 @@ def view(message_id):
     ).fetchone()
     if message is None:
         abort(404)
-    if message["recipient_id"] == g.user["id"] and not message["is_read"]:
-        database.execute("UPDATE mail SET is_read=1 WHERE id=?", (message_id,))
+    thread_id = message["thread_id"] or message["id"]
+    messages = database.execute(
+        "SELECT m.*,s.username sender_name,s.callsign sender_callsign,"
+        "r.username recipient_name,r.callsign recipient_callsign FROM mail m "
+        "JOIN users s ON s.id=m.sender_id JOIN users r ON r.id=m.recipient_id "
+        "WHERE COALESCE(m.thread_id,m.id)=? AND "
+        "((m.recipient_id=? AND m.recipient_deleted=0) OR "
+        "(m.sender_id=? AND m.sender_deleted=0)) ORDER BY m.created_at,m.id",
+        (thread_id, g.user["id"], g.user["id"]),
+    ).fetchall()
+    read_update = database.execute(
+        "UPDATE mail SET is_read=1 WHERE COALESCE(thread_id,id)=? AND recipient_id=? "
+        "AND recipient_deleted=0 AND is_read=0",
+        (thread_id, g.user["id"]),
+    )
+    if read_update.rowcount:
         database.commit()
-    return render_template("mail/view.html", message=message)
+    other_user = {
+        "id": message["sender_id"],
+        "username": message["sender_name"],
+        "callsign": message["sender_callsign"],
+    } if message["recipient_id"] == g.user["id"] else {
+        "id": message["recipient_id"],
+        "username": message["recipient_name"],
+        "callsign": message["recipient_callsign"],
+    }
+    return render_template(
+        "mail/view.html", message=message, messages=messages, other_user=other_user
+    )
+
+
+@bp.post("/<int:message_id>/reply")
+@login_required
+def reply(message_id):
+    validate_csrf()
+    database = get_db()
+    message = database.execute(
+        "SELECT * FROM mail WHERE id=? AND "
+        "((recipient_id=? AND recipient_deleted=0) OR (sender_id=? AND sender_deleted=0))",
+        (message_id, g.user["id"], g.user["id"]),
+    ).fetchone()
+    if message is None:
+        abort(404)
+
+    body = request.form.get("body", "").strip()
+    if not 1 <= len(body) <= 10000:
+        flash("Reply must be between 1 and 10000 characters.", "error")
+        return redirect(url_for("mail.view", message_id=message_id) + "#reply")
+
+    recipient_id = (
+        message["sender_id"] if message["recipient_id"] == g.user["id"]
+        else message["recipient_id"]
+    )
+    subject = message["subject"]
+    if not subject.lower().startswith("re:"):
+        subject = f"Re: {subject}"
+    thread_id = message["thread_id"] or message["id"]
+    cursor = database.execute(
+        "INSERT INTO mail(sender_id,recipient_id,thread_id,reply_to_id,subject,body) "
+        "VALUES(?,?,?,?,?,?)",
+        (g.user["id"], recipient_id, thread_id, message_id, subject, body),
+    )
+    database.commit()
+    flash("Reply delivered.", "success")
+    return redirect(url_for("mail.view", message_id=cursor.lastrowid) + "#message-latest")
 
 
 @bp.post("/<int:message_id>/delete")
@@ -93,7 +155,8 @@ def delete(message_id):
         abort(404)
     field = "sender_deleted" if message["sender_id"] == g.user["id"] else "recipient_deleted"
     database.execute(f"UPDATE mail SET {field}=1 WHERE id=?", (message_id,))
-    database.execute("DELETE FROM mail WHERE id=? AND sender_deleted=1 AND recipient_deleted=1", (message_id,))
+    # Keep doubly-deleted rows as thread tombstones. Physically deleting a root
+    # would otherwise orphan or cascade-delete replies that either participant kept.
     database.commit()
     flash("Mail removed from your mailbox.", "success")
     return redirect(url_for("mail.sent" if field == "sender_deleted" else "mail.inbox"))

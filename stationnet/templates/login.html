@@ -4,9 +4,9 @@
 <section class="auth-screen" aria-labelledby="login-title">
   <div class="access-status-strip mode-{{ g.station.registration_mode }}"><span aria-hidden="true">◉</span><strong>STATION ACCESS</strong><small>{% if g.station.registration_mode=='open' %}PUBLIC ENROLLMENT OPEN{% elif g.station.registration_mode=='private' %}PRIVATE / INVITATION ONLY{% else %}ENROLLMENT CLOSED{% endif %}</small></div>
   <header class="auth-heading">
-    <p class="eyebrow">PORT 01 / USER ACCESS</p>
+    <p class="eyebrow">USER ACCESS</p>
     <h1 id="login-title">Login to {{ g.station.name }} - [{{ g.station.callsign }}]</h1>
-    <p>Enter your station username and password. Your assigned callsign will be restored after authentication.</p>
+    <p>Enter your station username and password.</p>
   </header>
 
   <div class="auth-form">
@@ -16,7 +16,7 @@
       <label>Username<input name="username" required autofocus autocomplete="username" value="{{ request.form.username or '' }}"></label>
       <label>Password<input type="password" name="password" required autocomplete="current-password"></label>
       <label class="switch"><input type="checkbox" name="remember_me" {% if request.form.get('remember_me') == 'on' %}checked{% endif %}> Remember me on this device</label>
-      <button class="auth-submit">LOGIN / ESTABLISH LINK <span aria-hidden="true">-&gt;</span></button>
+      <button class="auth-submit">LOGIN<span aria-hidden="true">-&gt;</span></button>
     </form>
   </div>
 

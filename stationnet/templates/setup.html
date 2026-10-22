@@ -1,5 +1,5 @@
 {% extends 'base.html' %}{% block title %}Initialize Station{% endblock %}{% block content %}
-<section class="narrow terminal-card"><p class="eyebrow">STATIONNET BOOT ROM / FIRST RUN</p><h1>Initialize local station</h1><p>No station record was detected. Parameters are stored locally and can be changed later by the SYSOP.</p>
+<section class="narrow terminal-card"><p class="eyebrow">STATIONNET BOOT / FIRST RUN</p><h1>Initialize local station</h1><p>No station record was detected. Parameters are stored locally and can be changed later by the SYSOP.</p>
 <form method="post" class="form-grid"><input type="hidden" name="csrf_token" value="{{ session.csrf_token }}">
 <label>Station name<input name="name" maxlength="80" required autofocus value="{{ request.form.name or '' }}"></label>
 <label>Station description<textarea name="description" maxlength="500" rows="4">{{ request.form.description or '' }}</textarea></label>

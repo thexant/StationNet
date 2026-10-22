@@ -92,6 +92,51 @@ def test_mail_folders_privacy_and_delete(app, initialized):
     assert b"Private subject" in alice.get("/mail/sent").data
 
 
+def test_mail_replies_form_a_private_conversation(app, initialized):
+    alice = register(app, "alice")
+    bob = register(app, "bob")
+    with app.app_context():
+        ids = {row["username"]: row["id"] for row in get_db().execute("SELECT id,username FROM users")}
+    alice.post(
+        "/mail/compose",
+        data={
+            "csrf_token": csrf(alice, "/mail/compose"),
+            "recipient_id": ids["bob"], "subject": "Relay status", "body": "Are you receiving?",
+        },
+    )
+
+    thread = bob.get("/mail/1")
+    assert b"REPLY TO" in thread.data
+    assert b"Are you receiving?" in thread.data
+    response = bob.post(
+        "/mail/1/reply",
+        data={"csrf_token": csrf(bob, "/mail/1"), "body": "Receiving clearly."},
+        follow_redirects=True,
+    )
+    assert b"Reply delivered" in response.data
+    assert b"Are you receiving?" in response.data
+    assert b"Receiving clearly." in response.data
+
+    response = alice.post(
+        "/mail/2/reply",
+        data={"csrf_token": csrf(alice, "/mail/2"), "body": "Acknowledged."},
+        follow_redirects=True,
+    )
+    assert b"Acknowledged." in response.data
+    assert response.data.index(b"Are you receiving?") < response.data.index(b"Receiving clearly.")
+    assert response.data.index(b"Receiving clearly.") < response.data.index(b"Acknowledged.")
+    with app.app_context():
+        rows = get_db().execute(
+            "SELECT id,thread_id,reply_to_id,subject FROM mail ORDER BY id"
+        ).fetchall()
+        assert [tuple(row) for row in rows] == [
+            (1, 1, None, "Relay status"),
+            (2, 1, 1, "Re: Relay status"),
+            (3, 1, 2, "Re: Relay status"),
+        ]
+    assert initialized.get("/mail/2").status_code == 404
+
+
 def test_profiles_owner_only_and_directory_status(app, initialized):
     alice = register(app, "alice")
     with app.app_context():

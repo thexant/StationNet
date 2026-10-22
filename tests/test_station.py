@@ -43,6 +43,98 @@ def test_station_name_drives_ansi_masthead(initialized):
     assert b'aria-label="Dog City home"' in response.data
 
 
+def test_terminal_service_links_match_header_order_and_include_radio(initialized):
+    response = initialized.get("/terminal")
+    service_list = response.data.split(b'class="service-list">', 1)[1].split(b"</div>", 1)[0]
+
+    assert re.findall(rb"<strong>([^<]+)</strong>", service_list) == [
+        b"BULLETIN BOARD",
+        b"ANNOUNCEMENTS",
+        b"STATION CHAT",
+        b"PRIVATE MAIL",
+        b"RADIO",
+        b"FILE ARCHIVE",
+        b"USER DIRECTORY",
+        b"GAMES AND APPS",
+    ]
+    assert b'href="/radio/"' in service_list
+
+
+def test_terminal_activity_uses_existing_station_data(app, initialized):
+    with app.app_context():
+        database = get_db()
+        user = database.execute("SELECT id,callsign FROM users WHERE username='sysop'").fetchone()
+        bulletin_id = database.execute(
+            "INSERT INTO posts(author_id,title,body,created_at) VALUES(?,?,?,?)",
+            (user["id"], "Power Window", "Primary bulletin", "2026-10-20 12:00:00"),
+        ).lastrowid
+        reply_id = database.execute(
+            "INSERT INTO posts(author_id,parent_id,body,created_at) VALUES(?,?,?,?)",
+            (user["id"], bulletin_id, "Generator checks are complete.", "2026-10-20 12:05:00"),
+        ).lastrowid
+        database.execute(
+            "INSERT INTO station_chat_messages(author_id,body,created_at) VALUES(?,?,?)",
+            (user["id"], "All clear", "2026-10-20 12:10:00"),
+        )
+        file_id = database.execute(
+            "INSERT INTO archive_files(uploader_id,display_name,stored_name,category,size_bytes,created_at) "
+            "VALUES(?,?,?,?,?,?)",
+            (user["id"], "relay-map.txt", "test-map.txt", "Documents", 12, "2026-10-20 12:15:00"),
+        ).lastrowid
+        database.execute(
+            "INSERT INTO mail(sender_id,recipient_id,subject,body,is_read) VALUES(?,?,?,?,0)",
+            (user["id"], user["id"], "Unread one", "Message"),
+        )
+        database.execute(
+            "INSERT INTO radio_broadcast_assignments(user_id,frequency_khz,broadcast_name,broadcast_message) "
+            "VALUES(?,?,?,?)",
+            (user["id"], 10100, "Night Signal", "Music through local midnight"),
+        )
+        database.commit()
+
+    public_broadcasts = {
+        user["id"]: {
+            "user_id": user["id"], "callsign": user["callsign"], "frequency": "10.10",
+            "frequency_khz": 10100, "status": "playing", "track_title": "Aurora",
+            "track_artist": "Relay Ensemble",
+        }
+    }
+    with patch.object(app.extensions["hosted_broadcasts"], "all_public", return_value=public_broadcasts):
+        response = initialized.get("/terminal")
+
+    assert response.status_code == 200
+    for text in (
+        b"STATION ACTIVITY", b"Power Window", b"sysop", b"Generator checks are complete.",
+        b"relay-map.txt", b"Night Signal", b"Music through local midnight", b"Aurora",
+        b"Relay Ensemble",
+    ):
+        assert text in response.data
+    assert f'href="/board/{bulletin_id}#reply-{reply_id}"'.encode() in response.data
+    assert f'href="/files#file-{file_id}"'.encode() in response.data
+    assert response.data.count(b"data-local-time") == 4
+    assert b">1</strong><small>UNREAD MESSAGE</small>" in response.data
+
+
+def test_terminal_activity_excludes_paused_and_unassigned_broadcasts(app, initialized):
+    with app.app_context():
+        database = get_db()
+        user = database.execute("SELECT id,callsign FROM users WHERE username='sysop'").fetchone()
+        database.execute(
+            "INSERT INTO radio_broadcast_assignments(user_id,frequency_khz,broadcast_name) VALUES(?,?,?)",
+            (user["id"], 10100, "Assigned Signal"),
+        )
+        database.commit()
+
+    paused = {user["id"]: {"user_id": user["id"], "callsign": user["callsign"],
+              "frequency": "10.10", "frequency_khz": 10100, "status": "paused",
+              "track_title": "Quiet", "track_artist": ""}}
+    with patch.object(app.extensions["hosted_broadcasts"], "all_public", return_value=paused):
+        response = initialized.get("/terminal")
+
+    assert b"Assigned Signal" not in response.data
+    assert b"NO AUTHORIZED BROADCASTS ON AIR" in response.data
+
+
 def test_station_name_and_callsign_appear_in_descriptive_identity(initialized, app):
     with app.app_context():
         callsign = get_db().execute("SELECT callsign FROM station WHERE id=1").fetchone()[0]

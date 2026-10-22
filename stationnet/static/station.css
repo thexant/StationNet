@@ -100,8 +100,8 @@ p { max-width: 72ch; }
 .profile-ident strong { color: var(--cyan); font-size: 1.25rem; font-weight: 400; letter-spacing: .08em; }
 
 .station-board { padding: .75rem 1rem 1rem; border: 1px solid var(--green); }
-.station-board h2, .operator-block h2 { margin: 0; padding-bottom: .35rem; border-bottom: 1px solid var(--green-dim); font-size: 1rem; font-weight: 700; letter-spacing: .08em; }
-.station-board h2 span, .operator-block h2::first-letter { color: var(--cyan); }
+.station-board h2, .operator-block h2, .activity-panel h2 { margin: 0; padding-bottom: .35rem; border-bottom: 1px solid var(--green-dim); font-size: 1rem; font-weight: 700; letter-spacing: .08em; }
+.station-board h2 span, .operator-block h2::first-letter, .activity-panel h2::first-letter { color: var(--cyan); }
 .landing-copy .markdown-body { padding-top: .7rem; color: var(--white); font-size: .76rem; overflow-wrap: anywhere; }
 .landing-copy .markdown-body > :last-child { margin-bottom: 0; }
 .landing-copy .markdown-body h3, .landing-copy .markdown-body h4, .landing-copy .markdown-body h5 { margin: .9rem 0 .35rem; color: var(--green-bright); font-size: .82rem; letter-spacing: .04em; }
@@ -133,9 +133,32 @@ p { max-width: 72ch; }
 .service-copy small { color: var(--grey); font-size: .62rem; }
 .service-state { color: var(--green-bright); font-size: .62rem; }
 .service-list .offline { opacity: .42; }
+.directory-sidebar { display: grid; align-self: start; gap: 1rem; min-width: 0; }
 .operator-block { align-self: start; padding: .75rem; border: 1px solid var(--green); }
-.operator-block dl { margin: .8rem 0 1rem; }
-.operator-block dl div { display: flex; justify-content: space-between; gap: .7rem; padding: .45rem 0; border-bottom: 1px dotted var(--green-dim); }
+.operator-summary { display: grid; gap: .08rem; padding: .6rem 0 .45rem; }
+.operator-summary strong { color: var(--white); font-size: .78rem; overflow-wrap: anywhere; }
+.operator-summary span, .operator-summary small { color: var(--grey); font-size: .58rem; }
+.operator-actions { display: flex; align-items: center; justify-content: space-between; gap: .35rem; padding-top: .35rem; border-top: 1px dotted var(--green-dim); font-size: .6rem; }
+.operator-actions form { margin: 0; }
+.operator-actions .text-button { font-size: .6rem; }
+.compact-button { min-height: 2rem; margin-top: .25rem; padding: .4rem .55rem; font-size: .6rem; }
+.activity-panel { min-width: 0; padding: .75rem; border: 1px solid var(--green); }
+.activity-list { display: grid; }
+.activity-item { display: grid; gap: .12rem; min-width: 0; padding: .62rem 0; border-bottom: 1px dotted var(--green-dim); color: var(--white); text-decoration: none; }
+.activity-item:last-child { border-bottom: 0; padding-bottom: .1rem; }
+.activity-item:hover { padding-inline: .3rem; color: var(--white); background: rgba(0,237,69,.05); }
+.activity-item > span { color: var(--cyan); font-size: .56rem; letter-spacing: .06em; }
+.activity-item strong { color: var(--green-bright); font-size: .68rem; font-weight: 400; overflow-wrap: anywhere; }
+.activity-item small, .activity-item time, .activity-item em { color: var(--grey); font-size: .56rem; font-style: normal; overflow-wrap: anywhere; }
+.activity-item p { display: -webkit-box; margin: .1rem 0; overflow: hidden; color: var(--white); font-size: .6rem; line-height: 1.4; -webkit-box-orient: vertical; -webkit-line-clamp: 2; }
+.activity-count { grid-template-columns: 1fr auto; align-items: end; }
+.activity-count > span, .activity-count > small { grid-column: 1; }
+.activity-count > strong { grid-column: 2; grid-row: 1 / 3; color: var(--amber); font-size: 1.35rem; }
+.activity-broadcasts { gap: .35rem; }
+.activity-broadcast { display: grid; gap: .08rem; padding-left: .5rem; border-left: 1px solid var(--cyan); }
+.activity-broadcast + .activity-broadcast { margin-top: .25rem; }
+.activity-broadcast p { margin: 0; }
+.activity-broadcast em { color: var(--amber); }
 dt { color: var(--grey); font-size: .65rem; }
 dd { margin: 0; color: var(--white); font-size: .67rem; text-align: right; overflow-wrap: anywhere; }
 
@@ -240,6 +263,15 @@ button:hover, .button:hover { color: #000; background: var(--green); }
 .replies > h2 { padding-bottom: .4rem; border-bottom: 1px solid var(--green-dim); color: var(--cyan); }
 .reply { width: auto; margin: 0 0 .75rem clamp(0rem,4vw,2.5rem); border-style: dotted; }
 .reply-box { margin-top: 1.5rem; }
+.mail-thread-head { display: flex; justify-content: space-between; align-items: end; gap: 1rem; width: min(800px,100%); margin: 0 auto 1rem; }
+.mail-thread-head h1 { margin-bottom: .35rem; }
+.mail-thread-head p { margin-bottom: 0; }
+.mail-thread { display: grid; gap: .75rem; width: min(800px,100%); margin-inline: auto; }
+.mail-message { position: relative; margin: 0; padding-bottom: 2.5rem; border-color: var(--green-dim); }
+.mail-message.outgoing { margin-left: clamp(0rem,4vw,2.5rem); border-color: var(--cyan); }
+.mail-message.outgoing > .bulletin-meta span:first-child { color: var(--cyan); }
+.mail-message-delete { position: absolute; right: .75rem; bottom: .55rem; margin: 0; }
+.mail-message-delete .text-button { font-size: .56rem; }
 
 .statusbar { display: flex; justify-content: space-between; gap: 1rem; padding: .45rem .65rem; color: var(--green-dim); border: 1px solid var(--green-dim); font-size: .58rem; letter-spacing: .04em; }
 .carrier { color: var(--green); }
@@ -514,6 +546,7 @@ button:disabled { opacity: .5; cursor: not-allowed; }
 .radio-now-playing-block small { color: var(--grey); }
 .radio-controls { display: grid; grid-template-columns: auto minmax(8rem,1fr) auto auto auto; gap: .45rem; align-items: end; }
 .radio-controls button { min-height: 2.35rem; padding-inline: .6rem; white-space: nowrap; }
+.radio-controls button, .radio-player-controls [data-radio-step] { touch-action: manipulation; }
 .radio-controls input { padding-block: .45rem; }
 .radio-monitor { position: relative; height: 8.5rem; margin: .65rem 0; border: 1px solid var(--green-dim); background: #000; overflow: hidden; }
 .radio-monitor canvas { display: block; width: 100%; height: 100%; }
