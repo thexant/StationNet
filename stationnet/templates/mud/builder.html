@@ -63,6 +63,16 @@
     </form>
   </section>
 
+  <section class="terminal-card builder-create" aria-labelledby="create-item-heading">
+    <p class="eyebrow">ITEM LIBRARY / REUSABLE DEFINITIONS</p><h2 id="create-item-heading">Create an item definition</h2>
+    <form method="post" action="{{ url_for('mud.builder_create_item_definition') }}" class="form-grid"><input type="hidden" name="csrf_token" value="{{ session.csrf_token }}">
+      <label>Name<input name="name" minlength="2" maxlength="80" required></label><label>Type<select name="item_type"><option value="misc">Miscellaneous</option><option value="equipment">Equipment</option><option value="container">Container</option><option value="consumable">Consumable</option><option value="key">Key</option></select></label>
+      <label>Equipment slot<select name="equipment_slot"><option value="">Not equipment</option>{% for slot in ('head','body','hands','legs','feet','main_hand','off_hand','accessory') %}<option value="{{ slot }}">{{ slot|replace('_',' ') }}</option>{% endfor %}</select></label>
+      <label>Description<textarea name="description" rows="3" required></textarea></label><label>Optional use message<input name="use_message" maxlength="1000" placeholder="Shown when a player uses this item"></label><button>CREATE ITEM</button>
+    </form>
+    {% for definition in definitions %}<details class="builder-exits"><summary>{{ definition.name }} · {{ definition.item_type }}</summary><form method="post" action="{{ url_for('mud.builder_update_item_definition',item_id=definition.id) }}" class="form-grid"><input type="hidden" name="csrf_token" value="{{ session.csrf_token }}"><label>Name<input name="name" value="{{ definition.name }}" required></label><label>Type<select name="item_type">{% for type in ('misc','equipment','container','consumable','key') %}<option value="{{ type }}" {% if definition.item_type==type %}selected{% endif %}>{{ type }}</option>{% endfor %}</select></label><label>Equipment slot<select name="equipment_slot"><option value="">Not equipment</option>{% for slot in ('head','body','hands','legs','feet','main_hand','off_hand','accessory') %}<option value="{{ slot }}" {% if definition.equipment_slot==slot %}selected{% endif %}>{{ slot|replace('_',' ') }}</option>{% endfor %}</select></label><label>Description<textarea name="description" rows="3" required>{{ definition.description }}</textarea></label><label>Optional use message<input name="use_message" placeholder="Re-enter to set or change"></label><button class="secondary">SAVE ITEM</button></form></details>{% else %}<p class="muted">No item definitions yet.</p>{% endfor %}
+  </section>
+
   <div class="builder-room-list">
     {% for room in rooms %}
     <article class="terminal-card builder-room" id="room-{{ room.id }}">
@@ -118,6 +128,8 @@
           <button>ADD EXIT</button>
         </form>
       </section>
+
+      <section class="builder-exits"><h3>Items in {{ room.name }}</h3>{% for item in items_by_room[room.id] %}<form method="post" action="{{ url_for('mud.builder_delete_item_instance',instance_id=item.id) }}" class="builder-delete-exit"><input type="hidden" name="csrf_token" value="{{ session.csrf_token }}"><input type="hidden" name="confirmation" value="delete"><span>{{ item.name }} · {{ item.item_type }}</span> <button class="danger">REMOVE</button></form>{% else %}<p class="muted">No placed items.</p>{% endfor %}<form method="post" action="{{ url_for('mud.builder_place_selected_item') }}" class="builder-inline-form"><input type="hidden" name="csrf_token" value="{{ session.csrf_token }}"><input type="hidden" name="room_id" value="{{ room.id }}"><label>Place item<select name="definition_id" required><option value="" selected disabled>Choose an item</option>{% for definition in definitions %}<option value="{{ definition.id }}">{{ definition.name }}</option>{% endfor %}</select></label><label>Destination<select name="container_id"><option value="">Room floor</option>{% for item in items_by_room[room.id] if item.item_type=='container' %}<option value="{{ item.id }}">Inside {{ item.name }}</option>{% endfor %}</select></label><button {% if not definitions %}disabled{% endif %}>PLACE COPY</button></form></section>
 
       <details class="builder-danger-zone">
         <summary>Delete room</summary>

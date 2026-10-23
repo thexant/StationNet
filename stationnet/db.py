@@ -274,6 +274,40 @@ CREATE INDEX IF NOT EXISTS idx_mud_presence_room
  ON mud_presence(room_id,user_id);
 CREATE INDEX IF NOT EXISTS idx_mud_presence_seen
  ON mud_presence(last_seen,disconnected_at);
+CREATE TABLE IF NOT EXISTS mud_item_definitions (
+ id TEXT PRIMARY KEY,
+ name TEXT NOT NULL COLLATE NOCASE,
+ description TEXT NOT NULL,
+ item_type TEXT NOT NULL DEFAULT 'misc',
+ properties_json TEXT NOT NULL DEFAULT '{}',
+ behaviors_json TEXT NOT NULL DEFAULT '{}',
+ equipment_slot TEXT,
+ created_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+ created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+ updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+ CHECK(item_type IN ('misc','equipment','container','consumable','key')),
+ CHECK(equipment_slot IS NULL OR equipment_slot IN ('head','body','hands','legs','feet','main_hand','off_hand','accessory'))
+);
+CREATE INDEX IF NOT EXISTS idx_mud_item_definitions_name ON mud_item_definitions(name);
+CREATE TABLE IF NOT EXISTS mud_item_instances (
+ id TEXT PRIMARY KEY,
+ definition_id TEXT NOT NULL REFERENCES mud_item_definitions(id) ON DELETE RESTRICT,
+ room_id TEXT REFERENCES mud_world_rooms(id) ON DELETE SET NULL,
+ owner_character_id TEXT REFERENCES mud_characters(id) ON DELETE CASCADE,
+ container_id TEXT REFERENCES mud_item_instances(id) ON DELETE SET NULL,
+ equipped_slot TEXT,
+ is_open INTEGER NOT NULL DEFAULT 0 CHECK(is_open IN (0,1)),
+ state_json TEXT NOT NULL DEFAULT '{}',
+ created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+ updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+ CHECK((room_id IS NOT NULL) + (owner_character_id IS NOT NULL AND equipped_slot IS NULL) + (container_id IS NOT NULL) + (owner_character_id IS NOT NULL AND equipped_slot IS NOT NULL) = 1),
+ CHECK(equipped_slot IS NULL OR equipped_slot IN ('head','body','hands','legs','feet','main_hand','off_hand','accessory'))
+);
+CREATE INDEX IF NOT EXISTS idx_mud_item_instances_room ON mud_item_instances(room_id,id);
+CREATE INDEX IF NOT EXISTS idx_mud_item_instances_owner ON mud_item_instances(owner_character_id,id);
+CREATE INDEX IF NOT EXISTS idx_mud_item_instances_container ON mud_item_instances(container_id,id);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_mud_equipment_slot
+ ON mud_item_instances(owner_character_id,equipped_slot) WHERE equipped_slot IS NOT NULL;
 CREATE TRIGGER IF NOT EXISTS radio_default_membership_after_user_insert
 AFTER INSERT ON users
 BEGIN

@@ -289,6 +289,8 @@ def _help_action(_database, _user, parameters):
         "/look (or /l, /examine, /x) — examine your surroundings\n"
         "/exits — list routes from this room\n"
         "/go <exit> (or /move, /walk) — travel through an exit\n"
+        "/get <item> [from <container>], /drop <item>, /open <container>\n"
+        "/put <item> in <container>, /equip <item>, /unequip <item>, /use <item>\n"
         "/north, /south, /east, /west, /up, /down, /in, /out — direction shortcuts\n"
         "/status — check the MUD service\n"
         "/character (or /stats) — view your character and progression\n"
@@ -408,6 +410,7 @@ def _room_state(database, user_id):
             for exit_row in _room_exits(database, room["id"])
         ],
         "occupants": _room_occupants(database, room["id"], user_id),
+        "items": [{"id": item["id"], "name": item["name"], "item_type": item["item_type"]} for item in _room_item_rows(database, room["id"])],
     }
 
 
@@ -416,9 +419,10 @@ def _describe_room(database, room, viewer_id=None):
     routes = ", ".join(_exit_label(item) for item in exits) if exits else "none"
     occupants = _room_occupants(database, room["id"], viewer_id) if viewer_id else []
     people = ", ".join(item["character_name"] for item in occupants) if occupants else "none"
+    items = ", ".join(item["name"] for item in _room_item_rows(database, room["id"])) or "none"
     return (
         f"{room['name']}\n{room['description']}\n\n"
-        f"Exits: {routes}\nOther players: {people}"
+        f"Exits: {routes}\nOther players: {people}\nItems: {items}"
     )
 
 
@@ -450,6 +454,114 @@ def _examine_surroundings(database, _user, room, target):
 
 examinations.register(_examine_surroundings)
 
+EQUIPMENT_SLOTS = ("head", "body", "hands", "legs", "feet", "main_hand", "off_hand", "accessory")
+
+
+def _item_row(database, item_id):
+    return database.execute(
+        "SELECT i.*,d.name,d.description,d.item_type,d.properties_json,d.behaviors_json,d.equipment_slot AS definition_slot "
+        "FROM mud_item_instances AS i JOIN mud_item_definitions AS d ON d.id=i.definition_id WHERE i.id=?",
+        (item_id,),
+    ).fetchone()
+
+
+def _item_name(row):
+    return row["name"]
+
+
+def _item_state(row):
+    try:
+        return json.loads(row["state_json"])
+    except (TypeError, json.JSONDecodeError):
+        return {}
+
+
+def _item_matches(rows, target):
+    key = " ".join(target.casefold().split())
+    matches = [row for row in rows if " ".join(row["name"].casefold().split()) == key or row["id"] == target]
+    if not matches:
+        raise ActionError(f'You cannot find "{target}".')
+    if len(matches) > 1:
+        raise ActionError(f'More than one item matches "{target}". Use its item control.')
+    return matches[0]
+
+
+def _inventory_rows(database, user_id, equipped=False):
+    character = _character_row(database, user_id)
+    suffix = "IS NOT NULL" if equipped else "IS NULL"
+    return database.execute(
+        "SELECT i.*,d.name,d.description,d.item_type,d.equipment_slot AS definition_slot,d.properties_json "
+        "FROM mud_item_instances i JOIN mud_item_definitions d ON d.id=i.definition_id "
+        f"WHERE i.owner_character_id=? AND i.equipped_slot {suffix} ORDER BY d.name COLLATE NOCASE,i.id",
+        (character["id"],),
+    ).fetchall()
+
+
+def _room_item_rows(database, room_id):
+    return database.execute(
+        "SELECT i.*,d.name,d.description,d.item_type,d.equipment_slot AS definition_slot,d.properties_json "
+        "FROM mud_item_instances i JOIN mud_item_definitions d ON d.id=i.definition_id "
+        "WHERE i.room_id=? ORDER BY d.name COLLATE NOCASE,i.id", (room_id,)
+    ).fetchall()
+
+
+def _container_rows(database, container_id):
+    return database.execute(
+        "SELECT i.*,d.name,d.description,d.item_type,d.equipment_slot AS definition_slot,d.properties_json "
+        "FROM mud_item_instances i JOIN mud_item_definitions d ON d.id=i.definition_id "
+        "WHERE i.container_id=? ORDER BY d.name COLLATE NOCASE,i.id", (container_id,)
+    ).fetchall()
+
+
+def _is_container(row):
+    return row["item_type"] == "container"
+
+
+def _visible_container(database, user_id, room, item_id):
+    row = _item_row(database, item_id)
+    if row is None or not _is_container(row):
+        raise ActionError("That is not an available container.")
+    character = _character_row(database, user_id)
+    if row["room_id"] != room["id"] and row["owner_character_id"] != character["id"]:
+        raise ActionError("That container is not available to you.")
+    return row
+
+
+def inventory_state(database, user_id):
+    inventory = [dict(row) for row in _inventory_rows(database, user_id)]
+    equipment = [dict(row) for row in _inventory_rows(database, user_id, equipped=True)]
+    return {"inventory": inventory, "equipment": equipment, "slots": EQUIPMENT_SLOTS}
+
+
+def _describe_item(database, row):
+    body = f"{row['name']}\n{row['description']}\nType: {row['item_type']}"
+    if row["definition_slot"]:
+        body += f"\nEquipment slot: {row['definition_slot'].replace('_', ' ')}"
+    if _is_container(row):
+        contents = _container_rows(database, row["id"])
+        if row["is_open"]:
+            body += "\nContents: " + (", ".join(child["name"] for child in contents) or "empty")
+        else:
+            body += "\nIt is closed."
+    return body
+
+
+def _examine_item(database, user, room, target):
+    candidates = list(_room_item_rows(database, room["id"])) + list(_inventory_rows(database, user["id"])) + list(_inventory_rows(database, user["id"], True))
+    for container in _room_item_rows(database, room["id"]):
+        if _is_container(container) and container["is_open"]:
+            candidates.extend(_container_rows(database, container["id"]))
+    key = " ".join(target.casefold().split())
+    matching = [item for item in candidates if item["id"] == target or " ".join(item["name"].casefold().split()) == key]
+    if not matching:
+        return None
+    if len(matching) > 1:
+        raise ActionError(f'More than one item matches "{target}".')
+    return _describe_item(database, matching[0])
+
+
+examinations.register(_examine_item)
+
 
 def _look_action(database, user, parameters):
     arguments = parameters.get("arguments", [])
@@ -459,6 +571,105 @@ def _look_action(database, user, parameters):
     room = _current_room(database, user["id"])
     description = examinations.resolve(database, user, room, str(target).strip())
     return [EventDraft(description, event_type="room")]
+
+
+def _item_target(parameters):
+    return str(parameters.get("item_id") or " ".join(str(x) for x in parameters.get("arguments", []))).strip()
+
+
+def _get_action(database, user, parameters):
+    target = _item_target(parameters)
+    if not target:
+        raise ActionError("Get what?")
+    room = _current_room(database, user["id"])
+    container_id = str(parameters.get("container_id", "")).strip()
+    if not container_id and " from " in target.casefold():
+        target, container_name = re.split(r"\s+from\s+", target, maxsplit=1, flags=re.I)
+        container_id = _item_matches(_room_item_rows(database, room["id"]), container_name)["id"]
+    container = _visible_container(database, user["id"], room, container_id) if container_id else None
+    source = _container_rows(database, container["id"]) if container else _room_item_rows(database, room["id"])
+    if container and not container["is_open"]:
+        raise ActionError("Open that container first.")
+    item = _item_matches(source, target)
+    character = _character_row(database, user["id"])
+    database.execute("UPDATE mud_item_instances SET room_id=NULL,container_id=NULL,owner_character_id=?,equipped_slot=NULL,updated_at=CURRENT_TIMESTAMP WHERE id=?", (character["id"], item["id"]))
+    return [EventDraft(f"You pick up {item['name']}.", event_type="item")]
+
+
+def _drop_action(database, user, parameters):
+    target = _item_target(parameters)
+    if not target:
+        raise ActionError("Drop what?")
+    item = _item_matches(_inventory_rows(database, user["id"]), target)
+    room = _current_room(database, user["id"])
+    database.execute("UPDATE mud_item_instances SET room_id=?,owner_character_id=NULL,container_id=NULL,equipped_slot=NULL,updated_at=CURRENT_TIMESTAMP WHERE id=?", (room["id"], item["id"]))
+    return [EventDraft(f"You drop {item['name']}.", event_type="item")]
+
+
+def _open_action(database, user, parameters):
+    target = _item_target(parameters)
+    room = _current_room(database, user["id"])
+    item = _visible_container(database, user["id"], room, target)
+    if item["is_open"]:
+        return [EventDraft(f"{item['name']} is already open.\n" + _describe_item(database, item), event_type="item")]
+    database.execute("UPDATE mud_item_instances SET is_open=1,updated_at=CURRENT_TIMESTAMP WHERE id=?", (item["id"],))
+    refreshed = _item_row(database, item["id"])
+    return [EventDraft(f"You open {item['name']}.\n" + _describe_item(database, refreshed), event_type="item")]
+
+
+def _put_action(database, user, parameters):
+    args = parameters.get("arguments", [])
+    target = str(parameters.get("item_id") or (args[0] if args else "")).strip()
+    container_id = str(parameters.get("container_id", "")).strip()
+    if not container_id and " in " in target.casefold():
+        target, container_name = re.split(r"\s+in(?:to)?\s+", target, maxsplit=1, flags=re.I)
+        room = _current_room(database, user["id"])
+        container_id = _item_matches(_room_item_rows(database, room["id"]), container_name)["id"]
+    if not target or not container_id:
+        raise ActionError("Put an inventory item into an available container.")
+    room = _current_room(database, user["id"])
+    container = _visible_container(database, user["id"], room, container_id)
+    if not container["is_open"]:
+        raise ActionError("Open that container first.")
+    item = _item_matches(_inventory_rows(database, user["id"]), target)
+    if item["id"] == container["id"]:
+        raise ActionError("An item cannot contain itself.")
+    database.execute("UPDATE mud_item_instances SET room_id=NULL,owner_character_id=NULL,container_id=?,equipped_slot=NULL,updated_at=CURRENT_TIMESTAMP WHERE id=?", (container["id"], item["id"]))
+    return [EventDraft(f"You put {item['name']} in {container['name']}.", event_type="item")]
+
+
+def _equip_action(database, user, parameters):
+    target = _item_target(parameters)
+    item = _item_matches(_inventory_rows(database, user["id"]), target)
+    if item["item_type"] != "equipment" or not item["definition_slot"]:
+        raise ActionError("That item cannot be equipped.")
+    character = _character_row(database, user["id"])
+    slot = item["definition_slot"]
+    existing = database.execute("SELECT id FROM mud_item_instances WHERE owner_character_id=? AND equipped_slot=?", (character["id"], slot)).fetchone()
+    if existing:
+        database.execute("UPDATE mud_item_instances SET equipped_slot=NULL,updated_at=CURRENT_TIMESTAMP WHERE id=?", (existing["id"],))
+    database.execute("UPDATE mud_item_instances SET equipped_slot=?,updated_at=CURRENT_TIMESTAMP WHERE id=?", (slot, item["id"]))
+    return [EventDraft(f"You equip {item['name']} ({slot.replace('_', ' ')}).", event_type="item")]
+
+
+def _unequip_action(database, user, parameters):
+    target = _item_target(parameters)
+    item = _item_matches(_inventory_rows(database, user["id"], True), target)
+    database.execute("UPDATE mud_item_instances SET equipped_slot=NULL,updated_at=CURRENT_TIMESTAMP WHERE id=?", (item["id"],))
+    return [EventDraft(f"You unequip {item['name']}.", event_type="item")]
+
+
+def _use_action(database, user, parameters):
+    target = _item_target(parameters)
+    item = _item_matches(list(_inventory_rows(database, user["id"])) + list(_inventory_rows(database, user["id"], True)), target)
+    try:
+        properties = json.loads(item["properties_json"])
+    except json.JSONDecodeError:
+        properties = {}
+    message = properties.get("use_message")
+    if not isinstance(message, str) or not message.strip():
+        raise ActionError(f"{item['name']} has no usable effect yet.")
+    return [EventDraft(message.strip(), event_type="item")]
 
 
 def _exits_action(database, user, parameters):
@@ -586,6 +797,13 @@ actions.register(ActionDefinition(
     commands=("look", "l", "examine", "x"), handler=_look_action,
     group="SURROUNDINGS",
 ))
+actions.register(ActionDefinition(key="get", label="PICK UP", description="Pick up an item in this room or an open container.", commands=("get", "take"), handler=_get_action, group="ITEMS", show_context=False))
+actions.register(ActionDefinition(key="drop", label="DROP", description="Drop a carried item in this room.", commands=("drop",), handler=_drop_action, group="ITEMS", show_context=False))
+actions.register(ActionDefinition(key="open", label="OPEN", description="Open an available container.", commands=("open",), handler=_open_action, group="ITEMS", show_context=False))
+actions.register(ActionDefinition(key="put", label="PUT AWAY", description="Put a carried item in an open container.", commands=("put",), handler=_put_action, group="ITEMS", show_context=False))
+actions.register(ActionDefinition(key="equip", label="EQUIP", description="Equip a carried item.", commands=("equip", "wear"), handler=_equip_action, group="ITEMS", show_context=False))
+actions.register(ActionDefinition(key="unequip", label="UNEQUIP", description="Remove equipped gear.", commands=("unequip", "remove"), handler=_unequip_action, group="ITEMS", show_context=False))
+actions.register(ActionDefinition(key="use", label="USE", description="Use a carried item.", commands=("use",), handler=_use_action, group="ITEMS", show_context=False))
 actions.register(ActionDefinition(
     key="exits", label="LIST EXITS",
     description="List the routes available from this room.",
@@ -626,6 +844,35 @@ def _navigation_actions(database, user):
 
 
 actions.register_context_provider(_navigation_actions)
+
+
+def _item_actions(database, user):
+    room = _current_room(database, user["id"])
+    options = []
+    for item in _room_item_rows(database, room["id"]):
+        base = {"item_id": item["id"]}
+        options.extend((
+            {"key": "look", "label": f"EXAMINE {item['name'].upper()}", "description": item["description"], "group": "ITEMS", "parameters": {"target": item["id"]}},
+            {"key": "get", "label": f"PICK UP {item['name'].upper()}", "description": "Pick it up.", "group": "ITEMS", "parameters": base},
+        ))
+        if _is_container(item): options.append({"key": "open", "label": f"OPEN {item['name'].upper()}", "description": "Open and inspect it.", "group": "ITEMS", "parameters": base})
+        if _is_container(item) and item["is_open"]:
+            for child in _container_rows(database, item["id"]):
+                options.append({"key": "get", "label": f"TAKE {child['name'].upper()} FROM {item['name'].upper()}", "description": "Take from the open container.", "group": "ITEMS", "parameters": {"item_id": child["id"], "container_id": item["id"]}})
+    for item in _inventory_rows(database, user["id"]):
+        base = {"item_id": item["id"]}
+        options.extend((
+            {"key": "look", "label": f"EXAMINE {item['name'].upper()}", "description": item["description"], "group": "INVENTORY", "parameters": {"target": item["id"]}},
+            {"key": "drop", "label": f"DROP {item['name'].upper()}", "description": "Leave it here.", "group": "INVENTORY", "parameters": base},
+            {"key": "use", "label": f"USE {item['name'].upper()}", "description": "Use it if it has an effect.", "group": "INVENTORY", "parameters": base},
+        ))
+        if item["item_type"] == "equipment" and item["definition_slot"]: options.append({"key": "equip", "label": f"EQUIP {item['name'].upper()}", "description": "Wear or wield it.", "group": "INVENTORY", "parameters": base})
+    for item in _inventory_rows(database, user["id"], True):
+        options.append({"key": "unequip", "label": f"UNEQUIP {item['name'].upper()}", "description": "Return it to inventory.", "group": "EQUIPMENT", "parameters": {"item_id": item["id"]}})
+    return options
+
+
+actions.register_context_provider(_item_actions)
 
 
 def _insert_event(database, draft, default_user_id=None, action_id=None):
@@ -865,12 +1112,13 @@ def index():
     _prune_presence(database)
     room = _room_state(database, g.user["id"])
     character = character_state(database, g.user["id"])
+    inventory = inventory_state(database, g.user["id"])
     mud_actions = actions.contextual(g.user, database)
     events = _recent_events(database, g.user["id"])
     database.commit()
     return render_template(
         "mud/index.html", events=events,
-        mud_actions=mud_actions, room=room, character=character,
+        mud_actions=mud_actions, room=room, character=character, inventory=inventory,
     )
 
 
@@ -889,6 +1137,7 @@ def updates():
         )]
         room = _room_state(database, g.user["id"])
         character = character_state(database, g.user["id"])
+        inventory = inventory_state(database, g.user["id"])
         available = actions.contextual(g.user, database)
         database.commit()
     except (ActionError, sqlite3.Error) as problem:
@@ -896,7 +1145,7 @@ def updates():
         if isinstance(problem, ActionError):
             return jsonify(error=str(problem)), problem.status
         raise
-    return jsonify(events=events, room=room, character=character, actions=available)
+    return jsonify(events=events, room=room, character=character, inventory=inventory, actions=available)
 
 
 @bp.post("/disconnect")
@@ -931,19 +1180,21 @@ def perform_action():
         database = get_db()
         room = _room_state(database, g.user["id"])
         character = character_state(database, g.user["id"])
+        inventory = inventory_state(database, g.user["id"])
         available = actions.contextual(g.user, database)
         database.commit()
         return jsonify(
-            error=str(problem), room=room, character=character, actions=available
+            error=str(problem), room=room, character=character, inventory=inventory, actions=available
         ), problem.status
     database = get_db()
     room = _room_state(database, g.user["id"])
     character = character_state(database, g.user["id"])
+    inventory = inventory_state(database, g.user["id"])
     available = actions.contextual(g.user, database)
     database.commit()
     return jsonify(
         action=action_key, events=events,
-        actions=available, room=room, character=character,
+        actions=available, room=room, character=character, inventory=inventory,
     )
 
 
@@ -1015,10 +1266,92 @@ def builder():
         "FROM users AS u LEFT JOIN mud_builder_permissions AS p ON p.user_id=u.id "
         "ORDER BY u.is_admin DESC,u.callsign COLLATE NOCASE"
     ).fetchall() if g.user["is_admin"] else []
+    definitions = database.execute("SELECT * FROM mud_item_definitions ORDER BY name COLLATE NOCASE,id").fetchall()
+    items_by_room = {room["id"]: [] for room in rooms}
+    for row in database.execute("SELECT i.id,i.room_id,d.name,d.item_type FROM mud_item_instances i JOIN mud_item_definitions d ON d.id=i.definition_id WHERE i.room_id IS NOT NULL ORDER BY d.name COLLATE NOCASE"):
+        items_by_room.setdefault(row["room_id"], []).append(dict(row))
     return render_template(
         "mud/builder.html", rooms=rooms, exits_by_room=exits_by_room,
-        users=users, directions=DIRECTIONS,
+        users=users, directions=DIRECTIONS, definitions=definitions, items_by_room=items_by_room,
     )
+
+
+def _item_definition_fields():
+    name = " ".join(request.form.get("name", "").split())
+    description = request.form.get("description", "").strip()
+    item_type = request.form.get("item_type", "misc")
+    slot = request.form.get("equipment_slot", "").strip() or None
+    use_message = request.form.get("use_message", "").strip()
+    if not 2 <= len(name) <= 80 or not 1 <= len(description) <= 4000:
+        return None, "Item names must be 2–80 characters and descriptions 1–4000 characters."
+    if item_type not in {"misc", "equipment", "container", "consumable", "key"}:
+        return None, "Choose a valid item type."
+    if slot not in EQUIPMENT_SLOTS:
+        if slot is not None: return None, "Choose a valid equipment slot."
+    if item_type != "equipment": slot = None
+    if len(use_message) > 1000: return None, "Use messages cannot exceed 1000 characters."
+    return (name, description, item_type, json.dumps({"use_message": use_message} if use_message else {}), slot), None
+
+
+@bp.post("/builder/items")
+@builder_required
+def builder_create_item_definition():
+    validate_csrf(); fields, error = _item_definition_fields()
+    if error: flash(error, "error"); return _builder_redirect()
+    item_id = f"world:item-definition:{uuid.uuid4().hex}"
+    get_db().execute("INSERT INTO mud_item_definitions(id,name,description,item_type,properties_json,equipment_slot,created_by) VALUES(?,?,?,?,?,?,?)", (item_id, *fields, g.user["id"])); get_db().commit()
+    flash(f"Item definition {fields[0]} created.", "success"); return _builder_redirect()
+
+
+@bp.post("/builder/items/<path:item_id>")
+@builder_required
+def builder_update_item_definition(item_id):
+    validate_csrf(); fields, error = _item_definition_fields(); database = get_db()
+    if database.execute("SELECT 1 FROM mud_item_definitions WHERE id=?", (item_id,)).fetchone() is None: abort(404)
+    if error: flash(error, "error"); return _builder_redirect()
+    database.execute("UPDATE mud_item_definitions SET name=?,description=?,item_type=?,properties_json=?,equipment_slot=?,updated_at=CURRENT_TIMESTAMP WHERE id=?", (*fields, item_id)); database.commit()
+    flash("Item definition updated.", "success"); return _builder_redirect()
+
+
+@bp.post("/builder/items/<path:item_id>/place")
+@builder_required
+def builder_place_item(item_id):
+    return _builder_place_item(item_id)
+
+
+@bp.post("/builder/items/place")
+@builder_required
+def builder_place_selected_item():
+    return _builder_place_item(request.form.get("definition_id", "").strip())
+
+
+def _builder_place_item(item_id):
+    validate_csrf(); database = get_db(); room_id = request.form.get("room_id", "").strip(); container_id = request.form.get("container_id", "").strip()
+    definition = database.execute("SELECT name FROM mud_item_definitions WHERE id=?", (item_id,)).fetchone()
+    if definition is None or database.execute("SELECT 1 FROM mud_world_rooms WHERE id=?", (room_id,)).fetchone() is None: abort(404)
+    if container_id:
+        container = database.execute("SELECT i.id FROM mud_item_instances i JOIN mud_item_definitions d ON d.id=i.definition_id WHERE i.id=? AND i.room_id=? AND d.item_type='container'", (container_id, room_id)).fetchone()
+        if container is None:
+            flash("Choose a container placed in this room.", "error"); return _builder_redirect(room_id)
+    instance_id = f"world:item:{uuid.uuid4().hex}"
+    if container_id:
+        database.execute("INSERT INTO mud_item_instances(id,definition_id,container_id) VALUES(?,?,?)", (instance_id, item_id, container_id))
+    else:
+        database.execute("INSERT INTO mud_item_instances(id,definition_id,room_id) VALUES(?,?,?)", (instance_id, item_id, room_id))
+    database.commit()
+    flash(f"Placed {definition['name']} in the room.", "success"); return _builder_redirect(room_id)
+
+
+@bp.post("/builder/item-instances/<path:instance_id>/delete")
+@builder_required
+def builder_delete_item_instance(instance_id):
+    validate_csrf(); database = get_db(); item = database.execute("SELECT i.id,i.room_id,d.name FROM mud_item_instances i JOIN mud_item_definitions d ON d.id=i.definition_id WHERE i.id=?", (instance_id,)).fetchone()
+    if item is None: abort(404)
+    if request.form.get("confirmation") != "delete": flash("Item removal was not confirmed.", "error"); return _builder_redirect(item["room_id"])
+    # Never silently destroy items currently held or containing items.
+    if item["room_id"] is None or database.execute("SELECT 1 FROM mud_item_instances WHERE container_id=?", (instance_id,)).fetchone():
+        flash("Only empty room items can be removed from the builder.", "error"); return _builder_redirect(item["room_id"])
+    database.execute("DELETE FROM mud_item_instances WHERE id=?", (instance_id,)); database.commit(); flash(f"Removed {item['name']}.", "success"); return _builder_redirect(item["room_id"])
 
 
 @bp.post("/builder/rooms")

@@ -9,6 +9,7 @@ for(const mud of document.querySelectorAll("[data-mud]")){
   const roomName=mud.querySelector("[data-mud-room-name]");
   const roomDescription=mud.querySelector("[data-mud-room-description]");
   const roomExits=mud.querySelector("[data-mud-room-exits]");
+  const roomItems=mud.querySelector("[data-mud-room-items]");
   const occupants=mud.querySelector("[data-mud-occupants] > div");
   const characterName=mud.querySelector("[data-character-name]");
   const characterLevel=mud.querySelector("[data-character-level]");
@@ -18,6 +19,8 @@ for(const mud of document.querySelectorAll("[data-mud]")){
   const characterExperience=mud.querySelector("[data-character-experience]");
   const characterExperienceBar=mud.querySelector("[data-character-experience-bar]");
   const characterExperienceRemaining=mud.querySelector("[data-character-experience-remaining]");
+  const carried=mud.querySelector("[data-mud-carried]");
+  const equipped=mud.querySelector("[data-mud-equipped]");
   let busy=false, pollBusy=false;
   let lastId=Math.max(0,...Array.from(events.querySelectorAll("[data-event-id]"),row=>Number(row.dataset.eventId)||0));
 
@@ -79,6 +82,7 @@ for(const mud of document.querySelectorAll("[data-mud]")){
     roomName.textContent=room.name||"Unknown Location";
     roomDescription.textContent=room.description||"";
     roomExits.textContent=(room.exits||[]).map(exit=>exit.direction||exit.name).join(", ")||"none";
+    if(roomItems)roomItems.textContent=(room.items||[]).map(item=>item.name).join(", ")||"none";
     occupants.replaceChildren();
     if(!room.occupants?.length){
       const empty=document.createElement("span");
@@ -111,6 +115,15 @@ for(const mud of document.querySelectorAll("[data-mud]")){
       if(output)output.textContent=value;
     }
   };
+  const renderInventory=inventory=>{
+    if(!inventory||!carried||!equipped)return;
+    const fill=(node,items,slot)=>{
+      node.replaceChildren();
+      if(!items?.length){const empty=document.createElement("span");empty.className="muted";empty.textContent=slot?"nothing equipped":"nothing carried";node.append(empty);return}
+      for(const item of items){const button=document.createElement("button");button.type="button";button.className="secondary";button.dataset.mudAction="look";button.dataset.mudParameters=JSON.stringify({target:item.id});button.textContent=slot?`${(item.equipped_slot||"equipment").replaceAll("_"," ")}: ${item.name}`:item.name;node.append(button)}
+    };
+    fill(carried,inventory.inventory,false);fill(equipped,inventory.equipment,true);
+  };
   const setBusy=value=>{
     busy=value;
     form.querySelector("button").disabled=value;
@@ -131,6 +144,7 @@ for(const mud of document.querySelectorAll("[data-mud]")){
       const payload=await response.json();
       renderRoom(payload.room);
       renderCharacter(payload.character);
+      renderInventory(payload.inventory);
       if(payload.actions)renderActions(payload.actions);
       if(!response.ok)throw new Error(payload.error||"Action rejected by the station.");
       for(const event of payload.events||[])appendEvent(event);
@@ -151,6 +165,7 @@ for(const mud of document.querySelectorAll("[data-mud]")){
       if(!response.ok)throw new Error(payload.error||"MUD link interrupted.");
       renderRoom(payload.room);
       renderCharacter(payload.character);
+      renderInventory(payload.inventory);
       if(payload.actions)renderActions(payload.actions);
       for(const event of payload.events||[])appendEvent(event);
       if(error.textContent==="LINK RETRYING...")error.textContent="";
@@ -158,7 +173,7 @@ for(const mud of document.querySelectorAll("[data-mud]")){
     finally{pollBusy=false}
   };
 
-  actions.addEventListener("click",event=>{
+  mud.addEventListener("click",event=>{
     const button=event.target.closest("[data-mud-action]");
     if(button)dispatch({action:button.dataset.mudAction,parameters:button.dataset.mudParameters||"{}"});
   });
