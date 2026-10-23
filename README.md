@@ -60,6 +60,7 @@ Open `http://127.0.0.1:8080` and complete first-run setup. By default the statio
 | --- | --- | --- |
 | `STATIONNET_HOST` | `0.0.0.0` | Listening interface; use `127.0.0.1` for local-only. |
 | `STATIONNET_PORT` | `8080` | Listening port. |
+| `STATIONNET_THREADS` | `16` | Waitress request-worker count. Increase this if sustained queue-depth warnings occur with many active clients. |
 | `STATIONNET_DATA` | `./data` | Directory for `station.db` and `secret.key`. |
 | `STATIONNET_HTTPS` | unset | Set to `1` only when HTTPS is terminated in front of the app. |
 
