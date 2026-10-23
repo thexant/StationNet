@@ -180,12 +180,37 @@ CREATE TABLE IF NOT EXISTS installed_applications (
  author TEXT NOT NULL,
  version TEXT NOT NULL,
  category TEXT NOT NULL CHECK(category IN ('Games','Apps')),
- entrypoint TEXT NOT NULL,
+ entrypoint TEXT NOT NULL, permissions_json TEXT NOT NULL DEFAULT '[]',
  installed_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);
 CREATE TABLE IF NOT EXISTS application_states (
  application_slug TEXT PRIMARY KEY,
  enabled INTEGER NOT NULL DEFAULT 1 CHECK(enabled IN (0,1)),
  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);
+CREATE TABLE IF NOT EXISTS application_multiplayer_sessions (
+ id TEXT PRIMARY KEY, application_slug TEXT NOT NULL, name TEXT NOT NULL,
+ visibility TEXT NOT NULL CHECK(visibility IN ('public','private')), join_code TEXT,
+ max_players INTEGER NOT NULL CHECK(max_players BETWEEN 2 AND 64),
+ host_user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+ state_json TEXT NOT NULL DEFAULT '{}', state_revision INTEGER NOT NULL DEFAULT 0,
+ status TEXT NOT NULL DEFAULT 'open' CHECK(status IN ('open','closed')),
+ created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+ updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);
+CREATE INDEX IF NOT EXISTS idx_application_multiplayer_discovery
+ ON application_multiplayer_sessions(application_slug,status,visibility,updated_at);
+CREATE TABLE IF NOT EXISTS application_multiplayer_members (
+ session_id TEXT NOT NULL REFERENCES application_multiplayer_sessions(id) ON DELETE CASCADE,
+ user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+ connection_id TEXT NOT NULL, connected INTEGER NOT NULL DEFAULT 1 CHECK(connected IN (0,1)),
+ joined_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, last_seen TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+ PRIMARY KEY(session_id,user_id));
+CREATE TABLE IF NOT EXISTS application_multiplayer_events (
+ id INTEGER PRIMARY KEY AUTOINCREMENT,
+ session_id TEXT NOT NULL REFERENCES application_multiplayer_sessions(id) ON DELETE CASCADE,
+ sender_user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+ event_type TEXT NOT NULL, payload_json TEXT NOT NULL,
+ created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);
+CREATE INDEX IF NOT EXISTS idx_application_multiplayer_events
+ ON application_multiplayer_events(session_id,id);
 CREATE TABLE IF NOT EXISTS mud_characters (
  id TEXT PRIMARY KEY,
  user_id INTEGER NOT NULL UNIQUE REFERENCES users(id) ON DELETE CASCADE,
@@ -376,6 +401,7 @@ def init_db():
     _migrate_hosted_broadcast_fields(database)
     _migrate_broadcast_identity_fields(database)
     _migrate_mud_settings(database)
+    _migrate_application_permissions(database)
     _initialize_mud_characters(database)
     _initialize_mud_world(database)
     _migrate_legacy_callsigns(database)
@@ -406,6 +432,15 @@ def init_db():
             "UPDATE radio_permission_groups SET host_broadcasts=1 WHERE name='OPERATORS'"
         )
     database.commit()
+
+
+def _migrate_application_permissions(database):
+    """Add manifest capabilities to installations created by older releases."""
+    columns = {row["name"] for row in database.execute("PRAGMA table_info(installed_applications)")}
+    if "permissions_json" not in columns:
+        database.execute(
+            "ALTER TABLE installed_applications ADD COLUMN permissions_json TEXT NOT NULL DEFAULT '[]'"
+        )
 
 
 def _migrate_mail_threads(database):

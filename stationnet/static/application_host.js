@@ -21,6 +21,7 @@
   let totalEvents = 0;
   let closed = false;
   let audioContext = null;
+  const multiplayerConnection = (crypto.randomUUID ? crypto.randomUUID() : `${Date.now()}-${Math.random()}`);
   const activeTones = new Set();
   const startupTimer = setTimeout(() => {
     status.textContent = "PROGRAM STATUS / UNAVAILABLE";
@@ -491,6 +492,22 @@
     }
   }
 
+  async function multiplayer(message) {
+    const requestId = text(message.request, 80);
+    try {
+      const response = await fetch(surface.dataset.appMultiplayerUrl, {
+        method: "POST", credentials: "same-origin", keepalive: message.operation === "disconnect",
+        headers: { "Content-Type": "application/json", "X-CSRF-Token": surface.dataset.appCsrf },
+        body: JSON.stringify({ ...message.payload, operation: message.operation, connection_id: multiplayerConnection })
+      });
+      const result = await response.json();
+      if (!response.ok || !result.ok) throw new Error(result.error || `Multiplayer request failed (${response.status})`);
+      if (requestId && frame.contentWindow) frame.contentWindow.postMessage({ protocol: PROTOCOL, type: "multiplayer-result", request: requestId, ok: true, value: result }, "*");
+    } catch (error) {
+      if (requestId && frame.contentWindow) frame.contentWindow.postMessage({ protocol: PROTOCOL, type: "multiplayer-result", request: requestId, ok: false, error: text(error.message || error, 500) }, "*");
+    }
+  }
+
   function capabilityResult(request, ok, value, error) {
     if (frame.contentWindow) frame.contentWindow.postMessage({
       protocol: PROTOCOL, type: "capability-result", request: text(request, 80), ok,
@@ -560,6 +577,7 @@
     else if (message.type === "render") render(message);
     else if (message.type === "storage") storage(message);
     else if (message.type === "scores") scores(message);
+    else if (message.type === "multiplayer") multiplayer(message);
     else if (message.type === "capability") capability(message);
     else if (message.type === "sound") sound(message);
     else if (message.type === "keyboard") {

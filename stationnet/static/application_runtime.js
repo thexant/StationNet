@@ -8,6 +8,9 @@
   const animations = new Map();
   const cleanups = [];
   const storageRequests = new Map();
+  const multiplayerRequests = new Map();
+  const multiplayerHandlers = new Set();
+  let multiplayerSession = null, multiplayerCursor = 0, multiplayerTimer = null;
   const scoreRequests = new Map();
   const capabilityRequests = new Map();
   const packageFiles = self.__stationnetPackageFiles;
@@ -99,6 +102,33 @@
       scoreRequests.set(request, { resolve, reject });
       send("scores", { request, operation, score });
     });
+  }
+
+  function multiplayer(operation, payload = {}) {
+    const request = `multiplayer-${nextRequest++}`;
+    return new Promise((resolve, reject) => {
+      multiplayerRequests.set(request, { resolve, reject, operation });
+      send("multiplayer", { request, operation, payload });
+    });
+  }
+
+  function stopMultiplayerPolling() {
+    if (multiplayerTimer != null) clearInterval(multiplayerTimer);
+    multiplayerTimer = null;
+  }
+
+  function startMultiplayerPolling() {
+    if (multiplayerTimer != null || !multiplayerSession) return;
+    multiplayerTimer = setInterval(async () => {
+      if (!multiplayerSession || stopped) return;
+      try {
+        const value = await multiplayer("poll", { session_id: multiplayerSession, after: multiplayerCursor });
+        multiplayerCursor = value.cursor;
+        for (const event of value.events || []) {
+          for (const handler of multiplayerHandlers) Promise.resolve().then(() => handler(Object.freeze(event), value)).catch(fail);
+        }
+      } catch (_) { /* transient polling failures are retried */ }
+    }, 500);
   }
 
   function sound(tones, settings) {
@@ -265,6 +295,39 @@
       submit(score) { return scores("submit", score); },
       leaderboard() { return scores("list"); }
     }),
+    multiplayer: Object.freeze({
+      async create(settings = {}) {
+        const value = await multiplayer("create", { name: settings.name, max_players: settings.maxPlayers, visibility: settings.visibility, state: settings.state });
+        multiplayerSession = value.session.id; multiplayerCursor = 0; startMultiplayerPolling(); return value;
+      },
+      discover() { return multiplayer("discover"); },
+      async join(sessionId, settings = {}) {
+        const value = await multiplayer("join", { session_id: String(sessionId), join_code: settings.joinCode });
+        multiplayerSession = value.session.id; multiplayerCursor = 0; startMultiplayerPolling(); return value;
+      },
+      async leave() {
+        if (!multiplayerSession) return { ok: true, left: false };
+        const id = multiplayerSession; multiplayerSession = null; stopMultiplayerPolling();
+        return multiplayer("leave", { session_id: id });
+      },
+      send(event, data) {
+        if (!multiplayerSession) return Promise.reject(new Error("Join a multiplayer session first"));
+        return multiplayer("send", { session_id: multiplayerSession, event: String(event), data });
+      },
+      async snapshot() {
+        if (!multiplayerSession) return Promise.reject(new Error("Join a multiplayer session first"));
+        const value = await multiplayer("snapshot", { session_id: multiplayerSession, after: multiplayerCursor });
+        multiplayerCursor = value.cursor; return value;
+      },
+      setState(state, settings = {}) {
+        if (!multiplayerSession) return Promise.reject(new Error("Join a multiplayer session first"));
+        return multiplayer("set_state", { session_id: multiplayerSession, state, expected_revision: settings.expectedRevision });
+      },
+      onEvent(handler) {
+        if (typeof handler !== "function") throw new TypeError("A multiplayer event handler is required");
+        multiplayerHandlers.add(handler); return () => multiplayerHandlers.delete(handler);
+      }
+    }),
     sound: Object.freeze({
       // Play one synthesized oscillator. Frequency is in hertz; duration and
       // envelope values are milliseconds. No audio files are accepted.
@@ -344,6 +407,13 @@
       message.ok ? pending.resolve(message.value) : pending.reject(new Error(message.error || "Score request failed"));
       return;
     }
+    if (message.type === "multiplayer-result") {
+      const pending = multiplayerRequests.get(message.request);
+      if (!pending) return;
+      multiplayerRequests.delete(message.request);
+      message.ok ? pending.resolve(message.value) : pending.reject(new Error(message.error || "Multiplayer request failed"));
+      return;
+    }
     if (message.type === "capability-result") {
       const pending = capabilityRequests.get(message.request);
       if (!pending) return;
@@ -369,10 +439,14 @@
   function shutdown() {
     if (stopped) return;
     cleanups.splice(0).forEach((handler) => { try { handler(); } catch (_) {} });
+    stopMultiplayerPolling();
+    if (multiplayerSession) send("multiplayer", { operation: "disconnect", payload: { session_id: multiplayerSession } });
     storageRequests.forEach(({ reject }) => reject(new Error("Application terminated")));
     storageRequests.clear();
     scoreRequests.forEach(({ reject }) => reject(new Error("Application terminated")));
     scoreRequests.clear();
+    multiplayerRequests.forEach(({ reject }) => reject(new Error("Application terminated")));
+    multiplayerRequests.clear(); multiplayerHandlers.clear();
     capabilityRequests.forEach(({ reject }) => reject(new Error("Application terminated")));
     capabilityRequests.clear();
     animations.clear();

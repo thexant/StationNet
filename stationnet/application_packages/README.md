@@ -426,3 +426,66 @@ performs the package validation (ZIP shape, manifest, size limits, and UTF-8
 script) before it writes or registers anything. The repository test suite can
 be run with `python -m pytest`, but it does not execute a third-party package's
 gameplay for you.
+
+## Multiplayer
+
+Multiplayer is station-local and opt-in. Add `"permissions": ["multiplayer"]`
+to the manifest. Packages without this declaration retain their prior API and
+behavior. Identity always comes from the signed-in StationNet session;
+applications receive only an opaque `player:N` id, username, connection status,
+and host status. They cannot supply a user id.
+
+The API is available at `ui.multiplayer`:
+
+| Method | Result / behavior |
+| --- | --- |
+| `create({ name, maxPlayers, visibility, state })` | Creates and joins a lobby. Limits are 2–64; visibility is `public` (default) or `private`. Private results include `session.join_code`. |
+| `discover()` | Returns `{ sessions }` for this app's public open lobbies. |
+| `join(sessionId, { joinCode })` | Joins or reconnects the authenticated account. Private sessions require their code. |
+| `leave()` | Leaves explicitly. Host departure transfers ownership to the longest-standing remaining player. |
+| `send(event, data)` | Broadcasts a JSON event from the authenticated player. Data is limited to 32 KiB. |
+| `snapshot()` | Returns session metadata, permission-safe players, authoritative state/revision, and recent events. |
+| `setState(state, { expectedRevision })` | Host-only replacement of authoritative shared state (256 KiB maximum). The optional revision provides optimistic concurrency control. |
+| `onEvent(handler)` | Subscribes to 500 ms polling updates and returns an unsubscribe function. The handler receives `(event, snapshot)`. |
+
+State is persisted in StationNet's SQLite database. Event history is bounded to
+500 entries per lobby and each poll returns at most 100. The trusted host relays
+requests; sandboxed application code has no direct network or authentication
+access. A closed page is marked disconnected and the same account can reconnect.
+Missing heartbeats are inferred after 30 seconds, membership is retained for a
+five-minute reconnect grace period, empty sessions close, and old closed
+sessions are removed.
+
+Event objects are `{ id, event, data, player, created_at }`. For player-sent
+events, `player` contains only `{ id, username }`. StationNet also emits the
+reserved lifecycle events `player_joined`, `player_left`, `player_disconnected`,
+`player_reconnected`, `host_changed`, and `state_changed`; applications cannot
+spoof those names. A snapshot's player entries add `connected` and `is_host`.
+
+Only the host can replace shared state. Use the latest snapshot revision as
+`expectedRevision`; stale writes are rejected. Game-specific rules remain
+application-defined, so authoritative games should have the host validate
+received actions and publish accepted state instead of treating events as state.
+
+```js
+StationNet.start(async (ui) => {
+  const created = await ui.multiplayer.create({
+    name: "My lobby", maxPlayers: 2, state: { turn: 0 }
+  });
+  ui.multiplayer.onEvent(async (event, view) => {
+    if (created.is_host && event.event === "move") {
+      await ui.multiplayer.setState(
+        { turn: view.state.turn + 1, lastMove: event.data },
+        { expectedRevision: view.revision }
+      );
+    }
+  });
+  // A second authenticated user can call:
+  // await ui.multiplayer.join(created.session.id)
+  await ui.multiplayer.send("move", { x: 1, y: 2 });
+});
+```
+
+The built-in **Signal Pairs** package demonstrates two authenticated users: one
+creates a two-seat session, another joins its displayed id, and both exchange
+events.

@@ -18,6 +18,7 @@ from flask import (
 
 from .auth import admin_required, login_required
 from .db import get_db
+from .multiplayer import MultiplayerError, handle_multiplayer
 from .security import validate_csrf
 
 bp = Blueprint("applications", __name__, url_prefix="/games-apps")
@@ -41,6 +42,7 @@ STORAGE_MAX_VALUE_BYTES = 64 * 1024
 STORAGE_USER_BYTES = 512 * 1024
 STORAGE_SHARED_BYTES = 2 * 1024 * 1024
 SCORE_MAX = 1_000_000_000
+MANIFEST_PERMISSIONS = frozenset({"multiplayer"})
 
 
 class PackageError(ValueError):
@@ -58,6 +60,7 @@ class Application:
     entrypoint: str | None = None
     builtin: bool = True
     enabled: bool = True
+    permissions: tuple[str, ...] = ()
 
     @property
     def runnable(self) -> bool:
@@ -118,6 +121,10 @@ def _validate_metadata(application: Application) -> None:
         (application.author, 100), (application.version, 30),
     )):
         raise ValueError(f"Invalid application metadata: {application.slug}")
+    if (not isinstance(application.permissions, tuple)
+            or any(item not in MANIFEST_PERMISSIONS for item in application.permissions)
+            or len(set(application.permissions)) != len(application.permissions)):
+        raise ValueError(f"Invalid application permissions: {application.slug}")
 
 
 def register(application: Application) -> None:
@@ -173,7 +180,7 @@ def catalog() -> tuple[Application, ...]:
     }
     applications = [replace(item, enabled=states.get(item.slug, True)) for item in bundled]
     for row in database.execute(
-        "SELECT slug,name,description,author,version,category,entrypoint "
+        "SELECT slug,name,description,author,version,category,entrypoint,permissions_json "
         "FROM installed_applications ORDER BY installed_at,slug"
     ):
         if row["slug"] in bundled_slugs:
@@ -183,6 +190,7 @@ def catalog() -> tuple[Application, ...]:
             author=row["author"], version=row["version"], category=row["category"],
             entrypoint=row["entrypoint"], builtin=False,
             enabled=states.get(row["slug"], True),
+            permissions=tuple(json.loads(row["permissions_json"] or "[]")),
         ))
     return tuple(applications)
 
@@ -200,10 +208,14 @@ def _load_package(folder: str) -> Application:
     required = ("slug", "name", "description", "author", "version", "category", "entrypoint")
     if any(not isinstance(data.get(key), str) for key in required):
         raise ValueError(f"Invalid application manifest: {manifest_path}")
+    permissions = data.get("permissions", [])
+    if not isinstance(permissions, list) or any(not isinstance(item, str) for item in permissions):
+        raise ValueError(f"Invalid application manifest: {manifest_path}")
     application = Application(
         slug=data["slug"], name=data["name"], description=data["description"],
         author=data["author"], version=data["version"], category=data["category"],
         entrypoint=f"{folder}/{data['entrypoint']}",
+        permissions=tuple(permissions),
     )
     _validate_metadata(application)
     return application
@@ -305,11 +317,14 @@ def validate_package(package_bytes: bytes) -> tuple[Application, dict[str, bytes
         entry_info = names.get(entrypoint.casefold())
         if entry_info is None or entry_info.filename != entrypoint:
             raise PackageError(f"Package entrypoint is missing: {entrypoint}.")
+        permissions = manifest.get("permissions", [])
+        if not isinstance(permissions, list) or any(not isinstance(item, str) for item in permissions):
+            raise PackageError("Manifest permissions must be an array of supported permission names.")
         application = Application(
             slug=manifest["slug"], name=manifest["name"],
             description=manifest["description"], author=manifest["author"],
             version=manifest["version"], category=manifest["category"],
-            entrypoint=entrypoint, builtin=False,
+            entrypoint=entrypoint, builtin=False, permissions=tuple(permissions),
         )
         try:
             _validate_metadata(application)
@@ -351,10 +366,11 @@ def install_package(package_bytes: bytes) -> Application:
         os.replace(staging, destination)
         database.execute("BEGIN IMMEDIATE")
         database.execute(
-            "INSERT INTO installed_applications(slug,name,description,author,version,category,entrypoint) "
-            "VALUES(?,?,?,?,?,?,?)",
+            "INSERT INTO installed_applications(slug,name,description,author,version,category,entrypoint,permissions_json) "
+            "VALUES(?,?,?,?,?,?,?,?)",
             (application.slug, application.name, application.description, application.author,
-             application.version, application.category, application.entrypoint),
+             application.version, application.category, application.entrypoint,
+             json.dumps(application.permissions)),
         )
         database.execute(
             "INSERT INTO application_states(application_slug,enabled) VALUES(?,1) "
@@ -610,6 +626,25 @@ def scores(slug):
         personal_best=personal["best_score"] if personal else 0,
         leaderboard=[{"username": row["username"], "score": row["score"]} for row in leaders],
     )
+
+
+@bp.post("/<slug>/multiplayer")
+@login_required
+def multiplayer(slug):
+    """Relay authenticated multiplayer operations for permissioned applications."""
+    application = find(slug)
+    if application is None or not application.enabled or not application.runnable:
+        abort(404)
+    if "multiplayer" not in application.permissions:
+        return _storage_error("This application has not declared multiplayer access.", 403)
+    token = request.headers.get("X-CSRF-Token", "")
+    if not session.get("csrf_token") or not hmac.compare_digest(token, session["csrf_token"]):
+        return _storage_error("Invalid or expired request token.", 400)
+    try:
+        value = handle_multiplayer(slug, g.user, request.get_json(silent=True))
+    except MultiplayerError as error:
+        return _storage_error(str(error), error.status)
+    return jsonify(ok=True, **value)
 
 
 @bp.get("/<slug>/runtime")
