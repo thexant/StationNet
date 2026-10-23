@@ -1,10 +1,13 @@
 """Welcome, workspace, and SYSOP settings."""
+import json
 import secrets
 import sqlite3
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from flask import Blueprint, Response, current_app, flash, g, redirect, render_template, request, url_for
 from .auth import admin_required, invitation_digest
 from .ansi import HEADER_FONTS, HEADER_FONT_NAMES
 from .db import get_db
+from . import dungeons
 from .markdown import render_markdown
 from .radio import (can_host_broadcast, effective_access, format_frequency,
                     parse_frequency, reconcile_radio_permissions)
@@ -204,12 +207,31 @@ def mud_settings():
     current_portal = database.execute(
         "SELECT name,description FROM mud_portal_settings WHERE id=1"
     ).fetchone()
+    current_crossover = database.execute(
+        "SELECT progression_shared,inventory_shared FROM mud_crossover_settings WHERE id=1"
+    ).fetchone()
     legacy = ("mud_traditional_enabled" not in request.form and
               "mud_procedural_enabled" not in request.form and
               "mud_enabled" in request.form)
     traditional = (request.form.get("mud_enabled") == "on" if legacy else
                    request.form.get("mud_traditional_enabled") == "on")
     procedural = request.form.get("mud_procedural_enabled") == "on"
+    progression_policy = request.form.get("mud_progression_policy")
+    inventory_policy = request.form.get("mud_inventory_policy")
+    if progression_policy is None:
+        progression_shared = bool(current_crossover["progression_shared"])
+    elif progression_policy in {"shared", "independent"}:
+        progression_shared = progression_policy == "shared"
+    else:
+        flash("Select a valid progression crossover policy.", "error")
+        return redirect(url_for("station.settings") + "#mud-service")
+    if inventory_policy is None:
+        inventory_shared = bool(current_crossover["inventory_shared"])
+    elif inventory_policy in {"shared", "independent"}:
+        inventory_shared = inventory_policy == "shared"
+    else:
+        flash("Select a valid inventory crossover policy.", "error")
+        return redirect(url_for("station.settings") + "#mud-service")
     portal_name = request.form.get(
         "mud_portal_name", current_portal["name"]
     ).strip()
@@ -232,6 +254,13 @@ def mud_settings():
         "ON CONFLICT(id) DO UPDATE SET name=excluded.name,description=excluded.description,"
         "updated_at=CURRENT_TIMESTAMP", (portal_name, portal_description),
     )
+    database.execute(
+        "INSERT INTO mud_crossover_settings(id,progression_shared,inventory_shared) "
+        "VALUES(1,?,?) ON CONFLICT(id) DO UPDATE SET "
+        "progression_shared=excluded.progression_shared,"
+        "inventory_shared=excluded.inventory_shared,updated_at=CURRENT_TIMESTAMP",
+        (progression_shared, inventory_shared),
+    )
     from .mud import reconcile_mode_locations
     reconcile_mode_locations(database)
     database.commit()
@@ -239,6 +268,79 @@ def mud_settings():
               ("procedural", procedural)) if state]
     flash(f"MUD modes updated: {', '.join(labels) if labels else 'fully disabled'}.", "success")
     return redirect(url_for("station.settings") + "#mud-service")
+
+
+@bp.post("/sysop/settings/mud-daily")
+@admin_required
+def mud_daily_settings():
+    """Configure future daily rotations without mutating today's snapshot."""
+    validate_csrf()
+    database = get_db()
+    timezone_name = request.form.get("daily_timezone", "UTC").strip()
+    try:
+        ZoneInfo(timezone_name)
+    except ZoneInfoNotFoundError:
+        flash("Enter a valid IANA timezone, such as UTC or America/Edmonton.", "error")
+        return redirect(url_for("station.settings") + "#mud-daily")
+    max_attempts = request.form.get("daily_max_attempts", type=int)
+    if max_attempts is None or not 1 <= max_attempts <= 20:
+        flash("Daily attempts must be between 1 and 20.", "error")
+        return redirect(url_for("station.settings") + "#mud-daily")
+    try:
+        discovered = dungeons.discover_templates()
+    except dungeons.TemplateError as problem:
+        flash(f"Installed dungeon themes need attention: {problem}", "error")
+        return redirect(url_for("station.settings") + "#mud-daily")
+    eligible = sorted(set(request.form.getlist("daily_theme_id")))
+    if request.form.get("daily_all_themes") == "on":
+        eligible = []
+    elif not eligible or any(item not in discovered for item in eligible):
+        flash("Select at least one installed theme, or allow all playable themes.", "error")
+        return redirect(url_for("station.settings") + "#mud-daily")
+    difficulty_text = request.form.get("daily_difficulty", "").strip()
+    room_count_text = request.form.get("daily_room_count", "").strip()
+    layout = request.form.get("daily_layout", "").strip() or None
+    try:
+        difficulty = int(difficulty_text) if difficulty_text else None
+        room_count = int(room_count_text) if room_count_text else None
+    except ValueError:
+        flash("Daily difficulty and room count must be whole numbers.", "error")
+        return redirect(url_for("station.settings") + "#mud-daily")
+    if difficulty is not None and not 1 <= difficulty <= 100000:
+        flash("Daily difficulty must be between 1 and 100000.", "error")
+        return redirect(url_for("station.settings") + "#mud-daily")
+    if room_count is not None and not 2 <= room_count <= 500:
+        flash("Daily room count must be between 2 and 500.", "error")
+        return redirect(url_for("station.settings") + "#mud-daily")
+    if layout not in {None, "linear", "branching", "maze", "hub"}:
+        flash("Select a supported daily layout.", "error")
+        return redirect(url_for("station.settings") + "#mud-daily")
+    database.execute(
+        "UPDATE mud_daily_dungeon_settings SET timezone=?,eligible_theme_ids_json=?,"
+        "max_attempts=?,difficulty=?,room_count=?,layout=?,updated_at=CURRENT_TIMESTAMP WHERE id=1",
+        (timezone_name, json.dumps(eligible), max_attempts, difficulty, room_count, layout),
+    )
+    database.commit()
+    flash("Dungeon of the Day settings saved. Existing daily snapshots were preserved.", "success")
+    return redirect(url_for("station.settings") + "#mud-daily")
+
+
+@bp.post("/sysop/settings/mud-daily/retry")
+@admin_required
+def retry_mud_daily():
+    """Retry only a failed current-day generation record."""
+    validate_csrf()
+    database = get_db()
+    from .mud import ensure_daily_dungeon
+    database.execute("BEGIN IMMEDIATE")
+    daily = ensure_daily_dungeon(database, retry_failed=True)
+    database.commit()
+    flash(
+        "Today's dungeon is ready." if daily["status"] == "ready"
+        else f"Daily generation still failed: {daily['error_message']}",
+        "success" if daily["status"] == "ready" else "error",
+    )
+    return redirect(url_for("station.settings") + "#mud-daily")
 
 
 @bp.post("/sysop/radio/storage")
@@ -399,6 +501,36 @@ def settings():
     mud_portal = database.execute(
         "SELECT name,description FROM mud_portal_settings WHERE id=1"
     ).fetchone()
+    mud_crossover = database.execute(
+        "SELECT progression_shared,inventory_shared FROM mud_crossover_settings WHERE id=1"
+    ).fetchone()
+    mud_daily_settings_row = database.execute(
+        "SELECT * FROM mud_daily_dungeon_settings WHERE id=1"
+    ).fetchone()
+    try:
+        mud_daily_themes = [template for _key, template in (
+            (key, {"id": key, "name": value[1]["name"], "version": value[1]["version"]})
+            for key, value in dungeons.discover_templates().items()
+        )]
+    except dungeons.TemplateError:
+        mud_daily_themes = []
+    try:
+        configured_daily_themes = set(json.loads(
+            mud_daily_settings_row["eligible_theme_ids_json"] or "[]"
+        ))
+    except json.JSONDecodeError:
+        configured_daily_themes = set()
+    from .mud import ensure_daily_dungeon
+    current_daily = ensure_daily_dungeon(database)
+    database.commit()
+    daily_failures = database.execute(
+        "SELECT day_key,error_message,generated_at FROM mud_daily_dungeons "
+        "WHERE status='failed' ORDER BY day_key DESC LIMIT 10"
+    ).fetchall()
+    generation_failures = database.execute(
+        "SELECT theme_id,theme_version,seed,message,created_at "
+        "FROM mud_dungeon_generation_log WHERE status='failure' ORDER BY id DESC LIMIT 10"
+    ).fetchall()
     return render_template("settings.html", header_fonts=header_fonts,
                            bands=bands, groups=groups, users=users,
                            memberships=memberships, effective=effective,
@@ -406,6 +538,12 @@ def settings():
                            assignments=assignments, broadcast_sessions=broadcast_sessions,
                            rules_by_group=rules_by_group, invitations=invitations,
                            mud_portal=mud_portal,
+                           mud_crossover=mud_crossover,
+                           mud_daily_settings=mud_daily_settings_row,
+                           mud_daily_themes=mud_daily_themes,
+                           configured_daily_themes=configured_daily_themes,
+                           current_daily=current_daily, daily_failures=daily_failures,
+                           generation_failures=generation_failures,
                            format_frequency=format_frequency)
 
 

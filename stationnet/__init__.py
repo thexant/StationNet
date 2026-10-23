@@ -58,6 +58,12 @@ def create_app(test_config=None):
     def context():
         auth.load_logged_in_user()
         g.station = db.get_station()
+        if g.station is not None and g.station["mud_procedural_enabled"]:
+            # Lazy midnight rotation: the first request after local midnight
+            # materializes the immutable station-wide design. The persisted
+            # day key makes this restart-safe and idempotent across workers.
+            mud.ensure_daily_dungeon(db.get_db())
+            db.get_db().commit()
         g.mail_latest_id = 0
         if g.user is not None:
             g.mail_latest_id = db.get_db().execute(

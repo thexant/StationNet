@@ -17,6 +17,7 @@ for(const mud of document.querySelectorAll("[data-mud]")){
   const characterName=mud.querySelector("[data-character-name]");
   const characterLevel=mud.querySelector("[data-character-level]");
   const characterTrack=mud.querySelector("[data-character-track]");
+  const characterMode=mud.querySelector("[data-character-mode]");
   const characterHealth=mud.querySelector("[data-character-health]");
   const characterHealthBar=mud.querySelector("[data-character-health-bar]");
   const characterExperience=mud.querySelector("[data-character-experience]");
@@ -24,6 +25,7 @@ for(const mud of document.querySelectorAll("[data-mud]")){
   const characterExperienceRemaining=mud.querySelector("[data-character-experience-remaining]");
   const carried=mud.querySelector("[data-mud-carried]");
   const equipped=mud.querySelector("[data-mud-equipped]");
+  const inventoryScope=mud.querySelector("[data-mud-inventory-scope]");
   const quests=mud.querySelector("[data-mud-quests]");
   const questCount=mud.querySelector("[data-mud-quest-count]");
   let busy=false, pollBusy=false;
@@ -110,6 +112,7 @@ for(const mud of document.querySelectorAll("[data-mud]")){
     characterName.textContent=character.name;
     characterLevel.textContent=`LEVEL ${character.level}`;
     characterTrack.textContent=character.progression_label;
+    if(characterMode)characterMode.textContent=`${character.mode?.replace(/^./,letter=>letter.toUpperCase())||"Current"} mode`;
     characterHealth.textContent=`${character.health} / ${character.maximum_health}`;
     characterHealthBar.max=character.maximum_health;
     characterHealthBar.value=character.health;
@@ -139,6 +142,7 @@ for(const mud of document.querySelectorAll("[data-mud]")){
   };
   const renderInventory=inventory=>{
     if(!inventory||!carried||!equipped)return;
+    if(inventoryScope)inventoryScope.textContent=inventory.sharing==="shared"?"Shared across modes":`${inventory.mode?.replace(/^./,letter=>letter.toUpperCase())||"Current mode"} only`;
     const fill=(node,items,slot)=>{
       node.replaceChildren();
       if(!items?.length){const empty=document.createElement("span");empty.className="muted";empty.textContent=slot?"nothing equipped":"nothing carried";node.append(empty);return}

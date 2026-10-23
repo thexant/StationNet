@@ -111,10 +111,62 @@
     <input type="hidden" name="csrf_token" value="{{ session.csrf_token }}">
     <label class="switch"><input type="checkbox" name="mud_traditional_enabled" {% if g.station.mud_traditional_enabled %}checked{% endif %}> Enable traditional builder-managed world</label>
     <label class="switch"><input type="checkbox" name="mud_procedural_enabled" {% if g.station.mud_procedural_enabled %}checked{% endif %}> Enable procedural dungeon mode</label>
+    <label>Progression crossover
+      <select name="mud_progression_policy">
+        <option value="shared" {% if mud_crossover.progression_shared %}selected{% endif %}>Shared across both modes</option>
+        <option value="independent" {% if not mud_crossover.progression_shared %}selected{% endif %}>Independent mode tracks</option>
+      </select>
+      <small>Independent mode tracks retain their own level, experience, health, attributes, and statistics. Changing this never merges or deletes another track.</small>
+    </label>
+    <label>Inventory and equipment crossover
+      <select name="mud_inventory_policy">
+        <option value="shared" {% if mud_crossover.inventory_shared %}selected{% endif %}>Shared inventory and loadout</option>
+        <option value="independent" {% if not mud_crossover.inventory_shared %}selected{% endif %}>Independent mode inventories and loadouts</option>
+      </select>
+      <small>Every item keeps its acquisition mode. Shared view combines both inventories; independent view exposes only the current mode and its equipment.</small>
+    </label>
     <label>Portal room name<input name="mud_portal_name" maxlength="80" required value="{{ mud_portal.name }}"></label>
     <label>Portal room description<textarea name="mud_portal_description" maxlength="2000" required>{{ mud_portal.description }}</textarea><small>The gameplay explanation and gateway controls are system-managed and cannot be edited here or in the world builder.</small></label>
     <button>SAVE MUD MODES</button>
   </form>
+  </div>
+</section>
+
+<section class="narrow terminal-card settings-section collapsible-panel" id="mud-daily" data-collapsible-panel data-panel-key="sysop-mud-daily">
+  <button type="button" class="collapsible-panel-toggle" data-panel-toggle aria-expanded="true" aria-controls="mud-daily-content">
+    <span class="collapsible-panel-heading"><span class="eyebrow">SYSOP CONTROL / PROCEDURAL MUD</span><span class="collapsible-panel-title" role="heading" aria-level="2">Dungeon of the Day</span></span>
+    <span class="collapsible-panel-chevron" aria-hidden="true"></span>
+  </button>
+  <div id="mud-daily-content" data-panel-content>
+    <p class="muted">The station rotates at midnight in the configured timezone. Changes apply to future rotations; an already generated day remains immutable.</p>
+    <p><strong>CURRENT:</strong> {{ current_daily.day_key }} / {{ current_daily.status|upper }}{% if current_daily.theme_id %} / {{ current_daily.theme_id }}@{{ current_daily.theme_version }}{% endif %}</p>
+    {% if current_daily.error_message %}<p class="form-error">{{ current_daily.error_message }}</p>{% endif %}
+    <form method="post" action="{{ url_for('station.mud_daily_settings') }}" class="form-grid">
+      <input type="hidden" name="csrf_token" value="{{ session.csrf_token }}">
+      <label>Station timezone<input name="daily_timezone" required maxlength="80" value="{{ mud_daily_settings.timezone }}"><small>IANA name; rotation occurs at 00:00 local time.</small></label>
+      <label>Attempts per player per day<input type="number" name="daily_max_attempts" min="1" max="20" required value="{{ mud_daily_settings.max_attempts }}"></label>
+      <label>Fixed difficulty (optional)<input type="number" name="daily_difficulty" min="1" max="100000" value="{{ mud_daily_settings.difficulty or '' }}"><small>Blank uses each selected theme's default.</small></label>
+      <label>Fixed room count (optional)<input type="number" name="daily_room_count" min="2" max="500" value="{{ mud_daily_settings.room_count or '' }}"><small>Blank uses the theme default.</small></label>
+      <label>Fixed layout (optional)<select name="daily_layout">
+        <option value="">Theme-weighted layout</option>
+        {% for layout in ['linear','branching','maze','hub'] %}<option value="{{ layout }}" {% if mud_daily_settings.layout == layout %}selected{% endif %}>{{ layout|title }}</option>{% endfor %}
+      </select></label>
+      <fieldset>
+        <legend>Eligible themes</legend>
+        <label class="switch"><input type="checkbox" name="daily_all_themes" {% if not configured_daily_themes %}checked{% endif %}> All installed playable themes</label>
+        {% for theme in mud_daily_themes %}<label class="switch"><input type="checkbox" name="daily_theme_id" value="{{ theme.id }}" {% if theme.id in configured_daily_themes %}checked{% endif %}> {{ theme.name }} ({{ theme.id }}@{{ theme.version }})</label>{% else %}<p class="muted">No valid themes are installed.</p>{% endfor %}
+      </fieldset>
+      <button>SAVE DAILY CONFIGURATION</button>
+    </form>
+    {% if current_daily.status == 'failed' %}<form method="post" action="{{ url_for('station.retry_mud_daily') }}" class="inline-form">
+      <input type="hidden" name="csrf_token" value="{{ session.csrf_token }}"><button class="secondary">RETRY TODAY'S FAILED GENERATION</button>
+    </form>{% endif %}
+    <details><summary>Generation diagnostics</summary>
+      <h3>Daily failures</h3>
+      {% for failure in daily_failures %}<p><code>{{ failure.day_key }}</code> — {{ failure.error_message }} <small>{{ failure.generated_at }}</small></p>{% else %}<p class="muted">No daily rotation failures recorded.</p>{% endfor %}
+      <h3>Generator failures</h3>
+      {% for failure in generation_failures %}<p><code>{{ failure.theme_id or 'unknown' }}@{{ failure.theme_version or '?' }}</code> — {{ failure.message }} <small>{{ failure.created_at }}</small></p>{% else %}<p class="muted">No generator failures recorded.</p>{% endfor %}
+    </details>
   </div>
 </section>
 

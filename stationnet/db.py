@@ -1,4 +1,5 @@
 """SQLite persistence."""
+import secrets
 import sqlite3
 from flask import current_app, g
 
@@ -315,6 +316,15 @@ CREATE TABLE IF NOT EXISTS mud_dungeon_template_versions (
  installed_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
  PRIMARY KEY(theme_id,version),
  UNIQUE(theme_id,version,template_hash));
+CREATE TABLE IF NOT EXISTS mud_dungeon_managed_definitions (
+ definition_id TEXT PRIMARY KEY,
+ theme_id TEXT NOT NULL,
+ theme_version TEXT NOT NULL,
+ definition_kind TEXT NOT NULL CHECK(definition_kind IN ('item','npc','enemy','conversation')),
+ local_id TEXT NOT NULL,
+ definition_hash TEXT NOT NULL,
+ created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+ UNIQUE(theme_id,theme_version,definition_kind,local_id));
 CREATE TABLE IF NOT EXISTS mud_dungeon_rooms (
  instance_id TEXT NOT NULL REFERENCES mud_procedural_instances(id) ON DELETE CASCADE,
  room_key TEXT NOT NULL,
@@ -351,7 +361,7 @@ CREATE TABLE IF NOT EXISTS mud_dungeon_content (
  id TEXT PRIMARY KEY,
  instance_id TEXT NOT NULL,
  room_key TEXT NOT NULL,
- content_type TEXT NOT NULL CHECK(content_type IN ('enemy','item','encounter')),
+ content_type TEXT NOT NULL CHECK(content_type IN ('npc','enemy','item','encounter')),
  pool_id TEXT NOT NULL,
  definition_id TEXT,
  quantity INTEGER NOT NULL DEFAULT 1 CHECK(quantity>=1),
@@ -373,6 +383,54 @@ CREATE TABLE IF NOT EXISTS mud_dungeon_generation_log (
  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);
 CREATE INDEX IF NOT EXISTS idx_mud_dungeon_generation_log_status
  ON mud_dungeon_generation_log(status,id);
+CREATE TABLE IF NOT EXISTS mud_expedition_participants (
+ instance_id TEXT NOT NULL REFERENCES mud_procedural_instances(id) ON DELETE CASCADE,
+ user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+ character_id TEXT NOT NULL REFERENCES mud_characters(id) ON DELETE CASCADE,
+ status TEXT NOT NULL DEFAULT 'active'
+ CHECK(status IN ('active','completed','failed','abandoned')),
+ current_room_key TEXT NOT NULL,
+ rooms_visited INTEGER NOT NULL DEFAULT 0 CHECK(rooms_visited>=0),
+ joined_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+ finished_at TEXT,
+ reward_experience INTEGER NOT NULL DEFAULT 0 CHECK(reward_experience>=0),
+ rewarded_at TEXT,
+ PRIMARY KEY(instance_id,user_id),
+ UNIQUE(instance_id,character_id),
+ FOREIGN KEY(instance_id,current_room_key)
+  REFERENCES mud_dungeon_rooms(instance_id,room_key) ON DELETE CASCADE);
+CREATE INDEX IF NOT EXISTS idx_mud_expedition_participant_user
+ ON mud_expedition_participants(user_id,status,joined_at);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_mud_expedition_one_active_per_user
+ ON mud_expedition_participants(user_id) WHERE status='active';
+CREATE TABLE IF NOT EXISTS mud_expedition_room_visits (
+ instance_id TEXT NOT NULL,
+ room_key TEXT NOT NULL,
+ user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+ visited_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+ PRIMARY KEY(instance_id,room_key,user_id),
+ FOREIGN KEY(instance_id,user_id)
+  REFERENCES mud_expedition_participants(instance_id,user_id) ON DELETE CASCADE,
+ FOREIGN KEY(instance_id,room_key)
+  REFERENCES mud_dungeon_rooms(instance_id,room_key) ON DELETE CASCADE);
+CREATE TABLE IF NOT EXISTS mud_dungeon_content_state (
+ content_id TEXT PRIMARY KEY REFERENCES mud_dungeon_content(id) ON DELETE CASCADE,
+ status TEXT NOT NULL DEFAULT 'available'
+ CHECK(status IN ('available','claimed','defeated')),
+ claimed_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+ updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);
+CREATE TABLE IF NOT EXISTS mud_dungeon_conversation_sessions (
+ character_id TEXT PRIMARY KEY REFERENCES mud_characters(id) ON DELETE CASCADE,
+ instance_id TEXT NOT NULL REFERENCES mud_procedural_instances(id) ON DELETE CASCADE,
+ content_id TEXT NOT NULL REFERENCES mud_dungeon_content(id) ON DELETE CASCADE,
+ node_id TEXT NOT NULL REFERENCES mud_dialogue_nodes(id) ON DELETE CASCADE,
+ updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);
+CREATE TABLE IF NOT EXISTS mud_dungeon_npc_player_states (
+ character_id TEXT NOT NULL REFERENCES mud_characters(id) ON DELETE CASCADE,
+ content_id TEXT NOT NULL REFERENCES mud_dungeon_content(id) ON DELETE CASCADE,
+ state_json TEXT NOT NULL DEFAULT '{}',
+ updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+ PRIMARY KEY(character_id,content_id));
 CREATE TABLE IF NOT EXISTS mud_player_locations (
  user_id INTEGER PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
  mode TEXT NOT NULL CHECK(mode IN ('traditional','procedural')),
@@ -388,6 +446,58 @@ CREATE TABLE IF NOT EXISTS mud_portal_settings (
  name TEXT NOT NULL DEFAULT 'Dungeon Portals',
  description TEXT NOT NULL DEFAULT 'A threshold of dormant gateways hums with unrealized possibility.',
  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);
+CREATE TABLE IF NOT EXISTS mud_crossover_settings (
+ id INTEGER PRIMARY KEY CHECK(id=1),
+ progression_shared INTEGER NOT NULL DEFAULT 1 CHECK(progression_shared IN (0,1)),
+ inventory_shared INTEGER NOT NULL DEFAULT 1 CHECK(inventory_shared IN (0,1)),
+ updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);
+CREATE TABLE IF NOT EXISTS mud_daily_dungeon_settings (
+ id INTEGER PRIMARY KEY CHECK(id=1),
+ timezone TEXT NOT NULL DEFAULT 'UTC',
+ station_seed TEXT NOT NULL,
+ eligible_theme_ids_json TEXT NOT NULL DEFAULT '[]',
+ max_attempts INTEGER NOT NULL DEFAULT 3 CHECK(max_attempts BETWEEN 1 AND 20),
+ difficulty INTEGER CHECK(difficulty IS NULL OR difficulty BETWEEN 1 AND 100000),
+ room_count INTEGER CHECK(room_count IS NULL OR room_count BETWEEN 2 AND 500),
+ layout TEXT CHECK(layout IS NULL OR layout IN ('linear','branching','maze','hub')),
+ updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);
+CREATE TABLE IF NOT EXISTS mud_daily_dungeons (
+ day_key TEXT PRIMARY KEY,
+ timezone TEXT NOT NULL,
+ design_instance_id TEXT UNIQUE REFERENCES mud_procedural_instances(id) ON DELETE SET NULL,
+ status TEXT NOT NULL CHECK(status IN ('ready','failed')),
+ theme_id TEXT,
+ theme_version TEXT,
+ template_hash TEXT,
+ seed TEXT NOT NULL,
+ error_message TEXT,
+ generated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+ CHECK((status='ready' AND design_instance_id IS NOT NULL AND theme_id IS NOT NULL)
+    OR (status='failed' AND error_message IS NOT NULL)));
+CREATE INDEX IF NOT EXISTS idx_mud_daily_dungeons_generated
+ ON mud_daily_dungeons(generated_at,day_key);
+CREATE TABLE IF NOT EXISTS mud_daily_runs (
+ instance_id TEXT PRIMARY KEY REFERENCES mud_procedural_instances(id) ON DELETE CASCADE,
+ day_key TEXT NOT NULL REFERENCES mud_daily_dungeons(day_key) ON DELETE RESTRICT,
+ created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);
+CREATE INDEX IF NOT EXISTS idx_mud_daily_runs_day ON mud_daily_runs(day_key,created_at);
+CREATE TABLE IF NOT EXISTS mud_daily_participation (
+ day_key TEXT NOT NULL REFERENCES mud_daily_dungeons(day_key) ON DELETE RESTRICT,
+ user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+ attempts INTEGER NOT NULL DEFAULT 0 CHECK(attempts>=0),
+ completions INTEGER NOT NULL DEFAULT 0 CHECK(completions>=0),
+ failures INTEGER NOT NULL DEFAULT 0 CHECK(failures>=0),
+ abandons INTEGER NOT NULL DEFAULT 0 CHECK(abandons>=0),
+ best_rooms_visited INTEGER NOT NULL DEFAULT 0 CHECK(best_rooms_visited>=0),
+ last_instance_id TEXT REFERENCES mud_procedural_instances(id) ON DELETE SET NULL,
+ last_result TEXT CHECK(last_result IS NULL OR last_result IN ('active','completed','failed','abandoned')),
+ first_started_at TEXT,
+ last_finished_at TEXT,
+ reward_experience INTEGER NOT NULL DEFAULT 0 CHECK(reward_experience>=0),
+ rewarded_at TEXT,
+ PRIMARY KEY(day_key,user_id));
+CREATE INDEX IF NOT EXISTS idx_mud_daily_participation_user
+ ON mud_daily_participation(user_id,day_key);
 CREATE TABLE IF NOT EXISTS mud_presence (
  user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
  connection_id TEXT NOT NULL,
@@ -427,6 +537,8 @@ CREATE TABLE IF NOT EXISTS mud_item_instances (
  equipped_slot TEXT,
  is_open INTEGER NOT NULL DEFAULT 0 CHECK(is_open IN (0,1)),
  state_json TEXT NOT NULL DEFAULT '{}',
+ possession_mode TEXT NOT NULL DEFAULT 'traditional'
+ CHECK(possession_mode IN ('traditional','procedural')),
  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
  CHECK((room_id IS NOT NULL) + (owner_character_id IS NOT NULL AND equipped_slot IS NULL) + (container_id IS NOT NULL) + (owner_character_id IS NOT NULL AND equipped_slot IS NOT NULL) = 1),
@@ -437,6 +549,16 @@ CREATE INDEX IF NOT EXISTS idx_mud_item_instances_owner ON mud_item_instances(ow
 CREATE INDEX IF NOT EXISTS idx_mud_item_instances_container ON mud_item_instances(container_id,id);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_mud_equipment_slot
  ON mud_item_instances(owner_character_id,equipped_slot) WHERE equipped_slot IS NOT NULL;
+CREATE TABLE IF NOT EXISTS mud_character_equipment (
+ character_id TEXT NOT NULL REFERENCES mud_characters(id) ON DELETE CASCADE,
+ loadout_key TEXT NOT NULL CHECK(loadout_key IN ('shared','traditional','procedural')),
+ slot TEXT NOT NULL CHECK(slot IN ('head','body','hands','legs','feet','main_hand','off_hand','accessory')),
+ item_instance_id TEXT NOT NULL REFERENCES mud_item_instances(id) ON DELETE CASCADE,
+ equipped_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+ PRIMARY KEY(character_id,loadout_key,slot),
+ UNIQUE(character_id,loadout_key,item_instance_id));
+CREATE INDEX IF NOT EXISTS idx_mud_character_equipment_item
+ ON mud_character_equipment(item_instance_id);
 CREATE TABLE IF NOT EXISTS mud_conversations (
  id TEXT PRIMARY KEY,
  name TEXT NOT NULL COLLATE NOCASE,
@@ -662,6 +784,7 @@ def close_db(_error=None):
 def init_db():
     database = get_db()
     database.executescript(SCHEMA)
+    _migrate_mud_dungeon_content_types(database)
     _migrate_station_customization(database)
     _migrate_registration_policy(database)
     _migrate_community_fields(database)
@@ -671,10 +794,17 @@ def init_db():
     _migrate_mud_settings(database)
     _migrate_mud_locations(database)
     _migrate_mud_dungeon_instances(database)
+    _migrate_mud_expeditions(database)
+    _migrate_mud_crossover(database)
     _migrate_application_permissions(database)
     _initialize_mud_characters(database)
     _initialize_mud_world(database)
     database.execute("INSERT OR IGNORE INTO mud_portal_settings(id) VALUES(1)")
+    database.execute("INSERT OR IGNORE INTO mud_crossover_settings(id) VALUES(1)")
+    database.execute(
+        "INSERT OR IGNORE INTO mud_daily_dungeon_settings(id,station_seed) VALUES(1,?)",
+        (secrets.token_hex(32),),
+    )
     _migrate_legacy_callsigns(database)
     _migrate_factory_radio_bands(database)
     _align_radio_bands_to_display_precision(database)
@@ -703,6 +833,43 @@ def init_db():
             "UPDATE radio_permission_groups SET host_broadcasts=1 WHERE name='OPERATORS'"
         )
     database.commit()
+
+
+def _migrate_mud_dungeon_content_types(database):
+    """Allow non-hostile embedded NPCs in existing Chunk 10 databases."""
+    sql = database.execute(
+        "SELECT sql FROM sqlite_master WHERE type='table' AND name='mud_dungeon_content'"
+    ).fetchone()["sql"]
+    if "'npc'" in sql:
+        return
+    database.commit()
+    database.execute("PRAGMA foreign_keys=OFF")
+    database.execute("PRAGMA legacy_alter_table=ON")
+    try:
+        database.executescript("""
+        DROP INDEX IF EXISTS idx_mud_dungeon_content_room;
+        ALTER TABLE mud_dungeon_content RENAME TO mud_dungeon_content_legacy;
+        CREATE TABLE mud_dungeon_content (
+         id TEXT PRIMARY KEY,
+         instance_id TEXT NOT NULL,
+         room_key TEXT NOT NULL,
+         content_type TEXT NOT NULL CHECK(content_type IN ('npc','enemy','item','encounter')),
+         pool_id TEXT NOT NULL,
+         definition_id TEXT,
+         quantity INTEGER NOT NULL DEFAULT 1 CHECK(quantity>=1),
+         snapshot_json TEXT NOT NULL DEFAULT '{}',
+         config_json TEXT NOT NULL DEFAULT '{}',
+         FOREIGN KEY(instance_id,room_key)
+          REFERENCES mud_dungeon_rooms(instance_id,room_key) ON DELETE CASCADE);
+        INSERT INTO mud_dungeon_content
+        SELECT * FROM mud_dungeon_content_legacy;
+        DROP TABLE mud_dungeon_content_legacy;
+        CREATE INDEX idx_mud_dungeon_content_room
+         ON mud_dungeon_content(instance_id,room_key,content_type,id);
+        """)
+    finally:
+        database.execute("PRAGMA legacy_alter_table=OFF")
+        database.execute("PRAGMA foreign_keys=ON")
 
 
 def _migrate_application_permissions(database):
@@ -1037,6 +1204,38 @@ def _migrate_mud_settings(database):
         )
 
 
+def _migrate_mud_crossover(database):
+    """Add reversible possession provenance and preserve the legacy shared loadout."""
+    columns = {
+        row["name"] for row in database.execute("PRAGMA table_info(mud_item_instances)")
+    }
+    if "possession_mode" not in columns:
+        database.execute(
+            "ALTER TABLE mud_item_instances ADD COLUMN possession_mode TEXT NOT NULL "
+            "DEFAULT 'traditional' CHECK(possession_mode IN ('traditional','procedural'))"
+        )
+        # Dungeon pickups have an unambiguous source. Managed theme rewards are
+        # procedural too; traditional rewards keep the conservative legacy default.
+        database.execute(
+            "UPDATE mud_item_instances SET possession_mode='procedural' "
+            "WHERE id LIKE 'expedition:item:%' OR definition_id IN ("
+            "SELECT definition_id FROM mud_dungeon_managed_definitions)"
+        )
+    # Chunk 6 stored one global equipped slot on the item. Retain that exact
+    # loadout as the shared loadout, then clear the compatibility column so the
+    # new per-mode loadouts can coexist without violating its legacy index.
+    database.execute(
+        "INSERT OR IGNORE INTO mud_character_equipment"
+        "(character_id,loadout_key,slot,item_instance_id) "
+        "SELECT owner_character_id,'shared',equipped_slot,id FROM mud_item_instances "
+        "WHERE owner_character_id IS NOT NULL AND equipped_slot IS NOT NULL"
+    )
+    database.execute(
+        "UPDATE mud_item_instances SET equipped_slot=NULL "
+        "WHERE equipped_slot IS NOT NULL"
+    )
+
+
 def _migrate_mud_locations(database):
     """Extend presence for system locations without rebuilding legacy tables."""
     columns = {
@@ -1078,6 +1277,45 @@ def _migrate_mud_dungeon_instances(database):
             database.execute(
                 f"ALTER TABLE mud_procedural_instances ADD COLUMN {name} {declaration}"
             )
+
+
+def _migrate_mud_expeditions(database):
+    """Add live-run metadata without disturbing Chunk 10 pending designs."""
+    columns = {
+        row["name"] for row in database.execute(
+            "PRAGMA table_info(mud_procedural_instances)"
+        )
+    }
+    additions = {
+        "owner_user_id": "INTEGER REFERENCES users(id) ON DELETE SET NULL",
+        "join_code": "TEXT",
+        "terminal_reason": "TEXT",
+        "started_at": "TEXT",
+        "ended_at": "TEXT",
+    }
+    for name, declaration in additions.items():
+        if name not in columns:
+            database.execute(
+                f"ALTER TABLE mud_procedural_instances ADD COLUMN {name} {declaration}"
+            )
+    database.execute(
+        "CREATE UNIQUE INDEX IF NOT EXISTS idx_mud_expedition_join_code "
+        "ON mud_procedural_instances(join_code) WHERE join_code IS NOT NULL"
+    )
+    combat_columns = {
+        row["name"] for row in database.execute(
+            "PRAGMA table_info(mud_combat_encounters)"
+        )
+    }
+    if "dungeon_content_id" not in combat_columns:
+        database.execute(
+            "ALTER TABLE mud_combat_encounters ADD COLUMN dungeon_content_id TEXT"
+        )
+    database.execute(
+        "CREATE UNIQUE INDEX IF NOT EXISTS idx_mud_combat_live_dungeon_enemy "
+        "ON mud_combat_encounters(dungeon_content_id) "
+        "WHERE dungeon_content_id IS NOT NULL AND status IN ('ready','active')"
+    )
 
 def _migrate_legacy_callsigns(database):
     """Replace callsigns created under earlier, prefixed formats."""

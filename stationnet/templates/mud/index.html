@@ -78,6 +78,7 @@
             <span data-character-level>LEVEL {{ character.level }}</span>
           </div>
           <p class="mud-character-track" data-character-track>{{ character.progression_label }}</p>
+          <small data-character-mode>{{ character.mode|title }} mode</small>
           <div class="mud-character-meter">
             <span><span>HEALTH</span><output data-character-health>{{ character.health }} / {{ character.maximum_health }}</output></span>
             <progress data-character-health-bar value="{{ character.health }}" max="{{ character.maximum_health }}">{{ character.health }} / {{ character.maximum_health }}</progress>
@@ -102,6 +103,7 @@
         </button>
         <div id="mud-inventory-panel" data-panel-content hidden>
           <div class="mud-inventory-list" data-mud-inventory>
+            <small data-mud-inventory-scope>{{ 'Shared across modes' if inventory.sharing == 'shared' else (inventory.mode|title ~ ' only') }}</small>
             <strong>CARRIED</strong>
             <div data-mud-carried>{% for item in inventory.inventory %}<button type="button" class="secondary" data-mud-action="look" data-mud-parameters='{{ {"target": item.id}|tojson }}'>{{ item.name }}</button>{% else %}<span class="muted">nothing carried</span>{% endfor %}</div>
             <strong>EQUIPPED</strong>

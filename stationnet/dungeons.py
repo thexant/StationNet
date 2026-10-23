@@ -22,6 +22,9 @@ from .db import get_db
 GENERATOR_VERSION = "stationnet-dungeon-1"
 SCHEMA_VERSION = 1
 SUPPORTED_LAYOUTS = frozenset({"linear", "branching", "maze", "hub"})
+EQUIPMENT_SLOTS = frozenset({
+    "head", "body", "hands", "legs", "feet", "main_hand", "off_hand", "accessory",
+})
 ID_RE = re.compile(r"^[a-z0-9][a-z0-9._-]{0,63}$")
 OPPOSITE = {"north": "south", "south": "north", "east": "west", "west": "east"}
 DELTAS = {"north": (0, -1), "east": (1, 0), "south": (0, 1), "west": (-1, 0)}
@@ -154,6 +157,185 @@ def _validate_pool_base(errors, pool, path, ids):
     return True
 
 
+def local_definition_id(template, kind, local_id):
+    """Return the stable, collision-resistant engine ID for embedded content."""
+    singular = "npc" if kind in {"npc", "enemy", "npcs", "enemies"} else "item"
+    return f"dungeon:{template['id']}@{template['version']}:{singular}:{local_id}"
+
+
+def _validate_json_object(errors, value, path):
+    if value is not None and not isinstance(value, dict):
+        errors.append(f"{path}: must be an object")
+
+
+def _validate_embedded_definitions(errors, template, database=None):
+    definitions = template.get("definitions", {})
+    if not isinstance(definitions, dict):
+        errors.append("$.definitions: must be an object")
+        return {"items": set(), "npcs": set(), "enemies": set()}
+    allowed = {"items", "npcs", "enemies"}
+    for key in definitions:
+        if key not in allowed:
+            errors.append(f"$.definitions.{key}: unsupported definition type")
+    ids = {kind: set() for kind in allowed}
+    item_slots = {}
+    for kind in ("items", "npcs", "enemies"):
+        values = definitions.get(kind, [])
+        path = f"$.definitions.{kind}"
+        if not isinstance(values, list):
+            errors.append(f"{path}: must be an array")
+            continue
+        for index, definition in enumerate(values):
+            here = f"{path}[{index}]"
+            if not isinstance(definition, dict):
+                errors.append(f"{here}: must be an object")
+                continue
+            local_id = definition.get("id")
+            if not isinstance(local_id, str) or not ID_RE.fullmatch(local_id):
+                errors.append(f"{here}.id: must match {ID_RE.pattern}")
+            elif local_id in ids[kind]:
+                errors.append(f"{here}.id: duplicate id {local_id!r}")
+            else:
+                ids[kind].add(local_id)
+            for field in ("name", "description"):
+                if not isinstance(definition.get(field), str) or not definition[field].strip():
+                    errors.append(f"{here}.{field}: must be a non-empty string")
+            _validate_json_object(errors, definition.get("properties"), f"{here}.properties")
+            _validate_json_object(errors, definition.get("behaviors"), f"{here}.behaviors")
+            if kind == "items":
+                item_type = definition.get("item_type", "misc")
+                if item_type not in {"misc", "equipment", "container", "consumable", "key"}:
+                    errors.append(f"{here}.item_type: unsupported item type")
+                slot = definition.get("equipment_slot")
+                if slot is not None and slot not in EQUIPMENT_SLOTS:
+                    errors.append(f"{here}.equipment_slot: unsupported equipment slot")
+                if slot is not None and item_type != "equipment":
+                    errors.append(f"{here}.equipment_slot: requires item_type 'equipment'")
+                if isinstance(local_id, str):
+                    item_slots[local_id] = slot
+                continue
+            combat = definition.get("combat")
+            if kind == "enemies" and not isinstance(combat, dict):
+                errors.append(f"{here}.combat: enemies require a combat object")
+            if combat is not None:
+                if not isinstance(combat, dict):
+                    errors.append(f"{here}.combat: must be an object")
+                else:
+                    limits = {"maximum_health": (1, 1_000_000), "attack": (1, 100_000),
+                              "defense": (0, 100_000), "experience_reward": (0, 100_000),
+                              "respawn_seconds": (5, 86_400)}
+                    defaults = {"maximum_health": 30, "attack": 6, "defense": 2,
+                                "experience_reward": 10, "respawn_seconds": 60}
+                    for field, (low, high) in limits.items():
+                        if not _is_int(combat.get(field, defaults[field]), low, high):
+                            errors.append(f"{here}.combat.{field}: must be an integer from {low} to {high}")
+            conversation = definition.get("conversation")
+            if conversation is not None:
+                _validate_conversation(errors, conversation, f"{here}.conversation")
+            equipment = definition.get("equipment", [])
+            if not isinstance(equipment, list):
+                errors.append(f"{here}.equipment: must be an array")
+            else:
+                used_slots = set()
+                for equipment_index, entry in enumerate(equipment):
+                    equip_path = f"{here}.equipment[{equipment_index}]"
+                    if not isinstance(entry, dict):
+                        errors.append(f"{equip_path}: must be an object"); continue
+                    slot = entry.get("slot")
+                    if slot not in EQUIPMENT_SLOTS or slot in used_slots:
+                        errors.append(f"{equip_path}.slot: must be a unique supported slot")
+                    else:
+                        used_slots.add(slot)
+                    _validate_item_reference(errors, entry, equip_path, ids["items"], item_slots,
+                                             database, expected_slot=slot)
+            loot = definition.get("loot", [])
+            if not isinstance(loot, list):
+                errors.append(f"{here}.loot: must be an array")
+            else:
+                for loot_index, reward in enumerate(loot):
+                    reward_path = f"{here}.loot[{loot_index}]"
+                    if not isinstance(reward, dict):
+                        errors.append(f"{reward_path}: must be an object"); continue
+                    reward_type = reward.get("type")
+                    if reward_type not in {"experience", "item"}:
+                        errors.append(f"{reward_path}.type: choose 'experience' or 'item'")
+                    if not _is_int(reward.get("amount", 1), 1, 100_000):
+                        errors.append(f"{reward_path}.amount: must be an integer from 1 to 100000")
+                    if reward_type == "item":
+                        _validate_item_reference(errors, reward, reward_path, ids["items"], item_slots,
+                                                 database)
+    overlap = ids["npcs"] & ids["enemies"]
+    for local_id in sorted(overlap):
+        errors.append(f"$.definitions: NPC/enemy id {local_id!r} is duplicated")
+    return ids
+
+
+def _validate_item_reference(errors, value, path, local_items, item_slots, database=None,
+                             expected_slot=None):
+    local_id, shared_id = value.get("item_local_id"), value.get("item_definition_id")
+    if bool(local_id) == bool(shared_id):
+        errors.append(f"{path}: requires exactly one of item_local_id or item_definition_id")
+    elif local_id and local_id not in local_items:
+        errors.append(f"{path}.item_local_id: unknown embedded item {local_id!r}")
+    elif local_id and expected_slot and item_slots.get(local_id) != expected_slot:
+        errors.append(f"{path}.item_local_id: item must use equipment slot {expected_slot!r}")
+    elif shared_id and database is not None:
+        row = database.execute(
+            "SELECT item_type,equipment_slot FROM mud_item_definitions WHERE id=?", (shared_id,)
+        ).fetchone()
+        if row is None:
+            errors.append(f"{path}.item_definition_id: {shared_id!r} does not exist")
+        elif expected_slot and (row["item_type"] != "equipment"
+                                or row["equipment_slot"] != expected_slot):
+            errors.append(f"{path}.item_definition_id: item must use equipment slot {expected_slot!r}")
+
+
+def _validate_conversation(errors, value, path):
+    if not isinstance(value, dict):
+        errors.append(f"{path}: must be an object"); return
+    nodes = value.get("nodes")
+    if not isinstance(nodes, list) or not nodes:
+        errors.append(f"{path}.nodes: must be a non-empty array"); return
+    node_ids = set()
+    starts = 0
+    for index, node in enumerate(nodes):
+        here = f"{path}.nodes[{index}]"
+        if not isinstance(node, dict):
+            errors.append(f"{here}: must be an object"); continue
+        node_id = node.get("id")
+        if not isinstance(node_id, str) or not ID_RE.fullmatch(node_id) or node_id in node_ids:
+            errors.append(f"{here}.id: must be a unique valid id")
+        else:
+            node_ids.add(node_id)
+        if not isinstance(node.get("body"), str) or not node["body"].strip():
+            errors.append(f"{here}.body: must be a non-empty string")
+        starts += node.get("start") is True
+        responses = node.get("responses", [])
+        if not isinstance(responses, list):
+            errors.append(f"{here}.responses: must be an array")
+        else:
+            response_ids = set()
+            for response_index, response in enumerate(responses):
+                response_path = f"{here}.responses[{response_index}]"
+                if not isinstance(response, dict):
+                    errors.append(f"{response_path}: must be an object"); continue
+                response_id = response.get("id")
+                if not isinstance(response_id, str) or not ID_RE.fullmatch(response_id) or response_id in response_ids:
+                    errors.append(f"{response_path}.id: must be a unique valid id")
+                else:
+                    response_ids.add(response_id)
+                if not isinstance(response.get("text"), str) or not response["text"].strip():
+                    errors.append(f"{response_path}.text: must be a non-empty string")
+    if starts != 1:
+        errors.append(f"{path}.nodes: exactly one node must have start true")
+    for index, node in enumerate(nodes):
+        if not isinstance(node, dict): continue
+        for response_index, response in enumerate(node.get("responses", [])):
+            if isinstance(response, dict) and response.get("next_node_id") not in (None, "") \
+                    and response["next_node_id"] not in node_ids:
+                errors.append(f"{path}.nodes[{index}].responses[{response_index}].next_node_id: unknown node")
+
+
 def validate_template(template, database=None):
     """Return actionable JSON-path errors; an empty list means valid."""
     errors = []
@@ -167,6 +349,7 @@ def validate_template(template, database=None):
             errors.append(f"$.{key}: must match {ID_RE.pattern}")
     if not isinstance(template.get("name"), str) or not template.get("name", "").strip():
         errors.append("$.name: must be a non-empty string")
+    embedded_ids = _validate_embedded_definitions(errors, template, database)
 
     generation = template.get("generation")
     if not isinstance(generation, dict):
@@ -242,7 +425,7 @@ def validate_template(template, database=None):
         errors.append("$.pools: must be an object")
         pools = {}
     ids_by_kind = {}
-    for kind in ("rooms", "environments", "enemies", "items", "encounters"):
+    for kind in ("rooms", "environments", "npcs", "enemies", "items", "encounters"):
         values = pools.get(kind, [])
         if not isinstance(values, list):
             errors.append(f"$.pools.{kind}: must be an array")
@@ -260,7 +443,7 @@ def validate_template(template, database=None):
                 _validate_weighted_text(errors, pool.get("descriptions"), f"{path}.descriptions")
             elif kind == "environments":
                 _validate_weighted_text(errors, pool.get("descriptions"), f"{path}.descriptions")
-            elif kind in {"enemies", "items"}:
+            elif kind in {"npcs", "enemies", "items"}:
                 chance = pool.get("chance", 1)
                 if not isinstance(chance, (int, float)) or isinstance(chance, bool) or not 0 <= chance <= 1:
                     errors.append(f"{path}.chance: must be a number from 0 to 1")
@@ -273,24 +456,37 @@ def validate_template(template, database=None):
                 if not isinstance(choices, list) or not choices:
                     errors.append(f"{path}.choices: must be a non-empty array")
                 else:
-                    table = "mud_npc_definitions" if kind == "enemies" else "mud_item_definitions"
+                    table = "mud_npc_definitions" if kind in {"npcs", "enemies"} else "mud_item_definitions"
+                    local_kind = kind
                     for choice_index, choice in enumerate(choices):
                         choice_path = f"{path}.choices[{choice_index}]"
-                        if not isinstance(choice, dict) or not isinstance(choice.get("definition_id"), str) or not choice["definition_id"]:
+                        if not isinstance(choice, dict):
+                            errors.append(f"{choice_path}: must be an object")
+                            continue
+                        shared_id, local_id = choice.get("definition_id"), choice.get("local_id")
+                        if bool(shared_id) == bool(local_id):
+                            errors.append(f"{choice_path}: requires exactly one of definition_id or local_id")
+                            continue
+                        if shared_id is not None and (not isinstance(shared_id, str) or not shared_id):
                             errors.append(f"{choice_path}.definition_id: must be a non-empty string")
+                            continue
+                        if local_id is not None and (not isinstance(local_id, str)
+                                                     or local_id not in embedded_ids.get(local_kind, set())):
+                            errors.append(f"{choice_path}.local_id: unknown embedded {local_kind[:-1]} {local_id!r}")
                             continue
                         if not _is_int(choice.get("weight", 1), 1, 1_000_000):
                             errors.append(f"{choice_path}.weight: must be an integer from 1 to 1000000")
                         _validate_conditions(errors, choice.get("conditions"), f"{choice_path}.conditions")
-                        if database is not None and database.execute(
-                                f"SELECT 1 FROM {table} WHERE id=?", (choice["definition_id"],)
+                        if database is not None and shared_id and database.execute(
+                                f"SELECT 1 FROM {table} WHERE id=?", (shared_id,)
                         ).fetchone() is None:
-                            errors.append(f"{choice_path}.definition_id: {choice['definition_id']!r} does not exist")
+                            errors.append(f"{choice_path}.definition_id: {shared_id!r} does not exist")
             else:
                 chance = pool.get("chance", 1)
                 if not isinstance(chance, (int, float)) or isinstance(chance, bool) or not 0 <= chance <= 1:
                     errors.append(f"{path}.chance: must be a number from 0 to 1")
-                for key, target in (("enemy_pool", "enemies"), ("item_pool", "items")):
+                for key, target in (("npc_pool", "npcs"), ("enemy_pool", "enemies"),
+                                    ("item_pool", "items")):
                     if key in pool and not isinstance(pool[key], str):
                         errors.append(f"{path}.{key}: must be a pool id string")
                     elif key in pool and pool[key] not in ids_by_kind.get(target, set()):
@@ -489,9 +685,9 @@ def _direction_between(first, second):
 def _definition_snapshot(database, kind, definition_id):
     if database is None:
         return {"definition_id": definition_id}
-    if kind == "enemy":
+    if kind in {"npc", "enemy"}:
         row = database.execute(
-            "SELECT d.id,d.name,d.description,d.properties_json,d.behaviors_json,"
+            "SELECT d.id,d.name,d.description,d.conversation_id,d.properties_json,d.behaviors_json,"
             "p.maximum_health,p.attack,p.defense,p.experience_reward,p.respawn_seconds "
             "FROM mud_npc_definitions AS d LEFT JOIN mud_npc_combat_profiles AS p "
             "ON p.npc_definition_id=d.id WHERE d.id=?", (definition_id,),
@@ -504,6 +700,51 @@ def _definition_snapshot(database, kind, definition_id):
     if row is None:
         raise GenerationError(f"referenced {kind} definition {definition_id!r} no longer exists")
     return dict(row)
+
+
+def _embedded_definition(template, kind, local_id):
+    collection = "items" if kind == "item" else "npcs" if kind == "npc" else "enemies"
+    return next((entry for entry in template.get("definitions", {}).get(collection, [])
+                 if entry["id"] == local_id), None)
+
+
+def _embedded_snapshot(template, kind, definition):
+    definition_id = local_definition_id(template, kind, definition["id"])
+    snapshot = {
+        "definition_id": definition_id, "local_id": definition["id"],
+        "source": "embedded", "name": definition["name"],
+        "description": definition["description"],
+        "properties_json": canonical_json(definition.get("properties", {})),
+        "behaviors_json": canonical_json(definition.get("behaviors", {})),
+    }
+    if kind == "item":
+        snapshot.update(item_type=definition.get("item_type", "misc"),
+                        equipment_slot=definition.get("equipment_slot"))
+    else:
+        conversation = definition.get("conversation")
+        snapshot["conversation_id"] = (
+            f"{definition_id}:conversation" if conversation else None
+        )
+        snapshot["conversation"] = deepcopy(conversation)
+        combat = definition.get("combat")
+        if combat:
+            snapshot.update({
+                "maximum_health": combat.get("maximum_health", 30),
+                "attack": combat.get("attack", 6), "defense": combat.get("defense", 2),
+                "experience_reward": combat.get("experience_reward", 10),
+                "respawn_seconds": combat.get("respawn_seconds", 60),
+            })
+        snapshot["equipment"] = [
+            {"slot": entry["slot"], "item_definition_id": _item_reference_id(template, entry)}
+            for entry in definition.get("equipment", [])
+        ]
+        snapshot["loot"] = [
+            ({"type": "item", "item_definition_id": _item_reference_id(template, reward),
+              "amount": reward.get("amount", 1)} if reward["type"] == "item" else
+             {"type": "experience", "amount": reward.get("amount", 1)})
+            for reward in definition.get("loot", [])
+        ]
+    return snapshot
 
 
 def _select_content(template, context, rng, database):
@@ -521,7 +762,8 @@ def _select_content(template, context, rng, database):
         "quantity": 1, "snapshot": {}, "config": deepcopy(encounter.get("config", {})),
     })
     for key, kind, collection in (
-        ("enemy_pool", "enemy", "enemies"), ("item_pool", "item", "items")
+        ("npc_pool", "npc", "npcs"), ("enemy_pool", "enemy", "enemies"),
+        ("item_pool", "item", "items")
     ):
         pool_id = encounter.get(key)
         if not pool_id:
@@ -538,11 +780,18 @@ def _select_content(template, context, rng, database):
                    if _conditions_match(choice.get("conditions"), context)]
         for _ in range(count):
             choice = _weighted(rng, choices)
-            definition_id = choice["definition_id"]
+            local_id = choice.get("local_id")
+            if local_id:
+                definition = _embedded_definition(template, kind, local_id)
+                definition_id = local_definition_id(template, kind, local_id)
+                snapshot = _embedded_snapshot(template, kind, definition)
+            else:
+                definition_id = choice["definition_id"]
+                snapshot = _definition_snapshot(database, kind, definition_id)
             result.append({
                 "type": kind, "pool_id": pool_id, "definition_id": definition_id,
                 "quantity": 1,
-                "snapshot": _definition_snapshot(database, kind, definition_id),
+                "snapshot": snapshot,
                 "config": {},
             })
     return result
@@ -672,6 +921,119 @@ def _record_log(database, status, message, request_data, instance_id=None):
     )
 
 
+def _claim_managed_definition(database, template, definition_id, kind, local_id, value):
+    digest = hashlib.sha256(canonical_json(value).encode("utf-8")).hexdigest()
+    existing = database.execute(
+        "SELECT definition_hash FROM mud_dungeon_managed_definitions WHERE definition_id=?",
+        (definition_id,),
+    ).fetchone()
+    if existing is not None:
+        if existing["definition_hash"] != digest:
+            raise TemplateError([f"embedded definition collision for {definition_id!r}"])
+        return False
+    table = ("mud_item_definitions" if kind == "item" else
+             "mud_conversations" if kind == "conversation" else "mud_npc_definitions")
+    if database.execute(f"SELECT 1 FROM {table} WHERE id=?", (definition_id,)).fetchone():
+        raise TemplateError([f"embedded definition ID {definition_id!r} conflicts with station content"])
+    database.execute(
+        "INSERT INTO mud_dungeon_managed_definitions"
+        "(definition_id,theme_id,theme_version,definition_kind,local_id,definition_hash) "
+        "VALUES(?,?,?,?,?,?)",
+        (definition_id, template["id"], template["version"], kind, local_id, digest),
+    )
+    return True
+
+
+def _item_reference_id(template, reference):
+    return (local_definition_id(template, "item", reference["item_local_id"])
+            if reference.get("item_local_id") else reference["item_definition_id"])
+
+
+def _install_embedded_definitions(database, template):
+    """Materialize immutable namespaced definitions for existing gameplay systems."""
+    definitions = template.get("definitions", {})
+    for item in definitions.get("items", []):
+        definition_id = local_definition_id(template, "item", item["id"])
+        if _claim_managed_definition(database, template, definition_id, "item", item["id"], item):
+            database.execute(
+                "INSERT INTO mud_item_definitions"
+                "(id,name,description,item_type,properties_json,behaviors_json,equipment_slot) "
+                "VALUES(?,?,?,?,?,?,?)",
+                (definition_id, item["name"], item["description"], item.get("item_type", "misc"),
+                 canonical_json(item.get("properties", {})), canonical_json(item.get("behaviors", {})),
+                 item.get("equipment_slot")),
+            )
+    for kind in ("npcs", "enemies"):
+        for npc in definitions.get(kind, []):
+            definition_id = local_definition_id(template, kind, npc["id"])
+            conversation = npc.get("conversation")
+            conversation_id = f"{definition_id}:conversation" if conversation else None
+            if conversation and _claim_managed_definition(
+                    database, template, conversation_id, "conversation", npc["id"], conversation):
+                database.execute(
+                    "INSERT INTO mud_conversations(id,name) VALUES(?,?)",
+                    (conversation_id, conversation.get("name", f"{npc['name']} conversation")),
+                )
+                node_ids = {node["id"]: f"{conversation_id}:node:{node['id']}"
+                            for node in conversation["nodes"]}
+                for node in conversation["nodes"]:
+                    database.execute(
+                        "INSERT INTO mud_dialogue_nodes(id,conversation_id,node_key,body,is_start) "
+                        "VALUES(?,?,?,?,?)",
+                        (node_ids[node["id"]], conversation_id, node["id"], node["body"],
+                         int(node.get("start", False))),
+                    )
+                for node in conversation["nodes"]:
+                    for order, response in enumerate(node.get("responses", [])):
+                        database.execute(
+                            "INSERT INTO mud_dialogue_responses"
+                            "(id,node_id,response_text,next_node_id,required_state_key,"
+                            "required_state_value,state_key,state_value,sort_order) "
+                            "VALUES(?,?,?,?,?,?,?,?,?)",
+                            (f"{node_ids[node['id']]}:response:{response['id']}", node_ids[node["id"]],
+                             response["text"], node_ids.get(response.get("next_node_id")),
+                             response.get("required_state_key"), response.get("required_state_value"),
+                             response.get("state_key"), response.get("state_value"),
+                             response.get("sort_order", order)),
+                        )
+            registry_kind = "enemy" if kind == "enemies" else "npc"
+            if not _claim_managed_definition(
+                    database, template, definition_id, registry_kind, npc["id"], npc):
+                continue
+            database.execute(
+                "INSERT INTO mud_npc_definitions"
+                "(id,name,description,conversation_id,properties_json,behaviors_json) "
+                "VALUES(?,?,?,?,?,?)",
+                (definition_id, npc["name"], npc["description"], conversation_id,
+                 canonical_json(npc.get("properties", {})), canonical_json(npc.get("behaviors", {}))),
+            )
+            combat = npc.get("combat")
+            if combat:
+                database.execute(
+                    "INSERT INTO mud_npc_combat_profiles"
+                    "(npc_definition_id,maximum_health,attack,defense,experience_reward,respawn_seconds) "
+                    "VALUES(?,?,?,?,?,?)",
+                    (definition_id, combat.get("maximum_health", 30), combat.get("attack", 6),
+                     combat.get("defense", 2), combat.get("experience_reward", 10),
+                     combat.get("respawn_seconds", 60)),
+                )
+            for equipment in npc.get("equipment", []):
+                database.execute(
+                    "INSERT INTO mud_npc_equipment(npc_definition_id,equipment_slot,item_definition_id) "
+                    "VALUES(?,?,?)",
+                    (definition_id, equipment["slot"], _item_reference_id(template, equipment)),
+                )
+            for order, reward in enumerate(npc.get("loot", [])):
+                target_id = (_item_reference_id(template, reward)
+                             if reward["type"] == "item" else None)
+                database.execute(
+                    "INSERT INTO mud_npc_combat_rewards"
+                    "(id,npc_definition_id,reward_type,target_id,amount) VALUES(?,?,?,?,?)",
+                    (f"{definition_id}:reward:{order}", definition_id, reward["type"], target_id,
+                     reward.get("amount", 1)),
+                )
+
+
 def persist_instance(database, template, manifest, instance_type="random", source_name="external"):
     """Persist an immutable generated design in procedural-only tables."""
     if instance_type not in {"random", "daily"}:
@@ -691,6 +1053,7 @@ def persist_instance(database, template, manifest, instance_type="random", sourc
         "(theme_id,version,template_hash,template_json,source_name) VALUES(?,?,?,?,?)",
         (template["id"], template["version"], digest, canonical_json(template), source_name),
     )
+    _install_embedded_definitions(database, template)
     instance_id = f"dungeon:{uuid.uuid4().hex}"
     database.execute(
         "INSERT INTO mud_procedural_instances"
@@ -745,6 +1108,56 @@ def create_instance(database, template, seed, size=None, layout=None, difficulty
         # Caller controls the transaction. Generated rows are written only after a full manifest exists.
         _record_log(database, "failure", str(problem), request_data)
         raise
+
+
+def clone_instance(database, source_instance_id, instance_type="daily"):
+    """Clone an immutable design into a fresh run with isolated mutable state."""
+    source = database.execute(
+        "SELECT * FROM mud_procedural_instances WHERE id=?",
+        (source_instance_id,),
+    ).fetchone()
+    if source is None or not source["generation_manifest_json"]:
+        raise GenerationError("daily dungeon design is unavailable")
+    if instance_type not in {"random", "daily"}:
+        raise GenerationError("instance type must be 'random' or 'daily'")
+    instance_id = f"dungeon:{uuid.uuid4().hex}"
+    database.execute(
+        "INSERT INTO mud_procedural_instances"
+        "(id,instance_type,status,seed,theme_id,theme_version,template_hash,generator_version,"
+        "layout,room_count,difficulty,generation_manifest_json) "
+        "VALUES(?,?,'pending',?,?,?,?,?,?,?,?,?)",
+        (instance_id, instance_type, source["seed"], source["theme_id"],
+         source["theme_version"], source["template_hash"], source["generator_version"],
+         source["layout"], source["room_count"], source["difficulty"],
+         source["generation_manifest_json"]),
+    )
+    database.execute(
+        "INSERT INTO mud_dungeon_rooms(instance_id,room_key,ordinal,x,y,role,depth,difficulty,"
+        "name,description,room_template_id,environment_id,metadata_json) "
+        "SELECT ?,room_key,ordinal,x,y,role,depth,difficulty,name,description,room_template_id,"
+        "environment_id,metadata_json FROM mud_dungeon_rooms WHERE instance_id=?",
+        (instance_id, source_instance_id),
+    )
+    database.execute(
+        "INSERT INTO mud_dungeon_exits(instance_id,from_room_key,to_room_key,direction,name) "
+        "SELECT ?,from_room_key,to_room_key,direction,name FROM mud_dungeon_exits "
+        "WHERE instance_id=?",
+        (instance_id, source_instance_id),
+    )
+    for content in database.execute(
+        "SELECT id,room_key,content_type,pool_id,definition_id,quantity,snapshot_json,config_json "
+        "FROM mud_dungeon_content WHERE instance_id=? ORDER BY id",
+        (source_instance_id,),
+    ).fetchall():
+        suffix = content["id"].split(":content:", 1)[-1]
+        database.execute(
+            "INSERT INTO mud_dungeon_content(id,instance_id,room_key,content_type,pool_id,"
+            "definition_id,quantity,snapshot_json,config_json) VALUES(?,?,?,?,?,?,?,?,?)",
+            (f"{instance_id}:content:{suffix}", instance_id, content["room_key"],
+             content["content_type"], content["pool_id"], content["definition_id"],
+             content["quantity"], content["snapshot_json"], content["config_json"]),
+        )
+    return instance_id, json.loads(source["generation_manifest_json"])
 
 
 def format_preview(manifest):
@@ -802,7 +1215,9 @@ def list_definitions_command():
     database = get_db()
     click.echo("NPC definitions:")
     npcs = database.execute(
-        "SELECT id,name FROM mud_npc_definitions ORDER BY name COLLATE NOCASE,id"
+        "SELECT d.id,d.name FROM mud_npc_definitions AS d WHERE NOT EXISTS "
+        "(SELECT 1 FROM mud_dungeon_managed_definitions AS m WHERE m.definition_id=d.id) "
+        "ORDER BY d.name COLLATE NOCASE,d.id"
     ).fetchall()
     for row in npcs:
         click.echo(f"  {row['id']}  {row['name']}")
@@ -810,7 +1225,9 @@ def list_definitions_command():
         click.echo("  (none)")
     click.echo("Item definitions:")
     items = database.execute(
-        "SELECT id,name FROM mud_item_definitions ORDER BY name COLLATE NOCASE,id"
+        "SELECT d.id,d.name FROM mud_item_definitions AS d WHERE NOT EXISTS "
+        "(SELECT 1 FROM mud_dungeon_managed_definitions AS m WHERE m.definition_id=d.id) "
+        "ORDER BY d.name COLLATE NOCASE,d.id"
     ).fetchall()
     for row in items:
         click.echo(f"  {row['id']}  {row['name']}")

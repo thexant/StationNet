@@ -11,6 +11,16 @@
     "version": {"$ref": "#/$defs/id"},
     "name": {"type": "string", "minLength": 1},
     "description": {"type": "string"},
+    "definitions": {
+      "type": "object",
+      "description": "Portable definitions owned by this theme. Runtime IDs are namespaced by theme ID and version.",
+      "properties": {
+        "items": {"type": "array", "items": {"$ref": "#/$defs/itemDefinition"}},
+        "npcs": {"type": "array", "items": {"$ref": "#/$defs/npcDefinition"}},
+        "enemies": {"type": "array", "items": {"$ref": "#/$defs/enemyDefinition"}}
+      },
+      "additionalProperties": false
+    },
     "generation": {
       "type": "object",
       "required": ["size", "difficulty", "layouts"],
@@ -47,6 +57,7 @@
       "properties": {
         "rooms": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/roomPool"}},
         "environments": {"type": "array", "items": {"$ref": "#/$defs/environmentPool"}},
+        "npcs": {"type": "array", "items": {"$ref": "#/$defs/contentPool"}},
         "enemies": {"type": "array", "items": {"$ref": "#/$defs/contentPool"}},
         "items": {"type": "array", "items": {"$ref": "#/$defs/contentPool"}},
         "encounters": {"type": "array", "items": {"$ref": "#/$defs/encounterPool"}}
@@ -79,6 +90,77 @@
       },
       "additionalProperties": false
     },
+    "itemReference": {
+      "type": "object",
+      "oneOf": [
+        {"required": ["item_local_id"], "not": {"required": ["item_definition_id"]}},
+        {"required": ["item_definition_id"], "not": {"required": ["item_local_id"]}}
+      ],
+      "properties": {
+        "item_local_id": {"$ref": "#/$defs/id"},
+        "item_definition_id": {"type": "string", "minLength": 1}
+      }
+    },
+    "itemDefinition": {
+      "type": "object", "required": ["id", "name", "description"],
+      "properties": {
+        "id": {"$ref": "#/$defs/id"}, "name": {"type": "string", "minLength": 1},
+        "description": {"type": "string", "minLength": 1},
+        "item_type": {"enum": ["misc", "equipment", "container", "consumable", "key"]},
+        "equipment_slot": {"enum": ["head", "body", "hands", "legs", "feet", "main_hand", "off_hand", "accessory"]},
+        "properties": {"type": "object"}, "behaviors": {"type": "object"}
+      }
+    },
+    "conversation": {
+      "type": "object", "required": ["nodes"],
+      "properties": {
+        "name": {"type": "string"},
+        "nodes": {"type": "array", "minItems": 1, "items": {
+          "type": "object", "required": ["id", "body"],
+          "properties": {
+            "id": {"$ref": "#/$defs/id"}, "body": {"type": "string", "minLength": 1},
+            "start": {"type": "boolean"},
+            "responses": {"type": "array", "items": {
+              "type": "object", "required": ["id", "text"],
+              "properties": {
+                "id": {"$ref": "#/$defs/id"}, "text": {"type": "string", "minLength": 1},
+                "next_node_id": {"$ref": "#/$defs/id"},
+                "required_state_key": {"type": "string"}, "required_state_value": {"type": "string"},
+                "state_key": {"type": "string"}, "state_value": {"type": "string"},
+                "sort_order": {"type": "integer"}
+              }
+            }}
+          }
+        }}
+      }
+    },
+    "combat": {
+      "type": "object",
+      "properties": {
+        "maximum_health": {"type": "integer", "minimum": 1, "maximum": 1000000},
+        "attack": {"type": "integer", "minimum": 1, "maximum": 100000},
+        "defense": {"type": "integer", "minimum": 0, "maximum": 100000},
+        "experience_reward": {"type": "integer", "minimum": 0, "maximum": 100000},
+        "respawn_seconds": {"type": "integer", "minimum": 5, "maximum": 86400}
+      }
+    },
+    "npcDefinition": {
+      "type": "object", "required": ["id", "name", "description"],
+      "properties": {
+        "id": {"$ref": "#/$defs/id"}, "name": {"type": "string", "minLength": 1},
+        "description": {"type": "string", "minLength": 1},
+        "properties": {"type": "object"}, "behaviors": {"type": "object"},
+        "conversation": {"$ref": "#/$defs/conversation"}, "combat": {"$ref": "#/$defs/combat"},
+        "equipment": {"type": "array", "items": {"allOf": [{"$ref": "#/$defs/itemReference"}, {"type": "object", "required": ["slot"], "properties": {"slot": {"enum": ["head", "body", "hands", "legs", "feet", "main_hand", "off_hand", "accessory"]}}}]}},
+        "loot": {"type": "array", "items": {"oneOf": [
+          {"type": "object", "required": ["type"], "properties": {"type": {"const": "experience"}, "amount": {"type": "integer", "minimum": 1, "maximum": 100000}}},
+          {"allOf": [{"$ref": "#/$defs/itemReference"}, {"type": "object", "required": ["type"], "properties": {"type": {"const": "item"}, "amount": {"type": "integer", "minimum": 1, "maximum": 100}}}]}
+        ]}}
+      }
+    },
+    "enemyDefinition": {
+      "allOf": [{"$ref": "#/$defs/npcDefinition"}, {"type": "object", "required": ["combat"]}]
+    },
     "weightedText": {
       "type": "array", "minItems": 1,
       "items": {
@@ -108,14 +190,14 @@
         {"type": "object", "required": ["count", "choices"], "properties": {
           "chance": {"type": "number", "minimum": 0, "maximum": 1},
           "count": {"type": "object", "required": ["minimum", "maximum"], "properties": {"minimum": {"type": "integer", "minimum": 0, "maximum": 100}, "maximum": {"type": "integer", "minimum": 0, "maximum": 100}}},
-          "choices": {"type": "array", "minItems": 1, "items": {"type": "object", "required": ["definition_id"], "properties": {"definition_id": {"type": "string", "minLength": 1}, "weight": {"$ref": "#/$defs/weight"}, "conditions": {"$ref": "#/$defs/conditions"}}}}
+          "choices": {"type": "array", "minItems": 1, "items": {"type": "object", "oneOf": [{"required": ["definition_id"], "not": {"required": ["local_id"]}}, {"required": ["local_id"], "not": {"required": ["definition_id"]}}], "properties": {"definition_id": {"type": "string", "minLength": 1}, "local_id": {"$ref": "#/$defs/id"}, "weight": {"$ref": "#/$defs/weight"}, "conditions": {"$ref": "#/$defs/conditions"}}}}
         }}
       ]
     },
     "encounterPool": {
       "allOf": [
         {"$ref": "#/$defs/poolBase"},
-        {"type": "object", "properties": {"chance": {"type": "number", "minimum": 0, "maximum": 1}, "enemy_pool": {"$ref": "#/$defs/id"}, "item_pool": {"$ref": "#/$defs/id"}, "config": {"type": "object"}}}
+        {"type": "object", "properties": {"chance": {"type": "number", "minimum": 0, "maximum": 1}, "npc_pool": {"$ref": "#/$defs/id"}, "enemy_pool": {"$ref": "#/$defs/id"}, "item_pool": {"$ref": "#/$defs/id"}, "config": {"type": "object"}}}
       ]
     }
   }
