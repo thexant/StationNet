@@ -43,6 +43,9 @@ STORAGE_USER_BYTES = 512 * 1024
 STORAGE_SHARED_BYTES = 2 * 1024 * 1024
 SCORE_MAX = 1_000_000_000
 MANIFEST_PERMISSIONS = frozenset({"multiplayer"})
+MANIFEST_PLATFORMS = frozenset({"desktop", "touch"})
+MANIFEST_INPUTS = frozenset({"keyboard", "pointer", "fine-pointer", "touch", "pointer-lock"})
+PRESENTATION_MODES = frozenset({"standard", "immersive"})
 
 
 class PackageError(ValueError):
@@ -61,6 +64,9 @@ class Application:
     builtin: bool = True
     enabled: bool = True
     permissions: tuple[str, ...] = ()
+    platforms: tuple[str, ...] = ("desktop", "touch")
+    required_inputs: tuple[str, ...] = ()
+    preferred_presentation: str = "standard"
 
     @property
     def runnable(self) -> bool:
@@ -125,6 +131,34 @@ def _validate_metadata(application: Application) -> None:
             or any(item not in MANIFEST_PERMISSIONS for item in application.permissions)
             or len(set(application.permissions)) != len(application.permissions)):
         raise ValueError(f"Invalid application permissions: {application.slug}")
+    if (not isinstance(application.platforms, tuple) or not application.platforms
+            or any(item not in MANIFEST_PLATFORMS for item in application.platforms)
+            or len(set(application.platforms)) != len(application.platforms)):
+        raise ValueError(f"Invalid supported platforms: {application.slug}")
+    if (not isinstance(application.required_inputs, tuple)
+            or any(item not in MANIFEST_INPUTS for item in application.required_inputs)
+            or len(set(application.required_inputs)) != len(application.required_inputs)):
+        raise ValueError(f"Invalid input requirements: {application.slug}")
+    if application.preferred_presentation not in PRESENTATION_MODES:
+        raise ValueError(f"Invalid preferred presentation: {application.slug}")
+
+
+def _manifest_capabilities(data: dict, error_type=ValueError):
+    """Validate optional format-1 capability metadata and supply legacy defaults."""
+    platforms = data.get("platforms", ["desktop", "touch"])
+    if platforms == "universal":
+        platforms = ["desktop", "touch"]
+    if (not isinstance(platforms, list) or not platforms
+            or any(not isinstance(item, str) for item in platforms)):
+        raise error_type("Manifest platforms must be 'universal' or a non-empty array.")
+    required_inputs = data.get("required_inputs", [])
+    if (not isinstance(required_inputs, list)
+            or any(not isinstance(item, str) for item in required_inputs)):
+        raise error_type("Manifest required_inputs must be an array.")
+    presentation = data.get("preferred_presentation", "standard")
+    if not isinstance(presentation, str):
+        raise error_type("Manifest preferred_presentation must be text.")
+    return tuple(platforms), tuple(required_inputs), presentation
 
 
 def register(application: Application) -> None:
@@ -180,17 +214,21 @@ def catalog() -> tuple[Application, ...]:
     }
     applications = [replace(item, enabled=states.get(item.slug, True)) for item in bundled]
     for row in database.execute(
-        "SELECT slug,name,description,author,version,category,entrypoint,permissions_json "
+        "SELECT slug,name,description,author,version,category,entrypoint,permissions_json,capabilities_json "
         "FROM installed_applications ORDER BY installed_at,slug"
     ):
         if row["slug"] in bundled_slugs:
             continue
+        capabilities = json.loads(row["capabilities_json"] or "{}")
+        platforms, required_inputs, presentation = _manifest_capabilities(capabilities)
         applications.append(Application(
             slug=row["slug"], name=row["name"], description=row["description"],
             author=row["author"], version=row["version"], category=row["category"],
             entrypoint=row["entrypoint"], builtin=False,
             enabled=states.get(row["slug"], True),
             permissions=tuple(json.loads(row["permissions_json"] or "[]")),
+            platforms=platforms, required_inputs=required_inputs,
+            preferred_presentation=presentation,
         ))
     return tuple(applications)
 
@@ -211,11 +249,14 @@ def _load_package(folder: str) -> Application:
     permissions = data.get("permissions", [])
     if not isinstance(permissions, list) or any(not isinstance(item, str) for item in permissions):
         raise ValueError(f"Invalid application manifest: {manifest_path}")
+    platforms, required_inputs, presentation = _manifest_capabilities(data)
     application = Application(
         slug=data["slug"], name=data["name"], description=data["description"],
         author=data["author"], version=data["version"], category=data["category"],
         entrypoint=f"{folder}/{data['entrypoint']}",
         permissions=tuple(permissions),
+        platforms=platforms, required_inputs=required_inputs,
+        preferred_presentation=presentation,
     )
     _validate_metadata(application)
     return application
@@ -320,11 +361,14 @@ def validate_package(package_bytes: bytes) -> tuple[Application, dict[str, bytes
         permissions = manifest.get("permissions", [])
         if not isinstance(permissions, list) or any(not isinstance(item, str) for item in permissions):
             raise PackageError("Manifest permissions must be an array of supported permission names.")
+        platforms, required_inputs, presentation = _manifest_capabilities(manifest, PackageError)
         application = Application(
             slug=manifest["slug"], name=manifest["name"],
             description=manifest["description"], author=manifest["author"],
             version=manifest["version"], category=manifest["category"],
             entrypoint=entrypoint, builtin=False, permissions=tuple(permissions),
+            platforms=platforms, required_inputs=required_inputs,
+            preferred_presentation=presentation,
         )
         try:
             _validate_metadata(application)
@@ -366,11 +410,15 @@ def install_package(package_bytes: bytes) -> Application:
         os.replace(staging, destination)
         database.execute("BEGIN IMMEDIATE")
         database.execute(
-            "INSERT INTO installed_applications(slug,name,description,author,version,category,entrypoint,permissions_json) "
-            "VALUES(?,?,?,?,?,?,?,?)",
+            "INSERT INTO installed_applications(slug,name,description,author,version,category,entrypoint,permissions_json,capabilities_json) "
+            "VALUES(?,?,?,?,?,?,?,?,?)",
             (application.slug, application.name, application.description, application.author,
              application.version, application.category, application.entrypoint,
-             json.dumps(application.permissions)),
+             json.dumps(application.permissions), json.dumps({
+                 "platforms": application.platforms,
+                 "required_inputs": application.required_inputs,
+                 "preferred_presentation": application.preferred_presentation,
+             })),
         )
         database.execute(
             "INSERT INTO application_states(application_slug,enabled) VALUES(?,1) "

@@ -1,14 +1,30 @@
 {% extends 'base.html' %}
 {% block title %}{{ application.name }}{% endblock %}
 {% block content %}
-<section class="application-display" aria-labelledby="application-title">
+<section class="application-display" aria-labelledby="application-title"
+  data-app-platforms='{{ application.platforms|list|tojson }}'
+  data-app-inputs='{{ application.required_inputs|list|tojson }}'
+  data-app-presentation="{{ application.preferred_presentation }}">
   <header class="application-display-header">
     <div>
       <p class="eyebrow">STATION APPLICATION DISPLAY / {{ application.category|upper }}</p>
       <h1 id="application-title">{{ application.name }}</h1>
     </div>
-    <a class="button secondary" href="{{ url_for('applications.index') }}">&lt; DIRECTORY</a>
+    <div class="application-display-actions">
+      {% if application.runnable %}<button type="button" class="secondary" data-app-immersive aria-pressed="false">IMMERSIVE MODE</button>{% endif %}
+      <a class="button secondary" href="{{ url_for('applications.index') }}">&lt; DIRECTORY</a>
+    </div>
   </header>
+
+  <div class="application-compatibility" data-app-compatibility role="status">
+    <span>COMPATIBILITY / CHECKING INPUT CAPABILITIES</span>
+    <small>PLATFORMS: {{ 'UNIVERSAL' if application.platforms|length == 2 else application.platforms|join(', ')|upper }}{% if application.required_inputs %} / REQUIRES: {{ application.required_inputs|join(', ')|upper }}{% endif %}</small>
+  </div>
+  <div class="application-launch-warning" data-app-launch-warning role="alert" hidden>
+    <p data-app-launch-message></p>
+    <button type="button" data-app-launch-anyway>LAUNCH ANYWAY</button>
+    <a class="button secondary" href="{{ url_for('applications.index') }}">RETURN TO DIRECTORY</a>
+  </div>
 
   <div class="application-viewport">
     {% if application.runnable %}
@@ -24,7 +40,8 @@
       title="{{ application.name }} isolated runtime"
       aria-hidden="true" tabindex="-1"
       sandbox="allow-scripts"
-      src="{{ url_for('applications.runtime', slug=application.slug) }}"></iframe>
+      data-runtime-src="{{ url_for('applications.runtime', slug=application.slug) }}"
+      src="about:blank"></iframe>
     {% else %}
     <div class="application-status">PROGRAM STATUS / PLACEHOLDER</div>
     <div class="application-placeholder">
@@ -43,5 +60,6 @@
 
   <a class="button application-return" href="{{ url_for('applications.index') }}">&lt; RETURN TO GAMES AND APPS</a>
 </section>
+{% if application.runnable %}<button type="button" class="application-immersive-exit" data-app-immersive-exit hidden aria-label="Exit immersive application mode">EXIT IMMERSIVE</button>{% endif %}
 {% if application.runnable %}<script src="{{ url_for('static', filename='application_host.js') }}" defer></script>{% endif %}
 {% endblock %}

@@ -26,6 +26,7 @@
         <span>{{ application.category|upper }} / V{{ application.version }}</span>
         <h3>{{ application.name }}</h3>
         <p>{{ application.description }}</p>
+        <small class="application-requirements">{{ 'UNIVERSAL' if application.platforms|length == 2 else application.platforms|join(' + ')|upper }}{% if application.required_inputs %} / {{ application.required_inputs|join(' + ')|upper }} REQUIRED{% endif %} / {{ application.preferred_presentation|upper }}</small>
         <small>AUTHOR: {{ application.author }}</small>
       </div>
       <a class="button" href="{{ url_for('applications.display', slug=application.slug) }}">VIEW / LAUNCH</a>

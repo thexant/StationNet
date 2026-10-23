@@ -181,6 +181,7 @@ CREATE TABLE IF NOT EXISTS installed_applications (
  version TEXT NOT NULL,
  category TEXT NOT NULL CHECK(category IN ('Games','Apps')),
  entrypoint TEXT NOT NULL, permissions_json TEXT NOT NULL DEFAULT '[]',
+ capabilities_json TEXT NOT NULL DEFAULT '{}',
  installed_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);
 CREATE TABLE IF NOT EXISTS application_states (
  application_slug TEXT PRIMARY KEY,
@@ -333,6 +334,116 @@ CREATE INDEX IF NOT EXISTS idx_mud_item_instances_owner ON mud_item_instances(ow
 CREATE INDEX IF NOT EXISTS idx_mud_item_instances_container ON mud_item_instances(container_id,id);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_mud_equipment_slot
  ON mud_item_instances(owner_character_id,equipped_slot) WHERE equipped_slot IS NOT NULL;
+CREATE TABLE IF NOT EXISTS mud_conversations (
+ id TEXT PRIMARY KEY,
+ name TEXT NOT NULL COLLATE NOCASE,
+ created_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+ created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+ updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);
+CREATE TABLE IF NOT EXISTS mud_dialogue_nodes (
+ id TEXT PRIMARY KEY,
+ conversation_id TEXT NOT NULL REFERENCES mud_conversations(id) ON DELETE CASCADE,
+ node_key TEXT NOT NULL COLLATE NOCASE,
+ body TEXT NOT NULL,
+ is_start INTEGER NOT NULL DEFAULT 0 CHECK(is_start IN (0,1)),
+ created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+ updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+ UNIQUE(conversation_id,node_key));
+CREATE UNIQUE INDEX IF NOT EXISTS idx_mud_dialogue_single_start
+ ON mud_dialogue_nodes(conversation_id,is_start) WHERE is_start=1;
+CREATE TABLE IF NOT EXISTS mud_npc_definitions (
+ id TEXT PRIMARY KEY,
+ name TEXT NOT NULL COLLATE NOCASE,
+ description TEXT NOT NULL,
+ conversation_id TEXT REFERENCES mud_conversations(id) ON DELETE SET NULL,
+ properties_json TEXT NOT NULL DEFAULT '{}',
+ behaviors_json TEXT NOT NULL DEFAULT '{}',
+ created_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+ created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+ updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);
+CREATE INDEX IF NOT EXISTS idx_mud_npc_definitions_name ON mud_npc_definitions(name);
+CREATE TABLE IF NOT EXISTS mud_npc_instances (
+ id TEXT PRIMARY KEY,
+ definition_id TEXT NOT NULL REFERENCES mud_npc_definitions(id) ON DELETE RESTRICT,
+ room_id TEXT NOT NULL REFERENCES mud_world_rooms(id) ON DELETE CASCADE,
+ state_json TEXT NOT NULL DEFAULT '{}',
+ created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+ updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);
+CREATE INDEX IF NOT EXISTS idx_mud_npc_instances_room ON mud_npc_instances(room_id,id);
+CREATE TABLE IF NOT EXISTS mud_quests (
+ id TEXT PRIMARY KEY,
+ name TEXT NOT NULL COLLATE NOCASE,
+ description TEXT NOT NULL,
+ prerequisite_quest_id TEXT REFERENCES mud_quests(id) ON DELETE SET NULL,
+ created_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+ created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+ updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);
+CREATE INDEX IF NOT EXISTS idx_mud_quests_name ON mud_quests(name);
+CREATE TABLE IF NOT EXISTS mud_quest_objectives (
+ id TEXT PRIMARY KEY,
+ quest_id TEXT NOT NULL REFERENCES mud_quests(id) ON DELETE CASCADE,
+ objective_type TEXT NOT NULL CHECK(objective_type IN ('talk_npc','visit_room','possess_item')),
+ target_id TEXT NOT NULL,
+ description TEXT NOT NULL,
+ required_count INTEGER NOT NULL DEFAULT 1 CHECK(required_count>=1),
+ sort_order INTEGER NOT NULL DEFAULT 0,
+ created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);
+CREATE INDEX IF NOT EXISTS idx_mud_quest_objectives_quest
+ ON mud_quest_objectives(quest_id,sort_order,id);
+CREATE TABLE IF NOT EXISTS mud_quest_rewards (
+ id TEXT PRIMARY KEY,
+ quest_id TEXT NOT NULL REFERENCES mud_quests(id) ON DELETE CASCADE,
+ reward_type TEXT NOT NULL CHECK(reward_type IN ('experience','item')),
+ target_id TEXT,
+ amount INTEGER NOT NULL DEFAULT 1 CHECK(amount>=1),
+ created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);
+CREATE INDEX IF NOT EXISTS idx_mud_quest_rewards_quest ON mud_quest_rewards(quest_id,id);
+CREATE TABLE IF NOT EXISTS mud_quest_givers (
+ quest_id TEXT NOT NULL REFERENCES mud_quests(id) ON DELETE CASCADE,
+ npc_definition_id TEXT NOT NULL REFERENCES mud_npc_definitions(id) ON DELETE CASCADE,
+ PRIMARY KEY(quest_id,npc_definition_id));
+CREATE TABLE IF NOT EXISTS mud_dialogue_responses (
+ id TEXT PRIMARY KEY,
+ node_id TEXT NOT NULL REFERENCES mud_dialogue_nodes(id) ON DELETE CASCADE,
+ response_text TEXT NOT NULL,
+ next_node_id TEXT REFERENCES mud_dialogue_nodes(id) ON DELETE SET NULL,
+ accept_quest_id TEXT REFERENCES mud_quests(id) ON DELETE SET NULL,
+ required_state_key TEXT,
+ required_state_value TEXT,
+ state_key TEXT,
+ state_value TEXT,
+ sort_order INTEGER NOT NULL DEFAULT 0,
+ created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);
+CREATE INDEX IF NOT EXISTS idx_mud_dialogue_responses_node
+ ON mud_dialogue_responses(node_id,sort_order,id);
+CREATE TABLE IF NOT EXISTS mud_conversation_sessions (
+ character_id TEXT PRIMARY KEY REFERENCES mud_characters(id) ON DELETE CASCADE,
+ npc_instance_id TEXT NOT NULL REFERENCES mud_npc_instances(id) ON DELETE CASCADE,
+ node_id TEXT NOT NULL REFERENCES mud_dialogue_nodes(id) ON DELETE CASCADE,
+ updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);
+CREATE TABLE IF NOT EXISTS mud_npc_player_states (
+ character_id TEXT NOT NULL REFERENCES mud_characters(id) ON DELETE CASCADE,
+ npc_instance_id TEXT NOT NULL REFERENCES mud_npc_instances(id) ON DELETE CASCADE,
+ state_json TEXT NOT NULL DEFAULT '{}',
+ updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+ PRIMARY KEY(character_id,npc_instance_id));
+CREATE TABLE IF NOT EXISTS mud_player_quests (
+ character_id TEXT NOT NULL REFERENCES mud_characters(id) ON DELETE CASCADE,
+ quest_id TEXT NOT NULL REFERENCES mud_quests(id) ON DELETE CASCADE,
+ status TEXT NOT NULL DEFAULT 'active' CHECK(status IN ('active','completed')),
+ accepted_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+ completed_at TEXT,
+ rewarded_at TEXT,
+ PRIMARY KEY(character_id,quest_id));
+CREATE INDEX IF NOT EXISTS idx_mud_player_quests_status
+ ON mud_player_quests(character_id,status,accepted_at);
+CREATE TABLE IF NOT EXISTS mud_player_objectives (
+ character_id TEXT NOT NULL REFERENCES mud_characters(id) ON DELETE CASCADE,
+ objective_id TEXT NOT NULL REFERENCES mud_quest_objectives(id) ON DELETE CASCADE,
+ progress INTEGER NOT NULL DEFAULT 0 CHECK(progress>=0),
+ completed_at TEXT,
+ updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+ PRIMARY KEY(character_id,objective_id));
 CREATE TRIGGER IF NOT EXISTS radio_default_membership_after_user_insert
 AFTER INSERT ON users
 BEGIN
@@ -435,11 +546,15 @@ def init_db():
 
 
 def _migrate_application_permissions(database):
-    """Add manifest capabilities to installations created by older releases."""
+    """Add manifest metadata to installations created by older releases."""
     columns = {row["name"] for row in database.execute("PRAGMA table_info(installed_applications)")}
     if "permissions_json" not in columns:
         database.execute(
             "ALTER TABLE installed_applications ADD COLUMN permissions_json TEXT NOT NULL DEFAULT '[]'"
+        )
+    if "capabilities_json" not in columns:
+        database.execute(
+            "ALTER TABLE installed_applications ADD COLUMN capabilities_json TEXT NOT NULL DEFAULT '{}'"
         )
 
 

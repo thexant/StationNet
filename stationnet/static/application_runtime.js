@@ -13,6 +13,11 @@
   let multiplayerSession = null, multiplayerCursor = 0, multiplayerTimer = null;
   const scoreRequests = new Map();
   const capabilityRequests = new Map();
+  const pointerLockChangeHandlers = new Set();
+  const pointerLockMoveHandlers = new Set();
+  const presentationHandlers = new Set();
+  let pointerLockActive = false;
+  let presentationMode = "standard";
   const packageFiles = self.__stationnetPackageFiles;
   delete self.__stationnetPackageFiles;
   const moduleCache = new Map();
@@ -355,6 +360,34 @@
       },
       stop() { send("sound", { operation: "stop" }); }
     }),
+    pointerLock: Object.freeze({
+      request(settings) {
+        const opts = options(settings);
+        return capability("pointer-lock-request", { unadjustedMovement: Boolean(opts.unadjustedMovement) });
+      },
+      release() { return capability("pointer-lock-release", {}); },
+      get active() { return pointerLockActive; },
+      onChange(handler) {
+        if (typeof handler !== "function") throw new TypeError("A pointer lock change handler is required");
+        pointerLockChangeHandlers.add(handler);
+        return () => pointerLockChangeHandlers.delete(handler);
+      },
+      onMove(handler) {
+        if (typeof handler !== "function") throw new TypeError("A relative pointer movement handler is required");
+        pointerLockMoveHandlers.add(handler);
+        return () => pointerLockMoveHandlers.delete(handler);
+      }
+    }),
+    presentation: Object.freeze({
+      enterImmersive() { return capability("presentation-enter-immersive", {}); },
+      exitImmersive() { return capability("presentation-exit-immersive", {}); },
+      get mode() { return presentationMode; },
+      onChange(handler) {
+        if (typeof handler !== "function") throw new TypeError("A presentation change handler is required");
+        presentationHandlers.add(handler);
+        return () => presentationHandlers.delete(handler);
+      }
+    }),
     clipboard: Object.freeze({
       writeText(value) { return capability("copy-text", { text: String(value) }); }
     }),
@@ -378,6 +411,22 @@
   async function dispatch(message) {
     if (!message || message.protocol !== PROTOCOL) return;
     if (message.type === "terminate") return shutdown();
+    if (message.type === "pointer-lock-event") {
+      pointerLockActive = Boolean(message.active);
+      pointerLockChangeHandlers.forEach((handler) => Promise.resolve().then(() => handler(pointerLockActive)).catch(fail));
+      return;
+    }
+    if (message.type === "pointer-lock-move") {
+      if (!pointerLockActive) return;
+      const movement = Object.freeze({ x: Number(message.movementX) || 0, y: Number(message.movementY) || 0 });
+      pointerLockMoveHandlers.forEach((handler) => Promise.resolve().then(() => handler(movement)).catch(fail));
+      return;
+    }
+    if (message.type === "presentation-event") {
+      presentationMode = message.mode === "immersive" ? "immersive" : "standard";
+      presentationHandlers.forEach((handler) => Promise.resolve().then(() => handler(presentationMode)).catch(fail));
+      return;
+    }
     if (message.type === "animation-frame") {
       const handler = animations.get(message.action);
       try {
@@ -449,6 +498,8 @@
     multiplayerRequests.clear(); multiplayerHandlers.clear();
     capabilityRequests.forEach(({ reject }) => reject(new Error("Application terminated")));
     capabilityRequests.clear();
+    pointerLockChangeHandlers.clear(); pointerLockMoveHandlers.clear(); presentationHandlers.clear();
+    pointerLockActive = false; presentationMode = "standard";
     animations.clear();
     actions.clear();
     send("terminated");

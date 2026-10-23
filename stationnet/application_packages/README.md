@@ -34,7 +34,10 @@ not become web URLs or grant DOM, filesystem, or network access.
   "author": "Your name or station",
   "version": "1.0.0",
   "category": "Apps",
-  "entrypoint": "src/main.js"
+  "entrypoint": "src/main.js",
+  "platforms": ["desktop", "touch"],
+  "required_inputs": [],
+  "preferred_presentation": "standard"
 }
 ```
 
@@ -43,6 +46,21 @@ numbers, and single hyphens; do not change it between releases. `category` must
 be `Games` or `Apps`. StationNet currently supports package format `1` and does
 not resolve dependencies or perform automatic updates. Existing packages can
 keep `"entrypoint": "main.js"` unchanged.
+
+The final three fields are optional, so existing packages remain universal and
+use the normal StationNet layout. `platforms` may be `"universal"`,
+`["desktop"]`, `["touch"]`, or `["desktop", "touch"]`. Input requirements may
+contain `keyboard`, `pointer`, `fine-pointer`, `touch`, and `pointer-lock`.
+StationNet checks real browser input capabilities first (including hybrid
+devices) and uses a desktop/mobile heuristic only where browsers expose no
+keyboard capability signal. If a requirement is not met, launch pauses with an
+explanation and an explicit **Launch anyway** option.
+
+`preferred_presentation` is `standard` or `immersive`. Immersive presentation
+maximizes the app inside the existing StationNet tab; it is independent of
+pointer lock and browser fullscreen. Users can always leave it with the visible
+**Exit immersive** control or Escape (after Escape has first released pointer
+lock, when active).
 
 ## Create a package
 
@@ -124,6 +142,52 @@ Display methods include `render`, `append`, `update`, `remove`, `clear`, `title`
 `heading`, `text`, `list`, `table`, `preformatted`, and `grid`. Input methods
 include `button`, `menu`, `input`, `numberInput`, `textarea`, `select`,
 `checkbox`, `onKey`, and `animate`.
+
+### Mouse capture and immersive presentation
+
+`await ui.pointerLock.request()` asks StationNet to show a trusted **Capture
+mouse** control. The browser request occurs only when the user activates that
+control; applications cannot capture the pointer silently. The returned promise
+resolves once capture succeeds and rejects if it is cancelled or denied.
+`ui.pointerLock.onMove(handler)` supplies relative `{x, y}` movement,
+`ui.pointerLock.onChange(handler)` reports capture/release, and
+`ui.pointerLock.release()` releases explicitly. Escape, focus loss, navigation,
+and application termination also release capture. Pass
+`{unadjustedMovement: true}` to request raw movement where the browser supports
+it.
+
+`ui.presentation.enterImmersive()` and `exitImmersive()` change only the
+StationNet application layout. `ui.presentation.mode` reports `standard` or
+`immersive`, and `onChange(handler)` observes changes made by either the app or
+the user-facing controls.
+
+A minimal first-person-style controller looks like this:
+
+```js
+StationNet.start((ui) => {
+  let yaw = 0, pitch = 0;
+  const view = () => ui.render(
+    ui.title("First-person controls"),
+    ui.text(`Yaw ${yaw.toFixed(1)} / Pitch ${pitch.toFixed(1)}`, { id: "look" }),
+    ui.button("Capture mouse", async () => {
+      try { await ui.pointerLock.request({ unadjustedMovement: true }); }
+      catch (error) { ui.append(ui.text(error.message, { tone: "warning" })); }
+    })
+  );
+  ui.pointerLock.onMove(({ x, y }) => {
+    yaw += x * 0.12;
+    pitch = Math.max(-89, Math.min(89, pitch - y * 0.12));
+    ui.update("look", ui.text(`Yaw ${yaw.toFixed(1)} / Pitch ${pitch.toFixed(1)}`, { id: "look" }));
+  });
+  ui.onKey(({ code, phase }) => {
+    if (phase === "down" && code === "KeyI") ui.presentation.enterImmersive();
+  });
+  view();
+});
+```
+
+For this example, declare `"platforms": ["desktop"]` and
+`"required_inputs": ["keyboard", "fine-pointer", "pointer-lock"]`.
 
 ### Rendering, ids, and lifecycle
 

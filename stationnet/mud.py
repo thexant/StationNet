@@ -291,6 +291,8 @@ def _help_action(_database, _user, parameters):
         "/go <exit> (or /move, /walk) — travel through an exit\n"
         "/get <item> [from <container>], /drop <item>, /open <container>\n"
         "/put <item> in <container>, /equip <item>, /unequip <item>, /use <item>\n"
+        "/talk <npc>, /respond <number or response> — converse with an NPC\n"
+        "/quests, /quest accept <name> — view or accept available quests\n"
         "/north, /south, /east, /west, /up, /down, /in, /out — direction shortcuts\n"
         "/status — check the MUD service\n"
         "/character (or /stats) — view your character and progression\n"
@@ -393,6 +395,27 @@ def _exit_label(exit_row):
     return f"{route.upper()} — {exit_row['destination_name']}"
 
 
+def _room_npc_rows(database, room_id):
+    return database.execute(
+        "SELECT i.id,i.definition_id,i.room_id,i.state_json,d.name,d.description,"
+        "d.conversation_id,d.properties_json,d.behaviors_json "
+        "FROM mud_npc_instances AS i JOIN mud_npc_definitions AS d "
+        "ON d.id=i.definition_id WHERE i.room_id=? "
+        "ORDER BY d.name COLLATE NOCASE,i.id", (room_id,),
+    ).fetchall()
+
+
+def _npc_match(rows, target):
+    key = " ".join(str(target).casefold().split())
+    matches = [row for row in rows if row["id"] == target or row["definition_id"] == target
+               or " ".join(row["name"].casefold().split()) == key]
+    if not matches:
+        raise ActionError(f'You do not see an NPC matching "{target}" here.')
+    if len(matches) > 1:
+        raise ActionError(f'More than one NPC matches "{target}". Use an NPC control.')
+    return matches[0]
+
+
 def _room_state(database, user_id):
     room = _current_room(database, user_id)
     return {
@@ -411,6 +434,9 @@ def _room_state(database, user_id):
         ],
         "occupants": _room_occupants(database, room["id"], user_id),
         "items": [{"id": item["id"], "name": item["name"], "item_type": item["item_type"]} for item in _room_item_rows(database, room["id"])],
+        "npcs": [{"id": npc["id"], "definition_id": npc["definition_id"],
+                  "name": npc["name"], "description": npc["description"]}
+                 for npc in _room_npc_rows(database, room["id"])],
     }
 
 
@@ -420,9 +446,10 @@ def _describe_room(database, room, viewer_id=None):
     occupants = _room_occupants(database, room["id"], viewer_id) if viewer_id else []
     people = ", ".join(item["character_name"] for item in occupants) if occupants else "none"
     items = ", ".join(item["name"] for item in _room_item_rows(database, room["id"])) or "none"
+    npcs = ", ".join(item["name"] for item in _room_npc_rows(database, room["id"])) or "none"
     return (
         f"{room['name']}\n{room['description']}\n\n"
-        f"Exits: {routes}\nOther players: {people}\nItems: {items}"
+        f"Exits: {routes}\nOther players: {people}\nNPCs: {npcs}\nItems: {items}"
     )
 
 
@@ -533,6 +560,174 @@ def inventory_state(database, user_id):
     return {"inventory": inventory, "equipment": equipment, "slots": EQUIPMENT_SLOTS}
 
 
+def _objective_target_name(database, objective):
+    tables = {
+        "talk_npc": ("mud_npc_definitions", "NPC"),
+        "visit_room": ("mud_world_rooms", "room"),
+        "possess_item": ("mud_item_definitions", "item"),
+    }
+    table, fallback = tables[objective["objective_type"]]
+    row = database.execute(f"SELECT name FROM {table} WHERE id=?", (objective["target_id"],)).fetchone()
+    return row["name"] if row else f"Unknown {fallback}"
+
+
+def quest_state(database, user_id):
+    """Return player-specific active/completed quest state for rendering."""
+    character = _character_row(database, user_id)
+    quests = []
+    rows = database.execute(
+        "SELECT q.id,q.name,q.description,p.status,p.accepted_at,p.completed_at,p.rewarded_at "
+        "FROM mud_player_quests AS p JOIN mud_quests AS q ON q.id=p.quest_id "
+        "WHERE p.character_id=? ORDER BY p.status,q.name COLLATE NOCASE,q.id",
+        (character["id"],),
+    ).fetchall()
+    for row in rows:
+        entry = dict(row)
+        entry["objectives"] = []
+        objectives = database.execute(
+            "SELECT o.*,COALESCE(p.progress,0) AS progress,p.completed_at "
+            "FROM mud_quest_objectives AS o LEFT JOIN mud_player_objectives AS p "
+            "ON p.objective_id=o.id AND p.character_id=? WHERE o.quest_id=? "
+            "ORDER BY o.sort_order,o.id", (character["id"], row["id"]),
+        ).fetchall()
+        for objective in objectives:
+            item = dict(objective)
+            item["target_name"] = _objective_target_name(database, objective)
+            entry["objectives"].append(item)
+        quests.append(entry)
+    return {"active": [q for q in quests if q["status"] == "active"],
+            "completed": [q for q in quests if q["status"] == "completed"]}
+
+
+def _award_quest_rewards(database, user, quest_id):
+    character = _character_row(database, user["id"])
+    player_quest = database.execute(
+        "SELECT rewarded_at FROM mud_player_quests WHERE character_id=? AND quest_id=?",
+        (character["id"], quest_id),
+    ).fetchone()
+    if player_quest is None or player_quest["rewarded_at"] is not None:
+        return []
+    messages = []
+    for reward in database.execute(
+        "SELECT * FROM mud_quest_rewards WHERE quest_id=? ORDER BY id", (quest_id,),
+    ):
+        if reward["reward_type"] == "experience":
+            result = award_experience(database, user["id"], reward["amount"])
+            messages.append(f"{reward['amount']} experience")
+            if result["levels_gained"]:
+                messages.append(f"level {result['character']['level']}")
+        elif reward["reward_type"] == "item":
+            definition = database.execute(
+                "SELECT name FROM mud_item_definitions WHERE id=?", (reward["target_id"],)
+            ).fetchone()
+            if definition is None:
+                continue
+            for _ in range(reward["amount"]):
+                database.execute(
+                    "INSERT INTO mud_item_instances(id,definition_id,owner_character_id) VALUES(?,?,?)",
+                    (f"reward:item:{uuid.uuid4().hex}", reward["target_id"], character["id"]),
+                )
+            messages.append(f"{reward['amount']} × {definition['name']}")
+    database.execute(
+        "UPDATE mud_player_quests SET rewarded_at=CURRENT_TIMESTAMP WHERE character_id=? "
+        "AND quest_id=? AND rewarded_at IS NULL", (character["id"], quest_id),
+    )
+    return messages
+
+
+def _finish_ready_quests(database, user):
+    character = _character_row(database, user["id"])
+    completed = []
+    active = database.execute(
+        "SELECT q.id,q.name FROM mud_player_quests AS p JOIN mud_quests AS q ON q.id=p.quest_id "
+        "WHERE p.character_id=? AND p.status='active'", (character["id"],),
+    ).fetchall()
+    for quest in active:
+        remaining = database.execute(
+            "SELECT 1 FROM mud_quest_objectives AS o LEFT JOIN mud_player_objectives AS p "
+            "ON p.objective_id=o.id AND p.character_id=? WHERE o.quest_id=? "
+            "AND (p.completed_at IS NULL) LIMIT 1", (character["id"], quest["id"]),
+        ).fetchone()
+        if remaining is not None:
+            continue
+        database.execute(
+            "UPDATE mud_player_quests SET status='completed',completed_at=CURRENT_TIMESTAMP "
+            "WHERE character_id=? AND quest_id=? AND status='active'",
+            (character["id"], quest["id"]),
+        )
+        rewards = _award_quest_rewards(database, user, quest["id"])
+        suffix = f" Rewards: {', '.join(rewards)}." if rewards else ""
+        completed.append(EventDraft(f"Quest complete: {quest['name']}.{suffix}", event_type="quest"))
+    return completed
+
+
+def _set_objective_progress(database, user, objective_type, target_id):
+    character = _character_row(database, user["id"])
+    objectives = database.execute(
+        "SELECT o.id,o.required_count FROM mud_quest_objectives AS o "
+        "JOIN mud_player_quests AS q ON q.quest_id=o.quest_id "
+        "WHERE q.character_id=? AND q.status='active' AND o.objective_type=? AND o.target_id=?",
+        (character["id"], objective_type, target_id),
+    ).fetchall()
+    for objective in objectives:
+        if objective_type == "possess_item":
+            count = database.execute(
+                "SELECT COUNT(*) AS amount FROM mud_item_instances WHERE definition_id=? "
+                "AND owner_character_id=?", (target_id, character["id"]),
+            ).fetchone()["amount"]
+            progress = min(count, objective["required_count"])
+        else:
+            progress = objective["required_count"]
+        database.execute(
+            "INSERT INTO mud_player_objectives(character_id,objective_id,progress,completed_at) "
+            "VALUES(?,?,?,CASE WHEN ? THEN CURRENT_TIMESTAMP END) "
+            "ON CONFLICT(character_id,objective_id) DO UPDATE SET progress=MAX(progress,excluded.progress),"
+            "completed_at=CASE WHEN completed_at IS NOT NULL THEN completed_at "
+            "WHEN excluded.progress>=(SELECT required_count FROM mud_quest_objectives WHERE id=excluded.objective_id) "
+            "THEN CURRENT_TIMESTAMP END,updated_at=CURRENT_TIMESTAMP",
+            (character["id"], objective["id"], progress,
+             1 if progress >= objective["required_count"] else 0),
+        )
+    return _finish_ready_quests(database, user)
+
+
+def _accept_quest(database, user, quest_id):
+    character = _character_row(database, user["id"])
+    quest = database.execute("SELECT * FROM mud_quests WHERE id=?", (quest_id,)).fetchone()
+    if quest is None:
+        raise ActionError("That quest no longer exists.")
+    existing = database.execute(
+        "SELECT status FROM mud_player_quests WHERE character_id=? AND quest_id=?",
+        (character["id"], quest_id),
+    ).fetchone()
+    if existing:
+        raise ActionError("You have already accepted that quest.")
+    if quest["prerequisite_quest_id"] and database.execute(
+        "SELECT 1 FROM mud_player_quests WHERE character_id=? AND quest_id=? "
+        "AND status='completed' AND rewarded_at IS NOT NULL",
+        (character["id"], quest["prerequisite_quest_id"]),
+    ).fetchone() is None:
+        raise ActionError("You have not completed this quest's prerequisite.")
+    database.execute(
+        "INSERT INTO mud_player_quests(character_id,quest_id) VALUES(?,?)",
+        (character["id"], quest_id),
+    )
+    database.execute(
+        "INSERT INTO mud_player_objectives(character_id,objective_id) "
+        "SELECT ?,id FROM mud_quest_objectives WHERE quest_id=?",
+        (character["id"], quest_id),
+    )
+    room = _current_room(database, user["id"])
+    events = [EventDraft(f"Quest accepted: {quest['name']} — {quest['description']}", event_type="quest")]
+    events += _set_objective_progress(database, user, "visit_room", room["id"])
+    definitions = {row["definition_id"] for row in database.execute(
+        "SELECT definition_id FROM mud_item_instances WHERE owner_character_id=?", (character["id"],)
+    )}
+    for definition_id in definitions:
+        events += _set_objective_progress(database, user, "possess_item", definition_id)
+    return events
+
+
 def _describe_item(database, row):
     body = f"{row['name']}\n{row['description']}\nType: {row['item_type']}"
     if row["definition_slot"]:
@@ -561,6 +756,20 @@ def _examine_item(database, user, room, target):
 
 
 examinations.register(_examine_item)
+
+
+def _examine_npc(_database, _user, room, target):
+    key = " ".join(target.casefold().split())
+    matches = [npc for npc in _room_npc_rows(_database, room["id"])
+               if npc["id"] == target or " ".join(npc["name"].casefold().split()) == key]
+    if not matches:
+        return None
+    if len(matches) > 1:
+        raise ActionError(f'More than one NPC matches "{target}".')
+    return f"{matches[0]['name']}\n{matches[0]['description']}"
+
+
+examinations.register(_examine_npc)
 
 
 def _look_action(database, user, parameters):
@@ -593,7 +802,8 @@ def _get_action(database, user, parameters):
     item = _item_matches(source, target)
     character = _character_row(database, user["id"])
     database.execute("UPDATE mud_item_instances SET room_id=NULL,container_id=NULL,owner_character_id=?,equipped_slot=NULL,updated_at=CURRENT_TIMESTAMP WHERE id=?", (character["id"], item["id"]))
-    return [EventDraft(f"You pick up {item['name']}.", event_type="item")]
+    return [EventDraft(f"You pick up {item['name']}.", event_type="item")] + \
+        _set_objective_progress(database, user, "possess_item", item["definition_id"])
 
 
 def _drop_action(database, user, parameters):
@@ -672,6 +882,163 @@ def _use_action(database, user, parameters):
     return [EventDraft(message.strip(), event_type="item")]
 
 
+def _dialogue_node(database, node_id):
+    node = database.execute(
+        "SELECT n.*,c.name AS conversation_name FROM mud_dialogue_nodes AS n "
+        "JOIN mud_conversations AS c ON c.id=n.conversation_id WHERE n.id=?", (node_id,),
+    ).fetchone()
+    if node is None:
+        raise ActionError("That conversation is no longer available.")
+    responses = database.execute(
+        "SELECT * FROM mud_dialogue_responses WHERE node_id=? "
+        "ORDER BY sort_order,id", (node_id,),
+    ).fetchall()
+    return node, responses
+
+
+def _available_dialogue_responses(database, character_id, npc_id, node_id):
+    node, responses = _dialogue_node(database, node_id)
+    state_row = database.execute(
+        "SELECT state_json FROM mud_npc_player_states WHERE character_id=? AND npc_instance_id=?",
+        (character_id, npc_id),
+    ).fetchone()
+    try:
+        state = json.loads(state_row["state_json"]) if state_row else {}
+    except json.JSONDecodeError:
+        state = {}
+    visible = [response for response in responses if not response["required_state_key"]
+               or str(state.get(response["required_state_key"], "")) == response["required_state_value"]]
+    return node, visible
+
+
+def _dialogue_text(npc_name, node, responses):
+    body = f"{npc_name}: {node['body']}"
+    if responses:
+        body += "\n\n" + "\n".join(
+            f"{index}. {response['response_text']}" for index, response in enumerate(responses, 1)
+        )
+    else:
+        body += "\n\nThe conversation ends."
+    return body
+
+
+def _talk_action(database, user, parameters):
+    target = str(parameters.get("npc_id") or " ".join(str(x) for x in parameters.get("arguments", []))).strip()
+    if not target:
+        raise ActionError("Talk to whom?")
+    room = _current_room(database, user["id"])
+    npc = _npc_match(_room_npc_rows(database, room["id"]), target)
+    if not npc["conversation_id"]:
+        raise ActionError(f"{npc['name']} has nothing to say right now.")
+    node = database.execute(
+        "SELECT id FROM mud_dialogue_nodes WHERE conversation_id=? AND is_start=1",
+        (npc["conversation_id"],),
+    ).fetchone()
+    if node is None:
+        raise ActionError(f"{npc['name']} has nothing to say right now.")
+    character = _character_row(database, user["id"])
+    database.execute(
+        "INSERT INTO mud_conversation_sessions(character_id,npc_instance_id,node_id) VALUES(?,?,?) "
+        "ON CONFLICT(character_id) DO UPDATE SET npc_instance_id=excluded.npc_instance_id,"
+        "node_id=excluded.node_id,updated_at=CURRENT_TIMESTAMP",
+        (character["id"], npc["id"], node["id"]),
+    )
+    node, responses = _available_dialogue_responses(database, character["id"], npc["id"], node["id"])
+    events = [EventDraft(_dialogue_text(npc["name"], node, responses), event_type="dialogue")]
+    events += _set_objective_progress(database, user, "talk_npc", npc["definition_id"])
+    return events
+
+
+def _respond_action(database, user, parameters):
+    character = _character_row(database, user["id"])
+    session_row = database.execute(
+        "SELECT s.node_id,i.id AS npc_id,i.room_id,i.definition_id,d.name FROM mud_conversation_sessions AS s "
+        "JOIN mud_npc_instances AS i ON i.id=s.npc_instance_id "
+        "JOIN mud_npc_definitions AS d ON d.id=i.definition_id WHERE s.character_id=?",
+        (character["id"],),
+    ).fetchone()
+    room = _current_room(database, user["id"])
+    if session_row is None or session_row["room_id"] != room["id"]:
+        raise ActionError("Start a nearby conversation with /talk first.")
+    node, responses = _available_dialogue_responses(
+        database, character["id"], session_row["npc_id"], session_row["node_id"]
+    )
+    target = str(parameters.get("response_id") or " ".join(str(x) for x in parameters.get("arguments", []))).strip()
+    matches = [response for response in responses if response["id"] == target
+               or response["response_text"].casefold() == target.casefold()]
+    if target.isdigit() and 1 <= int(target) <= len(responses):
+        matches = [responses[int(target) - 1]]
+    if len(matches) != 1:
+        raise ActionError("Choose one of the current dialogue responses.")
+    chosen = matches[0]
+    events = [EventDraft(f"You: {chosen['response_text']}", event_type="dialogue")]
+    if chosen["state_key"]:
+        state_row = database.execute(
+            "SELECT state_json FROM mud_npc_player_states WHERE character_id=? AND npc_instance_id=?",
+            (character["id"], session_row["npc_id"]),
+        ).fetchone()
+        try:
+            state = json.loads(state_row["state_json"]) if state_row else {}
+        except json.JSONDecodeError:
+            state = {}
+        state[chosen["state_key"]] = chosen["state_value"]
+        database.execute(
+            "INSERT INTO mud_npc_player_states(character_id,npc_instance_id,state_json) VALUES(?,?,?) "
+            "ON CONFLICT(character_id,npc_instance_id) DO UPDATE SET state_json=excluded.state_json,"
+            "updated_at=CURRENT_TIMESTAMP",
+            (character["id"], session_row["npc_id"], json.dumps(state, separators=(",", ":"), sort_keys=True)),
+        )
+    if chosen["accept_quest_id"]:
+        existing_quest = database.execute(
+            "SELECT 1 FROM mud_player_quests WHERE character_id=? AND quest_id=?",
+            (character["id"], chosen["accept_quest_id"]),
+        ).fetchone()
+        if existing_quest is None:
+            events += _accept_quest(database, user, chosen["accept_quest_id"])
+            events += _set_objective_progress(database, user, "talk_npc", session_row["definition_id"])
+    if chosen["next_node_id"]:
+        database.execute(
+            "UPDATE mud_conversation_sessions SET node_id=?,updated_at=CURRENT_TIMESTAMP "
+            "WHERE character_id=?", (chosen["next_node_id"], character["id"]),
+        )
+        next_node, next_responses = _available_dialogue_responses(
+            database, character["id"], session_row["npc_id"], chosen["next_node_id"]
+        )
+        events.append(EventDraft(_dialogue_text(
+            session_row["name"], next_node, next_responses
+        ), event_type="dialogue"))
+    else:
+        database.execute("DELETE FROM mud_conversation_sessions WHERE character_id=?", (character["id"],))
+        events.append(EventDraft("The conversation ends.", event_type="dialogue"))
+    return events
+
+
+def _quests_action(database, user, parameters):
+    args = [str(value) for value in parameters.get("arguments", [])]
+    if args and args[0].casefold() == "accept":
+        target = " ".join(args[1:]).strip()
+        room = _current_room(database, user["id"])
+        available = _available_quests(database, user, room["id"])
+        matches = [quest for quest in available if quest["id"] == target or quest["name"].casefold() == target.casefold()]
+        if len(matches) != 1:
+            raise ActionError("That quest is not currently available from a nearby NPC.")
+        return _accept_quest(database, user, matches[0]["id"])
+    if args:
+        raise ActionError("Use /quests or /quest accept <name>.")
+    state = quest_state(database, user["id"])
+    if not state["active"]:
+        body = "You have no active quests."
+    else:
+        lines = ["Active quests:"]
+        for quest in state["active"]:
+            lines.append(f"\n{quest['name']} — {quest['description']}")
+            for objective in quest["objectives"]:
+                mark = "✓" if objective["completed_at"] else "·"
+                lines.append(f"{mark} {objective['description']} ({objective['progress']}/{objective['required_count']})")
+        body = "\n".join(lines)
+    return [EventDraft(body, event_type="quest")]
+
+
 def _exits_action(database, user, parameters):
     if parameters.get("arguments"):
         raise ActionError("The exits command does not accept arguments.")
@@ -731,7 +1098,7 @@ def _go_action(database, user, parameters):
     ).fetchone()
     route = chosen["direction"] or chosen["name"]
     new_recipients = _occupant_ids(database, destination_room["id"], user["id"])
-    return [
+    events = [
         EventDraft(
             f"You go {route}.\n\n{_describe_room(database, destination_room, user['id'])}",
             event_type="movement",
@@ -747,6 +1114,8 @@ def _go_action(database, user, parameters):
             audience_key=destination_room["id"], recipient_ids=new_recipients,
         ),
     ]
+    events += _set_objective_progress(database, user, "visit_room", destination_room["id"])
+    return events
 
 
 def _say_action(database, user, parameters):
@@ -804,6 +1173,9 @@ actions.register(ActionDefinition(key="put", label="PUT AWAY", description="Put 
 actions.register(ActionDefinition(key="equip", label="EQUIP", description="Equip a carried item.", commands=("equip", "wear"), handler=_equip_action, group="ITEMS", show_context=False))
 actions.register(ActionDefinition(key="unequip", label="UNEQUIP", description="Remove equipped gear.", commands=("unequip", "remove"), handler=_unequip_action, group="ITEMS", show_context=False))
 actions.register(ActionDefinition(key="use", label="USE", description="Use a carried item.", commands=("use",), handler=_use_action, group="ITEMS", show_context=False))
+actions.register(ActionDefinition(key="talk", label="TALK", description="Talk to a nearby NPC.", commands=("talk", "speak"), handler=_talk_action, group="NPCS", show_context=False))
+actions.register(ActionDefinition(key="respond", label="RESPOND", description="Choose a response in your current NPC conversation.", commands=("respond", "reply"), handler=_respond_action, group="DIALOGUE", show_context=False))
+actions.register(ActionDefinition(key="quests", label="VIEW QUESTS", description="View your active quest objectives and progress.", commands=("quests", "quest", "objectives"), handler=_quests_action, group="QUESTS"))
 actions.register(ActionDefinition(
     key="exits", label="LIST EXITS",
     description="List the routes available from this room.",
@@ -873,6 +1245,58 @@ def _item_actions(database, user):
 
 
 actions.register_context_provider(_item_actions)
+
+
+def _available_quests(database, user, room_id):
+    character = _character_row(database, user["id"])
+    return database.execute(
+        "SELECT DISTINCT q.id,q.name,q.description FROM mud_quests AS q "
+        "JOIN mud_quest_givers AS g ON g.quest_id=q.id "
+        "JOIN mud_npc_instances AS i ON i.definition_id=g.npc_definition_id "
+        "LEFT JOIN mud_player_quests AS p ON p.quest_id=q.id AND p.character_id=? "
+        "LEFT JOIN mud_player_quests AS prerequisite ON prerequisite.quest_id=q.prerequisite_quest_id "
+        "AND prerequisite.character_id=? AND prerequisite.status='completed' AND prerequisite.rewarded_at IS NOT NULL "
+        "WHERE i.room_id=? AND p.quest_id IS NULL "
+        "AND (q.prerequisite_quest_id IS NULL OR prerequisite.quest_id IS NOT NULL) "
+        "ORDER BY q.name COLLATE NOCASE,q.id",
+        (character["id"], character["id"], room_id),
+    ).fetchall()
+
+
+def _npc_actions(database, user):
+    room = _current_room(database, user["id"])
+    options = []
+    for npc in _room_npc_rows(database, room["id"]):
+        options.append({"key": "look", "label": f"EXAMINE {npc['name'].upper()}",
+                        "description": npc["description"], "group": "NPCS",
+                        "parameters": {"target": npc["id"]}})
+        if npc["conversation_id"]:
+            options.append({"key": "talk", "label": f"TALK TO {npc['name'].upper()}",
+                            "description": f"Start a conversation with {npc['name']}.", "group": "NPCS",
+                            "parameters": {"npc_id": npc["id"]}})
+    character = _character_row(database, user["id"])
+    session_row = database.execute(
+        "SELECT s.node_id,i.id AS npc_id,i.room_id,d.name FROM mud_conversation_sessions AS s "
+        "JOIN mud_npc_instances AS i ON i.id=s.npc_instance_id "
+        "JOIN mud_npc_definitions AS d ON d.id=i.definition_id WHERE s.character_id=?",
+        (character["id"],),
+    ).fetchone()
+    if session_row and session_row["room_id"] == room["id"]:
+        _node, responses = _available_dialogue_responses(
+            database, character["id"], session_row["npc_id"], session_row["node_id"],
+        )
+        for response in responses:
+            options.append({"key": "respond", "label": response["response_text"],
+                            "description": f"Reply to {session_row['name']}.", "group": "DIALOGUE",
+                            "parameters": {"response_id": response["id"]}})
+    for quest in _available_quests(database, user, room["id"]):
+        options.append({"key": "quests", "label": f"ACCEPT: {quest['name'].upper()}",
+                        "description": quest["description"], "group": "QUESTS",
+                        "parameters": {"arguments": ["accept", quest["id"]]}})
+    return options
+
+
+actions.register_context_provider(_npc_actions)
 
 
 def _insert_event(database, draft, default_user_id=None, action_id=None):
@@ -1113,12 +1537,14 @@ def index():
     room = _room_state(database, g.user["id"])
     character = character_state(database, g.user["id"])
     inventory = inventory_state(database, g.user["id"])
+    quests = quest_state(database, g.user["id"])
     mud_actions = actions.contextual(g.user, database)
     events = _recent_events(database, g.user["id"])
     database.commit()
     return render_template(
         "mud/index.html", events=events,
         mud_actions=mud_actions, room=room, character=character, inventory=inventory,
+        quests=quests,
     )
 
 
@@ -1138,6 +1564,7 @@ def updates():
         room = _room_state(database, g.user["id"])
         character = character_state(database, g.user["id"])
         inventory = inventory_state(database, g.user["id"])
+        quests = quest_state(database, g.user["id"])
         available = actions.contextual(g.user, database)
         database.commit()
     except (ActionError, sqlite3.Error) as problem:
@@ -1145,7 +1572,8 @@ def updates():
         if isinstance(problem, ActionError):
             return jsonify(error=str(problem)), problem.status
         raise
-    return jsonify(events=events, room=room, character=character, inventory=inventory, actions=available)
+    return jsonify(events=events, room=room, character=character, inventory=inventory,
+                   quests=quests, actions=available)
 
 
 @bp.post("/disconnect")
@@ -1181,20 +1609,24 @@ def perform_action():
         room = _room_state(database, g.user["id"])
         character = character_state(database, g.user["id"])
         inventory = inventory_state(database, g.user["id"])
+        quests = quest_state(database, g.user["id"])
         available = actions.contextual(g.user, database)
         database.commit()
         return jsonify(
-            error=str(problem), room=room, character=character, inventory=inventory, actions=available
+            error=str(problem), room=room, character=character, inventory=inventory,
+            quests=quests, actions=available
         ), problem.status
     database = get_db()
     room = _room_state(database, g.user["id"])
     character = character_state(database, g.user["id"])
     inventory = inventory_state(database, g.user["id"])
+    quests = quest_state(database, g.user["id"])
     available = actions.contextual(g.user, database)
     database.commit()
     return jsonify(
         action=action_key, events=events,
         actions=available, room=room, character=character, inventory=inventory,
+        quests=quests,
     )
 
 
@@ -1270,9 +1702,46 @@ def builder():
     items_by_room = {room["id"]: [] for room in rooms}
     for row in database.execute("SELECT i.id,i.room_id,d.name,d.item_type FROM mud_item_instances i JOIN mud_item_definitions d ON d.id=i.definition_id WHERE i.room_id IS NOT NULL ORDER BY d.name COLLATE NOCASE"):
         items_by_room.setdefault(row["room_id"], []).append(dict(row))
+    conversations = [dict(row) for row in database.execute(
+        "SELECT * FROM mud_conversations ORDER BY name COLLATE NOCASE,id"
+    )]
+    nodes_by_conversation = {item["id"]: [] for item in conversations}
+    responses_by_node = {}
+    for row in database.execute(
+        "SELECT * FROM mud_dialogue_nodes ORDER BY conversation_id,is_start DESC,node_key COLLATE NOCASE,id"
+    ):
+        node = dict(row); nodes_by_conversation.setdefault(row["conversation_id"], []).append(node)
+        responses_by_node[node["id"]] = [dict(response) for response in database.execute(
+            "SELECT * FROM mud_dialogue_responses WHERE node_id=? ORDER BY sort_order,id", (node["id"],)
+        )]
+    npc_definitions = [dict(row) for row in database.execute(
+        "SELECT * FROM mud_npc_definitions ORDER BY name COLLATE NOCASE,id"
+    )]
+    npcs_by_room = {room["id"]: [] for room in rooms}
+    for row in database.execute(
+        "SELECT i.id,i.room_id,d.name FROM mud_npc_instances AS i JOIN mud_npc_definitions AS d "
+        "ON d.id=i.definition_id ORDER BY d.name COLLATE NOCASE,i.id"
+    ):
+        npcs_by_room.setdefault(row["room_id"], []).append(dict(row))
+    quests = [dict(row) for row in database.execute(
+        "SELECT * FROM mud_quests ORDER BY name COLLATE NOCASE,id"
+    )]
+    objectives_by_quest = {item["id"]: [] for item in quests}
+    rewards_by_quest = {item["id"]: [] for item in quests}
+    givers_by_quest = {item["id"]: set() for item in quests}
+    for row in database.execute("SELECT * FROM mud_quest_objectives ORDER BY quest_id,sort_order,id"):
+        objectives_by_quest.setdefault(row["quest_id"], []).append(dict(row))
+    for row in database.execute("SELECT * FROM mud_quest_rewards ORDER BY quest_id,id"):
+        rewards_by_quest.setdefault(row["quest_id"], []).append(dict(row))
+    for row in database.execute("SELECT * FROM mud_quest_givers"):
+        givers_by_quest.setdefault(row["quest_id"], set()).add(row["npc_definition_id"])
     return render_template(
         "mud/builder.html", rooms=rooms, exits_by_room=exits_by_room,
         users=users, directions=DIRECTIONS, definitions=definitions, items_by_room=items_by_room,
+        conversations=conversations, nodes_by_conversation=nodes_by_conversation,
+        responses_by_node=responses_by_node, npc_definitions=npc_definitions,
+        npcs_by_room=npcs_by_room, quests=quests, objectives_by_quest=objectives_by_quest,
+        rewards_by_quest=rewards_by_quest, givers_by_quest=givers_by_quest,
     )
 
 
@@ -1291,6 +1760,239 @@ def _item_definition_fields():
     if item_type != "equipment": slot = None
     if len(use_message) > 1000: return None, "Use messages cannot exceed 1000 characters."
     return (name, description, item_type, json.dumps({"use_message": use_message} if use_message else {}), slot), None
+
+
+def _json_object_field(name):
+    raw = request.form.get(name, "{}").strip() or "{}"
+    if len(raw) > 10000:
+        return None, f"{name.replace('_', ' ').title()} cannot exceed 10,000 characters."
+    try:
+        value = json.loads(raw)
+    except json.JSONDecodeError:
+        return None, f"{name.replace('_', ' ').title()} must be valid JSON."
+    if not isinstance(value, dict):
+        return None, f"{name.replace('_', ' ').title()} must be a JSON object."
+    return json.dumps(value, separators=(",", ":"), sort_keys=True), None
+
+
+@bp.post("/builder/conversations")
+@builder_required
+def builder_create_conversation():
+    validate_csrf(); name = " ".join(request.form.get("name", "").split())
+    if not 2 <= len(name) <= 80:
+        flash("Conversation names must be between 2 and 80 characters.", "error"); return _builder_redirect()
+    database = get_db(); conversation_id = f"world:conversation:{uuid.uuid4().hex}"
+    database.execute("INSERT INTO mud_conversations(id,name,created_by) VALUES(?,?,?)", (conversation_id, name, g.user["id"]))
+    database.commit(); flash(f"Conversation {name} created.", "success"); return _builder_redirect()
+
+
+@bp.post("/builder/conversations/<path:conversation_id>")
+@builder_required
+def builder_update_conversation(conversation_id):
+    validate_csrf(); database = get_db(); name = " ".join(request.form.get("name", "").split())
+    if database.execute("SELECT 1 FROM mud_conversations WHERE id=?", (conversation_id,)).fetchone() is None: abort(404)
+    if not 2 <= len(name) <= 80: flash("Conversation names must be between 2 and 80 characters.", "error"); return _builder_redirect()
+    database.execute("UPDATE mud_conversations SET name=?,updated_at=CURRENT_TIMESTAMP WHERE id=?", (name, conversation_id)); database.commit()
+    flash("Conversation updated.", "success"); return _builder_redirect()
+
+
+def _dialogue_node_fields():
+    key = " ".join(request.form.get("node_key", "").split()); body = request.form.get("body", "").strip()
+    if not 1 <= len(key) <= 80 or not 1 <= len(body) <= 4000:
+        return None, "Dialogue keys must be 1–80 characters and dialogue text 1–4000 characters."
+    return (key, body, request.form.get("is_start") == "1"), None
+
+
+@bp.post("/builder/conversations/<path:conversation_id>/nodes")
+@builder_required
+def builder_create_dialogue_node(conversation_id):
+    validate_csrf(); database = get_db(); fields, error = _dialogue_node_fields()
+    if database.execute("SELECT 1 FROM mud_conversations WHERE id=?", (conversation_id,)).fetchone() is None: abort(404)
+    if error: flash(error, "error"); return _builder_redirect()
+    node_id = f"world:dialogue-node:{uuid.uuid4().hex}"
+    try:
+        if fields[2]: database.execute("UPDATE mud_dialogue_nodes SET is_start=0 WHERE conversation_id=?", (conversation_id,))
+        database.execute("INSERT INTO mud_dialogue_nodes(id,conversation_id,node_key,body,is_start) VALUES(?,?,?,?,?)", (node_id, conversation_id, fields[0], fields[1], int(fields[2])))
+        database.commit()
+    except sqlite3.IntegrityError:
+        database.rollback(); flash("Dialogue node keys must be unique within a conversation.", "error"); return _builder_redirect()
+    flash("Dialogue node created.", "success"); return _builder_redirect()
+
+
+@bp.post("/builder/dialogue-nodes/<path:node_id>")
+@builder_required
+def builder_update_dialogue_node(node_id):
+    validate_csrf(); database = get_db(); node = database.execute("SELECT conversation_id FROM mud_dialogue_nodes WHERE id=?", (node_id,)).fetchone()
+    if node is None: abort(404)
+    fields, error = _dialogue_node_fields()
+    if error: flash(error, "error"); return _builder_redirect()
+    try:
+        if fields[2]: database.execute("UPDATE mud_dialogue_nodes SET is_start=0 WHERE conversation_id=?", (node["conversation_id"],))
+        database.execute("UPDATE mud_dialogue_nodes SET node_key=?,body=?,is_start=?,updated_at=CURRENT_TIMESTAMP WHERE id=?", (fields[0], fields[1], int(fields[2]), node_id)); database.commit()
+    except sqlite3.IntegrityError:
+        database.rollback(); flash("Dialogue node keys must be unique within a conversation.", "error"); return _builder_redirect()
+    flash("Dialogue node updated.", "success"); return _builder_redirect()
+
+
+@bp.post("/builder/dialogue-nodes/<path:node_id>/responses")
+@builder_required
+def builder_create_dialogue_response(node_id):
+    validate_csrf(); database = get_db(); node = database.execute("SELECT conversation_id FROM mud_dialogue_nodes WHERE id=?", (node_id,)).fetchone()
+    if node is None: abort(404)
+    response_text = " ".join(request.form.get("response_text", "").split()); next_node_id = request.form.get("next_node_id", "").strip() or None; quest_id = request.form.get("accept_quest_id", "").strip() or None
+    required_state_key = " ".join(request.form.get("required_state_key", "").split()) or None; required_state_value = request.form.get("required_state_value", "").strip() or None
+    state_key = " ".join(request.form.get("state_key", "").split()) or None; state_value = request.form.get("state_value", "").strip() or None
+    sort_order = request.form.get("sort_order", 0, type=int)
+    if not 1 <= len(response_text) <= 500 or (state_key and len(state_key) > 80) or (state_value and len(state_value) > 500) or (required_state_key and len(required_state_key) > 80) or (required_state_value and len(required_state_value) > 500) or sort_order is None or not -10000 <= sort_order <= 10000: flash("Check response, state, and order fields.", "error"); return _builder_redirect()
+    if bool(required_state_key) != bool(required_state_value): flash("A response state requirement needs both a key and value.", "error"); return _builder_redirect()
+    if next_node_id and database.execute("SELECT 1 FROM mud_dialogue_nodes WHERE id=? AND conversation_id=?", (next_node_id, node["conversation_id"])).fetchone() is None: flash("The next node must belong to this conversation.", "error"); return _builder_redirect()
+    if quest_id and database.execute("SELECT 1 FROM mud_quests WHERE id=?", (quest_id,)).fetchone() is None: flash("Choose an existing quest.", "error"); return _builder_redirect()
+    database.execute("INSERT INTO mud_dialogue_responses(id,node_id,response_text,next_node_id,accept_quest_id,required_state_key,required_state_value,state_key,state_value,sort_order) VALUES(?,?,?,?,?,?,?,?,?,?)", (f"world:dialogue-response:{uuid.uuid4().hex}", node_id, response_text, next_node_id, quest_id, required_state_key, required_state_value, state_key, state_value, sort_order)); database.commit()
+    flash("Dialogue response added.", "success"); return _builder_redirect()
+
+
+@bp.post("/builder/dialogue-responses/<path:response_id>/delete")
+@builder_required
+def builder_delete_dialogue_response(response_id):
+    validate_csrf(); database = get_db()
+    if request.form.get("confirmation") != "delete": flash("Response removal was not confirmed.", "error"); return _builder_redirect()
+    if database.execute("DELETE FROM mud_dialogue_responses WHERE id=?", (response_id,)).rowcount == 0: abort(404)
+    database.commit(); flash("Dialogue response removed.", "success"); return _builder_redirect()
+
+
+def _npc_definition_fields():
+    name = " ".join(request.form.get("name", "").split()); description = request.form.get("description", "").strip(); conversation_id = request.form.get("conversation_id", "").strip() or None
+    properties, error = _json_object_field("properties_json")
+    if error: return None, error
+    behaviors, error = _json_object_field("behaviors_json")
+    if error: return None, error
+    if not 2 <= len(name) <= 80 or not 1 <= len(description) <= 4000: return None, "NPC names must be 2–80 characters and descriptions 1–4000 characters."
+    return (name, description, conversation_id, properties, behaviors), None
+
+
+@bp.post("/builder/npcs")
+@builder_required
+def builder_create_npc_definition():
+    validate_csrf(); database = get_db(); fields, error = _npc_definition_fields()
+    if error: flash(error, "error"); return _builder_redirect()
+    if fields[2] and database.execute("SELECT 1 FROM mud_conversations WHERE id=?", (fields[2],)).fetchone() is None: flash("Choose an existing conversation.", "error"); return _builder_redirect()
+    npc_id = f"world:npc-definition:{uuid.uuid4().hex}"; database.execute("INSERT INTO mud_npc_definitions(id,name,description,conversation_id,properties_json,behaviors_json,created_by) VALUES(?,?,?,?,?,?,?)", (npc_id, *fields, g.user["id"])); database.commit()
+    flash(f"NPC definition {fields[0]} created.", "success"); return _builder_redirect()
+
+
+@bp.post("/builder/npcs/<path:npc_id>")
+@builder_required
+def builder_update_npc_definition(npc_id):
+    validate_csrf(); database = get_db(); fields, error = _npc_definition_fields()
+    if database.execute("SELECT 1 FROM mud_npc_definitions WHERE id=?", (npc_id,)).fetchone() is None: abort(404)
+    if error: flash(error, "error"); return _builder_redirect()
+    if fields[2] and database.execute("SELECT 1 FROM mud_conversations WHERE id=?", (fields[2],)).fetchone() is None: flash("Choose an existing conversation.", "error"); return _builder_redirect()
+    database.execute("UPDATE mud_npc_definitions SET name=?,description=?,conversation_id=?,properties_json=?,behaviors_json=?,updated_at=CURRENT_TIMESTAMP WHERE id=?", (*fields, npc_id)); database.commit(); flash("NPC definition updated.", "success"); return _builder_redirect()
+
+
+@bp.post("/builder/npcs/place")
+@builder_required
+def builder_place_npc():
+    validate_csrf(); database = get_db(); definition_id = request.form.get("definition_id", "").strip(); room_id = request.form.get("room_id", "").strip()
+    definition = database.execute("SELECT name FROM mud_npc_definitions WHERE id=?", (definition_id,)).fetchone()
+    if definition is None or database.execute("SELECT 1 FROM mud_world_rooms WHERE id=?", (room_id,)).fetchone() is None: abort(404)
+    database.execute("INSERT INTO mud_npc_instances(id,definition_id,room_id) VALUES(?,?,?)", (f"world:npc:{uuid.uuid4().hex}", definition_id, room_id)); database.commit(); flash(f"Placed {definition['name']} in the room.", "success"); return _builder_redirect(room_id)
+
+
+@bp.post("/builder/npc-instances/<path:instance_id>/delete")
+@builder_required
+def builder_delete_npc_instance(instance_id):
+    validate_csrf(); database = get_db(); npc = database.execute("SELECT i.room_id,d.name FROM mud_npc_instances i JOIN mud_npc_definitions d ON d.id=i.definition_id WHERE i.id=?", (instance_id,)).fetchone()
+    if npc is None: abort(404)
+    if request.form.get("confirmation") != "delete": flash("NPC removal was not confirmed.", "error"); return _builder_redirect(npc["room_id"])
+    database.execute("DELETE FROM mud_npc_instances WHERE id=?", (instance_id,)); database.commit(); flash(f"Removed {npc['name']} from the room.", "success"); return _builder_redirect(npc["room_id"])
+
+
+def _quest_fields(database, quest_id=None):
+    name = " ".join(request.form.get("name", "").split()); description = request.form.get("description", "").strip(); prerequisite = request.form.get("prerequisite_quest_id", "").strip() or None
+    if not 2 <= len(name) <= 120 or not 1 <= len(description) <= 4000: return None, "Quest names must be 2–120 characters and descriptions 1–4000 characters."
+    if prerequisite == quest_id: return None, "A quest cannot require itself."
+    if prerequisite and database.execute("SELECT 1 FROM mud_quests WHERE id=?", (prerequisite,)).fetchone() is None: return None, "Choose an existing prerequisite quest."
+    cursor = prerequisite
+    seen = set()
+    while cursor and cursor not in seen:
+        if cursor == quest_id:
+            return None, "Quest prerequisites cannot form a cycle."
+        seen.add(cursor)
+        row = database.execute(
+            "SELECT prerequisite_quest_id FROM mud_quests WHERE id=?", (cursor,)
+        ).fetchone()
+        cursor = row["prerequisite_quest_id"] if row else None
+    return (name, description, prerequisite), None
+
+
+@bp.post("/builder/quests")
+@builder_required
+def builder_create_quest():
+    validate_csrf(); database = get_db(); fields, error = _quest_fields(database)
+    if error: flash(error, "error"); return _builder_redirect()
+    quest_id = f"world:quest:{uuid.uuid4().hex}"; database.execute("INSERT INTO mud_quests(id,name,description,prerequisite_quest_id,created_by) VALUES(?,?,?,?,?)", (quest_id, *fields, g.user["id"])); database.commit(); flash(f"Quest {fields[0]} created.", "success"); return _builder_redirect()
+
+
+@bp.post("/builder/quests/<path:quest_id>")
+@builder_required
+def builder_update_quest(quest_id):
+    validate_csrf(); database = get_db()
+    if database.execute("SELECT 1 FROM mud_quests WHERE id=?", (quest_id,)).fetchone() is None: abort(404)
+    fields, error = _quest_fields(database, quest_id)
+    if error: flash(error, "error"); return _builder_redirect()
+    database.execute("UPDATE mud_quests SET name=?,description=?,prerequisite_quest_id=?,updated_at=CURRENT_TIMESTAMP WHERE id=?", (*fields, quest_id)); database.commit(); flash("Quest updated.", "success"); return _builder_redirect()
+
+
+@bp.post("/builder/quests/<path:quest_id>/givers")
+@builder_required
+def builder_set_quest_givers(quest_id):
+    validate_csrf(); database = get_db()
+    if database.execute("SELECT 1 FROM mud_quests WHERE id=?", (quest_id,)).fetchone() is None: abort(404)
+    giver_ids = set(request.form.getlist("npc_definition_id")); valid = {row["id"] for row in database.execute("SELECT id FROM mud_npc_definitions")}
+    if not giver_ids <= valid: flash("Choose existing NPC definitions.", "error"); return _builder_redirect()
+    database.execute("DELETE FROM mud_quest_givers WHERE quest_id=?", (quest_id,)); database.executemany("INSERT INTO mud_quest_givers(quest_id,npc_definition_id) VALUES(?,?)", ((quest_id, value) for value in giver_ids)); database.commit(); flash("Quest givers updated.", "success"); return _builder_redirect()
+
+
+@bp.post("/builder/quests/<path:quest_id>/objectives")
+@builder_required
+def builder_create_quest_objective(quest_id):
+    validate_csrf(); database = get_db(); objective_type = request.form.get("objective_type", ""); target_id = request.form.get("target_id", "").strip(); description = request.form.get("description", "").strip(); required_count = request.form.get("required_count", 1, type=int)
+    target_tables = {"talk_npc": "mud_npc_definitions", "visit_room": "mud_world_rooms", "possess_item": "mud_item_definitions"}
+    if database.execute("SELECT 1 FROM mud_quests WHERE id=?", (quest_id,)).fetchone() is None: abort(404)
+    if objective_type not in target_tables or database.execute(f"SELECT 1 FROM {target_tables.get(objective_type, 'mud_quests')} WHERE id=?", (target_id,)).fetchone() is None: flash("Choose a valid objective type and target.", "error"); return _builder_redirect()
+    sort_order = request.form.get("sort_order", 0, type=int)
+    if not 1 <= len(description) <= 500 or required_count is None or not 1 <= required_count <= 100 or sort_order is None or not -10000 <= sort_order <= 10000: flash("Objective descriptions must be 1–500 characters, counts 1–100, and order valid.", "error"); return _builder_redirect()
+    database.execute("INSERT INTO mud_quest_objectives(id,quest_id,objective_type,target_id,description,required_count,sort_order) VALUES(?,?,?,?,?,?,?)", (f"world:quest-objective:{uuid.uuid4().hex}", quest_id, objective_type, target_id, description, required_count, sort_order)); database.commit(); flash("Quest objective added.", "success"); return _builder_redirect()
+
+
+@bp.post("/builder/quest-objectives/<path:objective_id>/delete")
+@builder_required
+def builder_delete_quest_objective(objective_id):
+    validate_csrf(); database = get_db()
+    if request.form.get("confirmation") != "delete": flash("Objective removal was not confirmed.", "error"); return _builder_redirect()
+    if database.execute("DELETE FROM mud_quest_objectives WHERE id=?", (objective_id,)).rowcount == 0: abort(404)
+    database.commit(); flash("Quest objective removed.", "success"); return _builder_redirect()
+
+
+@bp.post("/builder/quests/<path:quest_id>/rewards")
+@builder_required
+def builder_create_quest_reward(quest_id):
+    validate_csrf(); database = get_db(); reward_type = request.form.get("reward_type", ""); target_id = request.form.get("target_id", "").strip() or None; amount = request.form.get("amount", 1, type=int)
+    if database.execute("SELECT 1 FROM mud_quests WHERE id=?", (quest_id,)).fetchone() is None: abort(404)
+    if reward_type not in {"experience", "item"} or amount is None or not 1 <= amount <= 100000 or (reward_type == "item" and amount > 100): flash("Choose a valid reward amount (up to 100 items or 100,000 XP).", "error"); return _builder_redirect()
+    if reward_type == "item" and database.execute("SELECT 1 FROM mud_item_definitions WHERE id=?", (target_id,)).fetchone() is None: flash("Choose an item definition for an item reward.", "error"); return _builder_redirect()
+    if reward_type == "experience": target_id = None
+    database.execute("INSERT INTO mud_quest_rewards(id,quest_id,reward_type,target_id,amount) VALUES(?,?,?,?,?)", (f"world:quest-reward:{uuid.uuid4().hex}", quest_id, reward_type, target_id, amount)); database.commit(); flash("Quest reward added.", "success"); return _builder_redirect()
+
+
+@bp.post("/builder/quest-rewards/<path:reward_id>/delete")
+@builder_required
+def builder_delete_quest_reward(reward_id):
+    validate_csrf(); database = get_db()
+    if request.form.get("confirmation") != "delete": flash("Reward removal was not confirmed.", "error"); return _builder_redirect()
+    if database.execute("DELETE FROM mud_quest_rewards WHERE id=?", (reward_id,)).rowcount == 0: abort(404)
+    database.commit(); flash("Quest reward removed.", "success"); return _builder_redirect()
 
 
 @bp.post("/builder/items")

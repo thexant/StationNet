@@ -20,7 +20,8 @@
         <h2 data-mud-room-name>{{ room.name }}</h2>
         <p data-mud-room-description>{{ room.description }}</p>
         <p class="mud-room-exits"><span>EXITS</span> <span data-mud-room-exits>{% if room.exits %}{% for exit in room.exits %}{{ exit.direction or exit.name }}{% if not loop.last %}, {% endif %}{% endfor %}{% else %}none{% endif %}</span></p>
-        <p class="mud-room-exits"><span>ITEMS</span> <span data-mud-room-items>{% if room.items %}{% for item in room.items %}{{ item.name }}{% if not loop.last %}, {% endif %}{% endfor %}{% else %}none{% endif %}</span></p>
+        <p class="mud-room-exits"><span>ITEMS</span> <span data-mud-room-items>{% if room['items'] %}{% for item in room['items'] %}{{ item.name }}{% if not loop.last %}, {% endif %}{% endfor %}{% else %}none{% endif %}</span></p>
+        <p class="mud-room-exits"><span>NPCS</span> <span data-mud-room-npcs>{% if room.npcs %}{% for npc in room.npcs %}{{ npc.name }}{% if not loop.last %}, {% endif %}{% endfor %}{% else %}none{% endif %}</span></p>
         <div class="mud-occupants" data-mud-occupants aria-label="Other players in this room">
           <span>PLAYERS</span>
           <div>{% if room.occupants %}{% for player in room.occupants %}<span class="mud-entity" data-player-id="{{ player.id }}" data-character-id="{{ player.character_id or '' }}" title="{{ player.username }}">{{ player.character_name or player.callsign }}</span>{% endfor %}{% else %}<span class="muted" data-mud-no-occupants>none</span>{% endif %}</div>
@@ -102,6 +103,17 @@
             <strong>EQUIPPED</strong>
             <div data-mud-equipped>{% for item in inventory.equipment %}<button type="button" class="secondary" data-mud-action="look" data-mud-parameters='{{ {"target": item.id}|tojson }}'>{{ item.equipped_slot|replace('_',' ') }}: {{ item.name }}</button>{% else %}<span class="muted">nothing equipped</span>{% endfor %}</div>
             <small>Click an item to inspect it; its available actions appear in the contextual controls.</small>
+          </div>
+        </div>
+      </section>
+      <section class="mud-panel collapsible-panel" data-collapsible-panel data-panel-key="mud-quests">
+        <button type="button" class="collapsible-panel-toggle" data-panel-toggle aria-expanded="false" aria-controls="mud-quests-panel">
+          <span class="collapsible-panel-heading"><span class="eyebrow">OBJECTIVES</span><span class="collapsible-panel-title">Quests <span data-mud-quest-count>{{ quests.active|length }}</span></span></span>
+          <span class="collapsible-panel-chevron" aria-hidden="true"></span>
+        </button>
+        <div id="mud-quests-panel" data-panel-content hidden>
+          <div class="mud-quest-list" data-mud-quests>
+            {% for quest in quests.active %}<article><strong>{{ quest.name }}</strong><p>{{ quest.description }}</p><ul>{% for objective in quest.objectives %}<li class="{% if objective.completed_at %}complete{% endif %}">{{ '✓' if objective.completed_at else '·' }} {{ objective.description }} <span>{{ objective.progress }}/{{ objective.required_count }}</span></li>{% endfor %}</ul></article>{% else %}<span class="muted">no active quests</span>{% endfor %}
           </div>
         </div>
       </section>

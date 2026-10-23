@@ -6,6 +6,11 @@
   const frame = document.querySelector("[data-app-runtime]");
   const surface = document.querySelector("[data-app-surface]");
   const status = document.querySelector("[data-app-status]");
+  const display = document.querySelector(".application-display[data-app-platforms]");
+  const compatibility = document.querySelector("[data-app-compatibility]");
+  const launchWarning = document.querySelector("[data-app-launch-warning]");
+  const immersiveButton = document.querySelector("[data-app-immersive]");
+  const immersiveExit = document.querySelector("[data-app-immersive-exit]");
   if (!frame || !surface || !status) return;
 
   const PROTOCOL = "stationnet-app-v1";
@@ -21,13 +26,49 @@
   let totalEvents = 0;
   let closed = false;
   let audioContext = null;
+  let startupTimer = null;
+  let immersive = false;
+  let immersiveFocus = null;
+  let immersiveScroll = [0, 0];
+  let pointerLockRequest = null;
   const multiplayerConnection = (crypto.randomUUID ? crypto.randomUUID() : `${Date.now()}-${Math.random()}`);
   const activeTones = new Set();
-  const startupTimer = setTimeout(() => {
-    status.textContent = "PROGRAM STATUS / UNAVAILABLE";
-    surface.textContent = "The application runtime did not respond.";
-    terminate();
-  }, 10000);
+
+  const parseMetadata = (name) => {
+    try { const value = JSON.parse(display?.dataset[name] || "[]"); return Array.isArray(value) ? value : []; }
+    catch (_) { return []; }
+  };
+  const detectedInputs = () => {
+    const media = (query) => typeof matchMedia === "function" && matchMedia(query).matches;
+    const touch = navigator.maxTouchPoints > 0 || "ontouchstart" in window;
+    const finePointer = media("(any-pointer: fine)");
+    const pointer = finePointer || media("(any-pointer: coarse)");
+    const mobile = navigator.userAgentData?.mobile ?? /Android|iPhone|iPad|Mobile/i.test(navigator.userAgent);
+    return {
+      keyboard: finePointer || !mobile, pointer, "fine-pointer": finePointer, touch,
+      "pointer-lock": "pointerLockElement" in document && typeof surface.requestPointerLock === "function"
+    };
+  };
+  const environmentCompatibility = () => {
+    const inputs = detectedInputs();
+    const required = parseMetadata("appInputs");
+    const platforms = parseMetadata("appPlatforms");
+    const missing = required.filter((name) => !inputs[name]);
+    const platformMatch = !platforms.length
+      || (platforms.includes("touch") && inputs.touch)
+      || (platforms.includes("desktop") && (inputs.keyboard || inputs["fine-pointer"]));
+    return { inputs, missing, platformMatch, supported: !missing.length && platformMatch };
+  };
+  const startRuntime = () => {
+    if (closed || frame.dataset.started === "1") return;
+    frame.dataset.started = "1";
+    frame.src = frame.dataset.runtimeSrc;
+    startupTimer = setTimeout(() => {
+      status.textContent = "PROGRAM STATUS / UNAVAILABLE";
+      surface.textContent = "The application runtime did not respond.";
+      terminate();
+    }, 10000);
+  };
 
   const text = (value, limit = LIMITS.text) => String(value == null ? "" : value).slice(0, limit);
   const number = (value, fallback, min, max) => {
@@ -515,10 +556,101 @@
     }, "*");
   }
 
+  const sendHostEvent = (type, payload = {}) => {
+    if (frame.contentWindow) frame.contentWindow.postMessage({ protocol: PROTOCOL, type, ...payload }, "*");
+  };
+
+  function setImmersive(value) {
+    const next = Boolean(value);
+    if (immersive === next) return;
+    if (next) {
+      immersiveFocus = document.activeElement;
+      immersiveScroll = [scrollX, scrollY];
+    }
+    immersive = next;
+    document.body.classList.toggle("application-immersive", immersive);
+    if (immersiveButton) immersiveButton.setAttribute("aria-pressed", String(immersive));
+    if (immersiveExit) immersiveExit.hidden = !immersive;
+    if (immersive) {
+      surface.focus({ preventScroll: true });
+    } else {
+      scrollTo(...immersiveScroll);
+      if (immersiveFocus instanceof HTMLElement && immersiveFocus.isConnected) immersiveFocus.focus({ preventScroll: true });
+    }
+    sendHostEvent("presentation-event", { mode: immersive ? "immersive" : "standard" });
+  }
+
+  function dismissPointerPrompt(error) {
+    const prompt = document.querySelector("[data-app-pointer-prompt]");
+    if (prompt) prompt.remove();
+    if (error && pointerLockRequest) capabilityResult(pointerLockRequest, false, false, error);
+    if (error) pointerLockRequest = null;
+  }
+
+  function requestPointerLock(message) {
+    if (!detectedInputs()["pointer-lock"]) {
+      capabilityResult(message.request, false, false, new Error("Pointer lock is unavailable in this browser"));
+      return;
+    }
+    if (document.pointerLockElement === surface) {
+      capabilityResult(message.request, true, true); return;
+    }
+    dismissPointerPrompt(new Error("A newer mouse capture request replaced this one"));
+    pointerLockRequest = message.request;
+    const prompt = document.createElement("div");
+    prompt.className = "application-pointer-prompt"; prompt.dataset.appPointerPrompt = "";
+    const copy = document.createElement("p");
+    copy.textContent = "This application wants to capture your mouse for relative movement. Press Escape at any time to release it.";
+    const capture = document.createElement("button"); capture.type = "button"; capture.textContent = "CAPTURE MOUSE";
+    const cancel = document.createElement("button"); cancel.type = "button"; cancel.className = "secondary"; cancel.textContent = "CANCEL";
+    capture.addEventListener("click", async () => {
+      try {
+        const result = surface.requestPointerLock(message.unadjustedMovement ? { unadjustedMovement: true } : undefined);
+        if (result && typeof result.then === "function") await result;
+      } catch (error) {
+        dismissPointerPrompt(error);
+      }
+    });
+    cancel.addEventListener("click", () => dismissPointerPrompt(new Error("Mouse capture was cancelled")));
+    prompt.append(copy, capture, cancel);
+    display.insertBefore(prompt, display.querySelector(".application-viewport"));
+    capture.focus();
+  }
+
+  document.addEventListener("pointerlockchange", () => {
+    const active = document.pointerLockElement === surface;
+    if (active) {
+      dismissPointerPrompt();
+      if (pointerLockRequest) capabilityResult(pointerLockRequest, true, true);
+      pointerLockRequest = null;
+      surface.focus({ preventScroll: true });
+    }
+    sendHostEvent("pointer-lock-event", { active });
+  });
+  document.addEventListener("pointerlockerror", () => dismissPointerPrompt(new Error("The browser denied mouse capture")));
+  document.addEventListener("mousemove", (event) => {
+    if (document.pointerLockElement !== surface) return;
+    sendHostEvent("pointer-lock-move", { movementX: Number(event.movementX) || 0, movementY: Number(event.movementY) || 0 });
+  });
+
   async function capability(message) {
     const request = message.request;
     const value = text(message.text, LIMITS.capabilityText);
     try {
+      if (message.operation === "pointer-lock-request") {
+        requestPointerLock(message); return;
+      }
+      if (message.operation === "pointer-lock-release") {
+        dismissPointerPrompt(new Error("Mouse capture request was released"));
+        if (document.pointerLockElement === surface) document.exitPointerLock();
+        capabilityResult(request, true, true); return;
+      }
+      if (message.operation === "presentation-enter-immersive") {
+        setImmersive(true); capabilityResult(request, true, "immersive"); return;
+      }
+      if (message.operation === "presentation-exit-immersive") {
+        setImmersive(false); capabilityResult(request, true, "standard"); return;
+      }
       if (message.operation === "copy-text") {
         if (navigator.clipboard && navigator.clipboard.writeText) await navigator.clipboard.writeText(value);
         else {
@@ -573,7 +705,10 @@
       clearTimeout(startupTimer); status.textContent = "PROGRAM STATUS / INITIALIZED";
       reportVisibility();
     }
-    else if (message.type === "ready") status.textContent = "PROGRAM STATUS / RUNNING";
+    else if (message.type === "ready") {
+      status.textContent = "PROGRAM STATUS / RUNNING";
+      if (display?.dataset.appPresentation === "immersive") setImmersive(true);
+    }
     else if (message.type === "render") render(message);
     else if (message.type === "storage") storage(message);
     else if (message.type === "scores") scores(message);
@@ -609,6 +744,9 @@
   };
   addEventListener("keydown", (event) => {
     unlockAudio();
+    if (event.key === "Escape" && immersive && document.pointerLockElement !== surface) {
+      event.preventDefault(); setImmersive(false); return;
+    }
     if (["INPUT", "TEXTAREA", "SELECT"].includes(event.target.tagName)) return;
     if (event.target.tagName === "BUTTON" && ["Enter", " "].includes(event.key)) return;
     preventGameKeyDefault(event);
@@ -628,7 +766,10 @@
 
   const reportVisibility = () => {
     const value = document.hidden || !document.hasFocus() ? "hidden" : "visible";
-    if (value === "hidden") releasePressedKeys();
+    if (value === "hidden") {
+      releasePressedKeys();
+      if (document.pointerLockElement === surface) document.exitPointerLock();
+    }
     if (frame.contentWindow) frame.contentWindow.postMessage({ protocol: PROTOCOL, type: "animation-visibility", visible: value === "visible" }, "*");
     lifecycleActions.forEach((action) => interact(action, { value }));
   };
@@ -639,9 +780,36 @@
   function terminate() {
     if (closed) return; closed = true;
     clearTimeout(startupTimer);
+    dismissPointerPrompt(new Error("Application terminated"));
+    if (document.pointerLockElement === surface) document.exitPointerLock();
+    setImmersive(false);
     if (frame.contentWindow) frame.contentWindow.postMessage({ protocol: PROTOCOL, type: "terminate" }, "*");
     stopSounds();
     frame.remove(); keyboardActions.clear(); lifecycleActions.clear(); pressedKeys.clear();
+  }
+  if (immersiveButton) immersiveButton.addEventListener("click", () => setImmersive(!immersive));
+  if (immersiveExit) immersiveExit.addEventListener("click", () => setImmersive(false));
+
+  const compatibilityResult = environmentCompatibility();
+  if (compatibility) {
+    if (compatibilityResult.supported) {
+      compatibility.firstElementChild.textContent = "COMPATIBILITY / SUPPORTED ON THIS DEVICE";
+    } else {
+      compatibility.classList.add("warning");
+      compatibility.firstElementChild.textContent = "COMPATIBILITY / REQUIREMENTS NOT MET";
+    }
+  }
+  if (compatibilityResult.supported) {
+    startRuntime();
+  } else {
+    const reasons = [];
+    if (!compatibilityResult.platformMatch) reasons.push("this device does not match the declared desktop/touch platforms");
+    if (compatibilityResult.missing.length) reasons.push(`missing input capabilities: ${compatibilityResult.missing.join(", ")}`);
+    launchWarning.hidden = false;
+    launchWarning.querySelector("[data-app-launch-message]").textContent = `This application may not work correctly: ${reasons.join("; ")}.`;
+    launchWarning.querySelector("[data-app-launch-anyway]").addEventListener("click", () => {
+      launchWarning.hidden = true; startRuntime();
+    }, { once: true });
   }
   addEventListener("pagehide", terminate, { once: true });
 })();

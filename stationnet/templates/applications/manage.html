@@ -31,6 +31,7 @@
         <span>{{ 'BUILT-IN' if application.builtin else 'THIRD-PARTY' }} / {{ application.category|upper }} / V{{ application.version }}</span>
         <h3>{{ application.name }}</h3>
         <p>{{ application.description }}</p>
+        <small>{{ 'UNIVERSAL' if application.platforms|length == 2 else application.platforms|join(' + ')|upper }}{% if application.required_inputs %} / INPUT: {{ application.required_inputs|join(' + ')|upper }}{% endif %} / PRESENTATION: {{ application.preferred_presentation|upper }}</small>
         <small>ID: {{ application.slug }} / AUTHOR: {{ application.author }} / STATUS: {{ 'ENABLED' if application.enabled else 'DISABLED' }}</small>
       </div>
       <div class="application-admin-actions">

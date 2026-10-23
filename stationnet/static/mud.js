@@ -10,6 +10,7 @@ for(const mud of document.querySelectorAll("[data-mud]")){
   const roomDescription=mud.querySelector("[data-mud-room-description]");
   const roomExits=mud.querySelector("[data-mud-room-exits]");
   const roomItems=mud.querySelector("[data-mud-room-items]");
+  const roomNpcs=mud.querySelector("[data-mud-room-npcs]");
   const occupants=mud.querySelector("[data-mud-occupants] > div");
   const characterName=mud.querySelector("[data-character-name]");
   const characterLevel=mud.querySelector("[data-character-level]");
@@ -21,6 +22,8 @@ for(const mud of document.querySelectorAll("[data-mud]")){
   const characterExperienceRemaining=mud.querySelector("[data-character-experience-remaining]");
   const carried=mud.querySelector("[data-mud-carried]");
   const equipped=mud.querySelector("[data-mud-equipped]");
+  const quests=mud.querySelector("[data-mud-quests]");
+  const questCount=mud.querySelector("[data-mud-quest-count]");
   let busy=false, pollBusy=false;
   let lastId=Math.max(0,...Array.from(events.querySelectorAll("[data-event-id]"),row=>Number(row.dataset.eventId)||0));
 
@@ -83,6 +86,7 @@ for(const mud of document.querySelectorAll("[data-mud]")){
     roomDescription.textContent=room.description||"";
     roomExits.textContent=(room.exits||[]).map(exit=>exit.direction||exit.name).join(", ")||"none";
     if(roomItems)roomItems.textContent=(room.items||[]).map(item=>item.name).join(", ")||"none";
+    if(roomNpcs)roomNpcs.textContent=(room.npcs||[]).map(npc=>npc.name).join(", ")||"none";
     occupants.replaceChildren();
     if(!room.occupants?.length){
       const empty=document.createElement("span");
@@ -124,6 +128,21 @@ for(const mud of document.querySelectorAll("[data-mud]")){
     };
     fill(carried,inventory.inventory,false);fill(equipped,inventory.equipment,true);
   };
+  const renderQuests=state=>{
+    if(!quests||!state)return;
+    const active=state.active||[];
+    if(questCount)questCount.textContent=active.length;
+    quests.replaceChildren();
+    if(!active.length){const empty=document.createElement("span");empty.className="muted";empty.textContent="no active quests";quests.append(empty);return}
+    for(const quest of active){
+      const article=document.createElement("article");
+      const title=document.createElement("strong");title.textContent=quest.name;
+      const description=document.createElement("p");description.textContent=quest.description;
+      const list=document.createElement("ul");
+      for(const objective of quest.objectives||[]){const row=document.createElement("li");if(objective.completed_at)row.className="complete";row.append(`${objective.completed_at?"✓":"·"} ${objective.description} `);const progress=document.createElement("span");progress.textContent=`${objective.progress}/${objective.required_count}`;row.append(progress);list.append(row)}
+      article.append(title,description,list);quests.append(article);
+    }
+  };
   const setBusy=value=>{
     busy=value;
     form.querySelector("button").disabled=value;
@@ -145,6 +164,7 @@ for(const mud of document.querySelectorAll("[data-mud]")){
       renderRoom(payload.room);
       renderCharacter(payload.character);
       renderInventory(payload.inventory);
+      renderQuests(payload.quests);
       if(payload.actions)renderActions(payload.actions);
       if(!response.ok)throw new Error(payload.error||"Action rejected by the station.");
       for(const event of payload.events||[])appendEvent(event);
@@ -166,6 +186,7 @@ for(const mud of document.querySelectorAll("[data-mud]")){
       renderRoom(payload.room);
       renderCharacter(payload.character);
       renderInventory(payload.inventory);
+      renderQuests(payload.quests);
       if(payload.actions)renderActions(payload.actions);
       for(const event of payload.events||[])appendEvent(event);
       if(error.textContent==="LINK RETRYING...")error.textContent="";
