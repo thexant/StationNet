@@ -28,7 +28,7 @@ const sfxStorageKey="stationnet.sfx.enabled";
 let sfxEnabled=true;
 try{sfxEnabled=localStorage.getItem(sfxStorageKey)!=="false"}catch(_){}
 const sfxBase=document.body.dataset.sfxBase||"";
-const sfxFiles={click:"click.ogg",emailsent:"emailsent.ogg",newchat:"newchat.ogg",newmail:"newmail.ogg","ptt-on":"ptt-on.ogg","ptt-off":"ptt-off.ogg"};
+const sfxFiles={click:"click.ogg",emailsent:"emailsent.ogg",newchat:"newchat.ogg",newmail:"newmail.ogg",sendmessage:"sendmessage.ogg","ptt-on":"ptt-on.ogg","ptt-off":"ptt-off.ogg"};
 const sfxAudio=Object.fromEntries(Object.entries(sfxFiles).map(([name,file])=>{const audio=new Audio(`${sfxBase}${file}`);audio.preload="auto";return[name,audio]}));
 const playSfx=name=>{
   if(!sfxEnabled||!sfxAudio[name])return null;
@@ -203,6 +203,7 @@ for(const chat of document.querySelectorAll("[data-live-chat]")){
       const payload=await response.json();
       if(!response.ok)throw new Error(payload.error||"Transmission failed.");
       form.querySelector("textarea").value="";
+      playSfx("sendmessage");
       await poll();
     }catch(problem){error.textContent=problem.message}
     finally{button.disabled=false;form.querySelector("textarea").focus()}
