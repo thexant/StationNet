@@ -31,6 +31,12 @@
       <input name="brand_tagline" maxlength="160" required value="{{ g.station.brand_tagline }}">
       <small>Shown beneath the station logo on every page.</small>
     </label>
+    <label>Header style
+      <select name="header_font">
+        {% for font, label in header_fonts %}<option value="{{ font }}" {% if g.station.header_font==font %}selected{% endif %}>{{ label }}</option>{% endfor %}
+      </select>
+      <small>Applied to the station-name ASCII header on every page.</small>
+    </label>
     <div class="divider">FILE ARCHIVE POLICY</div>
     <label>Who may upload
       <select name="upload_permission">

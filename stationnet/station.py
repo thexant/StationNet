@@ -3,6 +3,7 @@ import secrets
 import sqlite3
 from flask import Blueprint, current_app, flash, g, redirect, render_template, request, url_for
 from .auth import admin_required, invitation_digest
+from .ansi import HEADER_FONTS, HEADER_FONT_NAMES
 from .db import get_db
 from .markdown import render_markdown
 from .radio import (can_host_broadcast, effective_access, format_frequency,
@@ -260,6 +261,7 @@ def settings():
         brand_tagline = request.form.get(
             "brand_tagline", g.station["brand_tagline"]
         ).strip()
+        header_font = request.form.get("header_font", g.station["header_font"])
         upload_permission = request.form.get("upload_permission", g.station["upload_permission"])
         storage_limit = request.form.get("file_storage_limit_mb", g.station["file_storage_limit_mb"], type=int)
         file_limit = request.form.get("file_size_limit_mb", g.station["file_size_limit_mb"], type=int)
@@ -268,6 +270,7 @@ def settings():
         elif len(landing_heading) > 100: flash("Landing message heading cannot exceed 100 characters.", "error")
         elif len(landing_message) > 4000: flash("Landing message cannot exceed 4000 characters.", "error")
         elif not 1 <= len(brand_tagline) <= 160: flash("Header tagline must be between 1 and 160 characters.", "error")
+        elif header_font not in HEADER_FONT_NAMES: flash("Select a valid header style.", "error")
         elif upload_permission not in {"members", "admins", "disabled"}: flash("Select a valid upload permission.", "error")
         elif storage_limit is None or not 1 <= storage_limit <= 10240: flash("Archive storage must be between 1 and 10240 MB.", "error")
         elif file_limit is None or not 1 <= file_limit <= 64: flash("Per-file limit must be between 1 and 64 MB.", "error")
@@ -288,7 +291,7 @@ def settings():
                 )
             database.execute(
                 "UPDATE station SET name=?,description=?,landing_message=?,landing_heading=?,"
-                "landing_message_enabled=?,brand_tagline=?,"
+                "landing_message_enabled=?,brand_tagline=?,header_font=?,"
                 "upload_permission=?,file_storage_limit_mb=?,file_size_limit_mb=?"
                 + access_update + " WHERE id=1",
                 (
@@ -298,6 +301,7 @@ def settings():
                     landing_heading,
                     landing_message_enabled,
                     brand_tagline,
+                    header_font,
                     upload_permission,
                     storage_limit,
                     file_limit,
@@ -306,6 +310,7 @@ def settings():
             database.commit(); flash("Station parameters updated.", "success")
             return redirect(url_for("station.settings"))
     database = get_db()
+    header_fonts = HEADER_FONTS
     bands = database.execute("SELECT * FROM radio_bands ORDER BY start_khz").fetchall()
     groups = database.execute("SELECT * FROM radio_permission_groups ORDER BY is_default DESC,name").fetchall()
     rules = database.execute(
@@ -339,7 +344,8 @@ def settings():
         "LEFT JOIN users recipient ON recipient.id=i.used_by "
         "ORDER BY i.id DESC"
     ).fetchall()
-    return render_template("settings.html", bands=bands, groups=groups, users=users,
+    return render_template("settings.html", header_fonts=header_fonts,
+                           bands=bands, groups=groups, users=users,
                            memberships=memberships, effective=effective,
                            broadcast_hosts=broadcast_hosts,
                            assignments=assignments, broadcast_sessions=broadcast_sessions,

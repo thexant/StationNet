@@ -13,6 +13,7 @@ CREATE TABLE IF NOT EXISTS station (
  landing_message_enabled INTEGER NOT NULL DEFAULT 1
  CHECK(landing_message_enabled IN (0,1)),
  brand_tagline TEXT NOT NULL DEFAULT 'H7/dS! // YOUR INDEPENDENT COMMUNITY STATION //',
+ header_font TEXT NOT NULL DEFAULT 'small',
  upload_permission TEXT NOT NULL DEFAULT 'members',
  file_storage_limit_mb INTEGER NOT NULL DEFAULT 100,
  file_size_limit_mb INTEGER NOT NULL DEFAULT 10,
@@ -550,6 +551,10 @@ def _migrate_station_customization(database):
         database.execute(
             "ALTER TABLE station ADD COLUMN brand_tagline TEXT NOT NULL "
             "DEFAULT 'H7/dS! // YOUR INDEPENDENT COMMUNITY STATION //'"
+        )
+    if "header_font" not in columns:
+        database.execute(
+            "ALTER TABLE station ADD COLUMN header_font TEXT NOT NULL DEFAULT 'small'"
         )
     database.execute(
         "UPDATE station SET brand_tagline=? WHERE brand_tagline=?",
