@@ -84,7 +84,8 @@ def create_app(test_config=None):
         except (TypeError, ValueError):
             g.masthead_font_size = 100
         g.station_banner = station_banner(
-            g.station["name"] if g.station else "STATIONNET",
+            (g.station["header_text"].strip() or g.station["name"])
+            if g.station else "STATIONNET",
             g.station["header_font"] if g.station else "small",
             g.masthead_font_size,
         )

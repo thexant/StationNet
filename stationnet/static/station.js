@@ -159,6 +159,61 @@ const localTimestamp=value=>{
 };
 for(const time of document.querySelectorAll("[data-local-time]"))time.textContent=localTimestamp(time.dateTime||time.textContent);
 document.addEventListener("keydown",e=>{const editing=e.target instanceof HTMLInputElement||e.target instanceof HTMLTextAreaElement||e.target instanceof HTMLSelectElement||e.target?.isContentEditable;if(e.key==="/"&&!editing&&!e.ctrlKey&&!e.metaKey&&!e.altKey){e.preventDefault();const command=document.querySelector("[data-command-input]");if(command){command.focus();if(!command.value)command.value="/"}else document.querySelector("#service-nav")?.focus()}});
+for(const editor of document.querySelectorAll("[data-banner-editor]")){
+  const text=editor.querySelector("[data-banner-text]");
+  const font=editor.querySelector("[data-font-browser]");
+  const size=editor.querySelector("[data-banner-size]");
+  const search=editor.querySelector("[data-font-search]");
+  const color=editor.querySelector("[data-banner-color]");
+  const picker=editor.querySelector("[data-banner-color-picker]");
+  const preset=editor.querySelector("[data-banner-color-preset]");
+  const preview=editor.querySelector("[data-banner-preview]");
+  const output=editor.querySelector("[data-banner-preview-output]");
+  const status=editor.querySelector("[data-banner-preview-status]");
+  const restore=editor.querySelector("[data-banner-restore]");
+  if(!text||!font||!size||!color||!picker||!preset||!preview||!output)continue;
+  const defaultColor="#00d8cf";
+  let timer, controller;
+  const setPreviewColor=()=>preview.style.setProperty("--banner-preview-color",color.value||"var(--cyan)");
+  const syncPreset=()=>{
+    const matching=[...preset.options].find(option=>option.value===color.value);
+    preset.value=matching?color.value:(color.value?"custom":"");
+    picker.value=color.value||defaultColor;
+    setPreviewColor();
+  };
+  const render=()=>{
+    clearTimeout(timer);
+    timer=setTimeout(async()=>{
+      if(!font.value||!size.checkValidity())return;
+      controller?.abort();controller=new AbortController();
+      status.textContent="Rendering preview…";
+      const query=new URLSearchParams({text:text.value,font:font.value,size:size.value});
+      try{
+        const response=await fetch(`${editor.dataset.previewUrl}?${query}`,{headers:{Accept:"application/json"},cache:"no-store",signal:controller.signal});
+        const payload=await response.json();
+        if(!response.ok)throw new Error(payload.error||"Preview unavailable.");
+        output.textContent=payload.banner;
+        status.textContent="Matches the saved masthead renderer.";
+      }catch(problem){if(problem.name!=="AbortError")status.textContent=problem.message||"Preview unavailable."}
+    },220);
+  };
+  search?.addEventListener("input",()=>{
+    const term=search.value.trim().toLocaleLowerCase();
+    for(const option of font.options)option.hidden=!!term&&!option.value.toLocaleLowerCase().includes(term);
+  });
+  for(const control of [text,font,size])control.addEventListener("input",render);
+  font.addEventListener("change",render);
+  preset.addEventListener("change",()=>{
+    if(preset.value!=="custom")color.value=preset.value;
+    syncPreset();
+  });
+  picker.addEventListener("input",()=>{color.value=picker.value;syncPreset()});
+  restore?.addEventListener("click",()=>{
+    text.value="";font.value="small";size.value="100";color.value="";syncPreset();render();
+  });
+  editor.addEventListener("reset",()=>setTimeout(()=>{syncPreset();render()}));
+  syncPreset();
+}
 for(const form of document.querySelectorAll("form[data-confirm]"))form.addEventListener("submit",e=>{if(!confirm(form.dataset.confirm))e.preventDefault()});
 for(const form of document.querySelectorAll('form[method="post"]:not([data-chat-form]):not([data-sfx-submit])'))form.addEventListener("submit",event=>{
   if(event.defaultPrevented||!form.checkValidity())return;

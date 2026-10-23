@@ -3,39 +3,21 @@
 from functools import lru_cache
 import unicodedata
 
-from pyfiglet import Figlet
+from pyfiglet import Figlet, FigletFont
 
-HEADER_FONTS = (
-    ("small", "Compact"),
-    ("standard", "Classic terminal"),
-    ("slant", "Slanted"),
-    ("mini", "Minimal"),
-    ("digital", "Digital display"),
-    ("cybermedium", "Cyber"),
-    ("doom", "Bold block"),
-    ("shadow", "Shadow"),
-    ("3-d", "3-D"),
-    ("chunky", "Chunky"),
-    ("univers", "Univers"),
-    ("banner3-D", "Banner 3-D"),
-    ("epic", "Epic"),
-    ("larry3d", "Larry 3D"),
-    ("starwars", "Star Wars"),
-    ("cosmic", "Cosmic"),
-    ("5lineoblique", "5 Line Oblique"),
-    ("alligator", "Alligator"),
-    ("avatar", "Avatar"),
-    ("banner", "Banner"),
-    ("doh", "Doh"),
-    ("graffiti", "Graffiti"),
-    ("ogre", "Ogre"),
-    ("smkeyboard", "Small keyboard"),
-    ("speed", "Speed"),
-    ("sub-zero", "Sub-Zero"),
-    ("weird", "Weird"),
 
-)
-HEADER_FONT_NAMES = frozenset(font for font, _label in HEADER_FONTS)
+def available_header_fonts() -> tuple[str, ...]:
+    """Return every FIGlet font shipped by the installed pyfiglet package."""
+    try:
+        return tuple(sorted(set(FigletFont.getFonts()), key=str.casefold))
+    except (OSError, AttributeError):
+        # A usable fallback keeps existing installations operable if a damaged
+        # pyfiglet font directory is encountered.
+        return ("small",)
+
+
+def is_available_header_font(font: str) -> bool:
+    return font in available_header_fonts()
 
 
 @lru_cache(maxsize=128)
@@ -56,7 +38,7 @@ def station_banner(name: str, font: str = "small", size: int = 100) -> str:
     # the horizontal space it just gained instead of retaining old line wraps.
     safe_size = min(200, max(5, int(size)))
     renderer = Figlet(
-        font=font if font in HEADER_FONT_NAMES else "small",
+        font=font if is_available_header_font(font) else "small",
         width=round(72 * 100 / safe_size),
     )
     return renderer.renderText(printable_name or "STATIONNET").rstrip()

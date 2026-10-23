@@ -1,11 +1,12 @@
 """Welcome, workspace, and SYSOP settings."""
 import json
+import re
 import secrets
 import sqlite3
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
-from flask import Blueprint, Response, current_app, flash, g, redirect, render_template, request, url_for
+from flask import Blueprint, Response, current_app, flash, g, jsonify, redirect, render_template, request, url_for
 from .auth import admin_required, invitation_digest
-from .ansi import HEADER_FONTS, HEADER_FONT_NAMES
+from .ansi import available_header_fonts, is_available_header_font, station_banner
 from .db import get_db
 from . import dungeons
 from .markdown import render_markdown
@@ -14,19 +15,44 @@ from .radio import (can_host_broadcast, effective_access, format_frequency,
 from .security import validate_csrf
 bp = Blueprint("station", __name__)
 
+HEX_COLOR_RE = re.compile(r"^#[0-9a-fA-F]{6}$")
+
+
+def _header_color(value):
+    """Return a safe configured CSS color, or the theme's normal cyan."""
+    return value if isinstance(value, str) and HEX_COLOR_RE.fullmatch(value) else ""
+
 
 @bp.get("/masthead.css")
 def masthead_css():
     """Serve the station-specific masthead scale without inline styles."""
     size = g.masthead_font_size
+    color = _header_color(g.station["header_color"] if g.station else "")
     stylesheet = (
         ".ansi-logo { font-size: clamp("
         f"{size * 0.004:.3f}rem, {size * 0.0155:.3f}vw, "
-        f"{size * 0.0088:.3f}rem); }}"
+        f"{size * 0.0088:.3f}rem);"
+        + (f" color: {color};" if color else "") + " }"
     )
     response = Response(stylesheet, content_type="text/css")
     response.headers["Cache-Control"] = "no-store"
     return response
+
+
+@bp.get("/sysop/banner-preview")
+@admin_required
+def banner_preview():
+    """Render a single proposed masthead using the exact production renderer."""
+    text = request.args.get("text", "").strip()
+    font = request.args.get("font", "small")
+    size = request.args.get("size", 100, type=int)
+    if len(text) > 80:
+        return jsonify(error="Banner text must be 80 characters or fewer."), 400
+    if not is_available_header_font(font):
+        return jsonify(error="That FIGlet font is not available."), 400
+    if size is None or not 5 <= size <= 200:
+        return jsonify(error="Header size must be between 5% and 200%."), 400
+    return jsonify(banner=station_banner(text or g.station["name"], font, size))
 
 @bp.get("/")
 def index():
@@ -421,6 +447,8 @@ def settings():
             "brand_tagline", g.station["brand_tagline"]
         ).strip()
         header_font = request.form.get("header_font", g.station["header_font"])
+        header_text = request.form.get("header_text", g.station["header_text"]).strip()
+        header_color = request.form.get("header_color", g.station["header_color"]).strip()
         header_font_size = request.form.get(
             "header_font_size", g.station["header_font_size"], type=int
         )
@@ -432,7 +460,9 @@ def settings():
         elif len(landing_heading) > 100: flash("Landing message heading cannot exceed 100 characters.", "error")
         elif len(landing_message) > 4000: flash("Landing message cannot exceed 4000 characters.", "error")
         elif not 1 <= len(brand_tagline) <= 160: flash("Header tagline must be between 1 and 160 characters.", "error")
-        elif header_font not in HEADER_FONT_NAMES: flash("Select a valid header style.", "error")
+        elif len(header_text) > 80: flash("Banner text must be 80 characters or fewer.", "error")
+        elif not is_available_header_font(header_font): flash("Select a valid FIGlet header style.", "error")
+        elif header_color and not HEX_COLOR_RE.fullmatch(header_color): flash("Banner color must be a six-digit hexadecimal color.", "error")
         elif header_font_size is None or not 5 <= header_font_size <= 200: flash("Header size must be between 5% and 200%.", "error")
         elif upload_permission not in {"members", "admins", "disabled"}: flash("Select a valid upload permission.", "error")
         elif storage_limit is None or not 1 <= storage_limit <= 10240: flash("Archive storage must be between 1 and 10240 MB.", "error")
@@ -454,7 +484,7 @@ def settings():
                 )
             database.execute(
                 "UPDATE station SET name=?,description=?,landing_message=?,landing_heading=?,"
-                "landing_message_enabled=?,brand_tagline=?,header_font=?,header_font_size=?,"
+                "landing_message_enabled=?,brand_tagline=?,header_font=?,header_font_size=?,header_text=?,header_color=?,"
                 "upload_permission=?,file_storage_limit_mb=?,file_size_limit_mb=?"
                 + access_update + " WHERE id=1",
                 (
@@ -466,6 +496,8 @@ def settings():
                     brand_tagline,
                     header_font,
                     header_font_size,
+                    header_text,
+                    header_color,
                     upload_permission,
                     storage_limit,
                     file_limit,
@@ -474,7 +506,7 @@ def settings():
             database.commit(); flash("Station parameters updated.", "success")
             return redirect(url_for("station.settings"))
     database = get_db()
-    header_fonts = HEADER_FONTS
+    header_fonts = available_header_fonts()
     bands = database.execute("SELECT * FROM radio_bands ORDER BY start_khz").fetchall()
     groups = database.execute("SELECT * FROM radio_permission_groups ORDER BY is_default DESC,name").fetchall()
     rules = database.execute(

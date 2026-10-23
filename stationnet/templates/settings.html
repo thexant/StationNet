@@ -9,7 +9,7 @@
   </button>
   <div id="station-parameters-content" data-panel-content>
   <p>Station identity: <strong>{{ g.station.name }} - [{{ g.station.callsign }}]</strong></p>
-  <form method="post" action="{{ url_for('station.settings') }}" class="form-grid">
+  <form method="post" action="{{ url_for('station.settings') }}" class="form-grid" data-banner-editor data-preview-url="{{ url_for('station.banner_preview') }}">
     <input type="hidden" name="csrf_token" value="{{ session.csrf_token }}">
     <label>Station name
       <input name="name" maxlength="80" required value="{{ g.station.name }}">
@@ -32,16 +32,37 @@
       <input name="brand_tagline" maxlength="160" required value="{{ g.station.brand_tagline }}">
       <small>Shown beneath the station logo on every page.</small>
     </label>
+    <div class="divider">ASCII BANNER</div>
+    <label>Banner text
+      <input name="header_text" maxlength="80" value="{{ g.station.header_text }}" placeholder="{{ g.station.name }}" data-banner-text>
+      <small>Leave blank to use the station name. The preview uses the same FIGlet renderer as the live masthead.</small>
+    </label>
+    <label>Find a FIGlet style
+      <input type="search" placeholder="Search {{ header_fonts|length }} installed styles" autocomplete="off" data-font-search>
+      <small>All fonts installed with pyfiglet are available. Search narrows the browser below.</small>
+    </label>
     <label>Header style
-      <select name="header_font">
-        {% for font, label in header_fonts %}<option value="{{ font }}" {% if g.station.header_font==font %}selected{% endif %}>{{ label }}</option>{% endfor %}
+      <select name="header_font" size="8" data-font-browser>
+        {% if g.station.header_font not in header_fonts %}<option value="small" selected>small (saved style unavailable; using fallback)</option>{% endif %}
+        {% for font in header_fonts %}<option value="{{ font }}" {% if g.station.header_font==font %}selected{% endif %}>{{ font }}</option>{% endfor %}
       </select>
-      <small>Applied to the station-name ASCII header on every page.</small>
+      <small>Browse a compact, searchable list; the selected style is sampled in the live preview.</small>
     </label>
     <label>Header size
-      <input type="number" name="header_font_size" min="5" max="200" step="5" required value="{{ g.station.header_font_size }}">
+      <input type="number" name="header_font_size" min="5" max="200" step="5" required value="{{ g.station.header_font_size }}" data-banner-size>
       <small>Scale the station-name ASCII header from 5% to 200%. Reduce it for long names or larger styles.</small>
     </label>
+    <label>Banner colour
+      <span class="banner-color-controls"><select data-banner-color-preset aria-label="Banner colour preset">
+        <option value="">Theme default (cyan)</option><option value="#00ed45">Terminal green</option><option value="#71ff8a">Bright green</option><option value="#00d8cf">Cyan</option><option value="#e6a431">Amber</option><option value="#d829be">Magenta</option><option value="custom">Custom…</option>
+      </select><input type="color" value="{{ g.station.header_color or '#00d8cf' }}" data-banner-color-picker aria-label="Custom banner colour"></span>
+      <input type="hidden" name="header_color" value="{{ g.station.header_color }}" data-banner-color>
+      <small>Theme default preserves the standard masthead color. A selected colour is applied wherever the ASCII banner appears.</small>
+    </label>
+    <section class="banner-preview" aria-labelledby="banner-preview-heading" data-banner-preview>
+      <div><span class="eyebrow" id="banner-preview-heading">LIVE BANNER PREVIEW</span><small data-banner-preview-status aria-live="polite">Matches the saved masthead renderer.</small></div>
+      <pre data-banner-preview-output>{{ g.station_banner }}</pre>
+    </section>
     <div class="divider">FILE ARCHIVE POLICY</div>
     <label>Who may upload
       <select name="upload_permission">
@@ -54,7 +75,7 @@
     <label>Maximum file size (MB)<input type="number" name="file_size_limit_mb" min="1" max="64" required value="{{ g.station.file_size_limit_mb }}"></label>
     <p><a href="{{ url_for('announcements.index') }}">MANAGE STATION ANNOUNCEMENTS</a></p>
     <p><a href="{{ url_for('application_admin.manage') }}">MANAGE GAMES AND APPS</a></p>
-    <button>COMMIT PARAMETERS</button>
+    <div class="button-row"><button>SAVE PARAMETERS</button><button type="reset" class="secondary">CANCEL CHANGES</button><button type="button" class="secondary" data-banner-restore>RESTORE BANNER DEFAULT</button></div>
   </form>
   </div>
 </section>
