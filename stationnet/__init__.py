@@ -64,9 +64,16 @@ def create_app(test_config=None):
                 (g.user["id"],),
             ).fetchone()[0]
         g.mud_can_build = bool(g.user and mud.can_build(db.get_db(), g.user))
+        try:
+            g.masthead_font_size = min(
+                200, max(5, int(g.station["header_font_size"]))
+            ) if g.station else 100
+        except (TypeError, ValueError):
+            g.masthead_font_size = 100
         g.station_banner = station_banner(
             g.station["name"] if g.station else "STATIONNET",
             g.station["header_font"] if g.station else "small",
+            g.masthead_font_size,
         )
         ensure_csrf_token()
         if g.user is not None:

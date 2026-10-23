@@ -32,7 +32,7 @@ a:hover { color: var(--magenta); }
 .system-line { display: flex; justify-content: space-between; gap: 1rem; color: var(--grey); font-family: "Courier New", monospace; font-size: .72rem; }
 .station-brand { display: grid; justify-items: center; margin: 1.5rem 0 1.2rem; color: var(--cyan); text-decoration: none; }
 .station-brand:hover { color: var(--cyan); }
-.ansi-logo { max-width: 100%; margin: 0; overflow-x: auto; color: currentColor; font: 700 clamp(.4rem, 1.55vw, .88rem)/1.08 var(--mono); letter-spacing: .02em; text-shadow: .13em .1em 0 var(--magenta); white-space: pre; }
+.ansi-logo { max-width: 100%; margin: 0; overflow-x: auto; color: currentColor; font-family: var(--mono); font-size: clamp(.4rem, 1.55vw, .88rem); font-weight: 700; line-height: 1.08; letter-spacing: .02em; text-shadow: .13em .1em 0 var(--magenta); white-space: pre; }
 .brand-tag { margin-top: .7rem; color: var(--amber); font-size: .68rem; letter-spacing: .08em; text-align: center; }
 .brand-tag i { color: var(--green-bright); font-style: normal; }
 

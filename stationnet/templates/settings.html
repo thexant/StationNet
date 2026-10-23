@@ -37,6 +37,10 @@
       </select>
       <small>Applied to the station-name ASCII header on every page.</small>
     </label>
+    <label>Header size
+      <input type="number" name="header_font_size" min="5" max="200" step="5" required value="{{ g.station.header_font_size }}">
+      <small>Scale the station-name ASCII header from 5% to 200%. Reduce it for long names or larger styles.</small>
+    </label>
     <div class="divider">FILE ARCHIVE POLICY</div>
     <label>Who may upload
       <select name="upload_permission">

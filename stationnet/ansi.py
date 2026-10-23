@@ -39,7 +39,7 @@ HEADER_FONT_NAMES = frozenset(font for font, _label in HEADER_FONTS)
 
 
 @lru_cache(maxsize=128)
-def station_banner(name: str, font: str = "small") -> str:
+def station_banner(name: str, font: str = "small", size: int = 100) -> str:
     """Render a station name in one of the supported masthead styles."""
     ascii_name = (
         unicodedata.normalize("NFKD", name)
@@ -51,7 +51,12 @@ def station_banner(name: str, font: str = "small") -> str:
         character for character in ascii_name if character.isprintable()
     ).strip()
 
-    # A bounded width wraps long names into readable four-line blocks instead
-    # of forcing the masthead to shrink until it is illegible.
-    renderer = Figlet(font=font if font in HEADER_FONT_NAMES else "small", width=72)
+    # pyfiglet inserts its own newlines at this width. Scale that width in the
+    # opposite direction of the CSS display size so a smaller masthead can use
+    # the horizontal space it just gained instead of retaining old line wraps.
+    safe_size = min(200, max(5, int(size)))
+    renderer = Figlet(
+        font=font if font in HEADER_FONT_NAMES else "small",
+        width=round(72 * 100 / safe_size),
+    )
     return renderer.renderText(printable_name or "STATIONNET").rstrip()

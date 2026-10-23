@@ -6,6 +6,7 @@
   <meta name="theme-color" content="#000000">
   <title>{% block title %}StationNet{% endblock %}{% if g.station %} :: {{ g.station.name }}{% endif %}</title>
   <link rel="stylesheet" href="{{ url_for('static',filename='station.css',v='radio-layout-2') }}">
+  <link rel="stylesheet" href="{{ url_for('station.masthead_css') }}">
   <script src="{{ url_for('static',filename='station.js') }}" defer></script>
   <script src="{{ url_for('static',filename='radio.js') }}" defer></script>
 </head>

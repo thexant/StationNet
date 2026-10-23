@@ -862,6 +862,12 @@ def control_automated(broadcast_id):
         flash("Automated broadcast stopped." if changed else "Automated broadcast was already stopped.",
               "success" if changed else "warning")
         return _automated_redirect(broadcast_id)
+    if action == "indefinite":
+        changed = _store().set_indefinite(key, request.form.get("enabled") == "1")
+        flash("Automated broadcast loop updated." if changed else
+              "No active automated broadcast session was found.",
+              "success" if changed else "error")
+        return _automated_redirect(broadcast_id)
     if action != "start":
         abort(400)
     if not transmission_authorized(g.user["id"], definition["frequency_khz"], "HOSTED_BROADCAST"):

@@ -166,6 +166,52 @@ def test_automated_sessions_are_independent_and_wait_after_playlist_completion(a
         store.stop("automated:2")
 
 
+def test_sysop_can_toggle_an_automated_broadcast_to_loop_indefinitely(app):
+    client = app.test_client()
+    login(client, app.config["SYSOP_ID"])
+    with app.app_context():
+        audio_dir = Path(app.config["DATA_DIR"]) / "radio_audio" / str(app.config["SYSOP_ID"])
+        audio_dir.mkdir(parents=True)
+        (audio_dir / "alert.wav").write_bytes(b"test audio")
+        database = get_db()
+        audio_id = database.execute(
+            "INSERT INTO radio_audio_files"
+            "(owner_id,display_name,stored_name,media_type,size_bytes,duration_seconds,title) "
+            "VALUES(?,?,?,?,?,?,?)",
+            (app.config["SYSOP_ID"], "alert.wav", "alert.wav", "audio/wav", 10, 60, "Alert"),
+        ).lastrowid
+        database.execute(
+            "INSERT INTO radio_playlist_tracks(playlist_id,audio_file_id,display_name,position) "
+            "VALUES(?,?,?,0)", (app.config["PLAYLIST_ID"], audio_id, "alert.wav"),
+        )
+        broadcast_id = database.execute(
+            "INSERT INTO radio_automated_broadcasts"
+            "(created_by,name,frequency_khz,playlist_id,runtime_minutes,delay_minutes) "
+            "VALUES(?,?,?,?,?,?)",
+            (app.config["SYSOP_ID"], "Continuous alert", 7100,
+             app.config["PLAYLIST_ID"], 1, 10),
+        ).lastrowid
+        database.commit()
+
+    start = client.post(f"/radio/manage/automated/{broadcast_id}/control", data={
+        "csrf_token": "csrf", "action": "start",
+    })
+    assert start.status_code == 302
+    toggle = client.post(f"/radio/manage/automated/{broadcast_id}/control", data={
+        "csrf_token": "csrf", "action": "indefinite", "enabled": "1",
+    })
+    assert toggle.status_code == 302
+    with app.app_context():
+        session = app.extensions["hosted_broadcasts"].public(f"automated:{broadcast_id}")
+        assert session["indefinite"] is True
+        assert session["remaining_seconds"] is None
+        assert app.extensions["hosted_broadcasts"].advance(
+            f"automated:{broadcast_id}", session["audio_file_id"], session["track_serial"],
+        )
+        assert app.extensions["hosted_broadcasts"].public(f"automated:{broadcast_id}")["status"] == "live"
+        app.extensions["hosted_broadcasts"].stop(f"automated:{broadcast_id}")
+
+
 def test_broadcast_directory_only_includes_on_air_broadcasts(app):
     client = app.test_client()
     login(client, app.config["SYSOP_ID"])

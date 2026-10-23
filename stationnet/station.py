@@ -1,7 +1,7 @@
 """Welcome, workspace, and SYSOP settings."""
 import secrets
 import sqlite3
-from flask import Blueprint, current_app, flash, g, redirect, render_template, request, url_for
+from flask import Blueprint, Response, current_app, flash, g, redirect, render_template, request, url_for
 from .auth import admin_required, invitation_digest
 from .ansi import HEADER_FONTS, HEADER_FONT_NAMES
 from .db import get_db
@@ -10,6 +10,20 @@ from .radio import (can_host_broadcast, effective_access, format_frequency,
                     parse_frequency, reconcile_radio_permissions)
 from .security import validate_csrf
 bp = Blueprint("station", __name__)
+
+
+@bp.get("/masthead.css")
+def masthead_css():
+    """Serve the station-specific masthead scale without inline styles."""
+    size = g.masthead_font_size
+    stylesheet = (
+        ".ansi-logo { font-size: clamp("
+        f"{size * 0.004:.3f}rem, {size * 0.0155:.3f}vw, "
+        f"{size * 0.0088:.3f}rem); }}"
+    )
+    response = Response(stylesheet, content_type="text/css")
+    response.headers["Cache-Control"] = "no-store"
+    return response
 
 @bp.get("/")
 def index():
@@ -262,6 +276,9 @@ def settings():
             "brand_tagline", g.station["brand_tagline"]
         ).strip()
         header_font = request.form.get("header_font", g.station["header_font"])
+        header_font_size = request.form.get(
+            "header_font_size", g.station["header_font_size"], type=int
+        )
         upload_permission = request.form.get("upload_permission", g.station["upload_permission"])
         storage_limit = request.form.get("file_storage_limit_mb", g.station["file_storage_limit_mb"], type=int)
         file_limit = request.form.get("file_size_limit_mb", g.station["file_size_limit_mb"], type=int)
@@ -271,6 +288,7 @@ def settings():
         elif len(landing_message) > 4000: flash("Landing message cannot exceed 4000 characters.", "error")
         elif not 1 <= len(brand_tagline) <= 160: flash("Header tagline must be between 1 and 160 characters.", "error")
         elif header_font not in HEADER_FONT_NAMES: flash("Select a valid header style.", "error")
+        elif header_font_size is None or not 5 <= header_font_size <= 200: flash("Header size must be between 5% and 200%.", "error")
         elif upload_permission not in {"members", "admins", "disabled"}: flash("Select a valid upload permission.", "error")
         elif storage_limit is None or not 1 <= storage_limit <= 10240: flash("Archive storage must be between 1 and 10240 MB.", "error")
         elif file_limit is None or not 1 <= file_limit <= 64: flash("Per-file limit must be between 1 and 64 MB.", "error")
@@ -291,7 +309,7 @@ def settings():
                 )
             database.execute(
                 "UPDATE station SET name=?,description=?,landing_message=?,landing_heading=?,"
-                "landing_message_enabled=?,brand_tagline=?,header_font=?,"
+                "landing_message_enabled=?,brand_tagline=?,header_font=?,header_font_size=?,"
                 "upload_permission=?,file_storage_limit_mb=?,file_size_limit_mb=?"
                 + access_update + " WHERE id=1",
                 (
@@ -302,6 +320,7 @@ def settings():
                     landing_message_enabled,
                     brand_tagline,
                     header_font,
+                    header_font_size,
                     upload_permission,
                     storage_limit,
                     file_limit,
