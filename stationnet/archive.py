@@ -9,6 +9,7 @@ from PIL import Image, ImageOps, UnidentifiedImageError
 from .auth import login_required
 from .db import get_db
 from .security import validate_csrf
+from .moderation import audit
 
 bp = Blueprint("archive", __name__, url_prefix="/files")
 CATEGORIES = ("General", "Documents", "Images", "Software", "Other")
@@ -166,6 +167,8 @@ def delete(file_id):
         flash("File is currently in use and could not be removed. Try again shortly.", "error")
         return redirect(url_for("archive.index"))
     database.execute("DELETE FROM archive_files WHERE id=?", (file_id,))
+    if g.user["id"] != item["uploader_id"]:
+        audit(database,g.user["id"],item["uploader_id"],"delete_file",request.form.get("reason", "SYSOP removal")[:500],"file",file_id)
     database.commit()
     flash("Archive file removed.", "success")
     return redirect(url_for("archive.index"))

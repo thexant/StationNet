@@ -12,7 +12,7 @@
     </a>
     {% endif %}
     <div class="file-details"><span>{{ file.category|upper }} / {{ file.size_bytes|filesizeformat }}</span><h2>{{ file.display_name }}</h2><p>{{ file.description or 'No description.' }}</p><small>UPLOADED BY {{ file.username }} - [{{ file.callsign }}] / {{ file.created_at }} UTC</small></div>
-    <div class="button-row"><a class="button" href="{{ url_for('archive.download',file_id=file.id) }}">DOWNLOAD</a>{% if file.uploader_id==g.user.id or g.user.is_admin %}<form method="post" action="{{ url_for('archive.delete',file_id=file.id) }}" data-confirm="Permanently remove this archive file?"><input type="hidden" name="csrf_token" value="{{ session.csrf_token }}"><button class="danger">DELETE</button></form>{% endif %}</div>
+    <div class="button-row"><a class="button" href="{{ url_for('archive.download',file_id=file.id) }}">DOWNLOAD</a><details><summary>REPORT</summary><form method="post" action="{{ url_for('reports.create_report') }}"><input type="hidden" name="csrf_token" value="{{ session.csrf_token }}"><input type="hidden" name="target_type" value="file"><input type="hidden" name="target_id" value="{{ file.id }}"><label>Reason<input name="reason" minlength="10" maxlength="500" required></label><button>SUBMIT</button></form></details>{% if file.uploader_id==g.user.id or g.user.is_admin %}<form method="post" action="{{ url_for('archive.delete',file_id=file.id) }}" data-confirm="Permanently remove this archive file?"><input type="hidden" name="csrf_token" value="{{ session.csrf_token }}"><button class="danger">DELETE</button></form>{% endif %}</div>
   </article>
   {% else %}
   <div class="empty-state"><span class="empty-signal">:c</span><h2>No files archived.</h2></div>

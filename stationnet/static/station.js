@@ -160,14 +160,40 @@ for(const chat of document.querySelectorAll("[data-live-chat]")){
   let initialized=false;
 
   const addMessage=message=>{
+    if(log.querySelector(`[data-message-id="${message.id}"]`))return;
     chat.querySelector("[data-chat-empty]")?.remove();
     const row=document.createElement("div");
     row.className="chat-message"+(message.mine?" mine":"");
+    row.dataset.messageId=String(message.id);
     const meta=document.createElement("span");
     meta.textContent=`${message.username} - [${message.callsign}] · ${localTimestamp(message.created_at)}`;
     const body=document.createElement("p");
     body.textContent=message.body;
     row.append(meta,body);
+    if(chat.dataset.reportUrl||chat.dataset.deleteUrl){
+      const menu=document.createElement("details");
+      const summary=document.createElement("summary");summary.textContent="ACTIONS";menu.append(summary);
+      if(chat.dataset.reportUrl&&!message.mine){
+        const report=document.createElement("button");report.type="button";report.textContent="REPORT";
+        report.addEventListener("click",async()=>{
+          const reason=prompt("Reason for reporting this message (at least 10 characters):");
+          if(!reason)return;
+          const data=new FormData();data.set("csrf_token",form.elements.csrf_token.value);data.set("target_type","chat");data.set("target_id",message.id);data.set("reason",reason);
+          const response=await fetch(chat.dataset.reportUrl,{method:"POST",body:data});
+          alert(response.ok?"Report sent to the sysops.":"Report could not be sent. Check the reason or try later.");
+        });menu.append(report);
+      }
+      if(chat.dataset.deleteUrl){
+        const remove=document.createElement("button");remove.type="button";remove.textContent="SYSOP DELETE";
+        remove.addEventListener("click",async()=>{
+          const reason=prompt("Reason for deleting this message:");if(!reason||!confirm("Delete this message?"))return;
+          const data=new FormData();data.set("csrf_token",form.elements.csrf_token.value);data.set("reason",reason);
+          const response=await fetch(chat.dataset.deleteUrl.replace("/0/delete",`/${message.id}/delete`),{method:"POST",body:data});
+          if(response.ok)row.remove();else alert("Message could not be deleted.");
+        });menu.append(remove);
+      }
+      row.append(menu);
+    }
     log.append(row);
     lastId=Math.max(lastId,message.id);
     log.scrollTop=log.scrollHeight;
@@ -180,8 +206,12 @@ for(const chat of document.querySelectorAll("[data-live-chat]")){
       const response=await fetch(`${url}?after=${lastId}`,{headers:{"Accept":"application/json"},cache:"no-store"});
       if(response.status===401||response.redirected){location.reload();return}
       const payload=await response.json();
+      if(!response.ok){error.textContent=payload.error||"CHAT UNAVAILABLE";form.querySelector("textarea").disabled=true;form.querySelector("button").disabled=true;return}
       const messages=payload.messages||[];
+      for(const id of payload.deleted_ids||[])log.querySelector(`[data-message-id="${id}"]`)?.remove();
       for(const message of messages)addMessage(message);
+      if(payload.muted){error.textContent="CHAT MUTED: you cannot send messages.";form.querySelector("textarea").disabled=true;form.querySelector("button").disabled=true}
+      else if(payload.active!==false&&form.querySelector("textarea").disabled){error.textContent="";form.querySelector("textarea").disabled=false;form.querySelector("button").disabled=false}
       if(initialized&&messages.some(message=>!message.mine))playSfx("newchat");
       initialized=true;
       if(payload.active===false){

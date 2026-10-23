@@ -3,8 +3,8 @@ import os
 import secrets
 from datetime import timedelta
 from pathlib import Path
-from flask import Flask, g, redirect, request, url_for
-from . import announcements, applications, archive, auth, board, broadcast, chat, db, dungeons, mail, mud, programs, radio, station, users
+from flask import Flask, g, jsonify, redirect, render_template, request, url_for
+from . import announcements, applications, archive, auth, board, broadcast, chat, db, dungeons, mail, moderation, mud, programs, radio, station, users
 from .ansi import station_banner
 from .realtime import DirectChatStore
 from .radio import RadioStore
@@ -42,6 +42,8 @@ def create_app(test_config=None):
     app.register_blueprint(station.bp)
     app.register_blueprint(board.bp)
     app.register_blueprint(chat.bp)
+    app.register_blueprint(moderation.bp)
+    app.register_blueprint(moderation.report_bp)
     app.register_blueprint(mail.bp)
     app.register_blueprint(archive.bp)
     app.register_blueprint(users.bp)
@@ -87,9 +89,19 @@ def create_app(test_config=None):
             g.masthead_font_size,
         )
         ensure_csrf_token()
+        endpoint = request.endpoint or ""
+        if g.user is not None and endpoint not in {"auth.logout", "static"}:
+            restriction = moderation.active_restriction(g.user["id"], ("ban", "suspension"))
+            if restriction is not None:
+                message = ("Account banned" if restriction["kind"] == "ban" else "Account suspended")
+                message += f": {restriction['reason']}"
+                if restriction["expires_at"]:
+                    message += f" (until {restriction['expires_at']} UTC)"
+                if request.is_json or request.accept_mimetypes.best == "application/json" or request.path.startswith(("/radio/", "/broadcast/", "/applications/")):
+                    return jsonify(error=message), 403
+                return render_template("moderation/restricted.html", message=message), 403
         if g.user is not None:
             auth.touch_presence()
-        endpoint = request.endpoint or ""
         if g.station is None and endpoint not in {"auth.setup", "static"} and not endpoint.startswith("static"):
             return redirect(url_for("auth.setup"))
         if g.station is not None and endpoint == "auth.setup":

@@ -3,6 +3,8 @@ from flask import Blueprint, abort, flash, g, redirect, render_template, request
 from .auth import admin_required, login_required
 from .db import get_db
 from .security import validate_csrf
+from .moderation import audit
+from .realtime import utc_now
 bp = Blueprint("board", __name__, url_prefix="/board")
 
 def _allowed():
@@ -51,8 +53,8 @@ def thread(post_id):
 @bp.post("/<int:post_id>/delete")
 @admin_required
 def delete(post_id):
-    validate_csrf(); database=get_db(); post=database.execute("SELECT id,parent_id FROM posts WHERE id=?", (post_id,)).fetchone()
+    validate_csrf(); database=get_db(); post=database.execute("SELECT id,parent_id,author_id FROM posts WHERE id=?", (post_id,)).fetchone()
     if post is None: abort(404)
     destination=url_for("board.thread", post_id=post["parent_id"]) if post["parent_id"] else url_for("board.index")
-    database.execute("DELETE FROM posts WHERE id=?", (post_id,)); database.commit(); flash("Bulletin content removed by SYSOP.", "success")
+    database.execute("DELETE FROM posts WHERE id=?", (post_id,)); audit(database,g.user["id"],post["author_id"],"delete_bulletin",request.form.get("reason", "SYSOP removal")[:500],"bulletin",post_id); database.commit(); flash("Bulletin content removed by SYSOP.", "success")
     return redirect(destination)

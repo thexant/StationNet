@@ -100,3 +100,11 @@ Voice uses direct peer-to-peer ICE candidates and no external STUN/TURN service.
 
 Later milestones may add expanded MUD gameplay, controlled federation, and more detailed radio propagation. Those systems remain outside this milestone.
 
+# Moderation
+
+SYSOP accounts can open **MODERATION** from the station navigation or SYSOP settings. The page lists accounts, current account and chat restrictions, open reports, and searchable audit history. An account page provides formal warnings, temporary suspensions, permanent bans, chat mutes, reinstatement, and recent public-chat bulk deletion. Reasons are required; private notes appear only in SYSOP history. Warnings also arrive as private station mail.
+
+Users can report public chat messages, bulletins, files, and user behavior. Open reports are limited to one per user and target, with a daily limit of ten reports per account. SYSOPs review them in the moderation queue and record a resolution note. Existing bulletin and file removal controls remain available; SYSOP removals are audited. Public-chat message actions appear within each message.
+
+Account restrictions are checked on every request, including API and radio paths. A temporary restriction expires automatically at its recorded UTC time; reinstatement ends active account restrictions, and unmute ends active chat mutes. Public-chat clients poll every two seconds for new messages and removals. Direct chat is temporary in-memory traffic, so it is not retained for retrospective moderation; user behavior can be reported from a profile. The bulk public-chat action removes up to the 500 most recent messages by the selected user per invocation.
+

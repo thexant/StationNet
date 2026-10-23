@@ -41,7 +41,7 @@
         {% if g.station.mud_enabled %}<i>*</i><a href="{{ url_for('mud.index') }}" {% if request.endpoint=='mud.index' %}aria-current="page"{% endif %}>MUD</a>{% endif %}
         {% if g.mud_can_build %}<i>*</i><a href="{{ url_for('mud.builder') }}" {% if request.endpoint and request.endpoint.startswith('mud.builder') %}aria-current="page"{% endif %}>WORLD BUILDER</a>{% endif %}
         {% endif %}
-        {% if g.user and g.user.is_admin %}<i>*</i><a href="{{ url_for('station.settings') }}" {% if request.endpoint=='station.settings' or request.blueprint=='application_admin' %}aria-current="page"{% endif %}>SYSOP CONTROL</a>{% endif %}
+        {% if g.user and g.user.is_admin %}<i>*</i><a href="{{ url_for('station.settings') }}" {% if request.endpoint=='station.settings' or request.blueprint=='application_admin' %}aria-current="page"{% endif %}>SYSOP CONTROL</a><i>*</i><a href="{{ url_for('moderation.dashboard') }}" {% if request.blueprint=='moderation' %}aria-current="page"{% endif %}>MODERATION</a>{% endif %}
       </nav>
       {% endif %}
     </header>

@@ -55,6 +55,30 @@ CREATE TABLE IF NOT EXISTS station_chat_messages (
  author_id INTEGER NOT NULL REFERENCES users(id) ON DELETE RESTRICT,
  body TEXT NOT NULL, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);
 CREATE INDEX IF NOT EXISTS idx_station_chat_created ON station_chat_messages(id);
+CREATE TABLE IF NOT EXISTS moderation_restrictions (
+ id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER NOT NULL REFERENCES users(id),
+ kind TEXT NOT NULL CHECK(kind IN ('suspension','ban','mute')),
+ starts_at TEXT NOT NULL, expires_at TEXT, ended_at TEXT,
+ actor_id INTEGER REFERENCES users(id), reason TEXT NOT NULL, private_note TEXT NOT NULL DEFAULT '');
+CREATE INDEX IF NOT EXISTS idx_moderation_restrictions_user ON moderation_restrictions(user_id,kind,ended_at,expires_at);
+CREATE TABLE IF NOT EXISTS moderation_audit (
+ id INTEGER PRIMARY KEY AUTOINCREMENT, actor_id INTEGER REFERENCES users(id),
+ user_id INTEGER REFERENCES users(id), action TEXT NOT NULL,
+ target_type TEXT, target_id INTEGER, reason TEXT NOT NULL DEFAULT '',
+ private_note TEXT NOT NULL DEFAULT '', created_at TEXT NOT NULL);
+CREATE INDEX IF NOT EXISTS idx_moderation_audit_user ON moderation_audit(user_id,id);
+CREATE TABLE IF NOT EXISTS moderation_reports (
+ id INTEGER PRIMARY KEY AUTOINCREMENT, reporter_id INTEGER NOT NULL REFERENCES users(id),
+ target_type TEXT NOT NULL CHECK(target_type IN ('user','chat','bulletin','file')),
+ target_id INTEGER NOT NULL, subject_user_id INTEGER REFERENCES users(id),
+ reason TEXT NOT NULL, created_at TEXT NOT NULL,
+ status TEXT NOT NULL DEFAULT 'open' CHECK(status IN ('open','resolved','dismissed')),
+ resolver_id INTEGER REFERENCES users(id), resolution_note TEXT NOT NULL DEFAULT '', resolved_at TEXT);
+CREATE INDEX IF NOT EXISTS idx_moderation_reports_queue ON moderation_reports(status,id);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_moderation_reports_open_unique
+ ON moderation_reports(reporter_id,target_type,target_id) WHERE status='open';
+CREATE TABLE IF NOT EXISTS station_chat_deletions (
+ message_id INTEGER PRIMARY KEY, deleted_at TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS mail (
  id INTEGER PRIMARY KEY AUTOINCREMENT,
  sender_id INTEGER NOT NULL REFERENCES users(id) ON DELETE RESTRICT,

@@ -6,6 +6,7 @@ from flask import Blueprint, abort, current_app, flash, g, jsonify, redirect, re
 from .auth import login_required
 from .db import get_db
 from .security import validate_csrf
+from .moderation import active_restriction
 
 bp = Blueprint("chat", __name__, url_prefix="/chat")
 
@@ -47,14 +48,19 @@ def station_messages():
         ).fetchall()
     messages = [dict(row) for row in rows]
     for message in messages:
-        message["mine"] = message.pop("author_id") == g.user["id"]
-    return jsonify(messages=messages)
+        message["mine"] = message["author_id"] == g.user["id"]
+    deleted = database.execute("SELECT message_id FROM station_chat_deletions WHERE message_id<=? AND message_id>?",
+                               (after if after else 0, max(0, after-2000))).fetchall() if after else []
+    return jsonify(messages=messages, deleted_ids=[row["message_id"] for row in deleted],
+                   muted=bool(active_restriction(g.user["id"], ("mute",))))
 
 
 @bp.post("/messages")
 @login_required
 def send_station_message():
     validate_csrf()
+    if active_restriction(g.user["id"], ("mute",)):
+        return jsonify(error="Your chat is muted. You cannot send messages."), 403
     body = request.form.get("body", "").strip()
     if not 1 <= len(body) <= 1000:
         return jsonify(error="Message must be between 1 and 1000 characters."), 400
@@ -95,13 +101,15 @@ def direct_messages(user_id):
         item["username"] = g.user["username"] if mine else peer["username"]
         item["mine"] = mine
         del item["sender_id"]
-    return jsonify(active=True, messages=messages)
+    return jsonify(active=True, messages=messages, muted=bool(active_restriction(g.user["id"], ("mute",))))
 
 
 @bp.post("/direct/<int:user_id>/messages")
 @login_required
 def send_direct_message(user_id):
     validate_csrf()
+    if active_restriction(g.user["id"], ("mute",)):
+        return jsonify(error="Your chat is muted. You cannot send messages."), 403
     peer = _online_user(user_id)
     if peer is None:
         return jsonify(error="That operator is no longer online."), 409

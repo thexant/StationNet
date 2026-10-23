@@ -1,7 +1,7 @@
 {% extends 'base.html' %}
 {% block title %}Station Chat{% endblock %}
 {% block content %}
-<section class="terminal-card live-chat" data-live-chat data-messages-url="{{ url_for('chat.station_messages') }}">
+<section class="terminal-card live-chat" data-live-chat data-messages-url="{{ url_for('chat.station_messages') }}" data-report-url="{{ url_for('reports.create_report') }}" {% if g.user.is_admin %}data-delete-url="{{ url_for('moderation.delete_chat',message_id=0) }}"{% endif %}>
   <p class="eyebrow">STATION PUBLIC CHAT</p>
   <h1>Station chat</h1>
   <p class="muted">Persistent station-wide traffic.</p>

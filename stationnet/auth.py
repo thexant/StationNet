@@ -269,6 +269,13 @@ def login():
             flash("Invalid username or password.", "error")
             return render_template("login.html", login_failed=True)
         else:
+            from .moderation import active_restriction
+            restriction = active_restriction(user["id"], ("ban", "suspension"))
+            if restriction is not None:
+                until = f" until {restriction['expires_at']} UTC" if restriction["expires_at"] else ""
+                state = "banned" if restriction["kind"] == "ban" else "suspended"
+                flash(f"Account {state}{until}: {restriction['reason']}", "error")
+                return render_template("login.html", login_failed=True), 403
             remember_me = request.form.get("remember_me") == "on"
             session.clear(); session.permanent = remember_me; session["user_id"] = user["id"]; establish_connection(user["id"])
             flash(

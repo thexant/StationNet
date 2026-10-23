@@ -1,6 +1,7 @@
 {% extends 'base.html' %}
 {% block title %}SYSOP Settings{% endblock %}
 {% block content %}
+<p><a class="button" href="{{ url_for('moderation.dashboard') }}">MODERATION / USERS / REPORTS</a></p>
 <section class="narrow terminal-card collapsible-panel" data-collapsible-panel data-panel-key="sysop-station-parameters">
   <button type="button" class="collapsible-panel-toggle" data-panel-toggle aria-expanded="true" aria-controls="station-parameters-content">
     <span class="collapsible-panel-heading"><span class="eyebrow">SYSOP CONTROL / STATION PARAMETERS</span><span class="collapsible-panel-title page-title" role="heading" aria-level="1">Station settings</span></span>
