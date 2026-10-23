@@ -5,7 +5,7 @@
   <p class="eyebrow">STATION PUBLIC CHAT</p>
   <h1>Station chat</h1>
   <p class="muted">Persistent station-wide traffic.</p>
-  <div class="chat-log" data-chat-log role="log" aria-live="polite"><p class="muted" data-chat-empty>Quiet for now...</p></div>
+  <div class="chat-log" data-chat-log role="log" aria-live="polite" aria-label="Station chat messages"><p class="muted" data-chat-empty>Loading messages...</p></div>
   <form class="chat-compose" data-chat-form>
     <input type="hidden" name="csrf_token" value="{{ session.csrf_token }}">
     <label>Transmit as {{ g.user.username }} - [{{ g.user.callsign }}]<textarea name="body" maxlength="1000" rows="3" required></textarea><small>Press Enter to send. Shift+Enter starts a new line.</small></label>

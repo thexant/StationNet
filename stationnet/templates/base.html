@@ -10,7 +10,7 @@
   <script src="{{ url_for('static',filename='station.js') }}" defer></script>
   <script src="{{ url_for('static',filename='radio.js',v='broadcast-overhaul-1') }}" defer></script>
 </head>
-<body data-sfx-base="{{ url_for('static',filename='sfx/') }}"{% if g.user %} data-user-id="{{ g.user.id }}" data-mail-latest-id="{{ g.mail_latest_id }}" data-mail-notifications-url="{{ url_for('mail.notifications') }}" data-presence-url="{{ url_for('users.presence') }}" data-radio-state-url="{{ url_for('radio.state') }}" data-radio-tune-url="{{ url_for('radio.tune') }}" data-radio-receive-url="{{ url_for('radio.receive') }}" data-radio-power-off-url="{{ url_for('radio.power_off') }}" data-radio-start-url="{{ url_for('radio.transmit_start') }}" data-radio-signal-url="{{ url_for('radio.transmit_signal') }}" data-radio-end-url="{{ url_for('radio.transmit_end') }}" data-radio-scan-url="{{ url_for('radio.scan') }}" data-radio-voice-peers-url="{{ url_for('radio.voice_peers') }}" data-radio-voice-signals-url="{{ url_for('radio.voice_signals') }}" data-broadcast-status-url="{{ url_for('broadcast.status') }}" data-broadcast-start-url="{{ url_for('broadcast.start_broadcast') }}" data-broadcast-program-start-url="{{ url_for('programs.start_program',program_id=0) }}" data-broadcast-stop-url="{{ url_for('broadcast.stop_broadcast') }}" data-broadcast-advance-url="{{ url_for('broadcast.advance_broadcast') }}" data-broadcast-timing-url="{{ url_for('broadcast.broadcast_timing') }}" data-broadcast-audio-url="{{ url_for('broadcast.broadcast_audio',file_id=0) }}" data-broadcast-content-image-url="{{ url_for('programs.content_image',content_id=0) }}" data-dj-control-url="{{ url_for('programs.dj_control') }}" data-dj-status-url="{{ url_for('programs.dj_status') }}" data-radio-csrf="{{ session.csrf_token }}"{% endif %}>
+<body data-sfx-base="{{ url_for('static',filename='sfx/') }}"{% if g.user %} data-user-id="{{ g.user.id }}" data-mail-latest-id="{{ g.mail_latest_id }}" data-mail-notifications-url="{{ url_for('mail.notifications') }}" data-direct-notifications-url="{{ url_for('chat.direct_notifications') }}" data-direct-base-url="{{ url_for('chat.direct',user_id=0) }}" data-presence-url="{{ url_for('users.presence') }}" data-radio-state-url="{{ url_for('radio.state') }}" data-radio-tune-url="{{ url_for('radio.tune') }}" data-radio-receive-url="{{ url_for('radio.receive') }}" data-radio-power-off-url="{{ url_for('radio.power_off') }}" data-radio-start-url="{{ url_for('radio.transmit_start') }}" data-radio-signal-url="{{ url_for('radio.transmit_signal') }}" data-radio-end-url="{{ url_for('radio.transmit_end') }}" data-radio-scan-url="{{ url_for('radio.scan') }}" data-radio-voice-peers-url="{{ url_for('radio.voice_peers') }}" data-radio-voice-signals-url="{{ url_for('radio.voice_signals') }}" data-broadcast-status-url="{{ url_for('broadcast.status') }}" data-broadcast-start-url="{{ url_for('broadcast.start_broadcast') }}" data-broadcast-program-start-url="{{ url_for('programs.start_program',program_id=0) }}" data-broadcast-stop-url="{{ url_for('broadcast.stop_broadcast') }}" data-broadcast-advance-url="{{ url_for('broadcast.advance_broadcast') }}" data-broadcast-timing-url="{{ url_for('broadcast.broadcast_timing') }}" data-broadcast-audio-url="{{ url_for('broadcast.broadcast_audio',file_id=0) }}" data-broadcast-content-image-url="{{ url_for('programs.content_image',content_id=0) }}" data-dj-control-url="{{ url_for('programs.dj_control') }}" data-dj-status-url="{{ url_for('programs.dj_status') }}" data-radio-csrf="{{ session.csrf_token }}"{% endif %}>
   <a class="skip-link" href="#main">Skip to content</a>
   <div class="station-shell">
     <header class="station-header">
@@ -27,14 +27,14 @@
       </div>
       <nav class="service-nav" id="service-nav" aria-label="Station services" tabindex="-1">
         <a href="{{ url_for('station.terminal') }}" {% if request.endpoint=='station.terminal' %}aria-current="page"{% endif %}>STATION</a>
-        <i>*</i>
+        <i aria-hidden="true">*</i>
         <a href="{{ url_for('board.index') }}" {% if request.blueprint=='board' %}aria-current="page"{% endif %}>BULLETIN BOARD</a>
-        <i>*</i>
+        <i aria-hidden="true">*</i>
         <a href="{{ url_for('announcements.index') }}" {% if request.blueprint=='announcements' %}aria-current="page"{% endif %}>ANNOUNCEMENTS</a>
         {% if g.user %}
-        <i>*</i><a href="{{ url_for('chat.station_chat') }}" {% if request.blueprint=='chat' %}aria-current="page"{% endif %}>CHAT</a>
-        <i>*</i><a href="{{ url_for('mail.inbox') }}" {% if request.blueprint=='mail' %}aria-current="page"{% endif %}>MAIL</a>
-        <i>*</i><a href="{{ url_for('radio.console') }}" {% if request.endpoint=='radio.console' %}aria-current="page"{% endif %}>RADIO</a>
+        <i>*</i><a href="{{ url_for('chat.station_chat') }}" {% if request.blueprint=='chat' %}aria-current="page"{% endif %}>CHAT <span class="direct-count" data-direct-count hidden></span></a>
+        <i>*</i><a href="{{ url_for('mail.inbox') }}" {% if request.blueprint=='mail' %}aria-current="page"{% endif %}>MAIL <span class="mail-count" data-mail-count hidden></span></a>
+        <i>*</i><a href="{{ url_for('radio.console') }}" {% if request.blueprint in ('radio', 'broadcast', 'programs') %}aria-current="page"{% endif %}>RADIO</a>
         <i>*</i><a href="{{ url_for('archive.index') }}" {% if request.blueprint=='archive' %}aria-current="page"{% endif %}>FILES</a>
         <i>*</i><a href="{{ url_for('users.directory') }}" {% if request.blueprint=='users' %}aria-current="page"{% endif %}>USERS</a>
         <i>*</i><a href="{{ url_for('applications.index') }}" {% if request.blueprint=='applications' %}aria-current="page"{% endif %}>GAMES + APPS</a>
@@ -48,6 +48,7 @@
 
     <div class="flash-stack" aria-live="polite">
       {% for category,message in get_flashed_messages(with_categories=true) %}<div class="flash {{ category }}"><span>SYS://</span> {{ message }}</div>{% endfor %}
+      {% if g.user %}<div class="direct-alerts" data-direct-alerts aria-live="polite"></div>{% endif %}
     </div>
 
     <main id="main" class="main-panel">{% block content %}{% endblock %}</main>

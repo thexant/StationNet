@@ -2,6 +2,7 @@
 {% block title %}Broadcast Programs{% endblock %}
 {% block content %}
 <header class="board-head"><div><p class="eyebrow">RADIO SERVICE / UNIFIED PROGRAMMING</p><h1>Broadcast programs</h1><p>Combine playlists, reusable audio, Morse, SSTV, and live breaks into one running order.</p></div><a class="button secondary" href="{{ url_for('broadcast.manage') }}">AUDIO + PLAYLISTS</a></header>
+<nav class="subnav settings-jump-nav" aria-label="Program sections"><a href="#content-library">CONTENT LIBRARY</a><a href="#program-editor">PROGRAM EDITOR</a><a href="{{ url_for('broadcast.manage') }}">AUDIO + PLAYLISTS</a></nav>
 
 <section class="terminal-card broadcast-section" id="content-library">
   <p class="eyebrow">REUSABLE ASSETS</p><h2>Broadcast content library</h2>
@@ -17,7 +18,7 @@
   <div class="content-grid">{% for item in content %}<article><b>{{ item.kind|upper }}</b><span>{{ item.name }}</span>{% if item.kind == 'morse' %}<small>{{ item.text_content|truncate(90) }}</small>{% endif %}<form method="post" action="{{ url_for('programs.delete_content',content_id=item.id) }}" data-confirm="Delete {{ item.name }}?"><input type="hidden" name="csrf_token" value="{{ session.csrf_token }}"><button class="text-button">DELETE</button></form></article>{% else %}<p class="muted">No reusable content yet. Existing playlists remain available below.</p>{% endfor %}</div>
 </section>
 
-<section class="terminal-card broadcast-section">
+<section class="terminal-card broadcast-section" id="program-editor">
   <p class="eyebrow">PROGRAM EDITOR</p><h2>Create program</h2>
   <form method="post" action="{{ url_for('programs.create_program') }}" class="inline-form"><input type="hidden" name="csrf_token" value="{{ session.csrf_token }}"><label>Name<input name="name" maxlength="80" required placeholder="EVENING SERVICE"></label><label>Description<input name="description" maxlength="240"></label><button>CREATE PROGRAM +</button></form>
 </section>

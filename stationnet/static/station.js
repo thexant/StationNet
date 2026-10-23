@@ -1,18 +1,15 @@
 "use strict";
-// StationNet is intentionally terminal-like: text entry should never surface
-// browser, password-manager, spelling, or mobile-keyboard suggestions. Keep the
-// policy here so it also covers controls added later by hosted applications.
+// Keep spelling and automatic capitalization out of terminal-style fields.
+// Authentication fields retain their declared autocomplete values so password
+// managers and the browser can fill them reliably.
 const disableTextEntrySuggestions=root=>{
   if(!(root instanceof Element||root instanceof Document))return;
-  const forms=root.matches?.("form")?[root]:[];
-  forms.push(...root.querySelectorAll("form"));
-  for(const form of forms)form.setAttribute("autocomplete","off");
   const controls=root.matches?.("input,textarea")?[root]:[];
   controls.push(...root.querySelectorAll("input,textarea"));
   for(const control of controls){
     const textLike=control instanceof HTMLTextAreaElement||(control instanceof HTMLInputElement&&["text","search","email","url","tel","password"].includes(control.type));
     if(!textLike)continue;
-    control.setAttribute("autocomplete","off");
+    if(!control.hasAttribute("autocomplete"))control.setAttribute("autocomplete","off");
     control.setAttribute("autocorrect","off");
     control.setAttribute("autocapitalize","off");
     control.setAttribute("spellcheck","false");
@@ -70,6 +67,7 @@ for(const form of document.querySelectorAll("form[data-sfx-submit]"))form.addEve
 
 const mailNotificationsUrl=document.body.dataset.mailNotificationsUrl;
 if(mailNotificationsUrl){
+  const mailBadge=document.querySelector("[data-mail-count]");
   const mailCursorKey=`stationnet.mail.cursor.${document.body.dataset.userId}`;
   const storedMailCursor=sessionStorage.getItem(mailCursorKey);
   let mailCursor=storedMailCursor===null?Number(document.body.dataset.mailLatestId):Number(storedMailCursor);
@@ -86,6 +84,10 @@ if(mailNotificationsUrl){
       const payload=await response.json();
       const latestId=Math.max(mailCursor,Number(payload.latest_id)||0);
       if(latestId!==mailCursor){mailCursor=latestId;sessionStorage.setItem(mailCursorKey,String(mailCursor))}
+      const unread=Math.max(0,Number(payload.unread_count)||0);
+      mailBadge.hidden=unread===0;
+      mailBadge.textContent=unread>99?"99+":String(unread);
+      mailBadge.parentElement.setAttribute("aria-label",unread?`Mail, ${unread} unread messages`:"Mail");
       if(Number(payload.new_count)>0)playSfx("newmail");
     }catch(_){}finally{mailPollBusy=false}
   };
@@ -98,6 +100,54 @@ if(mailNotificationsUrl){
   }
 }
 
+const directNotificationsUrl=document.body.dataset.directNotificationsUrl;
+if(directNotificationsUrl){
+  const alerts=document.querySelector("[data-direct-alerts]");
+  const badge=document.querySelector("[data-direct-count]");
+  const activeChat=document.querySelector("[data-direct-peer]");
+  const activePeer=Number(activeChat?.dataset.directPeer)||0;
+  const viewingDirect=()=>{
+    const log=activeChat?.querySelector("[data-chat-log]");
+    return activePeer&&document.visibilityState==="visible"&&document.hasFocus()&&
+      log&&log.scrollHeight-log.scrollTop-log.clientHeight<80;
+  };
+  let directPollBusy=false;
+  let previousUnread="";
+  const pollDirect=async()=>{
+    if(directPollBusy)return;
+    directPollBusy=true;
+    try{
+      const claim=document.visibilityState==="visible"&&document.hasFocus()?"1":"0";
+      const response=await fetch(`${directNotificationsUrl}?claim=${claim}`,{headers:{Accept:"application/json"},cache:"no-store"});
+      if(!response.ok||response.redirected)return;
+      const payload=await response.json();
+      const unread=payload.unread||[];
+      const count=unread.reduce((total,item)=>total+item.count,0);
+      badge.hidden=count===0;
+      badge.textContent=count>99?"99+":String(count);
+      badge.parentElement.setAttribute("aria-label",count?`Chat, ${count} unread direct messages`:"Chat");
+      const signature=JSON.stringify(unread);
+      if(signature!==previousUnread){
+        previousUnread=signature;
+        alerts.replaceChildren();
+        for(const item of unread){
+          const link=document.createElement("a");
+          link.className="direct-alert";
+          link.href=document.body.dataset.directBaseUrl.replace(/0$/,String(item.user_id));
+          link.textContent=`DIRECT / ${item.username} [${item.callsign}] · ${item.count} unread`;
+          link.setAttribute("aria-label",`${item.count} unread direct messages from ${item.username}. Open conversation.`);
+          alerts.append(link);
+        }
+      }
+      if((payload.alerts||[]).some(item=>item.user_id!==activePeer||!viewingDirect()))playSfx("newchat");
+    }catch(_){}finally{directPollBusy=false}
+  };
+  pollDirect();
+  setInterval(pollDirect,2000);
+  window.addEventListener("focus",pollDirect);
+  document.addEventListener("visibilitychange",()=>{if(!document.hidden)pollDirect()});
+}
+
 const clock=document.querySelector("[data-clock]");
 const dateReadout=document.querySelector("[data-date]");
 if(clock){const tick=()=>{const now=new Date();clock.textContent=now.toLocaleTimeString([],{hour12:false});if(dateReadout)dateReadout.textContent=now.toLocaleDateString([],{weekday:"short",month:"short",day:"2-digit",year:"numeric"}).toUpperCase()};tick();setInterval(tick,1000)}
@@ -108,8 +158,18 @@ const localTimestamp=value=>{
   return Number.isNaN(timestamp.getTime())?value:timestamp.toLocaleString([],{dateStyle:"medium",timeStyle:"short"});
 };
 for(const time of document.querySelectorAll("[data-local-time]"))time.textContent=localTimestamp(time.dateTime||time.textContent);
-document.addEventListener("keydown",e=>{const editing=e.target instanceof HTMLInputElement||e.target instanceof HTMLTextAreaElement;if(e.key==="/"&&!editing){e.preventDefault();const command=document.querySelector("[data-command-input]");if(command){command.focus();if(!command.value)command.value="/"}else document.querySelector("#service-nav")?.focus()}if(e.key==="Escape"&&document.activeElement instanceof HTMLElement)document.activeElement.blur()});
+document.addEventListener("keydown",e=>{const editing=e.target instanceof HTMLInputElement||e.target instanceof HTMLTextAreaElement||e.target instanceof HTMLSelectElement||e.target?.isContentEditable;if(e.key==="/"&&!editing&&!e.ctrlKey&&!e.metaKey&&!e.altKey){e.preventDefault();const command=document.querySelector("[data-command-input]");if(command){command.focus();if(!command.value)command.value="/"}else document.querySelector("#service-nav")?.focus()}});
 for(const form of document.querySelectorAll("form[data-confirm]"))form.addEventListener("submit",e=>{if(!confirm(form.dataset.confirm))e.preventDefault()});
+for(const form of document.querySelectorAll('form[method="post"]:not([data-chat-form]):not([data-sfx-submit])'))form.addEventListener("submit",event=>{
+  if(event.defaultPrevented||!form.checkValidity())return;
+  const button=event.submitter;
+  if(!(button instanceof HTMLButtonElement))return;
+  if(button.dataset.submitting){event.preventDefault();return}
+  button.dataset.submitting="true";
+  button.setAttribute("aria-disabled","true");
+  button.classList.add("is-submitting");
+  window.addEventListener("pageshow",()=>{delete button.dataset.submitting;button.removeAttribute("aria-disabled");button.classList.remove("is-submitting")},{once:true});
+});
 
 for(const button of document.querySelectorAll("[data-copy-button]"))button.addEventListener("click",async()=>{
   const input=button.parentElement?.querySelector("[data-copy-value]");
@@ -161,6 +221,7 @@ for(const chat of document.querySelectorAll("[data-live-chat]")){
 
   const addMessage=message=>{
     if(log.querySelector(`[data-message-id="${message.id}"]`))return;
+    const nearBottom=log.scrollHeight-log.scrollTop-log.clientHeight<80;
     chat.querySelector("[data-chat-empty]")?.remove();
     const row=document.createElement("div");
     row.className="chat-message"+(message.mine?" mine":"");
@@ -196,28 +257,34 @@ for(const chat of document.querySelectorAll("[data-live-chat]")){
     }
     log.append(row);
     lastId=Math.max(lastId,message.id);
-    log.scrollTop=log.scrollHeight;
+    if(nearBottom||message.mine)log.scrollTop=log.scrollHeight;
   };
 
   const poll=async()=>{
     if(busy)return;
     busy=true;
     try{
-      const response=await fetch(`${url}?after=${lastId}`,{headers:{"Accept":"application/json"},cache:"no-store"});
+      const read=chat.dataset.directPeer&&document.visibilityState==="visible"&&document.hasFocus()&&
+        log.scrollHeight-log.scrollTop-log.clientHeight<80?"&read=1":"";
+      const response=await fetch(`${url}?after=${lastId}${read}`,{headers:{"Accept":"application/json"},cache:"no-store"});
       if(response.status===401||response.redirected){location.reload();return}
       const payload=await response.json();
       if(!response.ok){error.textContent=payload.error||"CHAT UNAVAILABLE";form.querySelector("textarea").disabled=true;form.querySelector("button").disabled=true;return}
+      if(error.textContent==="LINK RETRYING...")error.textContent="";
       const messages=payload.messages||[];
+      if(payload.active!==false&&chat.dataset.closed){delete chat.dataset.closed;log.replaceChildren();lastId=0}
       for(const id of payload.deleted_ids||[])log.querySelector(`[data-message-id="${id}"]`)?.remove();
       for(const message of messages)addMessage(message);
       if(payload.muted){error.textContent="CHAT MUTED: you cannot send messages.";form.querySelector("textarea").disabled=true;form.querySelector("button").disabled=true}
       else if(payload.active!==false&&form.querySelector("textarea").disabled){error.textContent="";form.querySelector("textarea").disabled=false;form.querySelector("button").disabled=false}
-      if(initialized&&messages.some(message=>!message.mine))playSfx("newchat");
+      if(!chat.dataset.directPeer&&initialized&&messages.some(message=>!message.mine))playSfx("newchat");
+      if(!initialized&&messages.length===0){const empty=chat.querySelector("[data-chat-empty]");if(empty)empty.textContent=chat.dataset.directPeer?"No messages in this direct chat yet.":"Quiet for now. Start the conversation below."}
       initialized=true;
       if(payload.active===false){
         error.textContent="LINK CLOSED: USER OFFLINE";
         form.querySelector("textarea").disabled=true;
         form.querySelector("button").disabled=true;
+        if(chat.dataset.directPeer&&!chat.dataset.closed){chat.dataset.closed="true";log.replaceChildren();lastId=0;const closed=document.createElement("p");closed.className="muted";closed.textContent="This direct chat ended when the user went offline.";log.append(closed)}
       }
     }catch(_){error.textContent="LINK RETRYING..."}
     finally{busy=false}
@@ -227,7 +294,10 @@ for(const chat of document.querySelectorAll("[data-live-chat]")){
     event.preventDefault();
     error.textContent="";
     const button=form.querySelector("button");
+    const buttonLabel=button.textContent;
     button.disabled=true;
+    button.textContent="SENDING...";
+    form.setAttribute("aria-busy","true");
     try{
       const response=await fetch(url,{method:"POST",body:new FormData(form),headers:{"Accept":"application/json"}});
       const payload=await response.json();
@@ -236,7 +306,7 @@ for(const chat of document.querySelectorAll("[data-live-chat]")){
       playSfx("sendmessage");
       await poll();
     }catch(problem){error.textContent=problem.message}
-    finally{button.disabled=false;form.querySelector("textarea").focus()}
+    finally{button.textContent=buttonLabel;form.removeAttribute("aria-busy");if(!form.querySelector("textarea").disabled)button.disabled=false;form.querySelector("textarea").focus()}
   });
   form.querySelector("textarea").addEventListener("keydown",event=>{
     if(event.key==="Enter"&&!event.shiftKey&&!event.isComposing){

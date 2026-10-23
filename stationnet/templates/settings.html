@@ -1,8 +1,8 @@
 {% extends 'base.html' %}
 {% block title %}SYSOP Settings{% endblock %}
 {% block content %}
-<p><a class="button" href="{{ url_for('moderation.dashboard') }}">MODERATION / USERS / REPORTS</a></p>
-<section class="narrow terminal-card collapsible-panel" data-collapsible-panel data-panel-key="sysop-station-parameters">
+<nav class="subnav settings-jump-nav" aria-label="Settings sections"><a href="#station-parameters">STATION</a><a href="#access-policy">ACCESS</a><a href="#mud-service">MUD</a><a href="#mud-daily">DAILY MUD</a><a href="#radio-storage">RADIO STORAGE</a><a href="#radio-spectrum">SPECTRUM</a><a href="#broadcast-frequencies">FREQUENCIES</a><a href="#radio-permissions">PERMISSIONS</a><a href="#radio-users">USERS</a><a href="{{ url_for('moderation.dashboard') }}">MODERATION</a><a href="{{ url_for('application_admin.manage') }}">GAMES + APPS</a></nav>
+<section class="narrow terminal-card collapsible-panel" id="station-parameters" data-collapsible-panel data-panel-key="sysop-station-parameters">
   <button type="button" class="collapsible-panel-toggle" data-panel-toggle aria-expanded="true" aria-controls="station-parameters-content">
     <span class="collapsible-panel-heading"><span class="eyebrow">SYSOP CONTROL / STATION PARAMETERS</span><span class="collapsible-panel-title page-title" role="heading" aria-level="1">Station settings</span></span>
     <span class="collapsible-panel-chevron" aria-hidden="true"></span>

@@ -17,11 +17,14 @@ def notifications():
         "SELECT COALESCE(MAX(id),0) FROM mail WHERE recipient_id=?",
         (g.user["id"],),
     ).fetchone()[0]
-    new_count = database.execute(
-        "SELECT COUNT(*) FROM mail WHERE recipient_id=? AND recipient_deleted=0 AND id>?",
-        (g.user["id"], after),
-    ).fetchone()[0]
-    return jsonify(latest_id=latest_id, new_count=new_count)
+    counts = database.execute(
+        "SELECT COUNT(*) FILTER (WHERE id>?) AS new_count, "
+        "COUNT(*) FILTER (WHERE is_read=0) AS unread_count "
+        "FROM mail WHERE recipient_id=? AND recipient_deleted=0",
+        (after, g.user["id"]),
+    ).fetchone()
+    return jsonify(latest_id=latest_id, new_count=counts["new_count"],
+                   unread_count=counts["unread_count"])
 
 
 @bp.get("")

@@ -18,7 +18,7 @@
     <a class="reply-count" href="{{ url_for('board.thread',post_id=post.id) }}"><strong>{{ '%02d'|format(post.reply_count) }}</strong><span>{{ 'reply' if post.reply_count==1 else 'replies' }}</span></a>
   </article>
   {% else %}
-  <div class="empty-state"><span class="empty-signal" aria-hidden="true">:c</span><h2>No bulletins yet.</h2><p>Why not change that?</p></div>
+  <div class="empty-state"><span class="empty-signal" aria-hidden="true">:c</span><h2>No bulletins yet.</h2>{% if g.user %}<p>Start the conversation.</p><a class="button" href="{{ url_for('board.create') }}">POST FIRST BULLETIN</a>{% else %}<p>Sign in to post the first bulletin.</p>{% endif %}</div>
   {% endfor %}
 </section>
 {% endblock %}

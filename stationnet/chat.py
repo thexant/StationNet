@@ -95,6 +95,11 @@ def direct_messages(user_id):
     messages = current_app.extensions["direct_chat"].list(
         g.user["id"], session["connection_id"], peer["id"], peer["connection_id"], after
     )
+    if request.args.get("read") == "1":
+        current_app.extensions["direct_chat"].mark_read(
+            g.user["id"], session["connection_id"], peer["id"], peer["connection_id"],
+            max((item["id"] for item in messages), default=after),
+        )
     for item in messages:
         mine = item["sender_id"] == g.user["id"]
         item["callsign"] = g.user["callsign"] if mine else peer["callsign"]
@@ -102,6 +107,23 @@ def direct_messages(user_id):
         item["mine"] = mine
         del item["sender_id"]
     return jsonify(active=True, messages=messages, muted=bool(active_restriction(g.user["id"], ("mute",))))
+
+
+@bp.get("/direct/notifications")
+@login_required
+def direct_notifications():
+    cutoff = _cutoff()
+    peers = get_db().execute(
+        "SELECT id,username,callsign,connection_id FROM users "
+        "WHERE connection_id IS NOT NULL AND last_seen>=?", (cutoff,)
+    ).fetchall()
+    unread, alerts = current_app.extensions["direct_chat"].notifications(
+        g.user["id"], session["connection_id"], {peer["id"]: peer for peer in peers},
+        claim=request.args.get("claim") == "1",
+    )
+    response = jsonify(unread=unread, alerts=alerts)
+    response.headers["Cache-Control"] = "no-store"
+    return response
 
 
 @bp.post("/direct/<int:user_id>/messages")

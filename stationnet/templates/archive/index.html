@@ -2,7 +2,7 @@
 {% block title %}File Archive{% endblock %}
 {% block content %}
 <header class="board-head"><div><p class="eyebrow">FILE ARCHIVE</p><h1>File archive</h1><p class="muted">{{ used_bytes|filesizeformat }} used of {{ (g.station.file_storage_limit_mb * 1024 * 1024)|filesizeformat }}.</p></div>{% if can_upload %}<a class="button" href="{{ url_for('archive.upload') }}">UPLOAD FILE +</a>{% endif %}</header>
-<nav class="subnav"><a href="{{ url_for('archive.index') }}" {% if not category %}aria-current="page"{% endif %}>ALL</a>{% for name in categories %}<a href="{{ url_for('archive.index',category=name) }}" {% if category==name %}aria-current="page"{% endif %}>{{ name|upper }}</a>{% endfor %}</nav>
+<nav class="subnav" aria-label="File categories"><a href="{{ url_for('archive.index') }}" {% if not category %}aria-current="page"{% endif %}>ALL</a>{% for name in categories %}<a href="{{ url_for('archive.index',category=name) }}" {% if category==name %}aria-current="page"{% endif %}>{{ name|upper }}</a>{% endfor %}</nav>
 <section class="file-list">
   {% for file in files %}
   <article class="file-row" id="file-{{ file.id }}">
@@ -15,7 +15,7 @@
     <div class="button-row"><a class="button" href="{{ url_for('archive.download',file_id=file.id) }}">DOWNLOAD</a><details><summary>REPORT</summary><form method="post" action="{{ url_for('reports.create_report') }}"><input type="hidden" name="csrf_token" value="{{ session.csrf_token }}"><input type="hidden" name="target_type" value="file"><input type="hidden" name="target_id" value="{{ file.id }}"><label>Reason<input name="reason" minlength="10" maxlength="500" required></label><button>SUBMIT</button></form></details>{% if file.uploader_id==g.user.id or g.user.is_admin %}<form method="post" action="{{ url_for('archive.delete',file_id=file.id) }}" data-confirm="Permanently remove this archive file?"><input type="hidden" name="csrf_token" value="{{ session.csrf_token }}"><button class="danger">DELETE</button></form>{% endif %}</div>
   </article>
   {% else %}
-  <div class="empty-state"><span class="empty-signal">:c</span><h2>No files archived.</h2></div>
+  <div class="empty-state"><span class="empty-signal" aria-hidden="true">:c</span><h2>No files {{ 'in this category' if category else 'archived yet' }}.</h2>{% if category %}<a class="button secondary" href="{{ url_for('archive.index') }}">VIEW ALL FILES</a>{% elif can_upload %}<a class="button" href="{{ url_for('archive.upload') }}">UPLOAD THE FIRST FILE</a>{% endif %}</div>
   {% endfor %}
 </section>
 {% endblock %}
