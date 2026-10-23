@@ -61,3 +61,25 @@ def test_remembered_session_reconnects_after_presence_expires(app):
         ).fetchone()
     assert user["connection_id"] != old_connection_id
     assert user["last_seen"] > stale_seen
+
+
+def test_directory_shows_last_seen_in_the_viewers_local_time(app):
+    last_seen = "2026-10-22T18:30:00+00:00"
+    with app.app_context():
+        database = get_db()
+        database.execute(
+            "INSERT INTO users(username,callsign,password_hash,last_seen) VALUES(?,?,?,?)",
+            ("offline-member", "EEE-FFF", "unused", last_seen),
+        )
+        database.commit()
+
+    client = app.test_client()
+    with client.session_transaction() as session:
+        session["user_id"] = app.config["USER_ID"]
+        session["connection_id"] = "directory-connection"
+
+    response = client.get("/users")
+
+    assert response.status_code == 200
+    assert b"LAST SEEN:" in response.data
+    assert b'datetime="2026-10-22T18:30:00+00:00" data-local-time' in response.data

@@ -299,6 +299,7 @@ button:hover, .button:hover { color: #000; background: var(--green); }
 .file-row .button-row, .user-card .button-row { align-content: start; justify-content: end; }
 .user-card-identity { display: flex; align-items: center; gap: .9rem; min-width: 0; }
 .user-card-identity > div:last-child { min-width: 0; }
+.user-last-seen { display: block; margin-top: .35rem; }
 .user-avatar { display: grid; place-items: center; flex: 0 0 56px; width: 56px; height: 56px; border: 1px solid var(--cyan); background: #020702; overflow: hidden; }
 .user-avatar img { display: block; width: 100%; height: 100%; object-fit: cover; }
 .user-avatar.empty { color: var(--green-dim); border-color: var(--green-dim); font-size: var(--text-xs); }

@@ -294,7 +294,7 @@ def logout():
             (utc_now(), g.user["id"], connection_id),
         )
         database.execute(
-            "UPDATE users SET last_seen=NULL,connection_id=NULL WHERE id=? AND connection_id=?",
+            "UPDATE users SET connection_id=NULL WHERE id=? AND connection_id=?",
             (g.user["id"], connection_id),
         )
         database.commit()

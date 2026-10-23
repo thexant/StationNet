@@ -96,7 +96,7 @@ def presence():
 @login_required
 def directory():
     users = get_db().execute(
-        "SELECT id,username,callsign,is_admin,tagline,created_at,profile_photo_filename,"
+        "SELECT id,username,callsign,is_admin,tagline,created_at,last_seen,profile_photo_filename,"
         "(connection_id IS NOT NULL AND last_seen>=?) online FROM users "
         "ORDER BY username COLLATE NOCASE",
         (_cutoff(),),
