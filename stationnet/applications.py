@@ -27,11 +27,14 @@ GAMES = "Games"
 APPS = "Apps"
 CATEGORIES = (GAMES, APPS)
 PACKAGE_FORMAT = 1
-PACKAGE_MAX_BYTES = 2 * 1024 * 1024
-PACKAGE_MAX_EXPANDED_BYTES = 1024 * 1024
-PACKAGE_MAX_FILES = 10
+PACKAGE_MAX_BYTES = 5 * 1024 * 1024
+PACKAGE_MAX_EXPANDED_BYTES = 4 * 1024 * 1024
+PACKAGE_MAX_FILE_BYTES = 1024 * 1024
+PACKAGE_MAX_FILES = 64
 SLUG_RE = re.compile(r"[a-z0-9]+(?:-[a-z0-9]+)*")
 ENTRYPOINT_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,79}\.js")
+PACKAGE_PART_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,79}")
+WINDOWS_DEVICE_NAMES = {"CON", "PRN", "AUX", "NUL", *(f"COM{i}" for i in range(1, 10)), *(f"LPT{i}" for i in range(1, 10))}
 STORAGE_KEY_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,79}$")
 STORAGE_MAX_KEYS = 100
 STORAGE_MAX_VALUE_BYTES = 64 * 1024
@@ -82,6 +85,27 @@ def _entrypoint(application: Application) -> Path | None:
     root = root.resolve()
     path = (root / application.entrypoint).resolve()
     return path if root in path.parents and path.is_file() else None
+
+
+def _package_files(application: Application) -> dict[str, str]:
+    """Embed bounded package resources in the isolated worker; no file URL is exposed."""
+    folder = application.entrypoint.split("/", 1)[0] if application.builtin else application.slug
+    root = (_package_root() / folder if application.builtin else
+            _installed_root() / application.slug).resolve()
+    result: dict[str, str] = {}
+    total = 0
+    for path in root.rglob("*"):
+        if not path.is_file() or path.is_symlink() or root not in path.resolve().parents:
+            continue
+        relative = path.relative_to(root).as_posix()
+        if relative == "manifest.json":
+            continue
+        size = path.stat().st_size
+        total += size
+        if size > PACKAGE_MAX_FILE_BYTES or total > PACKAGE_MAX_EXPANDED_BYTES or len(result) >= PACKAGE_MAX_FILES:
+            raise PackageError("Stored application exceeds package resource limits.")
+        result[relative] = base64.b64encode(path.read_bytes()).decode("ascii")
+    return result
 
 
 def _validate_metadata(application: Application) -> None:
@@ -186,12 +210,29 @@ def _load_package(folder: str) -> Application:
 
 
 def _safe_archive_name(name: str) -> PurePosixPath:
-    if not name or "\\" in name or name.startswith("/"):
+    if not name or "\\" in name or name.startswith("/") or len(name) > 240:
         raise PackageError(f"Unsafe archive path: {name or '(empty)'}.")
-    path = PurePosixPath(name)
-    if any(part in {"", ".", ".."} for part in path.parts) or ":" in path.parts[0]:
+    parts = name.rstrip("/").split("/")
+    if len(parts) > 8 or any(
+        not PACKAGE_PART_RE.fullmatch(part) or part in {".", ".."}
+        or part.endswith(".") or part.split(".")[0].upper() in WINDOWS_DEVICE_NAMES
+        for part in parts
+    ):
         raise PackageError(f"Unsafe archive path: {name}.")
-    return path
+    return PurePosixPath(*parts)
+
+
+def _read_archive_file(archive: zipfile.ZipFile, info: zipfile.ZipInfo) -> bytes:
+    if info.file_size > PACKAGE_MAX_FILE_BYTES:
+        raise PackageError(f"Package file exceeds the 1 MiB limit: {info.filename}.")
+    try:
+        with archive.open(info) as stream:
+            content = stream.read(PACKAGE_MAX_FILE_BYTES + 1)
+    except (OSError, RuntimeError, NotImplementedError, zipfile.BadZipFile):
+        raise PackageError(f"Cannot read package file: {info.filename}.") from None
+    if len(content) != info.file_size or len(content) > PACKAGE_MAX_FILE_BYTES:
+        raise PackageError(f"Invalid package file size: {info.filename}.")
+    return content
 
 
 def validate_package(package_bytes: bytes) -> tuple[Application, dict[str, bytes]]:
@@ -199,19 +240,22 @@ def validate_package(package_bytes: bytes) -> tuple[Application, dict[str, bytes
     if not package_bytes:
         raise PackageError("Choose a non-empty ZIP package.")
     if len(package_bytes) > PACKAGE_MAX_BYTES:
-        raise PackageError("Package exceeds the 2 MiB upload limit.")
+        raise PackageError("Package exceeds the 5 MiB upload limit.")
     try:
         archive = zipfile.ZipFile(io.BytesIO(package_bytes))
     except (zipfile.BadZipFile, OSError):
         raise PackageError("The uploaded file is not a valid ZIP archive.") from None
     with archive:
         infos = archive.infolist()
+        if len(infos) > PACKAGE_MAX_FILES * 8:
+            raise PackageError("Package contains too many ZIP entries.")
         files = [info for info in infos if not info.is_dir()]
         if len(files) > PACKAGE_MAX_FILES:
             raise PackageError(f"Package contains more than {PACKAGE_MAX_FILES} files.")
         if not files:
             raise PackageError("Package does not contain any files.")
         names: dict[str, zipfile.ZipInfo] = {}
+        directories: set[str] = set()
         expanded = 0
         for info in infos:
             path = _safe_archive_name(info.filename)
@@ -219,21 +263,28 @@ def validate_package(package_bytes: bytes) -> tuple[Application, dict[str, bytes
                 raise PackageError("Encrypted package entries are not supported.")
             if ((info.external_attr >> 16) & 0o170000) == 0o120000:
                 raise PackageError(f"Symbolic links are not supported: {info.filename}.")
-            if info.is_dir():
-                raise PackageError(f"Package folders are not supported: {info.filename}.")
             normalized = path.as_posix()
             folded = normalized.casefold()
-            if folded in names:
+            if folded in names or folded in directories:
                 raise PackageError(f"Package contains a duplicate path: {normalized}.")
+            if info.is_dir():
+                directories.add(folded)
+                continue
             names[folded] = info
+            if info.file_size > PACKAGE_MAX_FILE_BYTES:
+                raise PackageError(f"Package file exceeds the 1 MiB limit: {normalized}.")
             expanded += info.file_size
         if expanded > PACKAGE_MAX_EXPANDED_BYTES:
-            raise PackageError("Expanded package exceeds the 1 MiB limit.")
+            raise PackageError("Expanded package exceeds the 4 MiB limit.")
+        for name in names:
+            parts = name.split("/")
+            if any("/".join(parts[:index]) in names for index in range(1, len(parts))):
+                raise PackageError(f"Package file conflicts with a folder: {name}.")
         manifest_info = names.get("manifest.json")
-        if manifest_info is None or PurePosixPath(manifest_info.filename).parent != PurePosixPath("."):
+        if manifest_info is None or manifest_info.filename != "manifest.json":
             raise PackageError("Package must contain manifest.json at its root.")
         try:
-            manifest = json.loads(archive.read(manifest_info).decode("utf-8"))
+            manifest = json.loads(_read_archive_file(archive, manifest_info).decode("utf-8"))
         except (
             UnicodeDecodeError, json.JSONDecodeError, RuntimeError,
             NotImplementedError, zipfile.BadZipFile,
@@ -245,14 +296,14 @@ def validate_package(package_bytes: bytes) -> tuple[Application, dict[str, bytes
         if type(manifest.get("package_format")) is not int or manifest["package_format"] != PACKAGE_FORMAT:
             raise PackageError(f"Unsupported package format; expected package_format {PACKAGE_FORMAT}.")
         entrypoint = manifest["entrypoint"]
-        if not ENTRYPOINT_RE.fullmatch(entrypoint):
-            raise PackageError("Entrypoint must be a root-level JavaScript (.js) file.")
-        allowed = {"manifest.json", entrypoint.casefold()}
-        unsupported = [info.filename for key, info in names.items() if key not in allowed]
-        if unsupported:
-            raise PackageError(f"Unsupported package file: {unsupported[0]}.")
+        try:
+            entry_path = _safe_archive_name(entrypoint)
+        except PackageError:
+            raise PackageError("Entrypoint must be a safe package-relative JavaScript (.js) path.") from None
+        if not ENTRYPOINT_RE.fullmatch(entry_path.name):
+            raise PackageError("Entrypoint must name a JavaScript (.js) file.")
         entry_info = names.get(entrypoint.casefold())
-        if entry_info is None or PurePosixPath(entry_info.filename).parent != PurePosixPath("."):
+        if entry_info is None or entry_info.filename != entrypoint:
             raise PackageError(f"Package entrypoint is missing: {entrypoint}.")
         application = Application(
             slug=manifest["slug"], name=manifest["name"],
@@ -264,14 +315,18 @@ def validate_package(package_bytes: bytes) -> tuple[Application, dict[str, bytes
             _validate_metadata(application)
         except ValueError as error:
             raise PackageError(str(error)) from None
+        contents = {info.filename: _read_archive_file(archive, info) for info in files}
         try:
-            script = archive.read(entry_info)
+            script = contents[entrypoint]
             script.decode("utf-8")
-        except (UnicodeDecodeError, RuntimeError, NotImplementedError, zipfile.BadZipFile):
+            for name, content in contents.items():
+                if name.lower().endswith(".js"):
+                    content.decode("utf-8")
+        except UnicodeDecodeError:
             raise PackageError("Application script must be valid UTF-8 text.") from None
         if not script.strip():
             raise PackageError("Application script cannot be empty.")
-        return application, {"manifest.json": archive.read(manifest_info), entrypoint: script}
+        return application, contents
 
 
 def install_package(package_bytes: bytes) -> Application:
@@ -290,7 +345,9 @@ def install_package(package_bytes: bytes) -> Application:
     try:
         staging.mkdir()
         for name, content in files.items():
-            (staging / name).write_bytes(content)
+            target = staging / name
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_bytes(content)
         os.replace(staging, destination)
         database.execute("BEGIN IMMEDIATE")
         database.execute(
@@ -564,10 +621,15 @@ def runtime(slug):
     if application is None or entrypoint is None:
         abort(404)
     worker = Path(__file__).with_name("static") / "application_runtime.js"
+    try:
+        package_files = _package_files(application)
+    except (OSError, PackageError):
+        abort(404)
     return render_template(
         "applications/runtime.html", application=application,
         application_source=base64.b64encode(entrypoint.read_bytes()).decode("ascii"),
         worker_source=base64.b64encode(worker.read_bytes()).decode("ascii"),
+        package_files=package_files,
     )
 
 

@@ -1,16 +1,27 @@
 # StationNet application packages
 
-StationNet applications are ordinary ZIP files with exactly two root-level files:
+StationNet applications are self-contained ZIP files. The original two-file
+package is still valid:
 
 ```text
 manifest.json
 main.js
 ```
 
-The file named by `entrypoint` may have a different `.js` name. Folders, native
-executables, Python modules, dependencies, databases, HTML, CSS, and other files
-are intentionally unsupported. Applications run in StationNet's existing
-isolated JavaScript worker and use only the StationNet visual and storage APIs.
+The declared JavaScript entrypoint may be in a subdirectory. Additional modules
+and assets can be organized alongside it:
+
+```text
+manifest.json
+src/main.js
+src/message.js
+assets/config.json
+assets/notes.txt
+assets/icon.png
+```
+
+Applications run in StationNet's isolated JavaScript worker. Bundled files do
+not become web URLs or grant DOM, filesystem, or network access.
 
 ## Manifest
 
@@ -23,26 +34,58 @@ isolated JavaScript worker and use only the StationNet visual and storage APIs.
   "author": "Your name or station",
   "version": "1.0.0",
   "category": "Apps",
-  "entrypoint": "main.js"
+  "entrypoint": "src/main.js"
 }
 ```
 
 `slug` is the application's permanent, unique identifier. Use lowercase letters,
 numbers, and single hyphens; do not change it between releases. `category` must
 be `Games` or `Apps`. StationNet currently supports package format `1` and does
-not resolve dependencies or perform automatic updates.
+not resolve dependencies or perform automatic updates. Existing packages can
+keep `"entrypoint": "main.js"` unchanged.
 
 ## Create a package
 
-Put the manifest and script in one folder, then create a ZIP with the *files at
-the archive root*. On Windows PowerShell, from that folder:
+Put the manifest and program files in one folder, then create a ZIP with
+`manifest.json` at the *archive root*. On Windows PowerShell, from that folder:
 
 ```powershell
-Compress-Archive -Path manifest.json,main.js -DestinationPath my-application.zip
+Compress-Archive -Path manifest.json,src,assets -DestinationPath my-application.zip
 ```
 
-Do not ZIP the containing folder itself. The included Number Guess demonstration
-uses this exact format and is a useful starting point.
+Do not ZIP the containing folder itself. See `multifile_demo` for a nested
+example, or Number Guess for the original two-file format.
+
+Packages may have at most 64 files, 5 MiB compressed, 4 MiB expanded, and 1 MiB
+per file. Paths are case-insensitively unique, at most eight levels deep, and
+must use `/` without absolute paths or `..`. Explicit ZIP directory entries are
+allowed. Everything needed to run must be inside the ZIP.
+
+### Bundled modules and assets
+
+`ui.assets.bytes(path)` returns a fresh `Uint8Array`; `ui.assets.text(path)`
+decodes UTF-8; `ui.assets.json(path)` parses UTF-8 JSON. These methods are
+synchronous and throw if the exact package-relative path is missing or invalid.
+They do not expose file URLs. Binary assets are available as application data;
+the current StationNet UI does not render packaged images or play packaged audio.
+
+`await ui.modules.load(path)` imports a bundled `.js` ES module and returns its
+exports. Imports are cached by path. Use this API for each module; ordinary
+relative `import` declarations inside a bundled module do not resolve against
+the ZIP. Modules run in the same isolated worker as the entrypoint.
+
+```js
+StationNet.start(async (ui) => {
+  const { greeting } = await ui.modules.load("src/message.js");
+  const config = ui.assets.json("assets/config.json");
+  ui.render(ui.title(greeting(config.name)));
+});
+```
+
+```js
+// src/message.js
+export function greeting(name) { return `Hello, ${name}!`; }
+```
 
 ## Install and manage
 
@@ -228,8 +271,9 @@ Colored cell grids can be exported as a controlled PNG with
 
 ## Synthesized sound
 
-Applications can generate sound with basic oscillators; they cannot upload, load,
-or play audio files. `ui.sound.playTone(frequency, duration, options)` plays a
+Applications can generate sound with basic oscillators. Bundled audio bytes can
+be read as data, but StationNet does not play audio files.
+`ui.sound.playTone(frequency, duration, options)` plays a
 single tone, with frequency in Hz and timing in milliseconds:
 
 ```js

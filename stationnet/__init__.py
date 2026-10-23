@@ -97,7 +97,7 @@ def create_app(test_config=None):
             # also closes every network channel available to application code.
             response.headers["X-Frame-Options"] = "SAMEORIGIN"
             response.headers["Content-Security-Policy"] = (
-                "default-src 'none'; script-src 'self'; connect-src 'none'; "
+                "default-src 'none'; script-src 'self' blob:; connect-src 'none'; "
                 "img-src 'none'; media-src 'none'; font-src 'none'; "
                 "style-src 'none'; object-src 'none'; child-src blob:; "
                 "frame-src 'none'; worker-src blob:; base-uri 'none'; "

@@ -9,10 +9,39 @@
   const storageRequests = new Map();
   const scoreRequests = new Map();
   const capabilityRequests = new Map();
+  const packageFiles = self.__stationnetPackageFiles;
+  delete self.__stationnetPackageFiles;
+  const moduleCache = new Map();
   let nextAction = 1;
   let nextRequest = 1;
   let messagesSent = 0;
   let stopped = false;
+
+  function bundledBytes(path) {
+    if (typeof path !== "string" || !Object.prototype.hasOwnProperty.call(packageFiles, path)) {
+      throw new Error(`Bundled file not found: ${String(path)}`);
+    }
+    return Uint8Array.from(atob(packageFiles[path]), (character) => character.charCodeAt(0));
+  }
+
+  function bundledText(path) {
+    return new TextDecoder("utf-8", { fatal: true }).decode(bundledBytes(path));
+  }
+
+  function loadModule(path) {
+    if (typeof path !== "string" || !path.endsWith(".js")) {
+      return Promise.reject(new Error("Module path must name a bundled .js file"));
+    }
+    if (!moduleCache.has(path)) {
+      let source;
+      try { source = bundledText(path); }
+      catch (error) { return Promise.reject(error); }
+      const url = URL.createObjectURL(new Blob([source], { type: "application/javascript" }));
+      const pending = import(url).finally(() => URL.revokeObjectURL(url));
+      moduleCache.set(path, pending);
+    }
+    return moduleCache.get(path);
+  }
 
   function send(type, payload = {}) {
     if (stopped || ++messagesSent > 1000000) return;
@@ -197,6 +226,12 @@
       delete(key, settings) { return storage("delete", String(key), undefined, settings); },
       keys(settings) { return storage("keys", undefined, undefined, settings); }
     }),
+    assets: Object.freeze({
+      bytes(path) { return bundledBytes(path); },
+      text(path) { return bundledText(path); },
+      json(path) { return JSON.parse(bundledText(path)); }
+    }),
+    modules: Object.freeze({ load: loadModule }),
     scores: Object.freeze({
       submit(score) { return scores("submit", score); },
       leaderboard() { return scores("list"); }

@@ -10,8 +10,12 @@
   };
   const runtime = decode(document.getElementById("stationnet-worker-source").textContent);
   const application = decode(document.getElementById("stationnet-application-source").textContent);
+  const files = JSON.parse(document.getElementById("stationnet-package-files").textContent);
   const trailer = `\n;postMessage({protocol:${JSON.stringify(protocol)},type:"ready"});`;
-  const url = URL.createObjectURL(new Blob([runtime, "\n", application, trailer], { type: "application/javascript" }));
+  const url = URL.createObjectURL(new Blob([
+    "self.__stationnetPackageFiles = ", JSON.stringify(files), ";\n",
+    runtime, "\n", application, trailer
+  ], { type: "application/javascript" }));
   const worker = new Worker(url);
   let stopped = false;
 
