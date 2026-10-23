@@ -164,3 +164,32 @@ def test_automated_sessions_are_independent_and_wait_after_playlist_completion(a
         assert "automated:2" in radio.live
         store.stop("automated:1")
         store.stop("automated:2")
+
+
+def test_broadcast_directory_only_includes_on_air_broadcasts(app):
+    client = app.test_client()
+    login(client, app.config["SYSOP_ID"])
+    with app.app_context():
+        database = get_db()
+        database.execute(
+            "INSERT INTO radio_broadcast_assignments(user_id,frequency_khz) VALUES(?,?)",
+            (app.config["SYSOP_ID"], 7100),
+        )
+        database.commit()
+
+    assert client.get("/radio/manage/status").get_json()["directory"] == []
+
+    with app.app_context():
+        app.extensions["hosted_broadcasts"].start(
+            app.config["SYSOP_ID"], "CCC-DDD", 7100, app.config["PLAYLIST_ID"],
+            "Alerts", [{"entry_id": 1, "position": 0, "file_id": 1,
+                        "name": "alert.wav", "title": "Alert", "artist": "",
+                        "duration": 60}], False, 120,
+        )
+    payload = client.get("/radio/manage/status").get_json()
+    assert [(item["frequency"], item["broadcasting"])
+            for item in payload["directory"]] == [("7.10", True)]
+
+    with app.app_context():
+        app.extensions["hosted_broadcasts"].stop(app.config["SYSOP_ID"])
+    assert client.get("/radio/manage/status").get_json()["directory"] == []

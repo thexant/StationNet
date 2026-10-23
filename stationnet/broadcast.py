@@ -1235,19 +1235,21 @@ def status():
                                   f"{row['username']} - [{row['callsign']}]",
                           "message": row["broadcast_message"],
                           "frequency": format_frequency(row["frequency_khz"]),
-                          "broadcasting": row["user_id"] in active and active[row["user_id"]]["status"] == "playing",
-                          "now_playing": (active.get(row["user_id"], {}).get("track_title") or
-                                          active.get(row["user_id"], {}).get("track_name"))}
+                          "broadcasting": True,
+                          "now_playing": (active[row["user_id"]].get("track_title") or
+                                          active[row["user_id"]].get("track_name"))}
                          for row in directory
-                         if effective_access(g.user["id"], row["frequency_khz"]) != "DENIED"]
+                         if (effective_access(g.user["id"], row["frequency_khz"]) != "DENIED" and
+                             active.get(row["user_id"], {}).get("status") == "playing")]
     for row in automated_directory:
         live = active.get(_automated_key(row["id"]), {})
-        if effective_access(g.user["id"], row["frequency_khz"]) != "DENIED":
+        if (effective_access(g.user["id"], row["frequency_khz"]) != "DENIED" and
+                live.get("status") == "playing"):
             directory_payload.append({
                 "user_id": None, "callsign": "STATION AUTOMATION", "username": None,
                 "name": row["name"], "message": row["message"],
                 "frequency": format_frequency(row["frequency_khz"]),
-                "broadcasting": live.get("status") == "playing",
+                "broadcasting": True,
                 "now_playing": live.get("track_title") or live.get("track_name"),
             })
     directory_payload.sort(key=lambda item: (float(item["frequency"]), item["name"].casefold()))
