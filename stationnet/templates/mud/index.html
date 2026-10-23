@@ -19,9 +19,13 @@
         <p class="eyebrow">CURRENT LOCATION</p>
         <h2 data-mud-room-name>{{ room.name }}</h2>
         <p data-mud-room-description>{{ room.description }}</p>
+        <p class="mud-room-instructions" data-mud-room-instructions {% if not room.instructions %}hidden{% endif %}>{{ room.instructions }}</p>
         <p class="mud-room-exits"><span>EXITS</span> <span data-mud-room-exits>{% if room.exits %}{% for exit in room.exits %}{{ exit.direction or exit.name }}{% if not loop.last %}, {% endif %}{% endfor %}{% else %}none{% endif %}</span></p>
         <p class="mud-room-exits"><span>ITEMS</span> <span data-mud-room-items>{% if room['items'] %}{% for item in room['items'] %}{{ item.name }}{% if not loop.last %}, {% endif %}{% endfor %}{% else %}none{% endif %}</span></p>
         <p class="mud-room-exits"><span>NPCS</span> <span data-mud-room-npcs>{% if room.npcs %}{% for npc in room.npcs %}{{ npc.name }}{% if not loop.last %}, {% endif %}{% endfor %}{% else %}none{% endif %}</span></p>
+        <div class="mud-combat-status" data-mud-combat aria-label="Nearby enemies">
+          {% for enemy in combat.enemies %}<article class="mud-enemy {% if enemy.status=='defeated' %}defeated{% endif %}"><span><strong>{{ enemy.name }}</strong><small>{{ enemy.status|upper }}</small></span><progress value="{{ enemy.health }}" max="{{ enemy.maximum_health }}">{{ enemy.health }}/{{ enemy.maximum_health }}</progress><output>{{ enemy.health }} / {{ enemy.maximum_health }} HP</output></article>{% endfor %}
+        </div>
         <div class="mud-occupants" data-mud-occupants aria-label="Other players in this room">
           <span>PLAYERS</span>
           <div>{% if room.occupants %}{% for player in room.occupants %}<span class="mud-entity" data-player-id="{{ player.id }}" data-character-id="{{ player.character_id or '' }}" title="{{ player.username }}">{{ player.character_name or player.callsign }}</span>{% endfor %}{% else %}<span class="muted" data-mud-no-occupants>none</span>{% endif %}</div>
@@ -57,7 +61,7 @@
           <input id="mud-command-input" name="command" data-command-input maxlength="1000" autocomplete="off" placeholder="Say something, or use /help" aria-describedby="mud-command-help" required>
           <button>SEND</button>
         </div>
-        <small id="mud-command-help">Plain text is speech,  gameplay commands start with /.</small>
+        <small id="mud-command-help">Plain text is speech; gameplay commands start with /. Use /combat or /attack &lt;enemy&gt; to fight.</small>
         <span class="mud-error" data-mud-error role="alert"></span>
       </form>
     </section>

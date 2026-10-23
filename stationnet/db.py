@@ -21,6 +21,8 @@ CREATE TABLE IF NOT EXISTS station (
  radio_default_quota_mb INTEGER NOT NULL DEFAULT 100,
  radio_broadcast_limit_minutes INTEGER NOT NULL DEFAULT 120,
  mud_enabled INTEGER NOT NULL DEFAULT 0 CHECK(mud_enabled IN (0,1)),
+ mud_traditional_enabled INTEGER NOT NULL DEFAULT 0 CHECK(mud_traditional_enabled IN (0,1)),
+ mud_procedural_enabled INTEGER NOT NULL DEFAULT 0 CHECK(mud_procedural_enabled IN (0,1)),
  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);
 CREATE TABLE IF NOT EXISTS users (
  id INTEGER PRIMARY KEY AUTOINCREMENT, username TEXT NOT NULL COLLATE NOCASE UNIQUE,
@@ -288,11 +290,37 @@ CREATE TABLE IF NOT EXISTS mud_world_locations (
  user_id INTEGER PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
  room_id TEXT REFERENCES mud_world_rooms(id) ON DELETE SET NULL,
  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);
+CREATE TABLE IF NOT EXISTS mud_procedural_instances (
+ id TEXT PRIMARY KEY,
+ instance_type TEXT NOT NULL CHECK(instance_type IN ('daily','random')),
+ status TEXT NOT NULL DEFAULT 'pending'
+ CHECK(status IN ('pending','active','completed','abandoned')),
+ seed TEXT,
+ created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+ updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);
+CREATE TABLE IF NOT EXISTS mud_player_locations (
+ user_id INTEGER PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+ mode TEXT NOT NULL CHECK(mode IN ('traditional','procedural')),
+ location_type TEXT NOT NULL
+ CHECK(location_type IN ('world_room','portal','dungeon_instance')),
+ location_key TEXT NOT NULL,
+ instance_id TEXT REFERENCES mud_procedural_instances(id) ON DELETE SET NULL,
+ updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);
+CREATE INDEX IF NOT EXISTS idx_mud_player_location_scope
+ ON mud_player_locations(location_type,location_key,user_id);
+CREATE TABLE IF NOT EXISTS mud_portal_settings (
+ id INTEGER PRIMARY KEY CHECK(id=1),
+ name TEXT NOT NULL DEFAULT 'Dungeon Portals',
+ description TEXT NOT NULL DEFAULT 'A threshold of dormant gateways hums with unrealized possibility.',
+ updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);
 CREATE TABLE IF NOT EXISTS mud_presence (
  user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
  connection_id TEXT NOT NULL,
  client_id TEXT NOT NULL,
  room_id TEXT REFERENCES mud_world_rooms(id) ON DELETE CASCADE,
+ location_type TEXT NOT NULL DEFAULT 'world_room',
+ location_key TEXT,
+ instance_id TEXT REFERENCES mud_procedural_instances(id) ON DELETE SET NULL,
  last_seen TEXT NOT NULL,
  disconnected_at TEXT,
  PRIMARY KEY(user_id,connection_id,client_id));
@@ -370,6 +398,60 @@ CREATE TABLE IF NOT EXISTS mud_npc_instances (
  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);
 CREATE INDEX IF NOT EXISTS idx_mud_npc_instances_room ON mud_npc_instances(room_id,id);
+CREATE TABLE IF NOT EXISTS mud_npc_combat_profiles (
+ npc_definition_id TEXT PRIMARY KEY REFERENCES mud_npc_definitions(id) ON DELETE CASCADE,
+ maximum_health INTEGER NOT NULL DEFAULT 30 CHECK(maximum_health BETWEEN 1 AND 1000000),
+ attack INTEGER NOT NULL DEFAULT 6 CHECK(attack BETWEEN 1 AND 100000),
+ defense INTEGER NOT NULL DEFAULT 2 CHECK(defense BETWEEN 0 AND 100000),
+ experience_reward INTEGER NOT NULL DEFAULT 10 CHECK(experience_reward BETWEEN 0 AND 100000),
+ respawn_seconds INTEGER NOT NULL DEFAULT 60 CHECK(respawn_seconds BETWEEN 5 AND 86400),
+ created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+ updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);
+CREATE TABLE IF NOT EXISTS mud_npc_equipment (
+ npc_definition_id TEXT NOT NULL REFERENCES mud_npc_definitions(id) ON DELETE CASCADE,
+ equipment_slot TEXT NOT NULL CHECK(equipment_slot IN ('head','body','hands','legs','feet','main_hand','off_hand','accessory')),
+ item_definition_id TEXT NOT NULL REFERENCES mud_item_definitions(id) ON DELETE RESTRICT,
+ PRIMARY KEY(npc_definition_id,equipment_slot));
+CREATE TABLE IF NOT EXISTS mud_npc_combat_rewards (
+ id TEXT PRIMARY KEY,
+ npc_definition_id TEXT NOT NULL REFERENCES mud_npc_definitions(id) ON DELETE CASCADE,
+ reward_type TEXT NOT NULL CHECK(reward_type IN ('experience','item')),
+ target_id TEXT REFERENCES mud_item_definitions(id) ON DELETE RESTRICT,
+ amount INTEGER NOT NULL DEFAULT 1 CHECK(amount BETWEEN 1 AND 100000),
+ created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+ CHECK((reward_type='experience' AND target_id IS NULL) OR
+       (reward_type='item' AND target_id IS NOT NULL)));
+CREATE INDEX IF NOT EXISTS idx_mud_npc_combat_rewards_definition
+ ON mud_npc_combat_rewards(npc_definition_id,id);
+CREATE TABLE IF NOT EXISTS mud_combat_encounters (
+ id TEXT PRIMARY KEY,
+ scope_type TEXT NOT NULL CHECK(scope_type IN ('room','instance')),
+ scope_key TEXT NOT NULL,
+ npc_instance_id TEXT REFERENCES mud_npc_instances(id) ON DELETE CASCADE,
+ npc_definition_id TEXT NOT NULL REFERENCES mud_npc_definitions(id) ON DELETE RESTRICT,
+ status TEXT NOT NULL DEFAULT 'ready' CHECK(status IN ('ready','active','defeated','abandoned')),
+ current_health INTEGER NOT NULL CHECK(current_health>=0),
+ maximum_health INTEGER NOT NULL CHECK(maximum_health>=1 AND current_health<=maximum_health),
+ started_at TEXT,
+ updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+ ended_at TEXT,
+ CHECK((scope_type='room' AND npc_instance_id IS NOT NULL) OR scope_type='instance'));
+CREATE UNIQUE INDEX IF NOT EXISTS idx_mud_combat_live_enemy
+ ON mud_combat_encounters(npc_instance_id) WHERE status IN ('ready','active');
+CREATE INDEX IF NOT EXISTS idx_mud_combat_scope
+ ON mud_combat_encounters(scope_type,scope_key,status);
+CREATE TABLE IF NOT EXISTS mud_combat_participants (
+ encounter_id TEXT NOT NULL REFERENCES mud_combat_encounters(id) ON DELETE CASCADE,
+ character_id TEXT NOT NULL REFERENCES mud_characters(id) ON DELETE CASCADE,
+ damage_dealt INTEGER NOT NULL DEFAULT 0 CHECK(damage_dealt>=0),
+ joined_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+ last_action_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+ left_at TEXT,
+ defeated_at TEXT,
+ rewarded_at TEXT,
+ PRIMARY KEY(encounter_id,character_id));
+CREATE INDEX IF NOT EXISTS idx_mud_combat_participant_character
+ ON mud_combat_participants(character_id,left_at,encounter_id);
 CREATE TABLE IF NOT EXISTS mud_quests (
  id TEXT PRIMARY KEY,
  name TEXT NOT NULL COLLATE NOCASE,
@@ -512,9 +594,11 @@ def init_db():
     _migrate_hosted_broadcast_fields(database)
     _migrate_broadcast_identity_fields(database)
     _migrate_mud_settings(database)
+    _migrate_mud_locations(database)
     _migrate_application_permissions(database)
     _initialize_mud_characters(database)
     _initialize_mud_world(database)
+    database.execute("INSERT OR IGNORE INTO mud_portal_settings(id) VALUES(1)")
     _migrate_legacy_callsigns(database)
     _migrate_factory_radio_bands(database)
     _align_radio_bands_to_display_precision(database)
@@ -862,6 +946,38 @@ def _migrate_mud_settings(database):
             "ALTER TABLE station ADD COLUMN mud_enabled INTEGER NOT NULL DEFAULT 0 "
             "CHECK(mud_enabled IN (0,1))"
         )
+    if "mud_traditional_enabled" not in columns:
+        database.execute(
+            "ALTER TABLE station ADD COLUMN mud_traditional_enabled INTEGER NOT NULL DEFAULT 0 "
+            "CHECK(mud_traditional_enabled IN (0,1))"
+        )
+        database.execute(
+            "UPDATE station SET mud_traditional_enabled=mud_enabled"
+        )
+    if "mud_procedural_enabled" not in columns:
+        database.execute(
+            "ALTER TABLE station ADD COLUMN mud_procedural_enabled INTEGER NOT NULL DEFAULT 0 "
+            "CHECK(mud_procedural_enabled IN (0,1))"
+        )
+
+
+def _migrate_mud_locations(database):
+    """Extend presence for system locations without rebuilding legacy tables."""
+    columns = {
+        row["name"] for row in database.execute("PRAGMA table_info(mud_presence)")
+    }
+    if "location_type" not in columns:
+        database.execute(
+            "ALTER TABLE mud_presence ADD COLUMN location_type TEXT NOT NULL DEFAULT 'world_room'"
+        )
+    if "location_key" not in columns:
+        database.execute("ALTER TABLE mud_presence ADD COLUMN location_key TEXT")
+    if "instance_id" not in columns:
+        database.execute("ALTER TABLE mud_presence ADD COLUMN instance_id TEXT")
+    database.execute(
+        "UPDATE mud_presence SET location_key=room_id "
+        "WHERE location_type='world_room' AND location_key IS NULL"
+    )
 
 def _migrate_legacy_callsigns(database):
     """Replace callsigns created under earlier, prefixed formats."""

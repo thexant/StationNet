@@ -8,9 +8,11 @@ for(const mud of document.querySelectorAll("[data-mud]")){
   const error=mud.querySelector("[data-mud-error]");
   const roomName=mud.querySelector("[data-mud-room-name]");
   const roomDescription=mud.querySelector("[data-mud-room-description]");
+  const roomInstructions=mud.querySelector("[data-mud-room-instructions]");
   const roomExits=mud.querySelector("[data-mud-room-exits]");
   const roomItems=mud.querySelector("[data-mud-room-items]");
   const roomNpcs=mud.querySelector("[data-mud-room-npcs]");
+  const combat=mud.querySelector("[data-mud-combat]");
   const occupants=mud.querySelector("[data-mud-occupants] > div");
   const characterName=mud.querySelector("[data-character-name]");
   const characterLevel=mud.querySelector("[data-character-level]");
@@ -84,6 +86,7 @@ for(const mud of document.querySelectorAll("[data-mud]")){
     if(!room)return;
     roomName.textContent=room.name||"Unknown Location";
     roomDescription.textContent=room.description||"";
+    if(roomInstructions){roomInstructions.textContent=room.instructions||"";roomInstructions.hidden=!room.instructions}
     roomExits.textContent=(room.exits||[]).map(exit=>exit.direction||exit.name).join(", ")||"none";
     if(roomItems)roomItems.textContent=(room.items||[]).map(item=>item.name).join(", ")||"none";
     if(roomNpcs)roomNpcs.textContent=(room.npcs||[]).map(npc=>npc.name).join(", ")||"none";
@@ -117,6 +120,21 @@ for(const mud of document.querySelectorAll("[data-mud]")){
     for(const [name,value] of Object.entries(character.attributes||{})){
       const output=mud.querySelector(`[data-character-attribute="${name}"]`);
       if(output)output.textContent=value;
+    }
+  };
+  const renderCombat=state=>{
+    if(!combat)return;
+    combat.replaceChildren();
+    for(const enemy of state?.enemies||[]){
+      const row=document.createElement("article");
+      row.className=`mud-enemy ${enemy.status==="defeated"?"defeated":""}`.trim();
+      const heading=document.createElement("span");
+      const name=document.createElement("strong");name.textContent=enemy.name;
+      const status=document.createElement("small");status.textContent=(enemy.status||"ready").toUpperCase();
+      heading.append(name,status);
+      const health=document.createElement("progress");health.max=enemy.maximum_health;health.value=enemy.health;
+      const output=document.createElement("output");output.textContent=`${enemy.health} / ${enemy.maximum_health} HP`;
+      row.append(heading,health,output);combat.append(row);
     }
   };
   const renderInventory=inventory=>{
@@ -165,6 +183,7 @@ for(const mud of document.querySelectorAll("[data-mud]")){
       renderCharacter(payload.character);
       renderInventory(payload.inventory);
       renderQuests(payload.quests);
+      renderCombat(payload.combat);
       if(payload.actions)renderActions(payload.actions);
       if(!response.ok)throw new Error(payload.error||"Action rejected by the station.");
       for(const event of payload.events||[])appendEvent(event);
@@ -187,6 +206,7 @@ for(const mud of document.querySelectorAll("[data-mud]")){
       renderCharacter(payload.character);
       renderInventory(payload.inventory);
       renderQuests(payload.quests);
+      renderCombat(payload.combat);
       if(payload.actions)renderActions(payload.actions);
       for(const event of payload.events||[])appendEvent(event);
       if(error.textContent==="LINK RETRYING...")error.textContent="";

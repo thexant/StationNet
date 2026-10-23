@@ -198,13 +198,46 @@ def revoke_invitation(invitation_id):
 @bp.post("/sysop/settings/mud")
 @admin_required
 def mud_settings():
-    """Enable or disable the native MUD without deleting its persisted data."""
+    """Save independent mode access and protected portal presentation."""
     validate_csrf()
-    enabled = request.form.get("mud_enabled") == "on"
     database = get_db()
-    database.execute("UPDATE station SET mud_enabled=? WHERE id=1", (enabled,))
+    current_portal = database.execute(
+        "SELECT name,description FROM mud_portal_settings WHERE id=1"
+    ).fetchone()
+    legacy = ("mud_traditional_enabled" not in request.form and
+              "mud_procedural_enabled" not in request.form and
+              "mud_enabled" in request.form)
+    traditional = (request.form.get("mud_enabled") == "on" if legacy else
+                   request.form.get("mud_traditional_enabled") == "on")
+    procedural = request.form.get("mud_procedural_enabled") == "on"
+    portal_name = request.form.get(
+        "mud_portal_name", current_portal["name"]
+    ).strip()
+    portal_description = request.form.get(
+        "mud_portal_description", current_portal["description"]
+    ).strip()
+    if not 2 <= len(portal_name) <= 80:
+        flash("Portal room name must be between 2 and 80 characters.", "error")
+        return redirect(url_for("station.settings") + "#mud-service")
+    if not 1 <= len(portal_description) <= 2000:
+        flash("Portal room description must be between 1 and 2000 characters.", "error")
+        return redirect(url_for("station.settings") + "#mud-service")
+    database.execute(
+        "UPDATE station SET mud_enabled=?,mud_traditional_enabled=?,"
+        "mud_procedural_enabled=? WHERE id=1",
+        (traditional or procedural, traditional, procedural),
+    )
+    database.execute(
+        "INSERT INTO mud_portal_settings(id,name,description) VALUES(1,?,?) "
+        "ON CONFLICT(id) DO UPDATE SET name=excluded.name,description=excluded.description,"
+        "updated_at=CURRENT_TIMESTAMP", (portal_name, portal_description),
+    )
+    from .mud import reconcile_mode_locations
+    reconcile_mode_locations(database)
     database.commit()
-    flash(f"MUD service {'enabled' if enabled else 'disabled'}.", "success")
+    labels = [name for name, state in (("traditional", traditional),
+              ("procedural", procedural)) if state]
+    flash(f"MUD modes updated: {', '.join(labels) if labels else 'fully disabled'}.", "success")
     return redirect(url_for("station.settings") + "#mud-service")
 
 
@@ -363,12 +396,16 @@ def settings():
         "LEFT JOIN users recipient ON recipient.id=i.used_by "
         "ORDER BY i.id DESC"
     ).fetchall()
+    mud_portal = database.execute(
+        "SELECT name,description FROM mud_portal_settings WHERE id=1"
+    ).fetchone()
     return render_template("settings.html", header_fonts=header_fonts,
                            bands=bands, groups=groups, users=users,
                            memberships=memberships, effective=effective,
                            broadcast_hosts=broadcast_hosts,
                            assignments=assignments, broadcast_sessions=broadcast_sessions,
                            rules_by_group=rules_by_group, invitations=invitations,
+                           mud_portal=mud_portal,
                            format_frequency=format_frequency)
 
 

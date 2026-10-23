@@ -24,6 +24,7 @@ PROGRESSION_TRACKS = frozenset({"shared", "traditional", "procedural"})
 ACTIVE_PROGRESSION_TRACK = "shared"
 HEALTH_PER_LEVEL = 10
 MAX_EXPERIENCE = 2**63 - 1
+COMBAT_ABANDON_SECONDS = 300
 DIRECTIONS = (
     "north", "northeast", "east", "southeast", "south", "southwest",
     "west", "northwest", "up", "down", "in", "out",
@@ -260,7 +261,9 @@ def award_experience(database, user_id, amount, track_key=ACTIVE_PROGRESSION_TRA
 def _status_action(_database, _user, parameters):
     if parameters.get("arguments"):
         raise ActionError("The status action does not accept arguments.")
-    return [EventDraft("MUD service online. Persistent world navigation is available.")]
+    modes = _mode_settings(_database)
+    enabled = [name for name in ("traditional", "procedural") if modes[name]]
+    return [EventDraft(f"MUD service online. Enabled modes: {', '.join(enabled)}.")]
 
 
 def _character_action(database, user, parameters):
@@ -291,11 +294,14 @@ def _help_action(_database, _user, parameters):
         "/go <exit> (or /move, /walk) — travel through an exit\n"
         "/get <item> [from <container>], /drop <item>, /open <container>\n"
         "/put <item> in <container>, /equip <item>, /unequip <item>, /use <item>\n"
+        "/combat - view enemies; /attack <enemy> (or /hit) - fight one round\n"
         "/talk <npc>, /respond <number or response> — converse with an NPC\n"
         "/quests, /quest accept <name> — view or accept available quests\n"
         "/north, /south, /east, /west, /up, /down, /in, /out — direction shortcuts\n"
         "/status — check the MUD service\n"
         "/character (or /stats) — view your character and progression\n"
+        "/portal enters the portal hub; /world returns when available\n"
+        "/daily and /expedition inspect the future procedural gateways\n"
         "Text without a leading slash is spoken to everyone in your room."
     )]
 
@@ -305,6 +311,51 @@ START_ROOM_NAME = "Starting Room"
 START_ROOM_DESCRIPTION = (
     "A quiet, unadorned room waiting for this station's world to take shape."
 )
+PORTAL_ROOM_ID = "stationnet:portal"
+PORTAL_ROOM_NAME = "Dungeon Portals"
+PORTAL_ROOM_DESCRIPTION = (
+    "A threshold of dormant gateways hums with unrealized possibility."
+)
+PORTAL_ROOM_INSTRUCTIONS = (
+    "This protected hub connects StationNet's procedural adventures. "
+    "Dungeon of the Day and Random Expeditions are not yet available."
+)
+
+
+def _mode_settings(database):
+    row = database.execute(
+        "SELECT mud_enabled,mud_traditional_enabled,mud_procedural_enabled "
+        "FROM station WHERE id=1"
+    ).fetchone()
+    if row is None:
+        # Domain-level tests and pre-setup maintenance can still operate on the
+        # traditional content tables; HTTP access remains guarded by station setup.
+        return {"traditional": True, "procedural": False, "enabled": True}
+    traditional = bool(row["mud_traditional_enabled"])
+    procedural = bool(row["mud_procedural_enabled"])
+    # Old integrations and tests may still set only the original master switch.
+    if row["mud_enabled"] and not traditional and not procedural:
+        traditional = True
+    return {
+        "traditional": traditional,
+        "procedural": procedural,
+        "enabled": traditional or procedural,
+    }
+
+
+def _portal_room(database):
+    row = database.execute(
+        "SELECT name,description FROM mud_portal_settings WHERE id=1"
+    ).fetchone()
+    return {
+        "id": PORTAL_ROOM_ID,
+        "name": row["name"] if row else PORTAL_ROOM_NAME,
+        "description": row["description"] if row else PORTAL_ROOM_DESCRIPTION,
+        "instructions": PORTAL_ROOM_INSTRUCTIONS,
+        "location_type": "portal",
+        "mode": "procedural",
+        "system_managed": True,
+    }
 
 
 def _start_room(database):
@@ -331,22 +382,96 @@ def _start_room(database):
     ).fetchone()
 
 
+def _set_player_location(database, user_id, mode, location_type, location_key,
+                         instance_id=None):
+    """Move shared identity state without making system locations world rooms."""
+    room_id = location_key if location_type == "world_room" else None
+    if location_type == "world_room":
+        database.execute(
+            "INSERT INTO mud_world_locations(user_id,room_id) VALUES(?,?) "
+            "ON CONFLICT(user_id) DO UPDATE SET room_id=excluded.room_id,"
+            "updated_at=CURRENT_TIMESTAMP", (user_id, room_id),
+        )
+    database.execute(
+        "INSERT INTO mud_player_locations(user_id,mode,location_type,location_key,instance_id) "
+        "VALUES(?,?,?,?,?) ON CONFLICT(user_id) DO UPDATE SET mode=excluded.mode,"
+        "location_type=excluded.location_type,location_key=excluded.location_key,"
+        "instance_id=excluded.instance_id,updated_at=CURRENT_TIMESTAMP",
+        (user_id, mode, location_type, location_key, instance_id),
+    )
+    database.execute(
+        "UPDATE mud_presence SET room_id=?,location_type=?,location_key=?,instance_id=? "
+        "WHERE user_id=?",
+        (room_id, location_type, location_key, instance_id, user_id),
+    )
+
+
+def _reconcile_player_location(database, user_id):
+    modes = _mode_settings(database)
+    if not modes["enabled"]:
+        return None
+    location = database.execute(
+        "SELECT mode,location_type,location_key,instance_id "
+        "FROM mud_player_locations WHERE user_id=?", (user_id,),
+    ).fetchone()
+    valid = False
+    if location is not None:
+        if location["mode"] == "traditional" and modes["traditional"]:
+            valid = location["location_type"] == "world_room"
+        elif location["mode"] == "procedural" and modes["procedural"]:
+            valid = location["location_type"] in {"portal", "dungeon_instance"}
+            if location["location_type"] == "dungeon_instance":
+                valid = database.execute(
+                    "SELECT 1 FROM mud_procedural_instances WHERE id=? AND status='active'",
+                    (location["instance_id"],),
+                ).fetchone() is not None
+    if valid:
+        return location
+    if location is not None and location["location_type"] == "world_room":
+        _leave_combat(database, user_id, "room", location["location_key"])
+    if modes["traditional"]:
+        saved = database.execute(
+            "SELECT room_id FROM mud_world_locations WHERE user_id=?", (user_id,),
+        ).fetchone()
+        room_id = saved["room_id"] if saved else None
+        if room_id is None or database.execute(
+            "SELECT 1 FROM mud_world_rooms WHERE id=?", (room_id,),
+        ).fetchone() is None:
+            room_id = _start_room(database)["id"]
+        _set_player_location(database, user_id, "traditional", "world_room", room_id)
+    else:
+        _set_player_location(database, user_id, "procedural", "portal", PORTAL_ROOM_ID)
+    return database.execute(
+        "SELECT mode,location_type,location_key,instance_id "
+        "FROM mud_player_locations WHERE user_id=?", (user_id,),
+    ).fetchone()
+
+
+def reconcile_mode_locations(database):
+    """Move active and persisted players out of newly inaccessible modes."""
+    for row in database.execute("SELECT id FROM users").fetchall():
+        _reconcile_player_location(database, row["id"])
+    if not _mode_settings(database)["enabled"]:
+        database.execute("DELETE FROM mud_presence")
+
+
 def _current_room(database, user_id):
+    location = _reconcile_player_location(database, user_id)
+    if location is None:
+        raise ActionError("The MUD is currently disabled.", 404)
+    if location["location_type"] == "portal":
+        return _portal_room(database)
     room = database.execute(
-        "SELECT r.id,r.name,r.description FROM mud_world_locations AS l "
-        "JOIN mud_world_rooms AS r ON r.id=l.room_id WHERE l.user_id=?",
-        (user_id,),
+        "SELECT id,name,description FROM mud_world_rooms WHERE id=?",
+        (location["location_key"],),
     ).fetchone()
     if room is not None:
         return room
-    room = _start_room(database)
-    database.execute(
-        "INSERT INTO mud_world_locations(user_id,room_id) VALUES(?,?) "
-        "ON CONFLICT(user_id) DO UPDATE SET room_id=excluded.room_id,"
-        "updated_at=CURRENT_TIMESTAMP",
-        (user_id, room["id"]),
+    fallback = _start_room(database)
+    _set_player_location(
+        database, user_id, "traditional", "world_room", fallback["id"]
     )
-    return room
+    return fallback
 
 
 def _room_exits(database, room_id):
@@ -366,27 +491,30 @@ def _timestamp_before(seconds):
 
 
 def _occupant_ids(database, room_id, exclude_user_id=None):
-    parameters = [room_id]
+    location_type = "portal" if room_id == PORTAL_ROOM_ID else "world_room"
+    parameters = [location_type, room_id]
     exclusion = ""
     if exclude_user_id is not None:
         exclusion = " AND user_id<>?"
         parameters.append(exclude_user_id)
     rows = database.execute(
-        "SELECT DISTINCT user_id FROM mud_presence WHERE room_id=?" + exclusion,
+        "SELECT DISTINCT user_id FROM mud_presence "
+        "WHERE location_type=? AND location_key=?" + exclusion,
         parameters,
     ).fetchall()
     return tuple(row["user_id"] for row in rows)
 
 
 def _room_occupants(database, room_id, viewer_id):
+    location_type = "portal" if room_id == PORTAL_ROOM_ID else "world_room"
     return [dict(row) for row in database.execute(
         "SELECT DISTINCT u.id,u.username,u.callsign,c.id AS character_id,"
         "COALESCE(c.display_name,u.callsign) AS character_name FROM mud_presence AS p "
         "JOIN users AS u ON u.id=p.user_id "
         "LEFT JOIN mud_characters AS c ON c.user_id=u.id "
-        "WHERE p.room_id=? AND p.user_id<>? "
+        "WHERE p.location_type=? AND p.location_key=? AND p.user_id<>? "
         "ORDER BY character_name COLLATE NOCASE,u.id",
-        (room_id, viewer_id),
+        (location_type, room_id, viewer_id),
     ).fetchall()]
 
 
@@ -398,9 +526,12 @@ def _exit_label(exit_row):
 def _room_npc_rows(database, room_id):
     return database.execute(
         "SELECT i.id,i.definition_id,i.room_id,i.state_json,d.name,d.description,"
-        "d.conversation_id,d.properties_json,d.behaviors_json "
+        "d.conversation_id,d.properties_json,d.behaviors_json,"
+        "p.maximum_health AS combat_maximum_health,p.attack AS combat_attack,"
+        "p.defense AS combat_defense,p.experience_reward,p.respawn_seconds "
         "FROM mud_npc_instances AS i JOIN mud_npc_definitions AS d "
-        "ON d.id=i.definition_id WHERE i.room_id=? "
+        "ON d.id=i.definition_id LEFT JOIN mud_npc_combat_profiles AS p "
+        "ON p.npc_definition_id=d.id WHERE i.room_id=? "
         "ORDER BY d.name COLLATE NOCASE,i.id", (room_id,),
     ).fetchall()
 
@@ -416,27 +547,185 @@ def _npc_match(rows, target):
     return matches[0]
 
 
+def _json_properties(raw):
+    try:
+        value = json.loads(raw or "{}")
+    except (TypeError, json.JSONDecodeError):
+        return {}
+    return value if isinstance(value, dict) else {}
+
+
+def _integer_property(properties, *names):
+    for name in names:
+        value = properties.get(name)
+        if isinstance(value, int) and not isinstance(value, bool):
+            return value
+    return 0
+
+
+def _equipment_combat_totals(database, character_id=None, npc_definition_id=None):
+    if character_id is not None:
+        rows = database.execute(
+            "SELECT d.properties_json FROM mud_item_instances AS i "
+            "JOIN mud_item_definitions AS d ON d.id=i.definition_id "
+            "WHERE i.owner_character_id=? AND i.equipped_slot IS NOT NULL",
+            (character_id,),
+        ).fetchall()
+    else:
+        rows = database.execute(
+            "SELECT d.properties_json FROM mud_npc_equipment AS e "
+            "JOIN mud_item_definitions AS d ON d.id=e.item_definition_id "
+            "WHERE e.npc_definition_id=?", (npc_definition_id,),
+        ).fetchall()
+    attack = defense = 0
+    for row in rows:
+        properties = _json_properties(row["properties_json"])
+        attack += max(0, _integer_property(properties, "damage", "attack", "attack_bonus"))
+        defense += max(0, _integer_property(properties, "armor", "defense", "defense_bonus"))
+    return {"attack": attack, "defense": defense}
+
+
+def _encounter_row(database, npc, create=True):
+    """Return one authoritative live/defeated encounter for a world NPC.
+
+    Scope columns deliberately avoid assuming that future encounters are backed by
+    handcrafted rooms. Chunk 9+ can create instance-scoped rows directly.
+    """
+    if npc["combat_maximum_health"] is None:
+        return None
+    live = database.execute(
+        "SELECT * FROM mud_combat_encounters WHERE npc_instance_id=? "
+        "AND status IN ('ready','active') ORDER BY updated_at DESC,id DESC LIMIT 1",
+        (npc["id"],),
+    ).fetchone()
+    if live is not None:
+        if live["status"] == "active" and database.execute(
+            "SELECT datetime(updated_at, '+' || ? || ' seconds')<=CURRENT_TIMESTAMP AS expired "
+            "FROM mud_combat_encounters WHERE id=?",
+            (COMBAT_ABANDON_SECONDS, live["id"]),
+        ).fetchone()["expired"]:
+            database.execute(
+                "UPDATE mud_combat_encounters SET status='abandoned',ended_at=CURRENT_TIMESTAMP,"
+                "updated_at=CURRENT_TIMESTAMP WHERE id=? AND status='active'", (live["id"],),
+            )
+            live = None
+        else:
+            return live
+    latest = database.execute(
+        "SELECT * FROM mud_combat_encounters WHERE npc_instance_id=? "
+        "ORDER BY updated_at DESC,id DESC LIMIT 1", (npc["id"],),
+    ).fetchone()
+    if latest is not None and latest["status"] == "defeated":
+        ready = database.execute(
+            "SELECT datetime(?, '+' || ? || ' seconds')<=CURRENT_TIMESTAMP AS ready",
+            (latest["ended_at"], npc["respawn_seconds"]),
+        ).fetchone()["ready"]
+        if not ready:
+            return latest
+    if not create:
+        return latest
+    encounter_id = f"combat:encounter:{uuid.uuid4().hex}"
+    database.execute(
+        "INSERT INTO mud_combat_encounters(id,scope_type,scope_key,npc_instance_id,"
+        "npc_definition_id,current_health,maximum_health) VALUES(?,'room',?,?,?,?,?)",
+        (encounter_id, npc["room_id"], npc["id"], npc["definition_id"],
+         npc["combat_maximum_health"], npc["combat_maximum_health"]),
+    )
+    return database.execute(
+        "SELECT * FROM mud_combat_encounters WHERE id=?", (encounter_id,),
+    ).fetchone()
+
+
+def combat_state(database, user_id):
+    room = _current_room(database, user_id)
+    enemies = []
+    for npc in _room_npc_rows(database, room["id"]):
+        encounter = _encounter_row(database, npc)
+        if encounter is None:
+            continue
+        enemies.append({
+            "id": npc["id"], "definition_id": npc["definition_id"], "name": npc["name"],
+            "encounter_id": encounter["id"], "status": encounter["status"],
+            "health": encounter["current_health"], "maximum_health": encounter["maximum_health"],
+            "attack": npc["combat_attack"], "defense": npc["combat_defense"],
+        })
+    return {"scope_type": "room", "scope_key": room["id"], "enemies": enemies}
+
+
+def _leave_combat(database, user_id, scope_type="room", scope_key=None, defeated=False):
+    character = _character_row(database, user_id)
+    parameters = [character["id"], scope_type]
+    scope_filter = ""
+    if scope_key is not None:
+        scope_filter = " AND e.scope_key=?"
+        parameters.append(scope_key)
+    database.execute(
+        "UPDATE mud_combat_participants SET left_at=CURRENT_TIMESTAMP," +
+        ("defeated_at=CURRENT_TIMESTAMP," if defeated else "") +
+        "last_action_at=CURRENT_TIMESTAMP WHERE character_id=? AND left_at IS NULL "
+        "AND encounter_id IN (SELECT e.id FROM mud_combat_encounters AS e "
+        "WHERE e.scope_type=? AND e.status='active'" + scope_filter + ")",
+        parameters,
+    )
+    encounters = database.execute(
+        "SELECT e.id FROM mud_combat_encounters AS e WHERE e.scope_type=? "
+        "AND e.status='active'" + (" AND e.scope_key=?" if scope_key is not None else ""),
+        (scope_type, scope_key) if scope_key is not None else (scope_type,),
+    ).fetchall()
+    for encounter in encounters:
+        if database.execute(
+            "SELECT 1 FROM mud_combat_participants WHERE encounter_id=? "
+            "AND left_at IS NULL LIMIT 1", (encounter["id"],),
+        ).fetchone() is None:
+            database.execute(
+                "UPDATE mud_combat_encounters SET status='abandoned',ended_at=CURRENT_TIMESTAMP,"
+                "updated_at=CURRENT_TIMESTAMP WHERE id=? AND status='active'", (encounter["id"],),
+            )
+
+
 def _room_state(database, user_id):
     room = _current_room(database, user_id)
+    portal = room["id"] == PORTAL_ROOM_ID
+    npcs = []
+    for npc in _room_npc_rows(database, room["id"]):
+        entry = {"id": npc["id"], "definition_id": npc["definition_id"],
+                 "name": npc["name"], "description": npc["description"],
+                 "hostile": npc["combat_maximum_health"] is not None}
+        if entry["hostile"]:
+            encounter = _encounter_row(database, npc)
+            entry.update(status=encounter["status"], health=encounter["current_health"],
+                         maximum_health=encounter["maximum_health"])
+        npcs.append(entry)
+    exits = [
+        {
+            "id": exit_row["id"],
+            "name": exit_row["name"],
+            "direction": exit_row["direction"],
+            "destination_id": exit_row["to_room_id"],
+            "destination_name": exit_row["destination_name"],
+        }
+        for exit_row in _room_exits(database, room["id"])
+    ]
+    modes = _mode_settings(database)
+    if portal and modes["traditional"]:
+        exits.append({"id": "system:return-world", "name": "Return to the traditional world",
+                      "direction": "out", "destination_id": None,
+                      "destination_name": "Traditional World"})
+    elif not portal and modes["procedural"] and room["id"] == _start_room(database)["id"]:
+        exits.append({"id": "system:enter-portals", "name": "Enter the Dungeon Portals",
+                      "direction": "portals", "destination_id": PORTAL_ROOM_ID,
+                      "destination_name": _portal_room(database)["name"]})
     return {
         "id": room["id"],
         "name": room["name"],
         "description": room["description"],
-        "exits": [
-            {
-                "id": exit_row["id"],
-                "name": exit_row["name"],
-                "direction": exit_row["direction"],
-                "destination_id": exit_row["to_room_id"],
-                "destination_name": exit_row["destination_name"],
-            }
-            for exit_row in _room_exits(database, room["id"])
-        ],
+        "instructions": room["instructions"] if portal else "",
+        "system_managed": portal,
+        "mode": "procedural" if portal else "traditional",
+        "exits": exits,
         "occupants": _room_occupants(database, room["id"], user_id),
         "items": [{"id": item["id"], "name": item["name"], "item_type": item["item_type"]} for item in _room_item_rows(database, room["id"])],
-        "npcs": [{"id": npc["id"], "definition_id": npc["definition_id"],
-                  "name": npc["name"], "description": npc["description"]}
-                 for npc in _room_npc_rows(database, room["id"])],
+        "npcs": npcs,
     }
 
 
@@ -447,8 +736,15 @@ def _describe_room(database, room, viewer_id=None):
     people = ", ".join(item["character_name"] for item in occupants) if occupants else "none"
     items = ", ".join(item["name"] for item in _room_item_rows(database, room["id"])) or "none"
     npcs = ", ".join(item["name"] for item in _room_npc_rows(database, room["id"])) or "none"
+    instructions = (f"\n\n{room['instructions']}" if room["id"] == PORTAL_ROOM_ID else "")
+    modes = _mode_settings(database)
+    if room["id"] == PORTAL_ROOM_ID and modes["traditional"]:
+        routes = "OUT — Traditional World"
+    elif (room["id"] != PORTAL_ROOM_ID and modes["procedural"]
+          and room["id"] == _start_room(database)["id"]):
+        routes = (routes + ", " if routes != "none" else "") + "PORTALS — Dungeon Portals"
     return (
-        f"{room['name']}\n{room['description']}\n\n"
+        f"{room['name']}\n{room['description']}{instructions}\n\n"
         f"Exits: {routes}\nOther players: {people}\nNPCs: {npcs}\nItems: {items}"
     )
 
@@ -766,10 +1062,185 @@ def _examine_npc(_database, _user, room, target):
         return None
     if len(matches) > 1:
         raise ActionError(f'More than one NPC matches "{target}".')
-    return f"{matches[0]['name']}\n{matches[0]['description']}"
+    npc = matches[0]
+    body = f"{npc['name']}\n{npc['description']}"
+    if npc["combat_maximum_health"] is not None:
+        encounter = _encounter_row(_database, npc)
+        body += (f"\nHostile · {encounter['status']} · Health "
+                 f"{encounter['current_health']}/{encounter['maximum_health']}"
+                 f" · Attack {npc['combat_attack']} · Defense {npc['combat_defense']}")
+    return body
 
 
 examinations.register(_examine_npc)
+
+
+def _combat_target(parameters):
+    return str(parameters.get("npc_id") or " ".join(
+        str(item) for item in parameters.get("arguments", [])
+    )).strip()
+
+
+def _encounter_reward_drafts(database, encounter, npc):
+    drafts = []
+    participants = database.execute(
+        "SELECT p.character_id,c.user_id,c.display_name FROM mud_combat_participants AS p "
+        "JOIN mud_characters AS c ON c.id=p.character_id "
+        "JOIN mud_world_locations AS l ON l.user_id=c.user_id "
+        "WHERE p.encounter_id=? AND p.damage_dealt>0 AND p.left_at IS NULL "
+        "AND l.room_id=? ORDER BY p.joined_at,p.character_id",
+        (encounter["id"], encounter["scope_key"]),
+    ).fetchall()
+    configured = database.execute(
+        "SELECT r.*,d.name AS item_name FROM mud_npc_combat_rewards AS r "
+        "LEFT JOIN mud_item_definitions AS d ON d.id=r.target_id "
+        "WHERE r.npc_definition_id=? ORDER BY r.id", (npc["definition_id"],),
+    ).fetchall()
+    for participant in participants:
+        claimed = database.execute(
+            "UPDATE mud_combat_participants SET rewarded_at=CURRENT_TIMESTAMP,"
+            "last_action_at=CURRENT_TIMESTAMP WHERE encounter_id=? AND character_id=? "
+            "AND rewarded_at IS NULL",
+            (encounter["id"], participant["character_id"]),
+        ).rowcount
+        if not claimed:
+            continue
+        rewards = []
+        experience = npc["experience_reward"]
+        for reward in configured:
+            if reward["reward_type"] == "experience":
+                experience += reward["amount"]
+            else:
+                for _ in range(reward["amount"]):
+                    database.execute(
+                        "INSERT INTO mud_item_instances(id,definition_id,owner_character_id) "
+                        "VALUES(?,?,?)",
+                        (f"combat:reward:{uuid.uuid4().hex}", reward["target_id"],
+                         participant["character_id"]),
+                    )
+                rewards.append(f"{reward['amount']} × {reward['item_name']}")
+        if experience:
+            result = award_experience(database, participant["user_id"], experience)
+            rewards.insert(0, f"{experience} experience")
+            if result["levels_gained"]:
+                rewards.append(f"level {result['character']['level']}")
+        summary = ", ".join(rewards) if rewards else "no configured rewards"
+        drafts.append(EventDraft(
+            f"Victory rewards for defeating {npc['name']}: {summary}.",
+            event_type="reward", audience_key=str(participant["user_id"]),
+        ))
+    return drafts
+
+
+def _defeat_player(database, user, encounter, npc):
+    character = _character_row(database, user["id"])
+    old_room = _current_room(database, user["id"])
+    start = _start_room(database)
+    database.execute(
+        "UPDATE mud_character_progression SET current_health=maximum_health,"
+        "updated_at=CURRENT_TIMESTAMP WHERE character_id=? AND track_key=?",
+        (character["id"], ACTIVE_PROGRESSION_TRACK),
+    )
+    _leave_combat(database, user["id"], encounter["scope_type"], encounter["scope_key"], True)
+    _set_player_location(
+        database, user["id"], "traditional", "world_room", start["id"]
+    )
+    return [
+        EventDraft(
+            f"{npc['name']} defeats you. You awaken fully recovered in {start['name']}.",
+            event_type="defeat",
+        ),
+        EventDraft(
+            f"{character['display_name']} is defeated by {npc['name']} and vanishes to safety.",
+            event_type="defeat", audience_type="room", audience_key=old_room["id"],
+            recipient_ids=_occupant_ids(database, old_room["id"], user["id"]),
+        ),
+    ]
+
+
+def _attack_action(database, user, parameters):
+    target = _combat_target(parameters)
+    if not target:
+        raise ActionError("Attack what?")
+    room = _current_room(database, user["id"])
+    npc = _npc_match(_room_npc_rows(database, room["id"]), target)
+    if npc["combat_maximum_health"] is None:
+        raise ActionError(f"{npc['name']} is not hostile.")
+    encounter = _encounter_row(database, npc)
+    if encounter["status"] == "defeated":
+        raise ActionError(f"{npc['name']} is defeated and has not yet recovered.", 409)
+    character = _character_row(database, user["id"])
+    database.execute(
+        "INSERT INTO mud_combat_participants(encounter_id,character_id) VALUES(?,?) "
+        "ON CONFLICT(encounter_id,character_id) DO UPDATE SET left_at=NULL,"
+        "defeated_at=NULL,last_action_at=CURRENT_TIMESTAMP",
+        (encounter["id"], character["id"]),
+    )
+    player_gear = _equipment_combat_totals(database, character_id=character["id"])
+    enemy_gear = _equipment_combat_totals(database, npc_definition_id=npc["definition_id"])
+    damage = max(1, 4 + character["strength"] // 2 + player_gear["attack"]
+                 - (npc["combat_defense"] + enemy_gear["defense"]) // 2)
+    remaining = max(0, encounter["current_health"] - damage)
+    database.execute(
+        "UPDATE mud_combat_encounters SET status=?,current_health=?,"
+        "started_at=COALESCE(started_at,CURRENT_TIMESTAMP),updated_at=CURRENT_TIMESTAMP,"
+        "ended_at=CASE WHEN ?=0 THEN CURRENT_TIMESTAMP ELSE NULL END WHERE id=? "
+        "AND status IN ('ready','active')",
+        ("defeated" if remaining == 0 else "active", remaining, remaining, encounter["id"]),
+    )
+    database.execute(
+        "UPDATE mud_combat_participants SET damage_dealt=damage_dealt+?,"
+        "last_action_at=CURRENT_TIMESTAMP WHERE encounter_id=? AND character_id=?",
+        (damage, encounter["id"], character["id"]),
+    )
+    recipients = set(_occupant_ids(database, room["id"])); recipients.add(user["id"])
+    drafts = [EventDraft(
+        f"{character['display_name']} attacks {npc['name']} for {damage} damage "
+        f"({remaining}/{encounter['maximum_health']} health).",
+        event_type="combat", audience_type="room", audience_key=room["id"],
+        recipient_ids=tuple(sorted(recipients)),
+    )]
+    if remaining == 0:
+        defeated = database.execute(
+            "SELECT * FROM mud_combat_encounters WHERE id=?", (encounter["id"],),
+        ).fetchone()
+        drafts.append(EventDraft(
+            f"{npc['name']} is defeated.", event_type="victory", audience_type="room",
+            audience_key=room["id"], recipient_ids=tuple(sorted(recipients)),
+        ))
+        drafts += _encounter_reward_drafts(database, defeated, npc)
+        return drafts
+    enemy_damage = max(1, npc["combat_attack"] + enemy_gear["attack"]
+                       - (character["vitality"] // 10 + player_gear["defense"]))
+    health = max(0, character["current_health"] - enemy_damage)
+    database.execute(
+        "UPDATE mud_character_progression SET current_health=?,updated_at=CURRENT_TIMESTAMP "
+        "WHERE character_id=? AND track_key=?", (health, character["id"], ACTIVE_PROGRESSION_TRACK),
+    )
+    drafts.append(EventDraft(
+        f"{npc['name']} retaliates against {character['display_name']} for {enemy_damage} damage "
+        f"({health}/{character['maximum_health']} health).",
+        event_type="combat", audience_type="room", audience_key=room["id"],
+        recipient_ids=tuple(sorted(recipients)),
+    ))
+    if health == 0:
+        drafts += _defeat_player(database, user, encounter, npc)
+    return drafts
+
+
+def _combat_action(database, user, parameters):
+    if parameters.get("arguments"):
+        raise ActionError("The combat command does not accept arguments.")
+    state = combat_state(database, user["id"])
+    if not state["enemies"]:
+        body = "There are no hostile enemies here."
+    else:
+        body = "Nearby enemies:\n" + "\n".join(
+            f"- {enemy['name']}: {enemy['status']} · "
+            f"{enemy['health']}/{enemy['maximum_health']} health"
+            for enemy in state["enemies"]
+        )
+    return [EventDraft(body, event_type="combat")]
 
 
 def _look_action(database, user, parameters):
@@ -812,6 +1283,8 @@ def _drop_action(database, user, parameters):
         raise ActionError("Drop what?")
     item = _item_matches(_inventory_rows(database, user["id"]), target)
     room = _current_room(database, user["id"])
+    if room["id"] == PORTAL_ROOM_ID:
+        raise ActionError("Items cannot be dropped in the protected portal room.")
     database.execute("UPDATE mud_item_instances SET room_id=?,owner_character_id=NULL,container_id=NULL,equipped_slot=NULL,updated_at=CURRENT_TIMESTAMP WHERE id=?", (room["id"], item["id"]))
     return [EventDraft(f"You drop {item['name']}.", event_type="item")]
 
@@ -1043,7 +1516,7 @@ def _exits_action(database, user, parameters):
     if parameters.get("arguments"):
         raise ActionError("The exits command does not accept arguments.")
     room = _current_room(database, user["id"])
-    exits = _room_exits(database, room["id"])
+    exits = _room_state(database, user["id"])["exits"]
     if not exits:
         body = f"There are no visible exits from {room['name']}."
     else:
@@ -1053,12 +1526,112 @@ def _exits_action(database, user, parameters):
     return [EventDraft(body, event_type="room")]
 
 
+def _transition_location(database, user, destination_mode, destination_type,
+                         destination_key, route):
+    character = character_state(database, user["id"])
+    old_room = _current_room(database, user["id"])
+    old_recipients = _occupant_ids(database, old_room["id"], user["id"])
+    _leave_combat(database, user["id"], "room", old_room["id"])
+    _set_player_location(
+        database, user["id"], destination_mode, destination_type, destination_key
+    )
+    new_room = _current_room(database, user["id"])
+    new_recipients = _occupant_ids(database, new_room["id"], user["id"])
+    return [
+        EventDraft(
+            f"You go {route}.\n\n{_describe_room(database, new_room, user['id'])}",
+            event_type="movement",
+        ),
+        EventDraft(
+            f"{character['name']} leaves via {route}.", event_type="departure",
+            audience_type="room", audience_key=old_room["id"],
+            recipient_ids=old_recipients,
+        ),
+        EventDraft(
+            f"{character['name']} arrives.", event_type="arrival",
+            audience_type="room", audience_key=new_room["id"],
+            recipient_ids=new_recipients,
+        ),
+    ]
+
+
+def _portal_action(database, user, parameters):
+    if parameters.get("arguments"):
+        raise ActionError("The portal command does not accept arguments.")
+    modes = _mode_settings(database)
+    room = _current_room(database, user["id"])
+    if not modes["procedural"]:
+        raise ActionError("Procedural dungeon mode is disabled.")
+    if room["id"] == PORTAL_ROOM_ID:
+        return [EventDraft(PORTAL_ROOM_INSTRUCTIONS, event_type="portal")]
+    if room["id"] != _start_room(database)["id"]:
+        raise ActionError("The Dungeon Portals can only be entered from the world's starting room.")
+    return _transition_location(
+        database, user, "procedural", "portal", PORTAL_ROOM_ID, "through the portal threshold"
+    )
+
+
+def _world_action(database, user, parameters):
+    if parameters.get("arguments"):
+        raise ActionError("The world command does not accept arguments.")
+    modes = _mode_settings(database)
+    room = _current_room(database, user["id"])
+    if room["id"] != PORTAL_ROOM_ID:
+        raise ActionError("You are already in the traditional world.")
+    if not modes["traditional"]:
+        raise ActionError("The traditional world is disabled.")
+    saved = database.execute(
+        "SELECT room_id FROM mud_world_locations WHERE user_id=?", (user["id"],),
+    ).fetchone()
+    destination = saved["room_id"] if saved else None
+    if destination is None or database.execute(
+        "SELECT 1 FROM mud_world_rooms WHERE id=?", (destination,),
+    ).fetchone() is None:
+        destination = _start_room(database)["id"]
+    return _transition_location(
+        database, user, "traditional", "world_room", destination, "back to the traditional world"
+    )
+
+
+def _dungeon_entrance_action(_database, _user, parameters):
+    modes = _mode_settings(_database)
+    if (not modes["procedural"] or
+            _current_room(_database, _user["id"])["id"] != PORTAL_ROOM_ID):
+        raise ActionError("That procedural gateway is not available from here.")
+    kind = str(parameters.get("kind", "")).strip()
+    arguments = parameters.get("arguments", [])
+    if arguments:
+        kind = " ".join(str(value) for value in arguments).casefold()
+    if kind in {"daily", "dungeon of the day"}:
+        label = "Dungeon of the Day"
+    elif kind in {"random", "expedition", "random expedition", "random expeditions"}:
+        label = "Random Expeditions"
+    else:
+        raise ActionError("Choose Dungeon of the Day or a Random Expedition.")
+    return [EventDraft(
+        f"{label} is not yet available. Its gateway will open in a future StationNet update.",
+        event_type="portal",
+    )]
+
+
 def _go_action(database, user, parameters):
     character = character_state(database, user["id"])
     room = _current_room(database, user["id"])
     exit_id = str(parameters.get("exit_id", "")).strip()
     arguments = parameters.get("arguments", [])
     destination = " ".join(str(item) for item in arguments).strip() if arguments else ""
+    modes = _mode_settings(database)
+    destination_key = " ".join(destination.casefold().split())
+    if room["id"] == PORTAL_ROOM_ID and modes["traditional"] and (
+        exit_id == "system:return-world" or destination_key in {"out", "world", "traditional world"}
+    ):
+        return _world_action(database, user, {})
+    if room["id"] != PORTAL_ROOM_ID and modes["procedural"] and (
+        exit_id == "system:enter-portals" or destination_key in {
+            "portal", "portals", "dungeon portals", _portal_room(database)["name"].casefold()
+        }
+    ):
+        return _portal_action(database, user, {})
     if exit_id:
         matches = database.execute(
             "SELECT e.id,e.name,e.direction,e.to_room_id,r.name AS destination_name "
@@ -1084,13 +1657,9 @@ def _go_action(database, user, parameters):
         raise ActionError(f'More than one exit matches "{destination}". Use an exit name or direction.')
     chosen = matches[0]
     old_recipients = _occupant_ids(database, room["id"], user["id"])
-    database.execute(
-        "UPDATE mud_world_locations SET room_id=?,updated_at=CURRENT_TIMESTAMP WHERE user_id=?",
-        (chosen["to_room_id"], user["id"]),
-    )
-    database.execute(
-        "UPDATE mud_presence SET room_id=? WHERE user_id=?",
-        (chosen["to_room_id"], user["id"]),
+    _leave_combat(database, user["id"], "room", room["id"])
+    _set_player_location(
+        database, user["id"], "traditional", "world_room", chosen["to_room_id"]
     )
     destination_room = database.execute(
         "SELECT id,name,description FROM mud_world_rooms WHERE id=?",
@@ -1123,9 +1692,10 @@ def _say_action(database, user, parameters):
     if not 1 <= len(body) <= 1000:
         raise ActionError("Messages must be between 1 and 1000 characters.")
     room = _current_room(database, user["id"])
+    location_type = "portal" if room["id"] == PORTAL_ROOM_ID else "world_room"
     if database.execute(
-        "SELECT 1 FROM mud_presence WHERE user_id=? AND room_id=? LIMIT 1",
-        (user["id"], room["id"]),
+        "SELECT 1 FROM mud_presence WHERE user_id=? AND location_type=? "
+        "AND location_key=? LIMIT 1", (user["id"], location_type, room["id"]),
     ).fetchone() is None:
         raise ActionError("Reconnect to the MUD before speaking in this room.", 409)
     recipients = set(_occupant_ids(database, room["id"]))
@@ -1176,6 +1746,8 @@ actions.register(ActionDefinition(key="use", label="USE", description="Use a car
 actions.register(ActionDefinition(key="talk", label="TALK", description="Talk to a nearby NPC.", commands=("talk", "speak"), handler=_talk_action, group="NPCS", show_context=False))
 actions.register(ActionDefinition(key="respond", label="RESPOND", description="Choose a response in your current NPC conversation.", commands=("respond", "reply"), handler=_respond_action, group="DIALOGUE", show_context=False))
 actions.register(ActionDefinition(key="quests", label="VIEW QUESTS", description="View your active quest objectives and progress.", commands=("quests", "quest", "objectives"), handler=_quests_action, group="QUESTS"))
+actions.register(ActionDefinition(key="combat", label="COMBAT STATUS", description="View hostile enemies and encounter status.", commands=("combat",), handler=_combat_action, group="COMBAT"))
+actions.register(ActionDefinition(key="attack", label="ATTACK", description="Attack a hostile enemy and resolve one combat round.", commands=("attack", "hit"), handler=_attack_action, group="COMBAT", show_context=False))
 actions.register(ActionDefinition(
     key="exits", label="LIST EXITS",
     description="List the routes available from this room.",
@@ -1188,6 +1760,26 @@ actions.register(ActionDefinition(
     commands=("go", "move", "walk"), handler=_go_action,
     group="NAVIGATION", show_context=False,
 ))
+actions.register(ActionDefinition(
+    key="portal", label="ENTER DUNGEON PORTALS",
+    description="Enter the protected procedural gameplay hub.",
+    commands=("portal", "portals"), handler=_portal_action,
+    group="NAVIGATION", show_context=False,
+))
+actions.register(ActionDefinition(
+    key="world", label="RETURN TO TRADITIONAL WORLD",
+    description="Return to your last traditional-world location.",
+    commands=("world",), handler=_world_action,
+    group="NAVIGATION", show_context=False,
+))
+actions.register(ActionDefinition(
+    key="dungeon_entrance", label="INSPECT GATEWAY",
+    description="Inspect a protected procedural dungeon gateway.",
+    handler=_dungeon_entrance_action,
+    group="PORTALS", show_context=False,
+))
+actions.register_command("daily", actions.get("dungeon_entrance"), ("daily",))
+actions.register_command("expedition", actions.get("dungeon_entrance"), ("expedition",))
 for alias, direction in {
     "north": "north", "n": "north", "south": "south", "s": "south",
     "east": "east", "e": "east", "west": "west", "w": "west",
@@ -1203,7 +1795,7 @@ for alias, direction in {
 
 def _navigation_actions(database, user):
     room = _current_room(database, user["id"])
-    return [
+    options = [
         {
             "key": "go",
             "label": _exit_label(exit_row),
@@ -1213,6 +1805,25 @@ def _navigation_actions(database, user):
         }
         for exit_row in _room_exits(database, room["id"])
     ]
+    modes = _mode_settings(database)
+    if room["id"] == PORTAL_ROOM_ID:
+        options.extend((
+            {"key": "dungeon_entrance", "label": "DUNGEON OF THE DAY",
+             "description": "Inspect the daily challenge gateway.", "group": "PORTALS",
+             "parameters": {"kind": "daily"}},
+            {"key": "dungeon_entrance", "label": "RANDOM EXPEDITION",
+             "description": "Inspect the random expedition gateway.", "group": "PORTALS",
+             "parameters": {"kind": "random"}},
+        ))
+        if modes["traditional"]:
+            options.append({"key": "world", "label": "OUT — TRADITIONAL WORLD",
+                            "description": "Return to your last traditional-world location.",
+                            "group": "NAVIGATION", "parameters": {}})
+    elif modes["procedural"] and room["id"] == _start_room(database)["id"]:
+        options.append({"key": "portal", "label": "ENTER DUNGEON PORTALS",
+                        "description": "Enter the protected procedural gameplay hub.",
+                        "group": "NAVIGATION", "parameters": {}})
+    return options
 
 
 actions.register_context_provider(_navigation_actions)
@@ -1299,6 +1910,26 @@ def _npc_actions(database, user):
 actions.register_context_provider(_npc_actions)
 
 
+def _combat_actions(database, user):
+    room = _current_room(database, user["id"])
+    options = []
+    for npc in _room_npc_rows(database, room["id"]):
+        if npc["combat_maximum_health"] is None:
+            continue
+        encounter = _encounter_row(database, npc)
+        if encounter["status"] in {"ready", "active"}:
+            options.append({
+                "key": "attack", "label": f"ATTACK {npc['name'].upper()}",
+                "description": (f"Fight one round. Enemy health: "
+                                f"{encounter['current_health']}/{encounter['maximum_health']}."),
+                "group": "COMBAT", "parameters": {"npc_id": npc["id"]},
+            })
+    return options
+
+
+actions.register_context_provider(_combat_actions)
+
+
 def _insert_event(database, draft, default_user_id=None, action_id=None):
     audience_key = draft.audience_key or str(default_user_id)
     cursor = database.execute(
@@ -1341,7 +1972,8 @@ def _events_for_user(database, user_id, after=0, action_id=None, limit=200):
 
 def _prune_presence(database):
     expired = database.execute(
-        "SELECT p.user_id,p.room_id,COALESCE(c.display_name,u.callsign) AS character_name "
+        "SELECT p.user_id,p.room_id,p.location_type,p.location_key,"
+        "COALESCE(c.display_name,u.callsign) AS character_name "
         "FROM mud_presence AS p "
         "JOIN users AS u ON u.id=p.user_id "
         "LEFT JOIN mud_characters AS c ON c.user_id=u.id "
@@ -1352,7 +1984,9 @@ def _prune_presence(database):
         return
     affected = {}
     for row in expired:
-        affected[row["user_id"]] = (row["room_id"], row["character_name"])
+        affected[row["user_id"]] = (
+            row["location_key"] or row["room_id"], row["character_name"]
+        )
     database.execute(
         "DELETE FROM mud_presence WHERE last_seen<? "
         "OR (disconnected_at IS NOT NULL AND disconnected_at<?)",
@@ -1363,6 +1997,7 @@ def _prune_presence(database):
             "SELECT 1 FROM mud_presence WHERE user_id=? LIMIT 1", (user_id,)
         ).fetchone() is not None:
             continue
+        _leave_combat(database, user_id, "room", room_id)
         _insert_event(database, EventDraft(
             f"{character_name} disconnects.", event_type="departure",
             audience_type="room", audience_key=room_id,
@@ -1387,6 +2022,10 @@ def _register_presence(database, user, client_id):
     character = character_state(database, user["id"])
     _prune_presence(database)
     room = _current_room(database, user["id"])
+    location = database.execute(
+        "SELECT location_type,location_key,instance_id FROM mud_player_locations "
+        "WHERE user_id=?", (user["id"],),
+    ).fetchone()
     already_present = database.execute(
         "SELECT 1 FROM mud_presence WHERE user_id=? LIMIT 1", (user["id"],)
     ).fetchone() is not None
@@ -1397,10 +2036,15 @@ def _register_presence(database, user, client_id):
     )
     now = datetime.now(timezone.utc).replace(microsecond=0).isoformat()
     database.execute(
-        "INSERT INTO mud_presence(user_id,connection_id,client_id,room_id,last_seen) "
-        "VALUES(?,?,?,?,?) ON CONFLICT(user_id,connection_id,client_id) DO UPDATE SET "
-        "room_id=excluded.room_id,last_seen=excluded.last_seen,disconnected_at=NULL",
-        (user["id"], connection_id, client_id, room["id"], now),
+        "INSERT INTO mud_presence(user_id,connection_id,client_id,room_id,location_type,"
+        "location_key,instance_id,last_seen) VALUES(?,?,?,?,?,?,?,?) "
+        "ON CONFLICT(user_id,connection_id,client_id) DO UPDATE SET "
+        "room_id=excluded.room_id,location_type=excluded.location_type,"
+        "location_key=excluded.location_key,instance_id=excluded.instance_id,"
+        "last_seen=excluded.last_seen,disconnected_at=NULL",
+        (user["id"], connection_id, client_id,
+         room["id"] if location["location_type"] == "world_room" else None,
+         location["location_type"], location["location_key"], location["instance_id"], now),
     )
     if not already_present:
         _insert_event(database, EventDraft(
@@ -1494,7 +2138,8 @@ class MudService:
                     database, draft, default_user_id=user["id"],
                     action_id=cursor.lastrowid,
                 )
-                visible = draft.audience_type == "private" or (
+                visible = (draft.audience_type == "private" and
+                           (draft.audience_key is None or draft.audience_key == str(user["id"]))) or (
                     draft.recipient_ids is not None and user["id"] in draft.recipient_ids
                 )
                 if visible:
@@ -1538,13 +2183,14 @@ def index():
     character = character_state(database, g.user["id"])
     inventory = inventory_state(database, g.user["id"])
     quests = quest_state(database, g.user["id"])
+    combat = combat_state(database, g.user["id"])
     mud_actions = actions.contextual(g.user, database)
     events = _recent_events(database, g.user["id"])
     database.commit()
     return render_template(
         "mud/index.html", events=events,
         mud_actions=mud_actions, room=room, character=character, inventory=inventory,
-        quests=quests,
+        quests=quests, combat=combat,
     )
 
 
@@ -1565,6 +2211,7 @@ def updates():
         character = character_state(database, g.user["id"])
         inventory = inventory_state(database, g.user["id"])
         quests = quest_state(database, g.user["id"])
+        combat = combat_state(database, g.user["id"])
         available = actions.contextual(g.user, database)
         database.commit()
     except (ActionError, sqlite3.Error) as problem:
@@ -1573,7 +2220,7 @@ def updates():
             return jsonify(error=str(problem)), problem.status
         raise
     return jsonify(events=events, room=room, character=character, inventory=inventory,
-                   quests=quests, actions=available)
+                   quests=quests, combat=combat, actions=available)
 
 
 @bp.post("/disconnect")
@@ -1610,23 +2257,25 @@ def perform_action():
         character = character_state(database, g.user["id"])
         inventory = inventory_state(database, g.user["id"])
         quests = quest_state(database, g.user["id"])
+        combat = combat_state(database, g.user["id"])
         available = actions.contextual(g.user, database)
         database.commit()
         return jsonify(
             error=str(problem), room=room, character=character, inventory=inventory,
-            quests=quests, actions=available
+            quests=quests, combat=combat, actions=available
         ), problem.status
     database = get_db()
     room = _room_state(database, g.user["id"])
     character = character_state(database, g.user["id"])
     inventory = inventory_state(database, g.user["id"])
     quests = quest_state(database, g.user["id"])
+    combat = combat_state(database, g.user["id"])
     available = actions.contextual(g.user, database)
     database.commit()
     return jsonify(
         action=action_key, events=events,
         actions=available, room=room, character=character, inventory=inventory,
-        quests=quests,
+        quests=quests, combat=combat,
     )
 
 
@@ -1698,7 +2347,13 @@ def builder():
         "FROM users AS u LEFT JOIN mud_builder_permissions AS p ON p.user_id=u.id "
         "ORDER BY u.is_admin DESC,u.callsign COLLATE NOCASE"
     ).fetchall() if g.user["is_admin"] else []
-    definitions = database.execute("SELECT * FROM mud_item_definitions ORDER BY name COLLATE NOCASE,id").fetchall()
+    definitions = []
+    for row in database.execute("SELECT * FROM mud_item_definitions ORDER BY name COLLATE NOCASE,id"):
+        item = dict(row); properties = _json_properties(item["properties_json"])
+        item["attack_bonus"] = _integer_property(properties, "damage", "attack", "attack_bonus")
+        item["defense_bonus"] = _integer_property(properties, "armor", "defense", "defense_bonus")
+        item["use_message"] = properties.get("use_message", "")
+        definitions.append(item)
     items_by_room = {room["id"]: [] for room in rooms}
     for row in database.execute("SELECT i.id,i.room_id,d.name,d.item_type FROM mud_item_instances i JOIN mud_item_definitions d ON d.id=i.definition_id WHERE i.room_id IS NOT NULL ORDER BY d.name COLLATE NOCASE"):
         items_by_room.setdefault(row["room_id"], []).append(dict(row))
@@ -1715,8 +2370,21 @@ def builder():
             "SELECT * FROM mud_dialogue_responses WHERE node_id=? ORDER BY sort_order,id", (node["id"],)
         )]
     npc_definitions = [dict(row) for row in database.execute(
-        "SELECT * FROM mud_npc_definitions ORDER BY name COLLATE NOCASE,id"
+        "SELECT d.*,p.maximum_health AS combat_maximum_health,p.attack AS combat_attack,"
+        "p.defense AS combat_defense,p.experience_reward,p.respawn_seconds "
+        "FROM mud_npc_definitions AS d LEFT JOIN mud_npc_combat_profiles AS p "
+        "ON p.npc_definition_id=d.id ORDER BY d.name COLLATE NOCASE,d.id"
     )]
+    npc_equipment = {item["id"]: {} for item in npc_definitions}
+    npc_combat_rewards = {item["id"]: [] for item in npc_definitions}
+    for row in database.execute("SELECT * FROM mud_npc_equipment"):
+        npc_equipment.setdefault(row["npc_definition_id"], {})[row["equipment_slot"]] = row["item_definition_id"]
+    for row in database.execute(
+        "SELECT r.*,d.name AS item_name FROM mud_npc_combat_rewards AS r "
+        "LEFT JOIN mud_item_definitions AS d ON d.id=r.target_id "
+        "ORDER BY r.npc_definition_id,r.id"
+    ):
+        npc_combat_rewards.setdefault(row["npc_definition_id"], []).append(dict(row))
     npcs_by_room = {room["id"]: [] for room in rooms}
     for row in database.execute(
         "SELECT i.id,i.room_id,d.name FROM mud_npc_instances AS i JOIN mud_npc_definitions AS d "
@@ -1742,6 +2410,7 @@ def builder():
         responses_by_node=responses_by_node, npc_definitions=npc_definitions,
         npcs_by_room=npcs_by_room, quests=quests, objectives_by_quest=objectives_by_quest,
         rewards_by_quest=rewards_by_quest, givers_by_quest=givers_by_quest,
+        npc_equipment=npc_equipment, npc_combat_rewards=npc_combat_rewards,
     )
 
 
@@ -1751,6 +2420,8 @@ def _item_definition_fields():
     item_type = request.form.get("item_type", "misc")
     slot = request.form.get("equipment_slot", "").strip() or None
     use_message = request.form.get("use_message", "").strip()
+    attack_bonus = request.form.get("attack_bonus", 0, type=int)
+    defense_bonus = request.form.get("defense_bonus", 0, type=int)
     if not 2 <= len(name) <= 80 or not 1 <= len(description) <= 4000:
         return None, "Item names must be 2–80 characters and descriptions 1–4000 characters."
     if item_type not in {"misc", "equipment", "container", "consumable", "key"}:
@@ -1759,7 +2430,13 @@ def _item_definition_fields():
         if slot is not None: return None, "Choose a valid equipment slot."
     if item_type != "equipment": slot = None
     if len(use_message) > 1000: return None, "Use messages cannot exceed 1000 characters."
-    return (name, description, item_type, json.dumps({"use_message": use_message} if use_message else {}), slot), None
+    if attack_bonus is None or defense_bonus is None or not 0 <= attack_bonus <= 100000 or not 0 <= defense_bonus <= 100000:
+        return None, "Combat bonuses must be between 0 and 100,000."
+    properties = {}
+    if use_message: properties["use_message"] = use_message
+    if attack_bonus: properties["attack_bonus"] = attack_bonus
+    if defense_bonus: properties["defense_bonus"] = defense_bonus
+    return (name, description, item_type, json.dumps(properties, separators=(",", ":"), sort_keys=True), slot), None
 
 
 def _json_object_field(name):
@@ -1870,13 +2547,73 @@ def _npc_definition_fields():
     return (name, description, conversation_id, properties, behaviors), None
 
 
+def _npc_combat_fields(database):
+    if request.form.get("is_hostile") != "1":
+        return None, {}, None
+    values = {
+        "maximum_health": request.form.get("maximum_health", 30, type=int),
+        "attack": request.form.get("combat_attack", 6, type=int),
+        "defense": request.form.get("combat_defense", 2, type=int),
+        "experience_reward": request.form.get("experience_reward", 10, type=int),
+        "respawn_seconds": request.form.get("respawn_seconds", 60, type=int),
+    }
+    limits = {
+        "maximum_health": (1, 1000000), "attack": (1, 100000),
+        "defense": (0, 100000), "experience_reward": (0, 100000),
+        "respawn_seconds": (5, 86400),
+    }
+    if any(values[key] is None or not low <= values[key] <= high
+           for key, (low, high) in limits.items()):
+        return None, {}, "Check combat values (respawn must be 5 seconds to 24 hours)."
+    equipment = {}
+    for slot in EQUIPMENT_SLOTS:
+        item_id = request.form.get(f"npc_equipment_{slot}", "").strip()
+        if not item_id:
+            continue
+        valid = database.execute(
+            "SELECT 1 FROM mud_item_definitions WHERE id=? AND item_type='equipment' "
+            "AND equipment_slot=?", (item_id, slot),
+        ).fetchone()
+        if valid is None:
+            return None, {}, f"Choose valid {slot.replace('_', ' ')} equipment."
+        equipment[slot] = item_id
+    return values, equipment, None
+
+
+def _save_npc_combat(database, npc_id, profile, equipment):
+    if profile is None:
+        database.execute(
+            "UPDATE mud_combat_encounters SET status='abandoned',ended_at=CURRENT_TIMESTAMP,"
+            "updated_at=CURRENT_TIMESTAMP WHERE npc_definition_id=? AND status IN ('ready','active')",
+            (npc_id,),
+        )
+        database.execute("DELETE FROM mud_npc_combat_profiles WHERE npc_definition_id=?", (npc_id,))
+        return
+    database.execute(
+        "INSERT INTO mud_npc_combat_profiles(npc_definition_id,maximum_health,attack,defense,"
+        "experience_reward,respawn_seconds) VALUES(?,?,?,?,?,?) "
+        "ON CONFLICT(npc_definition_id) DO UPDATE SET maximum_health=excluded.maximum_health,"
+        "attack=excluded.attack,defense=excluded.defense,experience_reward=excluded.experience_reward,"
+        "respawn_seconds=excluded.respawn_seconds,updated_at=CURRENT_TIMESTAMP",
+        (npc_id, profile["maximum_health"], profile["attack"], profile["defense"],
+         profile["experience_reward"], profile["respawn_seconds"]),
+    )
+    database.execute("DELETE FROM mud_npc_equipment WHERE npc_definition_id=?", (npc_id,))
+    database.executemany(
+        "INSERT INTO mud_npc_equipment(npc_definition_id,equipment_slot,item_definition_id) "
+        "VALUES(?,?,?)", ((npc_id, slot, item_id) for slot, item_id in equipment.items()),
+    )
+
+
 @bp.post("/builder/npcs")
 @builder_required
 def builder_create_npc_definition():
     validate_csrf(); database = get_db(); fields, error = _npc_definition_fields()
     if error: flash(error, "error"); return _builder_redirect()
+    profile, equipment, error = _npc_combat_fields(database)
+    if error: flash(error, "error"); return _builder_redirect()
     if fields[2] and database.execute("SELECT 1 FROM mud_conversations WHERE id=?", (fields[2],)).fetchone() is None: flash("Choose an existing conversation.", "error"); return _builder_redirect()
-    npc_id = f"world:npc-definition:{uuid.uuid4().hex}"; database.execute("INSERT INTO mud_npc_definitions(id,name,description,conversation_id,properties_json,behaviors_json,created_by) VALUES(?,?,?,?,?,?,?)", (npc_id, *fields, g.user["id"])); database.commit()
+    npc_id = f"world:npc-definition:{uuid.uuid4().hex}"; database.execute("INSERT INTO mud_npc_definitions(id,name,description,conversation_id,properties_json,behaviors_json,created_by) VALUES(?,?,?,?,?,?,?)", (npc_id, *fields, g.user["id"])); _save_npc_combat(database, npc_id, profile, equipment); database.commit()
     flash(f"NPC definition {fields[0]} created.", "success"); return _builder_redirect()
 
 
@@ -1886,8 +2623,47 @@ def builder_update_npc_definition(npc_id):
     validate_csrf(); database = get_db(); fields, error = _npc_definition_fields()
     if database.execute("SELECT 1 FROM mud_npc_definitions WHERE id=?", (npc_id,)).fetchone() is None: abort(404)
     if error: flash(error, "error"); return _builder_redirect()
+    profile, equipment, error = _npc_combat_fields(database)
+    if error: flash(error, "error"); return _builder_redirect()
     if fields[2] and database.execute("SELECT 1 FROM mud_conversations WHERE id=?", (fields[2],)).fetchone() is None: flash("Choose an existing conversation.", "error"); return _builder_redirect()
-    database.execute("UPDATE mud_npc_definitions SET name=?,description=?,conversation_id=?,properties_json=?,behaviors_json=?,updated_at=CURRENT_TIMESTAMP WHERE id=?", (*fields, npc_id)); database.commit(); flash("NPC definition updated.", "success"); return _builder_redirect()
+    database.execute("UPDATE mud_npc_definitions SET name=?,description=?,conversation_id=?,properties_json=?,behaviors_json=?,updated_at=CURRENT_TIMESTAMP WHERE id=?", (*fields, npc_id)); _save_npc_combat(database, npc_id, profile, equipment); database.commit(); flash("NPC definition updated.", "success"); return _builder_redirect()
+
+
+@bp.post("/builder/npcs/<path:npc_id>/combat-rewards")
+@builder_required
+def builder_create_npc_combat_reward(npc_id):
+    validate_csrf(); database = get_db()
+    if database.execute("SELECT 1 FROM mud_npc_combat_profiles WHERE npc_definition_id=?", (npc_id,)).fetchone() is None:
+        flash("Enable hostile combat before adding rewards.", "error"); return _builder_redirect()
+    reward_type = request.form.get("reward_type", "item")
+    target_id = request.form.get("target_id", "").strip() or None
+    amount = request.form.get("amount", 1, type=int)
+    if reward_type not in {"experience", "item"} or amount is None or not 1 <= amount <= 100000:
+        flash("Choose a valid combat reward.", "error"); return _builder_redirect()
+    if reward_type == "item":
+        if amount > 100 or database.execute(
+            "SELECT 1 FROM mud_item_definitions WHERE id=?", (target_id,),
+        ).fetchone() is None:
+            flash("Choose an item and a quantity up to 100.", "error"); return _builder_redirect()
+    else:
+        target_id = None
+    database.execute(
+        "INSERT INTO mud_npc_combat_rewards(id,npc_definition_id,reward_type,target_id,amount) "
+        "VALUES(?,?,?,?,?)", (f"world:combat-reward:{uuid.uuid4().hex}", npc_id,
+                              reward_type, target_id, amount),
+    )
+    database.commit(); flash("Combat reward added.", "success"); return _builder_redirect()
+
+
+@bp.post("/builder/npc-combat-rewards/<path:reward_id>/delete")
+@builder_required
+def builder_delete_npc_combat_reward(reward_id):
+    validate_csrf(); database = get_db()
+    if request.form.get("confirmation") != "delete":
+        flash("Reward removal was not confirmed.", "error"); return _builder_redirect()
+    if database.execute("DELETE FROM mud_npc_combat_rewards WHERE id=?", (reward_id,)).rowcount == 0:
+        abort(404)
+    database.commit(); flash("Combat reward removed.", "success"); return _builder_redirect()
 
 
 @bp.post("/builder/npcs/place")
@@ -2136,8 +2912,17 @@ def builder_delete_room(room_id):
             "updated_at=CURRENT_TIMESTAMP",
             ((user_id, start["id"]) for user_id in affected),
         )
+        database.executemany(
+            "INSERT INTO mud_player_locations(user_id,mode,location_type,location_key) "
+            "VALUES(?,'traditional','world_room',?) ON CONFLICT(user_id) DO UPDATE SET "
+            "mode='traditional',location_type='world_room',location_key=excluded.location_key,"
+            "instance_id=NULL,updated_at=CURRENT_TIMESTAMP",
+            ((user_id, start["id"]) for user_id in affected),
+        )
         database.execute(
-            "UPDATE mud_presence SET room_id=? WHERE room_id=?", (start["id"], room_id)
+            "UPDATE mud_presence SET room_id=?,location_type='world_room',location_key=?,"
+            "instance_id=NULL WHERE room_id=? OR (location_type='world_room' AND location_key=?)",
+            (start["id"], start["id"], room_id, room_id),
         )
         database.execute("DELETE FROM mud_world_rooms WHERE id=?", (room_id,))
         for user_id in affected:

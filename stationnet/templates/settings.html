@@ -106,11 +106,14 @@
     <span class="collapsible-panel-chevron" aria-hidden="true"></span>
   </button>
   <div id="mud-service-content" data-panel-content>
-  <p class="muted">Enable the native StationNet MUD interface. Disabling access preserves its action history and all future world and character data.</p>
+  <p class="muted">Enable either experience independently. Disabling a mode preserves its world, characters, and history and safely relocates affected players.</p>
   <form method="post" action="{{ url_for('station.mud_settings') }}" class="form-grid">
     <input type="hidden" name="csrf_token" value="{{ session.csrf_token }}">
-    <label class="switch"><input type="checkbox" name="mud_enabled" {% if g.station.mud_enabled %}checked{% endif %}> Enable MUD service for authenticated members</label>
-    <button>SAVE MUD SERVICE</button>
+    <label class="switch"><input type="checkbox" name="mud_traditional_enabled" {% if g.station.mud_traditional_enabled %}checked{% endif %}> Enable traditional builder-managed world</label>
+    <label class="switch"><input type="checkbox" name="mud_procedural_enabled" {% if g.station.mud_procedural_enabled %}checked{% endif %}> Enable procedural dungeon mode</label>
+    <label>Portal room name<input name="mud_portal_name" maxlength="80" required value="{{ mud_portal.name }}"></label>
+    <label>Portal room description<textarea name="mud_portal_description" maxlength="2000" required>{{ mud_portal.description }}</textarea><small>The gameplay explanation and gateway controls are system-managed and cannot be edited here or in the world builder.</small></label>
+    <button>SAVE MUD MODES</button>
   </form>
   </div>
 </section>
