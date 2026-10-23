@@ -22,6 +22,18 @@ Windows (easy setup):
 
 To reset an installed copy, double-click `uninstall.bat`. It optionally backs up station data, then removes only the generated environment, data, `run.bat`, and cache files. The StationNet directory and all application source files remain intact, ready for `install.bat` to be run again.
 
+### Linux, macOS, Unix, and Termux
+
+From the extracted StationNet directory, make the scripts executable once, then install and run:
+
+```sh
+chmod +x install.sh run.sh uninstall.sh
+./install.sh
+./run.sh
+```
+
+`install.sh` requires Python 3.11 or newer and creates `.venv` in the StationNet folder. In Termux, install Python first with `pkg install python`. Run `./uninstall.sh` to optionally back up `data` and remove only generated runtime files, leaving the source copy intact.
+
 Windows PowerShell (manual setup):
 
 ```powershell
