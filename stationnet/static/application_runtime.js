@@ -71,6 +71,15 @@
     });
   }
 
+  function sound(tones, settings) {
+    const opts = options(settings);
+    send("sound", {
+      operation: "play", tones: Array.isArray(tones) ? tones : [tones],
+      duration: opts.duration, delay: opts.delay, waveform: opts.waveform,
+      volume: opts.volume, attack: opts.attack, release: opts.release
+    });
+  }
+
   function scheduled(handler, delay, repeat) {
     if (typeof handler !== "function") throw new TypeError("A timer callback is required");
     const wait = Math.max(0, Math.min(3600000, Number(delay) || 0));
@@ -191,6 +200,33 @@
     scores: Object.freeze({
       submit(score) { return scores("submit", score); },
       leaderboard() { return scores("list"); }
+    }),
+    sound: Object.freeze({
+      // Play one synthesized oscillator. Frequency is in hertz; duration and
+      // envelope values are milliseconds. No audio files are accepted.
+      playTone(frequency, duration = 120, settings) {
+        if (duration && typeof duration === "object") { settings = duration; duration = 120; }
+        const opts = options(settings);
+        sound({ frequency, duration }, opts);
+      },
+      // Play tones together. Entries may be frequencies or tone objects, so
+      // equal delays make a chord and different delays make a pattern.
+      play(tones, settings) { sound(tones, settings); },
+      // Schedule tones one after another. Give an entry a delay to position it
+      // explicitly instead (which also permits chords within a sequence).
+      sequence(tones, settings) {
+        const opts = options(settings);
+        const defaultDuration = Number(opts.duration) || 120;
+        let cursor = Number(opts.delay) || 0;
+        const events = (Array.isArray(tones) ? tones : []).map((tone) => {
+          const event = tone && typeof tone === "object" ? { ...tone } : { frequency: tone };
+          const duration = Number(event.duration == null ? defaultDuration : event.duration) || defaultDuration;
+          if (event.delay == null) { event.delay = cursor; cursor += Math.max(0, duration); }
+          return event;
+        });
+        sound(events, opts);
+      },
+      stop() { send("sound", { operation: "stop" }); }
     }),
     clipboard: Object.freeze({
       writeText(value) { return capability("copy-text", { text: String(value) }); }

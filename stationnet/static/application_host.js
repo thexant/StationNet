@@ -10,11 +10,14 @@
 
   const PROTOCOL = "stationnet-app-v1";
   const LIMITS = { components: 100, text: 8000, items: 100, columns: 80, rows: 100, canvasCommands: 600, capabilityText: 200000 };
+  const SOUND_LIMITS = { tones: 32, active: 24, frequency: [20, 20000], duration: [10, 10000], delay: [0, 30000], volume: [.001, .25], envelope: [0, 1000] };
   const keyboardActions = new Set();
   const lifecycleActions = new Set();
   let eventWindow = [];
   let totalEvents = 0;
   let closed = false;
+  let audioContext = null;
+  const activeTones = new Set();
   const startupTimer = setTimeout(() => {
     status.textContent = "PROGRAM STATUS / UNAVAILABLE";
     surface.textContent = "The application runtime did not respond.";
@@ -26,6 +29,60 @@
     const parsed = Number(value);
     return Number.isFinite(parsed) ? Math.min(max, Math.max(min, parsed)) : fallback;
   };
+
+  function audio() {
+    if (audioContext) return audioContext;
+    const Audio = window.AudioContext || window.webkitAudioContext;
+    if (!Audio) return null;
+    audioContext = new Audio();
+    return audioContext;
+  }
+
+  // Browsers require audio to be enabled directly from a player gesture. The
+  // app itself runs in a worker, so the trusted host performs that one-time
+  // unlock before forwarding an interaction to the application.
+  function unlockAudio() {
+    const context = audio();
+    if (context && context.state === "suspended") context.resume().catch(() => {});
+  }
+
+  function stopSounds() {
+    activeTones.forEach((tone) => { try { tone.stop(); } catch (_) {} });
+    activeTones.clear();
+  }
+
+  function sound(message) {
+    if (message.operation === "stop") { stopSounds(); return; }
+    if (message.operation !== "play") return;
+    const context = audio();
+    if (!context) return;
+    const tones = Array.isArray(message.tones) ? message.tones.slice(0, SOUND_LIMITS.tones) : [];
+    const waveforms = new Set(["sine", "square", "sawtooth", "triangle"]);
+    tones.forEach((raw) => {
+      if (activeTones.size >= SOUND_LIMITS.active) return;
+      const tone = raw && typeof raw === "object" ? raw : { frequency: raw };
+      const frequency = number(tone.frequency, NaN, ...SOUND_LIMITS.frequency);
+      if (!Number.isFinite(frequency)) return;
+      const duration = number(tone.duration, number(message.duration, 120, ...SOUND_LIMITS.duration), ...SOUND_LIMITS.duration);
+      const delay = number(tone.delay, number(message.delay, 0, ...SOUND_LIMITS.delay), ...SOUND_LIMITS.delay);
+      const volume = number(tone.volume, number(message.volume, .08, ...SOUND_LIMITS.volume), ...SOUND_LIMITS.volume);
+      const attack = Math.min(duration / 2, number(tone.attack, number(message.attack, 5, ...SOUND_LIMITS.envelope), ...SOUND_LIMITS.envelope));
+      const release = Math.min(duration / 2, number(tone.release, number(message.release, 20, ...SOUND_LIMITS.envelope), ...SOUND_LIMITS.envelope));
+      const waveform = waveforms.has(tone.waveform) ? tone.waveform : waveforms.has(message.waveform) ? message.waveform : "sine";
+      const oscillator = context.createOscillator(), gain = context.createGain();
+      const start = context.currentTime + delay / 1000, end = start + duration / 1000;
+      oscillator.type = waveform; oscillator.frequency.setValueAtTime(frequency, start);
+      gain.gain.setValueAtTime(0, start);
+      if (attack) gain.gain.linearRampToValueAtTime(volume, start + attack / 1000);
+      else gain.gain.setValueAtTime(volume, start);
+      gain.gain.setValueAtTime(volume, Math.max(start, end - release / 1000));
+      gain.gain.linearRampToValueAtTime(0, end);
+      oscillator.connect(gain).connect(context.destination);
+      activeTones.add(oscillator);
+      oscillator.addEventListener("ended", () => { activeTones.delete(oscillator); oscillator.disconnect(); gain.disconnect(); }, { once: true });
+      oscillator.start(start); oscillator.stop(end + .01);
+    });
+  }
 
   function collectValues() {
     const result = Object.create(null);
@@ -396,6 +453,7 @@
     else if (message.type === "storage") storage(message);
     else if (message.type === "scores") scores(message);
     else if (message.type === "capability") capability(message);
+    else if (message.type === "sound") sound(message);
     else if (message.type === "keyboard") {
       const id = text(message.action, 80); message.enabled ? keyboardActions.add(id) : keyboardActions.delete(id);
       if (message.enabled) surface.tabIndex = 0;
@@ -412,6 +470,7 @@
   // back to the document body. Listen at the window so game keys continue to
   // work without requiring the player to refocus the application surface.
   addEventListener("keydown", (event) => {
+    unlockAudio();
     if (["INPUT", "TEXTAREA", "SELECT"].includes(event.target.tagName)) return;
     if (event.target.tagName === "BUTTON" && ["Enter", " "].includes(event.key)) return;
     if (["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown", " ", "Backspace", "Delete"].includes(event.key)) event.preventDefault();
@@ -420,6 +479,7 @@
       ctrlKey: event.ctrlKey, altKey: event.altKey, shiftKey: event.shiftKey, metaKey: event.metaKey
     }));
   });
+  addEventListener("pointerdown", unlockAudio, { capture: true });
 
   const reportVisibility = () => lifecycleActions.forEach((action) => interact(action, {
     value: document.hidden || !document.hasFocus() ? "hidden" : "visible"
@@ -432,6 +492,7 @@
     if (closed) return; closed = true;
     clearTimeout(startupTimer);
     if (frame.contentWindow) frame.contentWindow.postMessage({ protocol: PROTOCOL, type: "terminate" }, "*");
+    stopSounds();
     frame.remove(); keyboardActions.clear(); lifecycleActions.clear();
   }
   addEventListener("pagehide", terminate, { once: true });
