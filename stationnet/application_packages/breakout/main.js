@@ -3,7 +3,7 @@
 StationNet.start(async (ui) => {
   const WIDTH = 640, HEIGHT = 440, PADDLE_Y = 405, PADDLE_W = 96, BALL_R = 7;
   const colors = ["#00ed45", "#00c8d7", "#ffb000", "#ff5555", "#55ff77", "#55ffff"];
-  let paddleX, ball, bricks, score = 0, best = 0, lives = 3, level = 1, state = "ready", readyLabel = "START", lastFrame = Date.now();
+  let paddleX, ball, bricks, score = 0, best = 0, lives = 3, level = 1, state = "ready", readyLabel = "START", lastFrame = Date.now(), leftHeld = false, rightHeld = false;
 
   function makeBricks() {
     const rows = Math.min(7, 4 + level), columns = 10, gap = 5, width = 56, height = 18, startX = 18, startY = 38;
@@ -88,11 +88,14 @@ StationNet.start(async (ui) => {
   }
 
   function pointer({ x }) { paddleX = Math.max(0, Math.min(WIDTH - PADDLE_W, x - PADDLE_W / 2)); draw(); }
-  function key({ key }) {
-    if (["ArrowLeft", "a", "A"].includes(key)) paddleX -= 38;
-    else if (["ArrowRight", "d", "D"].includes(key)) paddleX += 38;
-    else if ([" ", "Enter"].includes(key)) togglePause();
-    paddleX = Math.max(0, Math.min(WIDTH - PADDLE_W, paddleX)); draw();
+  function moveHeld(value, phase) {
+    if (value === "left") leftHeld = phase !== "end";
+    if (value === "right") rightHeld = phase !== "end";
+  }
+  function key({ key, phase, repeat }) {
+    if (["ArrowLeft", "a", "A"].includes(key)) moveHeld("left", phase === "up" ? "end" : "start");
+    else if (["ArrowRight", "d", "D"].includes(key)) moveHeld("right", phase === "up" ? "end" : "start");
+    else if ([" ", "Enter"].includes(key) && phase === "down" && !repeat) togglePause();
   }
   async function showScores(result) {
     if (!result) return; best = Number(result.personal_best) || best; updateHud();
@@ -102,16 +105,16 @@ StationNet.start(async (ui) => {
 
   ui.render(
     ui.title("Breakout // Brick Breaker"),
-    ui.text("Arrow keys or A/D move the paddle. Mouse and touch movement work directly on the playfield. Clear every brick to advance.", { tone: "muted" }),
+    ui.text("Hold arrow keys, A/D, or touch controls to move the paddle. Mouse and touch movement work directly on the playfield. Clear every brick to advance.", { tone: "muted" }),
     ui.text("SCORE 0   LIVES 3   LEVEL 1   PERSONAL BEST 0", { id: "hud", emphasis: true }),
     ui.text("READY", { id: "game-status", tone: "accent" }),
     ui.canvas(WIDTH, HEIGHT, [], { id: "playfield", onPointer: pointer, hover: true, label: "Breakout playfield" }),
-    ui.menu("Touch paddle", [{ label: "◀ LEFT", value: "left" }, { label: "RIGHT ▶", value: "right" }], ({ value }) => { paddleX += value === "left" ? -70 : 70; paddleX = Math.max(0, Math.min(WIDTH - PADDLE_W, paddleX)); draw(); }, { id: "game-controls" }),
+    ui.menu("Touch paddle", [{ label: "◀ LEFT", value: "left" }, { label: "RIGHT ▶", value: "right" }], null, { id: "game-controls", onPress: ({ value, phase }) => moveHeld(value, phase), onRelease: ({ value, phase }) => moveHeld(value, phase) }),
     ui.button("Pause", togglePause, { id: "pause" }),
     ui.heading("Station leaderboard", 3), ui.table(["#", "Player", "Score"], [["—", "Loading…", "—"]], { id: "leaderboard" })
   );
   ui.onKey(key);
   ui.onVisibility(({ value }) => { if (value === "hidden" && state === "running") { state = "paused"; updateStatus("PAUSED — WINDOW INACTIVE"); updateControls(); } });
-  ui.interval(() => { const now = Date.now(), dt = Math.min(.032, (now - lastFrame) / 1000); lastFrame = now; if (state === "running") { step(dt); draw(); } }, 16);
+  ui.interval(() => { const now = Date.now(), dt = Math.min(.032, (now - lastFrame) / 1000); lastFrame = now; if (state === "running") { paddleX += (rightHeld - leftHeld) * 380 * dt; paddleX = Math.max(0, Math.min(WIDTH - PADDLE_W, paddleX)); step(dt); draw(); } }, 16);
   restart(); ui.scores.leaderboard().then(showScores).catch(() => updateStatus("READY — LEADERBOARD UNAVAILABLE"));
 });

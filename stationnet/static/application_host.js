@@ -98,6 +98,46 @@
     frame.contentWindow.postMessage({ protocol: PROTOCOL, type: "interaction", action, values: collectValues(), ...extra }, "*");
   }
 
+  // Click is retained for ordinary UI. Games can additionally opt into the
+  // beginning and end of a press, including keyboard activation.
+  function bindPressable(node, actions, extra = {}) {
+    const click = text(actions.click, 80), press = text(actions.press, 80), release = text(actions.release, 80);
+    if (click) node.addEventListener("click", () => interact(click, extra));
+    if (!press && !release) return;
+
+    let pointerId = null;
+    const finishPointer = (event) => {
+      if (pointerId == null || (event.pointerId != null && event.pointerId !== pointerId)) return;
+      pointerId = null;
+      if (release) interact(release, { ...extra, phase: "end" });
+    };
+    node.addEventListener("pointerdown", (event) => {
+      if (event.button !== 0 || pointerId != null) return;
+      pointerId = event.pointerId;
+      node.setPointerCapture?.(pointerId);
+      if (press) interact(press, { ...extra, phase: "start" });
+    });
+    node.addEventListener("pointerup", finishPointer);
+    node.addEventListener("pointercancel", finishPointer);
+    node.addEventListener("lostpointercapture", finishPointer);
+
+    const keys = new Set();
+    node.addEventListener("keydown", (event) => {
+      if (!['Enter', ' '].includes(event.key) || event.repeat || keys.has(event.code)) return;
+      keys.add(event.code);
+      if (press) interact(press, { ...extra, phase: "start" });
+    });
+    node.addEventListener("keyup", (event) => {
+      if (!keys.delete(event.code)) return;
+      if (release) interact(release, { ...extra, phase: "end" });
+    });
+    node.addEventListener("blur", () => {
+      if (!keys.size) return;
+      keys.clear();
+      if (release) interact(release, { ...extra, phase: "end" });
+    });
+  }
+
   const canvasColor = (value, fallback = "#00ed45") => {
     const color = String(value || "");
     return /^(#[0-9a-f]{3,8}|rgb\(\s*\d+\s*,\s*\d+\s*,\s*\d+\s*\))$/i.test(color) ? color : fallback;
@@ -141,7 +181,7 @@
       const button = document.createElement("button"); button.type = "button";
       button.textContent = text(control.label, 120);
       if (control.variant === "secondary") button.classList.add("secondary");
-      button.addEventListener("click", () => interact(text(control.action, 80)));
+      bindPressable(button, { click: control.action, press: control.pressAction, release: control.releaseAction });
       overlay.append(button);
     });
     if (overlay.childElementCount) wrapper.append(overlay);
@@ -165,7 +205,7 @@
         node = document.createElement("button"); node.type = "button"; node.textContent = text(component.label, 120);
         if (component.variant === "secondary") node.classList.add("secondary");
         node.disabled = Boolean(component.disabled);
-        node.addEventListener("click", () => interact(text(component.action, 80))); break;
+        bindPressable(node, { click: component.action, press: component.pressAction, release: component.releaseAction }); break;
       case "menu": {
         node = document.createElement("fieldset"); node.className = "app-menu";
         if (component.layout === "dpad") node.classList.add("app-dpad");
@@ -174,7 +214,7 @@
           if (!item || typeof item !== "object") return;
           const button = document.createElement("button"); button.type = "button"; button.textContent = text(item.label, 120);
           button.disabled = Boolean(item.disabled);
-          button.addEventListener("click", () => interact(text(component.action, 80), { value: text(item.value, 500) }));
+          bindPressable(button, { click: component.action, press: component.pressAction, release: component.releaseAction }, { value: text(item.value, 500) });
           node.append(button);
         }); break;
       }
@@ -469,21 +509,42 @@
   // Contextual controls are replaced after activation, which can move focus
   // back to the document body. Listen at the window so game keys continue to
   // work without requiring the player to refocus the application surface.
+  const pressedKeys = new Map();
+  const keyboardEvent = (event, phase) => ({
+    key: text(event.key, 40), code: text(event.code, 40), phase, repeat: Boolean(event.repeat),
+    ctrlKey: event.ctrlKey, altKey: event.altKey, shiftKey: event.shiftKey, metaKey: event.metaKey
+  });
+  const preventGameKeyDefault = (event) => {
+    if (["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown", " ", "Backspace", "Delete"].includes(event.key)) event.preventDefault();
+  };
+  const releasePressedKeys = () => {
+    pressedKeys.forEach((event) => keyboardActions.forEach((action) => interact(action, { ...event, phase: "up", repeat: false })));
+    pressedKeys.clear();
+  };
   addEventListener("keydown", (event) => {
     unlockAudio();
     if (["INPUT", "TEXTAREA", "SELECT"].includes(event.target.tagName)) return;
     if (event.target.tagName === "BUTTON" && ["Enter", " "].includes(event.key)) return;
-    if (["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown", " ", "Backspace", "Delete"].includes(event.key)) event.preventDefault();
-    keyboardActions.forEach((action) => interact(action, {
-      key: text(event.key, 40), code: text(event.code, 40),
-      ctrlKey: event.ctrlKey, altKey: event.altKey, shiftKey: event.shiftKey, metaKey: event.metaKey
-    }));
+    preventGameKeyDefault(event);
+    const payload = keyboardEvent(event, "down");
+    if (!event.repeat) pressedKeys.set(payload.code || payload.key, payload);
+    keyboardActions.forEach((action) => interact(action, payload));
+  });
+  addEventListener("keyup", (event) => {
+    const identity = text(event.code, 40) || text(event.key, 40);
+    if (!pressedKeys.has(identity)) return;
+    preventGameKeyDefault(event);
+    pressedKeys.delete(identity);
+    const payload = keyboardEvent(event, "up");
+    keyboardActions.forEach((action) => interact(action, payload));
   });
   addEventListener("pointerdown", unlockAudio, { capture: true });
 
-  const reportVisibility = () => lifecycleActions.forEach((action) => interact(action, {
-    value: document.hidden || !document.hasFocus() ? "hidden" : "visible"
-  }));
+  const reportVisibility = () => {
+    const value = document.hidden || !document.hasFocus() ? "hidden" : "visible";
+    if (value === "hidden") releasePressedKeys();
+    lifecycleActions.forEach((action) => interact(action, { value }));
+  };
   document.addEventListener("visibilitychange", reportVisibility);
   addEventListener("blur", reportVisibility);
   addEventListener("focus", reportVisibility);
@@ -493,7 +554,7 @@
     clearTimeout(startupTimer);
     if (frame.contentWindow) frame.contentWindow.postMessage({ protocol: PROTOCOL, type: "terminate" }, "*");
     stopSounds();
-    frame.remove(); keyboardActions.clear(); lifecycleActions.clear();
+    frame.remove(); keyboardActions.clear(); lifecycleActions.clear(); pressedKeys.clear();
   }
   addEventListener("pagehide", terminate, { once: true });
 })();

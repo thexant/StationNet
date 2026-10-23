@@ -108,12 +108,12 @@
     heading(content, level = 2, settings) { return identified({ type: "heading", text: String(content), level }, settings); },
     button(label, onClick, settings) {
       const opts = options(settings);
-      return identified({ type: "button", label: String(label), action: action(onClick), variant: opts.variant, disabled: Boolean(opts.disabled) }, opts);
+      return identified({ type: "button", label: String(label), action: action(onClick), pressAction: action(opts.onPress), releaseAction: action(opts.onRelease), variant: opts.variant, disabled: Boolean(opts.disabled) }, opts);
     },
     menu(label, items, onSelect, settings) {
       const opts = options(settings);
       return identified({
-        type: "menu", label: String(label || "Choose an option"), action: action(onSelect),
+        type: "menu", label: String(label || "Choose an option"), action: action(onSelect), pressAction: action(opts.onPress), releaseAction: action(opts.onRelease),
         layout: opts.layout === "dpad" ? "dpad" : undefined,
         items: (Array.isArray(items) ? items : []).map((item) => {
           if (item && typeof item === "object") return { label: String(item.label), value: String(item.value), disabled: Boolean(item.disabled) };
@@ -163,7 +163,7 @@
         type: "canvas", width, height, commands: Array.isArray(commands) ? commands : [],
         action: action(opts.onPointer), hover: Boolean(opts.hover), label: String(opts.label || "Game playfield"),
         controls: Array.isArray(opts.controls) ? opts.controls.slice(0, 4).map((control) => ({
-          label: String(control && control.label || "Action"), action: action(control && control.onClick),
+          label: String(control && control.label || "Action"), action: action(control && control.onClick), pressAction: action(control && control.onPress), releaseAction: action(control && control.onRelease),
           variant: control && control.variant === "secondary" ? "secondary" : undefined
         })) : undefined
       }, opts);
@@ -282,7 +282,7 @@
         key: message.key, code: message.code,
         ctrlKey: Boolean(message.ctrlKey), altKey: Boolean(message.altKey),
         shiftKey: Boolean(message.shiftKey), metaKey: Boolean(message.metaKey),
-        x: message.x, y: message.y, drag: Boolean(message.drag), phase: message.phase
+        x: message.x, y: message.y, drag: Boolean(message.drag), phase: message.phase, repeat: Boolean(message.repeat)
       }));
     } catch (error) { fail(error); }
   }

@@ -126,27 +126,30 @@ as application errors.
 `ui.onKey(handler)` receives an event object:
 
 ```js
-{ key, code, ctrlKey, altKey, shiftKey, metaKey, value, values }
+{ key, code, phase, repeat, ctrlKey, altKey, shiftKey, metaKey, value, values }
 ```
 
 `key` and `code` use browser `KeyboardEvent` names, such as `"ArrowLeft"`,
 `"a"`, `" "`, and `"KeyA"`; they are not normalized to names such as `"left"`.
-Only `keydown` is reported—there is no keyup event—and a held key produces the
-browser's normal repeated keydown events. Key handling is skipped while typing
-in a text input, textarea, or select. The method returns an unsubscribe
-function.
+`phase` is `"down"` or `"up"`; a held key produces repeated `"down"` events,
+marked with `repeat: true`. StationNet sends an `"up"` event for every pressed
+key when the application loses focus, so games do not leave movement stuck.
+Key handling is skipped while typing in a text input, textarea, or select. The
+method returns an unsubscribe function.
 
-`button(label, onClick, options)` is a click/tap control. `onClick` receives the
-same general event object (with `values`, the current named form values), but no
-press/release or hold events. Canvas controls and menu choices are likewise
-click/tap-only; implement continuous movement with keyboard repeats, canvas
-pointer phases, or an interval.
+`button(label, onClick, options)` remains a click/tap control. Add
+`onPress(event)` and/or `onRelease(event)` to `options` to receive the start and
+end of a pointer or keyboard press; their `phase` is `"start"` or `"end"`.
+The click handler and press handlers may be combined. `ui.menu` accepts the same
+`onPress`/`onRelease` options and includes the selected item's string `value`.
+Each canvas `controls` entry likewise accepts `{ label, onClick, onPress,
+onRelease, variant }`. This allows held touch controls for fast-action games.
 
 `ui.menu(label, items, onSelect, options)` renders a labelled set of buttons.
 Each item may be a string (used for both label and value) or
 `{ label, value, disabled }`. `onSelect` receives `{ value, values, ... }`,
-where `value` is always a string. `options` supports `id` and
-`{ layout: "dpad" }`; other options are ignored. A d-pad uses the first four
+where `value` is always a string. `options` supports `id`, `onPress`,
+`onRelease`, and `{ layout: "dpad" }`; other options are ignored. A d-pad uses the first four
 items by *order*, not label: first = up, second = left, third = down, fourth =
 right. It does not infer directions from the labels.
 
@@ -181,8 +184,9 @@ Canvas options are `{ id, label, onPointer, hover, controls }`. `id` enables
 `phase` is `"start"`, `"move"`, or `"end"`. `hover` defaults to `false`; when
 true, mouse moves are reported without a pressed button (touch and dragging are
 reported either way). `controls` defaults to no controls and accepts up to four
-`{ label, onClick, variant }` entries. `label` defaults to `"Action"`,
-`onClick` receives the normal interaction event, and `variant` may be
+`{ label, onClick, onPress, onRelease, variant }` entries. `label` defaults to
+`"Action"`; `onClick`, `onPress`, and `onRelease` receive the normal interaction
+event (the latter two have `phase` `"start"`/`"end"`), and `variant` may be
 `"secondary"` (anything else is the default style). Controls are an accessible
 centered overlay covering the playfield; there are no placement options.
 
@@ -198,7 +202,11 @@ StationNet.start((ui) => {
   ], { id: "field", label: "Moving dot" }));
 
   ui.render(ui.title("Dot runner"), ui.canvas(320, 180, [], { id: "field", label: "Moving dot" }));
-  ui.onKey(({ key }) => { if (key === "ArrowLeft") vx = -3; if (key === "ArrowRight") vx = 3; });
+  ui.onKey(({ key, phase }) => {
+    if (phase === "down" && key === "ArrowLeft") vx = -3;
+    if (phase === "down" && key === "ArrowRight") vx = 3;
+    if (phase === "up" && ["ArrowLeft", "ArrowRight"].includes(key)) vx = 0;
+  });
   ui.onVisibility(({ value }) => { visible = value === "visible"; if (visible) draw(); });
   ui.interval(() => { if (!visible) return; x = Math.max(12, Math.min(308, x + vx)); draw(); }, 33);
   draw();
