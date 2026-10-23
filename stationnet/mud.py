@@ -1865,7 +1865,7 @@ def _transition_location(database, user, destination_mode, destination_type,
     new_recipients = _occupant_ids(database, new_room["id"], user["id"])
     return [
         EventDraft(
-            f"You go {route}.\n\n{_describe_room(database, new_room, user['id'])}",
+            f"You go {route}.",
             event_type="movement",
         ),
         EventDraft(
@@ -2543,7 +2543,7 @@ def _go_action(database, user, parameters):
     audience_key = instance_id or room["id"]
     events = [
         EventDraft(
-            f"You go {route}.\n\n{_describe_room(database, destination_room, user['id'])}",
+            f"You go {route}.",
             event_type="movement",
         ),
         EventDraft(
