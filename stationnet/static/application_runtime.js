@@ -5,6 +5,7 @@
 (() => {
   const PROTOCOL = "stationnet-app-v1";
   const actions = new Map();
+  const animations = new Map();
   const cleanups = [];
   const storageRequests = new Map();
   const scoreRequests = new Map();
@@ -128,6 +129,33 @@
     return cancel;
   }
 
+  function animate(handler) {
+    if (typeof handler !== "function") throw new TypeError("An animation callback is required");
+    const id = `animation-${nextAction++}`;
+    let active = true, paused = false;
+    animations.set(id, handler);
+    send("animation", { action: id, enabled: true });
+
+    const cancel = () => {
+      if (!active) return;
+      active = false; paused = false; animations.delete(id);
+      send("animation", { action: id, enabled: false });
+    };
+    cancel.pause = () => {
+      if (!active || paused) return;
+      paused = true;
+      send("animation", { action: id, enabled: false });
+    };
+    cancel.resume = () => {
+      if (!active || !paused || stopped) return;
+      paused = false;
+      send("animation", { action: id, enabled: true });
+    };
+    Object.defineProperty(cancel, "paused", { get: () => paused });
+    cleanups.push(cancel);
+    return cancel;
+  }
+
   const api = Object.freeze({
     text(content, settings) {
       const opts = options(settings);
@@ -220,6 +248,7 @@
     onCleanup(handler) { if (typeof handler === "function") cleanups.push(handler); },
     timeout(handler, delay) { return scheduled(handler, delay, false); },
     interval(handler, delay) { return scheduled(handler, delay, true); },
+    animate,
     storage: Object.freeze({
       set(key, value, settings) { return storage("set", String(key), value, settings); },
       get(key, settings) { return storage("get", String(key), undefined, settings); },
@@ -286,6 +315,21 @@
   async function dispatch(message) {
     if (!message || message.protocol !== PROTOCOL) return;
     if (message.type === "terminate") return shutdown();
+    if (message.type === "animation-frame") {
+      const handler = animations.get(message.action);
+      try {
+        if (handler) await handler(Object.freeze({
+          time: Number(message.time) || 0,
+          delta: Math.max(0, Number(message.delta) || 0)
+        }));
+      } catch (error) { fail(error); }
+      // This acknowledgement is runtime flow control, not an application
+      // event, and is consumed by the trusted relay rather than the host.
+      finally {
+        if (!stopped) postMessage({ protocol: PROTOCOL, type: "animation-ready", action: String(message.action || "") });
+      }
+      return;
+    }
     if (message.type === "storage-result") {
       const pending = storageRequests.get(message.request);
       if (!pending) return;
@@ -331,6 +375,7 @@
     scoreRequests.clear();
     capabilityRequests.forEach(({ reject }) => reject(new Error("Application terminated")));
     capabilityRequests.clear();
+    animations.clear();
     actions.clear();
     send("terminated");
     stopped = true;

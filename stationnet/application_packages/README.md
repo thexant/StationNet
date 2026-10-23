@@ -123,7 +123,7 @@ StationNet.start((ui) => {
 Display methods include `render`, `append`, `update`, `remove`, `clear`, `title`,
 `heading`, `text`, `list`, `table`, `preformatted`, and `grid`. Input methods
 include `button`, `menu`, `input`, `numberInput`, `textarea`, `select`,
-`checkbox`, and `onKey`.
+`checkbox`, `onKey`, and `animate`.
 
 ### Rendering, ids, and lifecycle
 
@@ -148,6 +148,36 @@ not assigned automatically, and an update/remove whose id is absent is a no-op.
 For animation, render the fixed UI once, then update only the canvas on every
 frame. Re-rendering the entire tree each frame is supported but replaces DOM
 elements and is needlessly expensive; it can also discard current input/focus.
+
+`ui.animate(handler)` registers a display-synchronized callback. The callback
+receives `{ time, delta }`: `time` is the browser's monotonic animation timestamp
+in milliseconds and `delta` is elapsed time in seconds. Its first callback, and
+the first callback after a resume or visibility pause, has `delta: 0`. StationNet
+waits for a callback (including an async callback) to finish before requesting
+another, so slow applications skip frames instead of building a render queue.
+Callbacks use browser paint scheduling and are capped near 60 per second;
+30–60 FPS is a reasonable target, not a guarantee.
+
+The returned cancellation function follows the timer API and also has
+`.pause()`, `.resume()`, and a read-only `.paused` property:
+
+```js
+const animation = ui.animate(({ delta }) => {
+  const dt = Math.min(delta, 1 / 30); // cap simulation jumps after a slow frame
+  updateGame(dt);
+  ui.update("field", ui.canvas(640, 400, commands(), { id: "field" }));
+});
+
+animation.pause();
+animation.resume(); // the next delta is zero
+animation();        // permanently cancel
+```
+
+Animations pause automatically while the page is hidden or its window is not
+focused, and they are cancelled at application termination. Use explicit
+pause/resume for game state such as menus. Canvas-only updates to the same id are
+coalesced before paint (latest frame wins), and the existing canvas element and
+bitmap allocation are reused while its dimensions stay unchanged.
 
 `ui.onVisibility(handler)` registers a handler called immediately and whenever
 the page is hidden/shown or loses/gains focus. It receives an event object whose
@@ -259,11 +289,11 @@ event (the latter two have `phase` `"start"`/`"end"`), and `variant` may be
 centered overlay covering the playfield; there are no placement options.
 
 Here is a complete, short animated canvas example. It draws only the canvas each
-frame, uses browser arrow-key names, and stops work while the page is hidden:
+frame and uses browser arrow-key names. Visibility pausing is automatic:
 
 ```js
 StationNet.start((ui) => {
-  let x = 130, vx = 0, visible = true;
+  let x = 130, vx = 0;
   const draw = () => ui.update("field", ui.canvas(320, 180, [
     { type: "text", x: 12, y: 18, text: "ARROWS TO MOVE", size: 12, color: "#55ff55" },
     { type: "circle", x, y: 100, radius: 12, color: "#00ed45" }
@@ -271,12 +301,14 @@ StationNet.start((ui) => {
 
   ui.render(ui.title("Dot runner"), ui.canvas(320, 180, [], { id: "field", label: "Moving dot" }));
   ui.onKey(({ key, phase }) => {
-    if (phase === "down" && key === "ArrowLeft") vx = -3;
-    if (phase === "down" && key === "ArrowRight") vx = 3;
+    if (phase === "down" && key === "ArrowLeft") vx = -180;
+    if (phase === "down" && key === "ArrowRight") vx = 180;
     if (phase === "up" && ["ArrowLeft", "ArrowRight"].includes(key)) vx = 0;
   });
-  ui.onVisibility(({ value }) => { visible = value === "visible"; if (visible) draw(); });
-  ui.interval(() => { if (!visible) return; x = Math.max(12, Math.min(308, x + vx)); draw(); }, 33);
+  ui.animate(({ delta }) => {
+    x = Math.max(12, Math.min(308, x + vx * delta));
+    draw();
+  });
   draw();
 });
 ```
@@ -293,6 +325,20 @@ and `ui.download.text(filename, text)`. They return promises and accept text onl
 applications do not receive general browser, DOM, network, or filesystem access.
 Colored cell grids can be exported as a controlled PNG with
 `ui.download.cellImage(filename, rows, options)`.
+
+### Animation performance demo and limits
+
+The built-in Breakout package is the reference sustained-animation demo. It
+uses `ui.animate`, time-based movement, and one in-place canvas update per frame;
+on capable foreground browsers it is designed to run smoothly in the 30–60 FPS
+range. Frame rate remains dependent on the browser, hardware, other page work,
+and the complexity of the application's command list.
+
+The remaining hot path is structured-cloning each frame's command data from the
+worker and replaying those commands through Canvas 2D. Keep stable page controls
+outside the loop, update one canvas id, batch wireframes with `lines`, and avoid
+allocating more commands than the scene needs. Large text/geometry command lists
+will become CPU and message-copy bound before simple sprite-style scenes do.
 
 ## Synthesized sound
 

@@ -165,8 +165,13 @@
   function drawCanvas(canvas, component) {
     const width = Math.trunc(number(component.width, 640, 80, 1200));
     const height = Math.trunc(number(component.height, 400, 80, 800));
-    canvas.width = width; canvas.height = height;
-    canvas.dataset.logicalWidth = String(width); canvas.dataset.logicalHeight = String(height);
+    // Assigning either bitmap dimension clears the context and reallocates its
+    // backing store. Animated updates overwhelmingly keep both dimensions, so
+    // only resize when an application actually requests it.
+    if (canvas.width !== width) canvas.width = width;
+    if (canvas.height !== height) canvas.height = height;
+    if (canvas.dataset.logicalWidth !== String(width)) canvas.dataset.logicalWidth = String(width);
+    if (canvas.dataset.logicalHeight !== String(height)) canvas.dataset.logicalHeight = String(height);
     if (component.action) canvas.dataset.canvasAction = text(component.action, 80);
     if (component.hover != null) canvas.dataset.canvasHover = component.hover ? "1" : "0";
     canvas.setAttribute("aria-label", text(component.label, 200));
@@ -547,7 +552,10 @@
   addEventListener("message", (event) => {
     if (event.source !== frame.contentWindow || !event.data || event.data.protocol !== PROTOCOL || !allowedEvent()) return;
     const message = event.data;
-    if (message.type === "initialized") { clearTimeout(startupTimer); status.textContent = "PROGRAM STATUS / INITIALIZED"; }
+    if (message.type === "initialized") {
+      clearTimeout(startupTimer); status.textContent = "PROGRAM STATUS / INITIALIZED";
+      reportVisibility();
+    }
     else if (message.type === "ready") status.textContent = "PROGRAM STATUS / RUNNING";
     else if (message.type === "render") render(message);
     else if (message.type === "storage") storage(message);
@@ -603,6 +611,7 @@
   const reportVisibility = () => {
     const value = document.hidden || !document.hasFocus() ? "hidden" : "visible";
     if (value === "hidden") releasePressedKeys();
+    if (frame.contentWindow) frame.contentWindow.postMessage({ protocol: PROTOCOL, type: "animation-visibility", visible: value === "visible" }, "*");
     lifecycleActions.forEach((action) => interact(action, { value }));
   };
   document.addEventListener("visibilitychange", reportVisibility);

@@ -3,7 +3,7 @@
 StationNet.start(async (ui) => {
   const WIDTH = 640, HEIGHT = 440, PADDLE_Y = 405, PADDLE_W = 96, BALL_R = 7;
   const colors = ["#00ed45", "#00c8d7", "#ffb000", "#ff5555", "#55ff77", "#55ffff"];
-  let paddleX, ball, bricks, score = 0, best = 0, lives = 3, level = 1, state = "ready", readyLabel = "START", lastFrame = Date.now(), leftHeld = false, rightHeld = false;
+  let paddleX, ball, bricks, score = 0, best = 0, lives = 3, level = 1, state = "ready", readyLabel = "START", leftHeld = false, rightHeld = false;
 
   function makeBricks() {
     const rows = Math.min(7, 4 + level), columns = 10, gap = 5, width = 56, height = 18, startX = 18, startY = 38;
@@ -25,7 +25,7 @@ StationNet.start(async (ui) => {
   function start() {
     if (state === "gameover") restart();
     if (state === "running") return;
-    state = "running"; lastFrame = Date.now(); updateStatus("RUNNING"); updateControls(); draw(true);
+    state = "running"; updateStatus("RUNNING"); updateControls(); draw(true);
   }
 
   function togglePause() {
@@ -115,6 +115,6 @@ StationNet.start(async (ui) => {
   );
   ui.onKey(key);
   ui.onVisibility(({ value }) => { if (value === "hidden" && state === "running") { state = "paused"; updateStatus("PAUSED — WINDOW INACTIVE"); updateControls(); } });
-  ui.interval(() => { const now = Date.now(), dt = Math.min(.032, (now - lastFrame) / 1000); lastFrame = now; if (state === "running") { paddleX += (rightHeld - leftHeld) * 380 * dt; paddleX = Math.max(0, Math.min(WIDTH - PADDLE_W, paddleX)); step(dt); draw(); } }, 16);
+  ui.animate(({ delta }) => { const dt = Math.min(.032, delta); if (state === "running") { paddleX += (rightHeld - leftHeld) * 380 * dt; paddleX = Math.max(0, Math.min(WIDTH - PADDLE_W, paddleX)); step(dt); draw(); } });
   restart(); ui.scores.leaderboard().then(showScores).catch(() => updateStatus("READY — LEADERBOARD UNAVAILABLE"));
 });

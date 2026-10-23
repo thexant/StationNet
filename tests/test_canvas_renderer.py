@@ -60,11 +60,15 @@ class Context {
   fill() { this.op('fill'); } stroke() { this.op('stroke'); } fillText(...args) { this.op('fillText', ...args); }
 }
 class Canvas extends Element {
-  constructor() { super('canvas'); this.context = new Context(); canvases.push(this); }
+  constructor() { super('canvas'); this.context = new Context(); this._width = 0; this._height = 0; this.resizeCount = 0; canvases.push(this); }
+  set width(value) { this._width = value; this.resizeCount += 1; }
+  get width() { return this._width; }
+  set height(value) { this._height = value; this.resizeCount += 1; }
+  get height() { return this._height; }
   getContext(kind) { assert.equal(kind, '2d'); return this.context; }
 }
 
-const frame = new Element('iframe'); frame.contentWindow = {};
+const frame = new Element('iframe'); frame.contentWindow = { postMessage() {} };
 const surface = new Element('main'); surface.dataset = {};
 const status = new Element('p');
 global.document = {
@@ -79,6 +83,13 @@ vm.runInThisContext(fs.readFileSync(process.argv[1], 'utf8'), { filename: proces
 const send = data => listeners.message[0]({ source: frame.contentWindow, data: { protocol: 'stationnet-app-v1', ...data } });
 const render = commands => { send({ type: 'render', mode: 'replace', components: [{ type: 'canvas', width: 320, height: 180, commands }] }); return canvases.at(-1).context; };
 send({ type: 'initialized' });
+
+// In-place updates reuse both the DOM canvas and its backing allocation.
+send({ type: 'render', mode: 'replace', components: [{ type: 'canvas', id: 'field', width: 320, height: 180, commands: [] }] });
+const animatedCanvas = canvases.at(-1), initialResizes = animatedCanvas.resizeCount;
+send({ type: 'render', mode: 'update', target: 'field', components: [{ type: 'canvas', id: 'field', width: 320, height: 180, commands: [{ type: 'rect', x: 0, y: 0, width: 2, height: 2 }] }] });
+assert.equal(canvases.at(-1), animatedCanvas);
+assert.equal(animatedCanvas.resizeCount, initialResizes);
 
 // Existing raster commands retain their behavior alongside vector commands.
 let context = render([
