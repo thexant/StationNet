@@ -96,12 +96,23 @@ def touch_presence():
         "SELECT connection_id,last_seen FROM users WHERE id=?", (g.user["id"],)
     ).fetchone()
     cutoff = (datetime.now(timezone.utc) - timedelta(seconds=ONLINE_SECONDS)).replace(microsecond=0).isoformat()
-    if (
-        presence and presence["connection_id"] == connection_id
-        and presence["last_seen"] and presence["last_seen"] < cutoff
-    ):
-        current_app.extensions["direct_chat"].disconnect(g.user["id"], connection_id)
-        current_app.extensions["radio"].disconnect(connection_id)
+    connection_is_stale = (
+        presence is None
+        or presence["connection_id"] != connection_id
+        or not presence["last_seen"]
+        or presence["last_seen"] < cutoff
+    )
+    if connection_is_stale:
+        # A remembered session can outlive its presence heartbeat (or be
+        # superseded by a login elsewhere).  It must get a new connection
+        # identity before serving a page, otherwise its conditional heartbeat
+        # update cannot bring it back online.
+        if presence and presence["connection_id"]:
+            old_connection_id = presence["connection_id"]
+            current_app.extensions["direct_chat"].disconnect(g.user["id"], old_connection_id)
+            current_app.extensions["radio"].disconnect(old_connection_id)
+        establish_connection(g.user["id"])
+        return
     database.execute(
         "UPDATE users SET last_seen=? WHERE id=? AND connection_id=?",
         (utc_now(), g.user["id"], connection_id),

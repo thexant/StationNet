@@ -1,4 +1,29 @@
 "use strict";
+// StationNet is intentionally terminal-like: text entry should never surface
+// browser, password-manager, spelling, or mobile-keyboard suggestions. Keep the
+// policy here so it also covers controls added later by hosted applications.
+const disableTextEntrySuggestions=root=>{
+  if(!(root instanceof Element||root instanceof Document))return;
+  const forms=root.matches?.("form")?[root]:[];
+  forms.push(...root.querySelectorAll("form"));
+  for(const form of forms)form.setAttribute("autocomplete","off");
+  const controls=root.matches?.("input,textarea")?[root]:[];
+  controls.push(...root.querySelectorAll("input,textarea"));
+  for(const control of controls){
+    const textLike=control instanceof HTMLTextAreaElement||(control instanceof HTMLInputElement&&["text","search","email","url","tel","password"].includes(control.type));
+    if(!textLike)continue;
+    control.setAttribute("autocomplete","off");
+    control.setAttribute("autocorrect","off");
+    control.setAttribute("autocapitalize","off");
+    control.setAttribute("spellcheck","false");
+    control.removeAttribute("list");
+  }
+};
+disableTextEntrySuggestions(document);
+new MutationObserver(records=>{
+  for(const record of records)for(const node of record.addedNodes)if(node instanceof Element)disableTextEntrySuggestions(node);
+}).observe(document.documentElement,{childList:true,subtree:true});
+
 const sfxStorageKey="stationnet.sfx.enabled";
 let sfxEnabled=true;
 try{sfxEnabled=localStorage.getItem(sfxStorageKey)!=="false"}catch(_){}
