@@ -201,7 +201,9 @@ right. It does not infer directions from the labels.
 `ui.canvas(width, height, commands, options)` creates a raster playfield. Width
 and height are logical CSS-pixel units, independently clamped to 80–1,200 and
 80–800 respectively (defaults: 640 × 400 when invalid). At most 600 commands
-are drawn per call. The background is opaque `#010401`.
+are drawn per call. The background is opaque `#010401`. All drawing is clipped
+to the canvas; coordinates outside the visible area are useful for shapes that
+cross an edge and cannot paint elsewhere on the page.
 
 The supported command objects are below. Coordinates and dimensions are logical
 canvas pixels. Numeric values are finite, clamped to the listed range, and use
@@ -212,14 +214,37 @@ the stated default when missing or invalid.
 | `rect` | `type: "rect"`, `x`, `y`, `width`, `height`, `color` | `x`: `0`, −width to 2 × width; `y`: `0`, −height to 2 × height; `width`: `1`, 0 to 2 × width; `height`: `1`, 0 to 2 × height; color defaults to `#00ed45`. |
 | `circle` | `type: "circle"`, `x`, `y`, `radius`, `color` | `x`, `y` use the rect coordinate ranges; `radius`: `2`, 0 to the larger canvas dimension; color defaults to `#00ed45`. |
 | `text` | `type: "text"`, `x`, `y`, `text`, `size`, `align`, `color` | `x`, `y` use the rect coordinate ranges; text is truncated to 200 characters; `size`: `18`, whole pixels, range 8–72; `align`: `"left"` (or `"center"`/`"right"`); color defaults to `#ffffff`. Text is vertically centered on `y`. |
+| `line` | `type: "line"`, `x1`, `y1`, `x2`, `y2`, `color`, `width` | Endpoints must be finite numbers in the range −1,000,000 to 1,000,000. `width` defaults to `1` and is clamped to 0.25–64. Color defaults to `#00ed45`. |
+| `lines` | `type: "lines"`, `segments`, `color`, `width` | `segments` is an array of `[x1, y1, x2, y2]` arrays using the line ranges. Invalid segment entries are skipped. All accepted segments are stroked in one batch. |
+| `polygon` | `type: "polygon"`, `points`, `fill`, `stroke`, `width` | `points` is an array of at least three `[x, y]` pairs using the line coordinate range. `fill` and `stroke` are independent colors; omit either to disable it. If both are omitted, the polygon is filled with `color` or the default green. `width` controls the stroke as for lines. |
 
-Colors must be `#` followed by 3–8 hexadecimal digits (for example `#0f0`,
-`#00ed45`, or `#00ed45cc`) or `rgb(r, g, b)` with decimal integer channels.
+Colors must use 3-, 4-, 6-, or 8-digit hexadecimal CSS notation (for example
+`#0f0`, `#0f08`, `#00ed45`, or `#00ed45cc`) or `rgb(r, g, b)` with decimal
+integer channels from 0 through 255.
 An invalid/missing color becomes the command's default. Unknown command types
 are skipped; unknown fields are silently ignored. The host also silently clamps
 or normalizes invalid supported values. There is currently no development-mode
 warning facility for ignored fields, so validate command construction in your
 own tests.
+
+A frame may contain up to 10,000 line segments, 20,000 polygon vertices, and
+256 polygons. One polygon may contain up to 4,096 vertices. These geometry
+budgets are shared across that canvas draw and are applied in command order.
+They are separate from the 600-command limit, so `lines` is the efficient form
+for changing wireframes: it creates one canvas path and one stroke for the whole
+batch instead of one stroke per segment.
+
+```js
+const wireframe = [
+  [40, 30, 140, 20], [140, 20, 160, 100], [160, 100, 50, 110],
+  [50, 110, 40, 30], [40, 30, 85, 70], [140, 20, 85, 70]
+];
+ui.update("viewport", ui.canvas(200, 140, [
+  { type: "polygon", points: [[-20, 125], [220, 125], [190, 155], [10, 155]], fill: "#062512", stroke: "#19a95b", width: 2 },
+  { type: "lines", segments: wireframe, color: "#55ff99", width: 1.5 },
+  { type: "line", x1: 0, y1: 125, x2: 200, y2: 125, color: "#ffffff", width: 2 }
+], { id: "viewport", label: "Wireframe viewport" }));
+```
 
 Canvas options are `{ id, label, onPointer, hover, controls }`. `id` enables
 `update`; `label` is the accessible name and defaults to `"Game playfield"`.

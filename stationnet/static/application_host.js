@@ -9,7 +9,11 @@
   if (!frame || !surface || !status) return;
 
   const PROTOCOL = "stationnet-app-v1";
-  const LIMITS = { components: 100, text: 8000, items: 100, columns: 80, rows: 100, canvasCommands: 600, capabilityText: 200000 };
+  const LIMITS = {
+    components: 100, text: 8000, items: 100, columns: 80, rows: 100,
+    canvasCommands: 600, canvasSegments: 10000, canvasVertices: 20000,
+    canvasPolygons: 256, polygonVertices: 4096, capabilityText: 200000
+  };
   const SOUND_LIMITS = { tones: 32, active: 24, frequency: [20, 20000], duration: [10, 10000], delay: [0, 30000], volume: [.001, .25], envelope: [0, 1000] };
   const keyboardActions = new Set();
   const lifecycleActions = new Set();
@@ -140,8 +144,23 @@
 
   const canvasColor = (value, fallback = "#00ed45") => {
     const color = String(value || "");
-    return /^(#[0-9a-f]{3,8}|rgb\(\s*\d+\s*,\s*\d+\s*,\s*\d+\s*\))$/i.test(color) ? color : fallback;
+    if (/^#(?:[0-9a-f]{3}|[0-9a-f]{4}|[0-9a-f]{6}|[0-9a-f]{8})$/i.test(color)) return color;
+    const rgb = color.match(/^rgb\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)\s*\)$/i);
+    return rgb && rgb.slice(1).every((channel) => Number(channel) <= 255) ? color : fallback;
   };
+
+  const canvasCoordinate = (value) => {
+    return typeof value === "number" && Number.isFinite(value)
+      ? Math.min(1000000, Math.max(-1000000, value)) : null;
+  };
+
+  const canvasPoint = (value) => {
+    if (!Array.isArray(value) || value.length < 2) return null;
+    const x = canvasCoordinate(value[0]), y = canvasCoordinate(value[1]);
+    return x == null || y == null ? null : [x, y];
+  };
+
+  const lineWidth = (command) => number(command.width, 1, .25, 64);
 
   function drawCanvas(canvas, component) {
     const width = Math.trunc(number(component.width, 640, 80, 1200));
@@ -153,6 +172,10 @@
     canvas.setAttribute("aria-label", text(component.label, 200));
     const context = canvas.getContext("2d");
     context.clearRect(0, 0, width, height); context.fillStyle = "#010401"; context.fillRect(0, 0, width, height);
+    // Canvas bitmaps clip already, but an explicit path also keeps that
+    // guarantee if drawing is later moved onto a larger shared surface.
+    context.save(); context.beginPath(); context.rect(0, 0, width, height); context.clip();
+    let segments = 0, vertices = 0, polygons = 0;
     (Array.isArray(component.commands) ? component.commands : []).slice(0, LIMITS.canvasCommands).forEach((command) => {
       if (!command || typeof command !== "object") return;
       const x = number(command.x, 0, -width, width * 2), y = number(command.y, 0, -height, height * 2);
@@ -167,8 +190,45 @@
         context.font = `${Math.trunc(number(command.size, 18, 8, 72))}px monospace`;
         context.textAlign = ["left", "center", "right"].includes(command.align) ? command.align : "left";
         context.textBaseline = "middle"; context.fillText(text(command.text, 200), x, y);
+      } else if (command.type === "line") {
+        if (segments >= LIMITS.canvasSegments) return;
+        const x1 = canvasCoordinate(command.x1), y1 = canvasCoordinate(command.y1);
+        const x2 = canvasCoordinate(command.x2), y2 = canvasCoordinate(command.y2);
+        if ([x1, y1, x2, y2].some((value) => value == null)) return;
+        context.beginPath(); context.moveTo(x1, y1); context.lineTo(x2, y2);
+        context.strokeStyle = canvasColor(command.color); context.lineWidth = lineWidth(command); context.stroke();
+        segments += 1;
+      } else if (command.type === "lines") {
+        if (!Array.isArray(command.segments) || segments >= LIMITS.canvasSegments) return;
+        const remaining = Math.min(command.segments.length, LIMITS.canvasSegments - segments);
+        let accepted = 0; context.beginPath();
+        for (let index = 0; index < remaining; index += 1) {
+          const segment = command.segments[index];
+          if (!Array.isArray(segment) || segment.length < 4) continue;
+          const x1 = canvasCoordinate(segment[0]), y1 = canvasCoordinate(segment[1]);
+          const x2 = canvasCoordinate(segment[2]), y2 = canvasCoordinate(segment[3]);
+          if ([x1, y1, x2, y2].some((value) => value == null)) continue;
+          context.moveTo(x1, y1); context.lineTo(x2, y2); accepted += 1;
+        }
+        if (!accepted) return;
+        context.strokeStyle = canvasColor(command.color); context.lineWidth = lineWidth(command); context.stroke();
+        segments += accepted;
+      } else if (command.type === "polygon") {
+        if (!Array.isArray(command.points) || polygons >= LIMITS.canvasPolygons || vertices >= LIMITS.canvasVertices) return;
+        const available = Math.min(command.points.length, LIMITS.polygonVertices, LIMITS.canvasVertices - vertices);
+        const points = command.points.slice(0, available).map(canvasPoint);
+        if (points.length < 3 || points.some((point) => point == null)) return;
+        context.beginPath(); context.moveTo(points[0][0], points[0][1]);
+        points.slice(1).forEach((point) => context.lineTo(point[0], point[1])); context.closePath();
+        if (command.fill != null) { context.fillStyle = canvasColor(command.fill); context.fill(); }
+        if (command.stroke != null) {
+          context.strokeStyle = canvasColor(command.stroke); context.lineWidth = lineWidth(command); context.stroke();
+        }
+        if (command.fill == null && command.stroke == null) { context.fillStyle = canvasColor(command.color); context.fill(); }
+        vertices += points.length; polygons += 1;
       }
     });
+    context.restore();
   }
 
   function drawCanvasControls(wrapper, controls) {
