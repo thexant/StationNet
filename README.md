@@ -14,6 +14,11 @@ Future services can be Flask blueprints using the common terminal shell rather t
 
 ## Install and run
 
+For offline Windows packages, Linux/Raspberry Pi wheel bundles, the standalone
+Android APK project, and upgrade steps, see [DISTRIBUTION.md](DISTRIBUTION.md).
+The scripts below are the existing source-checkout installation path and may
+download dependencies.
+
 Windows (easy setup):
 
 1. Double-click `install.bat` and follow the prompts.
@@ -22,7 +27,7 @@ Windows (easy setup):
 
 To reset an installed copy, double-click `uninstall.bat`. It optionally backs up station data, then removes only the generated environment, data, `run.bat`, and cache files. The StationNet directory and all application source files remain intact, ready for `install.bat` to be run again.
 
-### Linux, macOS, Unix, and Termux
+### Linux, macOS, and Unix
 
 From the extracted StationNet directory, make the scripts executable once, then install and run:
 
@@ -32,7 +37,7 @@ chmod +x install.sh run.sh uninstall.sh
 ./run.sh
 ```
 
-`install.sh` requires Python 3.11 or newer and creates `.venv` in the StationNet folder. In Termux, install Python first with `pkg install python`. Run `./uninstall.sh` to optionally back up `data` and remove only generated runtime files, leaving the source copy intact.
+`install.sh` requires Python 3.11 or newer and creates `.venv` in the StationNet folder. Run `./uninstall.sh` to optionally back up `data` and remove only generated runtime files, leaving the source copy intact. Android hosting uses the standalone APK described in the distribution guide.
 
 Windows PowerShell (manual setup):
 
@@ -63,6 +68,8 @@ Open `http://127.0.0.1:8080` and complete first-run setup. By default the statio
 | `STATIONNET_THREADS` | `16` | Waitress request-worker count. Increase this if sustained queue-depth warnings occur with many active clients. |
 | `STATIONNET_DATA` | `./data` | Directory for `station.db` and `secret.key`. |
 | `STATIONNET_HTTPS` | unset | Set to `1` only when HTTPS is terminated in front of the app. |
+| `STATIONNET_DISTRIBUTION_DIR` | `./dist` | Local ZIP/source package directory served on **Get Your Own Station**. |
+| `STATIONNET_ANDROID_APK_DIR` | Android debug APK output | Local directory scanned for the StationNet Android APK. |
 
 Back up the data directory to preserve station identity, accounts, messages, mail, announcements, and the `uploads/` file archive. Never publish its files.
 

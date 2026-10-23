@@ -293,8 +293,23 @@ button:focus-visible, .button:focus-visible, a:focus-visible, summary:focus-visi
 .mail-message-delete .text-button { font-size: var(--text-xs); }
 
 .statusbar { display: flex; justify-content: space-between; gap: 1rem; padding: .5rem .7rem; color: var(--green-dim); border: 1px solid var(--green-dim); font-size: var(--text-xs); letter-spacing: .04em; }
+.stationnet-link { color: var(--green-dim); font-size: var(--text-xs); text-decoration: none; }
+.stationnet-link:hover, .stationnet-link:focus-visible { color: var(--cyan); text-decoration: underline; }
 .carrier { color: var(--green); }
 .carrier i { display: inline-block; width: .38rem; height: .38rem; margin-right: .3rem; border-radius: 50%; background: currentColor; box-shadow: 0 0 .45rem currentColor; }
+
+.download-page { width: min(760px, 100%); margin-inline: auto; }
+.download-page > header { margin-bottom: 1.4rem; padding-bottom: 1rem; border-bottom: 1px solid var(--green-dim); }
+.download-page > header p { margin-bottom: 0; color: var(--grey); }
+.package-list { display: grid; gap: .75rem; margin: 1rem 0 1.8rem; }
+.package-card { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 1rem; align-items: center; padding: .9rem; border: 1px solid var(--green-dim); }
+.package-card h2 { margin: 0 0 .2rem; color: var(--cyan); font-size: .9rem; }
+.package-card p, .package-card small { margin: 0; color: var(--grey); font-size: var(--text-xs); }
+.download-notes { display: grid; grid-template-columns: repeat(auto-fit, minmax(15rem, 1fr)); gap: 1rem; }
+.download-notes section { padding: .85rem; border: 1px dotted var(--green-dim); }
+.download-notes h2 { margin-bottom: .45rem; color: var(--green-bright); font-size: .85rem; }
+.download-notes p, .download-notes li { color: var(--grey); font-size: var(--text-xs); }
+.download-notes ol { margin: .4rem 0 0; padding-left: 1.25rem; }
 
 .subnav { display: flex; flex-wrap: wrap; gap: .45rem 1rem; padding: .7rem .35rem; border-bottom: 1px dotted var(--green-dim); }
 .subnav a { display: inline-flex; align-items: center; min-height: 2rem; color: var(--grey); font-size: var(--text-xs); text-decoration: none; }

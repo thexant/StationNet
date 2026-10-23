@@ -4,7 +4,7 @@ import secrets
 from datetime import timedelta
 from pathlib import Path
 from flask import Flask, g, jsonify, redirect, render_template, request, url_for
-from . import announcements, applications, archive, auth, board, broadcast, chat, db, dungeons, mail, moderation, mud, programs, radio, station, users
+from . import announcements, applications, archive, auth, board, broadcast, chat, db, downloads, dungeons, mail, moderation, mud, programs, radio, station, users
 from .ansi import station_banner
 from .realtime import DirectChatStore
 from .radio import RadioStore
@@ -28,6 +28,8 @@ def create_app(test_config=None):
         SESSION_COOKIE_HTTPONLY=True, SESSION_COOKIE_SAMESITE="Lax",
         PERMANENT_SESSION_LIFETIME=timedelta(days=3650),
         SESSION_COOKIE_SECURE=os.environ.get("STATIONNET_HTTPS") == "1", MAX_CONTENT_LENGTH=128 * 1024 * 1024,
+        DISTRIBUTION_DIR=os.environ.get("STATIONNET_DISTRIBUTION_DIR", str(Path(__file__).resolve().parents[1] / "dist")),
+        ANDROID_APK_DIR=os.environ.get("STATIONNET_ANDROID_APK_DIR", str(Path(__file__).resolve().parents[1] / "android" / "app" / "build" / "outputs" / "apk" / "debug")),
     )
     if test_config:
         app.config.update(test_config)
@@ -40,6 +42,7 @@ def create_app(test_config=None):
     )
     app.register_blueprint(auth.bp)
     app.register_blueprint(station.bp)
+    app.register_blueprint(downloads.bp)
     app.register_blueprint(board.bp)
     app.register_blueprint(chat.bp)
     app.register_blueprint(moderation.bp)
@@ -103,7 +106,9 @@ def create_app(test_config=None):
                 return render_template("moderation/restricted.html", message=message), 403
         if g.user is not None:
             auth.touch_presence()
-        if g.station is None and endpoint not in {"auth.setup", "static"} and not endpoint.startswith("static"):
+        if (g.station is None and endpoint not in {"auth.setup", "static", "downloads.index",
+                                                   "downloads.download", "downloads.info"}
+                and not endpoint.startswith("static")):
             return redirect(url_for("auth.setup"))
         if g.station is not None and endpoint == "auth.setup":
             return redirect(url_for("station.index"))

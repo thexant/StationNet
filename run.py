@@ -1,5 +1,7 @@
 """StationNet production entry point."""
 import os
+import sys
+from pathlib import Path
 from waitress import serve
 from stationnet import create_app
 
@@ -16,6 +18,10 @@ def _thread_count():
 
 
 def main():
+    # Source launches are independent of the caller's working directory. Packaged
+    # launchers set STATIONNET_DATA to a persistent directory outside the app.
+    if not os.environ.get("STATIONNET_DATA") and not getattr(sys, "frozen", False):
+        os.environ["STATIONNET_DATA"] = str(Path(__file__).resolve().parent / "data")
     host = os.environ.get("STATIONNET_HOST", "0.0.0.0")
     port = int(os.environ.get("STATIONNET_PORT", "8080"))
     threads = _thread_count()

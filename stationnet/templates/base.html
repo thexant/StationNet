@@ -58,6 +58,7 @@
     <footer class="statusbar">
       <span>STATION: {{ g.station.callsign if g.station else 'OFFLINE' }}</span>
       <span>{% if g.user %}USER: {{ g.user.username }} - [{{ g.user.callsign }}] / {{ 'SYSOP' if g.user.is_admin else 'MEMBER' }}{% else %}USER: UNIDENTIFIED{% endif %}</span>
+      <a class="stationnet-link" href="{{ url_for('downloads.index') }}">GET YOUR OWN STATION</a>
       <span class="carrier"><i aria-hidden="true"></i> CARRIER</span>
     </footer>
   </div>

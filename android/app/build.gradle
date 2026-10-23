@@ -1,0 +1,49 @@
+plugins {
+    id 'com.android.application'
+    id 'com.chaquo.python'
+}
+
+android {
+    namespace 'net.stationnet.android'
+    compileSdk 35
+    defaultConfig {
+        applicationId 'net.stationnet.android'
+        minSdk 26
+        targetSdk 35
+        versionCode 1
+        versionName '1.0'
+        ndk { abiFilters 'arm64-v8a' }
+    }
+    buildTypes { release { minifyEnabled false } }
+    compileOptions { sourceCompatibility JavaVersion.VERSION_17; targetCompatibility JavaVersion.VERSION_17 }
+}
+
+chaquopy {
+    defaultConfig {
+        version = '3.11'
+        pip {
+            install 'Flask==3.1.2'
+            // Chaquopy's Android wheel repository has 11.0.0 for CPython 3.11,
+            // but does not have the desktop pin (11.3.0).
+            install 'Pillow==11.0.0'
+            install 'pyfiglet==1.0.4'
+            install 'waitress==3.0.2'
+            install 'tzdata>=2025.2'
+        }
+    }
+}
+
+def syncStationnet = tasks.register('syncStationnet', Sync) {
+    from('../../stationnet') {
+        exclude '**/__pycache__/**', '**/*.pyc'
+    }
+    into 'src/main/python/stationnet'
+}
+tasks.named('preBuild') { dependsOn syncStationnet }
+
+// Chaquopy registers its variant-specific merge tasks after this script is
+// evaluated. Configure matching tasks lazily, while still declaring the
+// producer/consumer relationship Gradle's validation requires.
+tasks.matching { it.name.endsWith('PythonSources') }.configureEach {
+    dependsOn syncStationnet
+}

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# StationNet installer for Linux, macOS, other Unix systems, and Termux.
+# StationNet source installer for Linux, macOS, and other Unix systems.
 set -euo pipefail
 
 INSTALL_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
@@ -27,7 +27,7 @@ done
 
 if [[ -z "$PYTHON_COMMAND" ]]; then
     printf 'ERROR: Python 3.11 or newer was not found.\n' >&2
-    printf 'Install Python 3.11+ (Termux: pkg install python), then try again.\n' >&2
+    printf 'Install Python 3.11+ and try again.\n' >&2
     exit 1
 fi
 
