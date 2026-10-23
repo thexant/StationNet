@@ -1,0 +1,108 @@
+{
+  "$schema": "./theme-schema.json",
+  "schema_version": 1,
+  "id": "replace-with-theme-id",
+  "version": "1.0.0",
+  "name": "Replace with theme name",
+  "description": "Replace with author-facing notes.",
+  "generation": {
+    "size": {"minimum": 5, "default": 10, "maximum": 30},
+    "difficulty": {"minimum": 1, "default": 1, "maximum": 100},
+    "layouts": [
+      {"type": "linear", "weight": 1},
+      {"type": "branching", "weight": 3},
+      {"type": "maze", "weight": 3},
+      {"type": "hub", "weight": 1}
+    ],
+    "special_roles": [
+      {
+        "role": "special",
+        "count": 1,
+        "min_depth_ratio": 0.25,
+        "max_depth_ratio": 0.85,
+        "prefer_dead_ends": true
+      }
+    ]
+  },
+  "pools": {
+    "rooms": [
+      {
+        "id": "entrance-room",
+        "weight": 1,
+        "conditions": {"roles": ["entrance"]},
+        "names": [{"text": "[Entrance room name]", "weight": 1}],
+        "descriptions": [{"text": "[Entrance room description.]", "weight": 1}]
+      },
+      {
+        "id": "exit-room",
+        "weight": 1,
+        "conditions": {"roles": ["exit"]},
+        "names": [{"text": "[Exit room name]", "weight": 1}],
+        "descriptions": [{"text": "[Exit room description.]", "weight": 1}]
+      },
+      {
+        "id": "special-room",
+        "weight": 1,
+        "conditions": {"roles": ["special"]},
+        "names": [{"text": "[Special room name]", "weight": 1}],
+        "descriptions": [{"text": "[Special room description.]", "weight": 1}]
+      },
+      {
+        "id": "general-room",
+        "weight": 1,
+        "conditions": {"roles": ["normal"]},
+        "names": [
+          {"text": "[Common room name A]", "weight": 3},
+          {"text": "[Uncommon room name B]", "weight": 1}
+        ],
+        "descriptions": [{"text": "[General room description.]", "weight": 1}]
+      }
+    ],
+    "environments": [
+      {
+        "id": "general-environment",
+        "weight": 1,
+        "conditions": {"roles": ["normal", "special"]},
+        "descriptions": [
+          {"text": "[Common environmental variation.]", "weight": 3},
+          {"text": "[Uncommon environmental variation.]", "weight": 1}
+        ]
+      }
+    ],
+    "enemies": [
+      {
+        "id": "general-enemies",
+        "weight": 1,
+        "chance": 1.0,
+        "count": {"minimum": 1, "maximum": 2},
+        "conditions": {"roles": ["normal", "special"], "min_difficulty": 1},
+        "choices": [
+          {"definition_id": "replace-with-existing-npc-definition-id", "weight": 1}
+        ]
+      }
+    ],
+    "items": [
+      {
+        "id": "general-items",
+        "weight": 1,
+        "chance": 0.5,
+        "count": {"minimum": 0, "maximum": 1},
+        "conditions": {"roles": ["normal", "special"]},
+        "choices": [
+          {"definition_id": "replace-with-existing-item-definition-id", "weight": 1}
+        ]
+      }
+    ],
+    "encounters": [
+      {
+        "id": "general-encounter",
+        "weight": 1,
+        "chance": 0.5,
+        "conditions": {"roles": ["normal", "special"], "min_depth_ratio": 0.2},
+        "enemy_pool": "general-enemies",
+        "item_pool": "general-items",
+        "config": {"replace_with_author_defined_parameters": true}
+      }
+    ]
+  }
+}

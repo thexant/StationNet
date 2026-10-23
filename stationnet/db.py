@@ -296,8 +296,83 @@ CREATE TABLE IF NOT EXISTS mud_procedural_instances (
  status TEXT NOT NULL DEFAULT 'pending'
  CHECK(status IN ('pending','active','completed','abandoned')),
  seed TEXT,
+ theme_id TEXT,
+ theme_version TEXT,
+ template_hash TEXT,
+ generator_version TEXT,
+ layout TEXT,
+ room_count INTEGER CHECK(room_count IS NULL OR room_count>=2),
+ difficulty INTEGER CHECK(difficulty IS NULL OR difficulty>=1),
+ generation_manifest_json TEXT,
  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);
+CREATE TABLE IF NOT EXISTS mud_dungeon_template_versions (
+ theme_id TEXT NOT NULL,
+ version TEXT NOT NULL,
+ template_hash TEXT NOT NULL,
+ template_json TEXT NOT NULL,
+ source_name TEXT NOT NULL,
+ installed_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+ PRIMARY KEY(theme_id,version),
+ UNIQUE(theme_id,version,template_hash));
+CREATE TABLE IF NOT EXISTS mud_dungeon_rooms (
+ instance_id TEXT NOT NULL REFERENCES mud_procedural_instances(id) ON DELETE CASCADE,
+ room_key TEXT NOT NULL,
+ ordinal INTEGER NOT NULL CHECK(ordinal>=0),
+ x INTEGER NOT NULL,
+ y INTEGER NOT NULL,
+ role TEXT NOT NULL,
+ depth INTEGER NOT NULL CHECK(depth>=0),
+ difficulty INTEGER NOT NULL CHECK(difficulty>=1),
+ name TEXT NOT NULL,
+ description TEXT NOT NULL,
+ room_template_id TEXT NOT NULL,
+ environment_id TEXT,
+ metadata_json TEXT NOT NULL DEFAULT '{}',
+ PRIMARY KEY(instance_id,room_key),
+ UNIQUE(instance_id,ordinal),
+ UNIQUE(instance_id,x,y));
+CREATE INDEX IF NOT EXISTS idx_mud_dungeon_rooms_instance
+ ON mud_dungeon_rooms(instance_id,ordinal);
+CREATE TABLE IF NOT EXISTS mud_dungeon_exits (
+ instance_id TEXT NOT NULL REFERENCES mud_procedural_instances(id) ON DELETE CASCADE,
+ from_room_key TEXT NOT NULL,
+ to_room_key TEXT NOT NULL,
+ direction TEXT NOT NULL,
+ name TEXT NOT NULL,
+ PRIMARY KEY(instance_id,from_room_key,direction),
+ FOREIGN KEY(instance_id,from_room_key)
+  REFERENCES mud_dungeon_rooms(instance_id,room_key) ON DELETE CASCADE,
+ FOREIGN KEY(instance_id,to_room_key)
+  REFERENCES mud_dungeon_rooms(instance_id,room_key) ON DELETE CASCADE);
+CREATE INDEX IF NOT EXISTS idx_mud_dungeon_exits_destination
+ ON mud_dungeon_exits(instance_id,to_room_key);
+CREATE TABLE IF NOT EXISTS mud_dungeon_content (
+ id TEXT PRIMARY KEY,
+ instance_id TEXT NOT NULL,
+ room_key TEXT NOT NULL,
+ content_type TEXT NOT NULL CHECK(content_type IN ('enemy','item','encounter')),
+ pool_id TEXT NOT NULL,
+ definition_id TEXT,
+ quantity INTEGER NOT NULL DEFAULT 1 CHECK(quantity>=1),
+ snapshot_json TEXT NOT NULL DEFAULT '{}',
+ config_json TEXT NOT NULL DEFAULT '{}',
+ FOREIGN KEY(instance_id,room_key)
+  REFERENCES mud_dungeon_rooms(instance_id,room_key) ON DELETE CASCADE);
+CREATE INDEX IF NOT EXISTS idx_mud_dungeon_content_room
+ ON mud_dungeon_content(instance_id,room_key,content_type,id);
+CREATE TABLE IF NOT EXISTS mud_dungeon_generation_log (
+ id INTEGER PRIMARY KEY AUTOINCREMENT,
+ instance_id TEXT REFERENCES mud_procedural_instances(id) ON DELETE SET NULL,
+ theme_id TEXT,
+ theme_version TEXT,
+ seed TEXT,
+ request_json TEXT NOT NULL DEFAULT '{}',
+ status TEXT NOT NULL CHECK(status IN ('success','failure')),
+ message TEXT NOT NULL,
+ created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);
+CREATE INDEX IF NOT EXISTS idx_mud_dungeon_generation_log_status
+ ON mud_dungeon_generation_log(status,id);
 CREATE TABLE IF NOT EXISTS mud_player_locations (
  user_id INTEGER PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
  mode TEXT NOT NULL CHECK(mode IN ('traditional','procedural')),
@@ -595,6 +670,7 @@ def init_db():
     _migrate_broadcast_identity_fields(database)
     _migrate_mud_settings(database)
     _migrate_mud_locations(database)
+    _migrate_mud_dungeon_instances(database)
     _migrate_application_permissions(database)
     _initialize_mud_characters(database)
     _initialize_mud_world(database)
@@ -978,6 +1054,30 @@ def _migrate_mud_locations(database):
         "UPDATE mud_presence SET location_key=room_id "
         "WHERE location_type='world_room' AND location_key IS NULL"
     )
+
+
+def _migrate_mud_dungeon_instances(database):
+    """Add reproducibility metadata without altering existing generated records."""
+    columns = {
+        row["name"] for row in database.execute(
+            "PRAGMA table_info(mud_procedural_instances)"
+        )
+    }
+    additions = {
+        "theme_id": "TEXT",
+        "theme_version": "TEXT",
+        "template_hash": "TEXT",
+        "generator_version": "TEXT",
+        "layout": "TEXT",
+        "room_count": "INTEGER",
+        "difficulty": "INTEGER",
+        "generation_manifest_json": "TEXT",
+    }
+    for name, declaration in additions.items():
+        if name not in columns:
+            database.execute(
+                f"ALTER TABLE mud_procedural_instances ADD COLUMN {name} {declaration}"
+            )
 
 def _migrate_legacy_callsigns(database):
     """Replace callsigns created under earlier, prefixed formats."""
