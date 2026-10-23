@@ -420,6 +420,11 @@ class RadioStore:
             result["audio_file_id"] = transmission.get("audio_file_id")
             result["track_offset"] = transmission.get("track_offset", 0)
             result["track_serial"] = transmission.get("track_serial", 0)
+            result["action_type"] = transmission.get("action_type", "music")
+            result["action_text"] = transmission.get("action_text", "")
+            result["content_id"] = transmission.get("content_id")
+            result["ducking"] = transmission.get("ducking", .35)
+            result["mic_active"] = bool(transmission.get("mic_active"))
         return result
 
     def scan(self, connection_id, user_id, current, direction, allocations):
@@ -458,8 +463,11 @@ class RadioStore:
         with self._lock:
             self._prune(monotonic())
             transmission = self._transmissions.get(transmission_id)
-            if not transmission or transmission["connection_id"] != connection_id or \
-                    transmission["transmission_type"] != "LIVE_VOICE":
+            hosted_dj = bool(transmission and transmission.get("server_hosted") and
+                             transmission.get("mic_active") and
+                             transmission.get("controller") == connection_id)
+            if not transmission or (transmission["connection_id"] != connection_id or
+                                    transmission["transmission_type"] != "LIVE_VOICE") and not hosted_dj:
                 raise LookupError("Voice transmission is no longer active.")
             return [
                 {"peer_id": peer_id, "user_id": receiver["user_id"]}
@@ -473,9 +481,11 @@ class RadioStore:
         with self._lock:
             self._prune(now)
             transmission = self._transmissions.get(transmission_id)
-            if not transmission or transmission["transmission_type"] != "LIVE_VOICE":
+            hosted_dj = bool(transmission and transmission.get("server_hosted") and
+                             transmission.get("mic_active") and transmission.get("controller"))
+            if not transmission or (transmission["transmission_type"] != "LIVE_VOICE" and not hosted_dj):
                 raise LookupError("Voice transmission is no longer active.")
-            owner = transmission["connection_id"]
+            owner = transmission.get("controller") if hosted_dj else transmission["connection_id"]
             receiver = self._receivers.get(connection_id)
             target_receiver = self._receivers.get(target)
             participant = bool(receiver and receiver["frequency"] == transmission["frequency"])
@@ -502,7 +512,9 @@ class RadioStore:
             self._prune(monotonic())
             transmission = self._transmissions.get(transmission_id)
             receiver = self._receivers.get(connection_id)
-            if not transmission or transmission["transmission_type"] != "LIVE_VOICE" or not \
+            hosted_dj = bool(transmission and transmission.get("server_hosted") and
+                             transmission.get("mic_active") and transmission.get("controller"))
+            if not transmission or (transmission["transmission_type"] != "LIVE_VOICE" and not hosted_dj) or not \
                     receiver or receiver["frequency"] != transmission["frequency"]:
                 raise LookupError("Voice transmission is no longer active on this frequency.")
             queue = self._voice_signals.get(connection_id, deque())
@@ -612,6 +624,16 @@ def broadcast_identity(frequency):
             "registered": True, "automated": True, "name": automated["name"],
             "message": automated["message"], "callsign": "STATION AUTOMATION",
             "username": None, "configured_name": automated["name"],
+        }
+    program_rule = get_db().execute(
+        "SELECT name,message FROM radio_automation_rules WHERE frequency_khz=? "
+        "ORDER BY id LIMIT 1", (frequency,),
+    ).fetchone()
+    if program_rule is not None:
+        return {
+            "registered": True, "automated": True, "name": program_rule["name"],
+            "message": program_rule["message"], "callsign": "STATION AUTOMATION",
+            "username": None, "configured_name": program_rule["name"],
         }
     row = get_db().execute(
         "SELECT a.broadcast_name,a.broadcast_message,u.callsign,u.username "

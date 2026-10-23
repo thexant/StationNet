@@ -4,7 +4,7 @@ import secrets
 from datetime import timedelta
 from pathlib import Path
 from flask import Flask, g, redirect, request, url_for
-from . import announcements, applications, archive, auth, board, broadcast, chat, db, dungeons, mail, mud, radio, station, users
+from . import announcements, applications, archive, auth, board, broadcast, chat, db, dungeons, mail, mud, programs, radio, station, users
 from .ansi import station_banner
 from .realtime import DirectChatStore
 from .radio import RadioStore
@@ -51,8 +51,12 @@ def create_app(test_config=None):
     app.register_blueprint(mud.bp)
     app.register_blueprint(radio.bp)
     app.register_blueprint(broadcast.bp)
+    app.register_blueprint(programs.bp)
     with app.app_context():
         db.init_db()
+    app.extensions["broadcast_coordinator"] = programs.BroadcastCoordinator(
+        app, app.extensions["hosted_broadcasts"]
+    )
 
     @app.before_request
     def context():

@@ -3,7 +3,7 @@
 {% block content %}
 <header class="board-head">
   <div><p class="eyebrow">SYSOP CONTROL / RADIO AUTOMATION</p><h1>Automated broadcasts</h1><p>Run multiple station-owned playlists without attaching them to an individual operator identity.</p></div>
-  <a class="button secondary" href="{{ url_for('station.settings') }}#broadcast-frequencies">RETURN TO SYSOP SETTINGS</a>
+  <div class="button-row"><a class="button secondary" href="{{ url_for('programs.automation') }}">PROGRAM AUTOMATION</a><a class="button secondary" href="{{ url_for('station.settings') }}#broadcast-frequencies">RETURN TO SYSOP SETTINGS</a></div>
 </header>
 
 <section class="terminal-card broadcast-section">

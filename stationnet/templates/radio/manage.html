@@ -3,7 +3,7 @@
 {% block content %}
 <header class="board-head">
   <div><p class="eyebrow">RADIO SERVICE / HOST PREPARATION</p><h1>Broadcast Management</h1><p>Prepare station-hosted audio and running orders. No audio is transmitted from this page.</p></div>
-  <a class="button secondary" href="{{ url_for('radio.console') }}">RETURN TO RADIO</a>
+  <div class="button-row"><a class="button secondary" href="{{ url_for('programs.programs') }}">PROGRAMS + CONTENT</a><a class="button secondary" href="{{ url_for('radio.console') }}">RETURN TO RADIO</a></div>
 </header>
 
 <section class="terminal-card broadcast-section" id="broadcast-identity">

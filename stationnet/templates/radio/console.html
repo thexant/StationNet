@@ -68,17 +68,25 @@
   {% if can_manage_broadcasts %}
   <section class="terminal-card broadcast-section collapsible-panel" data-radio-broadcast-panel data-collapsible-panel data-panel-key="radio-broadcast-management">
     <button type="button" class="collapsible-panel-toggle" data-panel-toggle aria-expanded="true" aria-controls="broadcast-management-content">
-      <span class="collapsible-panel-heading"><span class="eyebrow">HOSTED MUSIC / SERVER PLAYBACK</span><span class="collapsible-panel-title" role="heading" aria-level="2">Music broadcast</span></span>
+      <span class="collapsible-panel-heading"><span class="eyebrow">HOSTED AUDIO / UNIFIED PROGRAMS / LIVE DJ</span><span class="collapsible-panel-title" role="heading" aria-level="2">Broadcast console</span></span>
       <span class="collapsible-panel-chevron" aria-hidden="true"></span>
     </button>
     <div id="broadcast-management-content" data-panel-content>
     <p>Assigned frequency: <strong data-radio-broadcast-frequency>NONE</strong></p>
     <div class="form-grid">
-      <label>Playlist <select data-radio-broadcast-playlist><option value="">NO PLAYLISTS</option></select></label>
+      <label>Simple playlist <select data-radio-broadcast-playlist><option value="">NO PLAYLISTS</option></select></label>
+      <label>Or unified program <select data-radio-broadcast-program><option value="">NO PROGRAM</option></select></label>
       <p>Current track: <strong data-radio-broadcast-track>OFF AIR</strong></p>
       <p>Status: <strong data-radio-broadcast-state>STOPPED</strong></p>
       <p>Remaining session time: <strong data-radio-broadcast-remaining>--:--</strong></p>
       <div class="button-row"><button type="button" data-radio-broadcast-start>START BROADCAST</button><button type="button" class="danger" data-radio-broadcast-stop disabled>STOP</button></div>
+      <div class="dj-console" data-radio-dj-console>
+        <p><strong data-radio-dj-indicator>DJ CONTROL AVAILABLE</strong></p>
+        <div class="button-row"><button type="button" class="secondary" data-radio-dj-take>TAKE CONTROL</button><button type="button" class="secondary" data-radio-dj-pause disabled>PAUSE</button><button type="button" class="secondary" data-radio-dj-skip disabled>SKIP</button><button type="button" class="radio-ptt" data-radio-dj-ptt disabled>HOLD TO TALK</button></div>
+        <div class="inline-form"><label>Instant content<select data-radio-dj-trigger-select disabled><option value="">NO PREPARED CONTENT</option></select></label><button type="button" class="secondary" data-radio-dj-trigger disabled>PLAY NOW</button></div>
+        <label>Music ducking <input type="range" min="0" max="100" value="35" data-radio-dj-duck disabled><small>Music level while the microphone is open.</small></label>
+        <label>Microphone level <input type="range" min="0" max="150" value="100" data-radio-dj-mic-level disabled></label>
+      </div>
       <small data-radio-broadcast-help>An assigned frequency is required unless the tuned band allows open broadcasts.</small>
     </div>
     </div>

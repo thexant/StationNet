@@ -93,8 +93,8 @@ StationNet.start(async (ui) => {
   }
 
   ui.render(
-    ui.title("Snake // Packet Run"),
-    ui.text("Arrow keys or WASD. Swipe the playfield or use the touch controls. Collect packets; avoid walls and your own signal trail.", { tone: "muted" }),
+    ui.title("Snake"),
+    ui.text("Arrow keys, WASD, swipe the game area or use the touch controls. Collect food; avoid walls and eating yourself.", { tone: "muted" }),
     ui.text("SCORE 0   PERSONAL BEST 0", { id: "hud", emphasis: true }),
     ui.text("READY", { id: "game-status", tone: "accent" }),
     ui.canvas(COLS * CELL, ROWS * CELL, [], { id: "playfield", onPointer: pointer, label: "Snake playfield" }),

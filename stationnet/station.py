@@ -127,6 +127,16 @@ def terminal():
                     **session_info, "name": definition["name"], "username": None,
                     "message": definition["message"],
                 })
+        program_rules = {f"rule:{row['id']}": row for row in database.execute(
+            "SELECT id,name,message,frequency_khz FROM radio_automation_rules"
+        )}
+        for key, definition in program_rules.items():
+            session_info = live_broadcasts.get(key)
+            if session_info and session_info["status"] == "playing":
+                broadcasts.append({
+                    **session_info, "name": definition["name"], "username": None,
+                    "message": definition["message"],
+                })
         broadcasts.sort(key=lambda item: (item["frequency_khz"], item["name"].casefold()))
         activity = {
             "bulletin": latest_bulletin,
@@ -621,6 +631,9 @@ def save_broadcast_frequency(user_id):
     elif database.execute(
             "SELECT 1 FROM radio_automated_broadcasts WHERE frequency_khz=?", (frequency,)).fetchone():
         flash("That frequency is reserved for an automated broadcast.", "error")
+    elif database.execute(
+            "SELECT 1 FROM radio_automation_rules WHERE frequency_khz=?", (frequency,)).fetchone():
+        flash("That frequency is reserved for program automation.", "error")
     elif not can_host_broadcast(user_id, frequency):
         flash("That user needs effective FULL access and HOST BROADCASTS permission there.", "error")
     else:

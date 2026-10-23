@@ -675,6 +675,14 @@ button:disabled { opacity: .5; cursor: not-allowed; }
 .compact-files .file-row { align-items: center; }
 .compact-files .danger, .playlist-editor .danger { margin-top: 0; }
 .playlist-editor { margin-top: 1rem; padding: 1rem; border: 1px dotted var(--green-dim); }
+.program-editor { display: grid; gap: .9rem; }
+.program-action-form { padding-top: .8rem; border-top: 1px dotted var(--green-dim); }
+.content-grid { display: grid; grid-template-columns: repeat(auto-fit,minmax(13rem,1fr)); gap: .5rem; margin-top: 1rem; }
+.content-grid article { display: grid; gap: .2rem; padding: .65rem; border: 1px dotted var(--green-dim); }
+.content-grid article b { color: var(--cyan); font-size: var(--text-xs); }
+.dj-console { display: grid; gap: .65rem; margin-top: 1rem; padding: .8rem; border: 1px solid var(--amber); background: rgba(255,176,0,.035); }
+.dj-console p { margin: 0; color: var(--amber); }
+.dj-console .radio-ptt.active { color: #000; background: var(--amber); box-shadow: 0 0 12px var(--amber); }
 .playlist-settings { display: grid; grid-template-columns: minmax(12rem,1fr) auto auto; align-items: end; gap: .75rem; }
 .track-list { margin: 1rem 0; padding: 0; list-style: none; border-top: 1px dotted var(--green-dim); }
 .track-row { display: flex; align-items: center; justify-content: space-between; gap: .8rem; padding: .55rem .25rem; border-bottom: 1px dotted var(--green-dim); font-size: .7rem; }

@@ -1,0 +1,39 @@
+{% extends 'base.html' %}
+{% block title %}Broadcast Programs{% endblock %}
+{% block content %}
+<header class="board-head"><div><p class="eyebrow">RADIO SERVICE / UNIFIED PROGRAMMING</p><h1>Broadcast programs</h1><p>Combine playlists, reusable audio, Morse, SSTV, and live breaks into one running order.</p></div><a class="button secondary" href="{{ url_for('broadcast.manage') }}">AUDIO + PLAYLISTS</a></header>
+
+<section class="terminal-card broadcast-section" id="content-library">
+  <p class="eyebrow">REUSABLE ASSETS</p><h2>Broadcast content library</h2>
+  <form method="post" action="{{ url_for('programs.create_content') }}" enctype="multipart/form-data" class="form-grid">
+    <input type="hidden" name="csrf_token" value="{{ session.csrf_token }}">
+    <label>Content type<select name="kind" data-content-kind><option value="announcement">ANNOUNCEMENT</option><option value="jingle">JINGLE</option><option value="music">MUSIC</option><option value="morse">MORSE TEXT</option><option value="sstv">SSTV IMAGE</option></select></label>
+    <label>Name<input name="name" maxlength="80" required></label>
+    <label>Existing audio<select name="audio_file_id"><option value="">NONE</option>{% for file in audio_files %}<option value="{{ file.id }}">{{ file.display_name }}</option>{% endfor %}</select><small>Required for music, announcements, and jingles.</small></label>
+    <label>Morse text<textarea name="text_content" maxlength="2000" rows="3"></textarea></label>
+    <label>SSTV image<input type="file" name="image" accept="image/png,image/jpeg,image/webp"><small>PNG, JPEG, or WebP; 5 MB maximum.</small></label>
+    <button>ADD REUSABLE CONTENT +</button>
+  </form>
+  <div class="content-grid">{% for item in content %}<article><b>{{ item.kind|upper }}</b><span>{{ item.name }}</span>{% if item.kind == 'morse' %}<small>{{ item.text_content|truncate(90) }}</small>{% endif %}<form method="post" action="{{ url_for('programs.delete_content',content_id=item.id) }}" data-confirm="Delete {{ item.name }}?"><input type="hidden" name="csrf_token" value="{{ session.csrf_token }}"><button class="text-button">DELETE</button></form></article>{% else %}<p class="muted">No reusable content yet. Existing playlists remain available below.</p>{% endfor %}</div>
+</section>
+
+<section class="terminal-card broadcast-section">
+  <p class="eyebrow">PROGRAM EDITOR</p><h2>Create program</h2>
+  <form method="post" action="{{ url_for('programs.create_program') }}" class="inline-form"><input type="hidden" name="csrf_token" value="{{ session.csrf_token }}"><label>Name<input name="name" maxlength="80" required placeholder="EVENING SERVICE"></label><label>Description<input name="description" maxlength="240"></label><button>CREATE PROGRAM +</button></form>
+</section>
+
+{% for program in programs %}
+<section class="terminal-card broadcast-section program-editor" id="program-{{ program.id }}">
+  <form method="post" action="{{ url_for('programs.update_program',program_id=program.id) }}" class="playlist-settings"><input type="hidden" name="csrf_token" value="{{ session.csrf_token }}"><label>Program name<input name="name" value="{{ program.name }}" maxlength="80" required></label><label>Description<input name="description" value="{{ program.description }}" maxlength="240"></label><label class="switch"><input type="checkbox" name="loop_enabled" {% if program.loop_enabled %}checked{% endif %}> LOOP PROGRAM</label><button class="secondary">SAVE</button></form>
+  <ol class="track-list">{% for action in actions_by_program[program.id] %}<li class="track-row"><span><b>{{ loop.index }}.</b> {{ action.action_type|replace('_',' ')|upper }} / {{ action.label or action.content_name or action.playlist_name or 'LIVE SEGMENT' }}{% if action.repeat_count > 1 %} × {{ action.repeat_count }}{% endif %}</span><div class="button-row"><form method="post" action="{{ url_for('programs.move_action',program_id=program.id,action_id=action.id) }}"><input type="hidden" name="csrf_token" value="{{ session.csrf_token }}"><input type="hidden" name="direction" value="up"><button class="secondary" {% if loop.first %}disabled{% endif %}>UP</button></form><form method="post" action="{{ url_for('programs.move_action',program_id=program.id,action_id=action.id) }}"><input type="hidden" name="csrf_token" value="{{ session.csrf_token }}"><input type="hidden" name="direction" value="down"><button class="secondary" {% if loop.last %}disabled{% endif %}>DOWN</button></form><form method="post" action="{{ url_for('programs.delete_action',program_id=program.id,action_id=action.id) }}"><input type="hidden" name="csrf_token" value="{{ session.csrf_token }}"><button class="text-button">REMOVE</button></form></div></li>{% else %}<li class="muted">NO ACTIONS ASSIGNED</li>{% endfor %}</ol>
+  <form method="post" action="{{ url_for('programs.add_action',program_id=program.id) }}" class="form-grid program-action-form"><input type="hidden" name="csrf_token" value="{{ session.csrf_token }}">
+    <label>Action<select name="action_type"><option value="playlist">PLAY PLAYLIST</option><option value="resume_playlist">RESUME LAST PLAYLIST</option><option value="music">MUSIC ITEM</option><option value="announcement">ANNOUNCEMENT</option><option value="jingle">JINGLE</option><option value="morse">MORSE MESSAGE</option><option value="sstv">SSTV IMAGE</option><option value="live">LIVE MICROPHONE SEGMENT</option></select></label>
+    <label>Playlist<select name="playlist_id"><option value="">NONE</option>{% for item in playlists %}<option value="{{ item.id }}">{{ item.name }}</option>{% endfor %}</select></label>
+    <label>Library content<select name="content_id"><option value="">NONE</option>{% for item in content %}<option value="{{ item.id }}">{{ item.kind|upper }} / {{ item.name }}</option>{% endfor %}</select></label>
+    <label>Display label<input name="label" maxlength="80"></label><label>Inline Morse text<textarea name="text_content" maxlength="2000" rows="2"></textarea></label>
+    <label>Duration seconds<input type="number" name="duration_seconds" min="0" max="86400" step=".1" value="0"><small>Used for live, Morse, and SSTV; zero selects a safe default.</small></label><label>Repeat<input type="number" name="repeat_count" min="1" max="100" value="1"></label><button>ADD ACTION</button>
+  </form>
+  <form method="post" action="{{ url_for('programs.delete_program',program_id=program.id) }}" data-confirm="Delete program {{ program.name }}?"><input type="hidden" name="csrf_token" value="{{ session.csrf_token }}"><button class="danger">DELETE PROGRAM</button></form>
+</section>
+{% else %}<div class="empty-state"><span class="empty-signal">~</span><p>No unified programs prepared. Simple playlists continue to work unchanged.</p></div>{% endfor %}
+{% endblock %}

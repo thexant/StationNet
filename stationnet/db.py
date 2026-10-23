@@ -157,6 +157,61 @@ CREATE TABLE IF NOT EXISTS radio_automated_broadcasts (
  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);
 CREATE INDEX IF NOT EXISTS idx_radio_automated_playlist
  ON radio_automated_broadcasts(playlist_id);
+CREATE TABLE IF NOT EXISTS radio_broadcast_content (
+ id INTEGER PRIMARY KEY AUTOINCREMENT,
+ owner_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+ kind TEXT NOT NULL CHECK(kind IN ('music','announcement','jingle','morse','sstv')),
+ name TEXT NOT NULL COLLATE NOCASE,
+ audio_file_id INTEGER REFERENCES radio_audio_files(id) ON DELETE SET NULL,
+ text_content TEXT NOT NULL DEFAULT '',
+ stored_name TEXT,
+ media_type TEXT NOT NULL DEFAULT '',
+ size_bytes INTEGER NOT NULL DEFAULT 0 CHECK(size_bytes>=0),
+ created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+ UNIQUE(owner_id,kind,name));
+CREATE INDEX IF NOT EXISTS idx_radio_content_owner
+ ON radio_broadcast_content(owner_id,kind,name);
+CREATE TABLE IF NOT EXISTS radio_programs (
+ id INTEGER PRIMARY KEY AUTOINCREMENT,
+ owner_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+ name TEXT NOT NULL COLLATE NOCASE,
+ description TEXT NOT NULL DEFAULT '',
+ loop_enabled INTEGER NOT NULL DEFAULT 0 CHECK(loop_enabled IN (0,1)),
+ created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+ updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+ UNIQUE(owner_id,name));
+CREATE INDEX IF NOT EXISTS idx_radio_programs_owner ON radio_programs(owner_id,id);
+CREATE TABLE IF NOT EXISTS radio_program_actions (
+ id INTEGER PRIMARY KEY AUTOINCREMENT,
+ program_id INTEGER NOT NULL REFERENCES radio_programs(id) ON DELETE CASCADE,
+ action_type TEXT NOT NULL CHECK(action_type IN
+  ('playlist','resume_playlist','music','announcement','jingle','morse','sstv','live')),
+ playlist_id INTEGER REFERENCES radio_playlists(id) ON DELETE SET NULL,
+ content_id INTEGER REFERENCES radio_broadcast_content(id) ON DELETE SET NULL,
+ label TEXT NOT NULL DEFAULT '', text_content TEXT NOT NULL DEFAULT '',
+ duration_seconds REAL NOT NULL DEFAULT 0 CHECK(duration_seconds>=0),
+ repeat_count INTEGER NOT NULL DEFAULT 1 CHECK(repeat_count BETWEEN 1 AND 100),
+ position INTEGER NOT NULL CHECK(position>=0), settings_json TEXT NOT NULL DEFAULT '{}');
+CREATE INDEX IF NOT EXISTS idx_radio_program_actions
+ ON radio_program_actions(program_id,position,id);
+CREATE TABLE IF NOT EXISTS radio_automation_rules (
+ id INTEGER PRIMARY KEY AUTOINCREMENT,
+ created_by INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+ name TEXT NOT NULL, message TEXT NOT NULL DEFAULT '',
+ frequency_khz INTEGER NOT NULL CHECK(frequency_khz BETWEEN 100 AND 999990),
+ program_id INTEGER NOT NULL REFERENCES radio_programs(id) ON DELETE RESTRICT,
+ enabled INTEGER NOT NULL DEFAULT 0 CHECK(enabled IN (0,1)),
+ trigger_type TEXT NOT NULL DEFAULT 'time' CHECK(trigger_type IN
+  ('time','interval','playlist_complete','track_interval','dj_connect','dj_disconnect')),
+ trigger_value TEXT NOT NULL DEFAULT '',
+ runtime_minutes INTEGER NOT NULL DEFAULT 120 CHECK(runtime_minutes BETWEEN 1 AND 1440),
+ fallback_program_id INTEGER REFERENCES radio_programs(id) ON DELETE SET NULL,
+ last_run_at TEXT, next_run_at TEXT,
+ created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+ updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+ UNIQUE(frequency_khz,name));
+CREATE INDEX IF NOT EXISTS idx_radio_automation_due
+ ON radio_automation_rules(enabled,next_run_at);
 CREATE TABLE IF NOT EXISTS application_storage (
  application_slug TEXT NOT NULL,
  storage_scope TEXT NOT NULL CHECK(storage_scope IN ('user','shared')),
