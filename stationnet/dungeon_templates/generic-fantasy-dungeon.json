@@ -2,9 +2,9 @@
   "$schema": "./theme-schema.json",
   "schema_version": 1,
   "id": "generic-fantasy-dungeon",
-  "version": "1.0.0",
-  "name": "Generic Fantasy Dungeon",
-  "description": "A conventional, setting-neutral medieval fantasy dungeon with corridors, chambers, crypts, storage rooms, underground passages, escalating combat, exploration rewards, NPC interaction, and a boss encounter.",
+  "version": "1.1.0",
+  "name": "fantasy dungeon",
+  "description": "Explore the abandoned halls of an old fortress, from damp guard posts and hidden storerooms to a crypt sealed beneath the stone. Follow the traces left by earlier delvers, gather supplies and keys, and face the warden who still guards the inner vault.",
   "definitions": {
     "items": [
       {"id":"rusty-sword","name":"Rusty Sword","description":"A serviceable sword with a pitted blade.","item_type":"equipment","equipment_slot":"main_hand","properties":{"damage":2},"behaviors":{}},
@@ -22,8 +22,8 @@
       {"id":"vault-casket","name":"Vault Casket","description":"A small silver-bound casket recovered from the inner vault.","item_type":"container","properties":{},"behaviors":{"requires_key":"silver-key"}}
     ],
     "npcs": [
-      {"id":"wounded-scout","name":"Wounded Scout","description":"A weary explorer sheltering behind a stack of crates.","properties":{},"behaviors":{"friendly":true},"conversation":{"name":"Scout's Warning","nodes":[{"id":"start","body":"The scout keeps one hand pressed to a bandaged side. 'The lower halls are not abandoned. Take the marked key if you find it, and watch the floor stones.'","start":true,"responses":[{"id":"thanks","text":"Thank you. I will be careful.","state_key":"warned","state_value":"yes"}]}]}},
-      {"id":"prisoner","name":"Imprisoned Delver","description":"A frightened delver who has survived in a locked side cell.","properties":{},"behaviors":{"friendly":true},"conversation":{"name":"Delver's Directions","nodes":[{"id":"start","body":"'The guard captain keeps the silver key near the old crypt. The way out is beyond the deepest hall.'","start":true,"responses":[{"id":"promise","text":"I will find the key and get you clear.","state_key":"promised","state_value":"yes"}]}]}}
+      {"id":"wounded-scout","name":"Wounded Scout","description":"A weary explorer sheltering behind a stack of crates, with a bloodied bandage tied around one side.","properties":{},"behaviors":{"friendly":true},"conversation":{"name":"Scout's Warning","nodes":[{"id":"start","body":"The scout presses a hand to the bandage. 'The old guards still walk below. One carries an iron key with three towers stamped on it. And mind the floor stones near the guard post.'","start":true,"responses":[{"id":"thanks","text":"Thank you. I will watch my step.","state_key":"warned","state_value":"yes"}]}]}},
+      {"id":"prisoner","name":"Imprisoned Delver","description":"A frightened delver waiting in a side cell, counting the footsteps beyond the door.","properties":{},"behaviors":{"friendly":true},"conversation":{"name":"Delver's Directions","nodes":[{"id":"start","body":"'The crypt warden has the silver key. I heard it turn in the vault door before they shut me in. The outer gate lies past the deepest hall.'","start":true,"responses":[{"id":"promise","text":"I will find the key and get you clear.","state_key":"promised","state_value":"yes"}]}]}}
     ],
     "enemies": [
       {"id":"cave-rat","name":"Cave Rat","description":"A scarred rat with yellow teeth and a bold, hungry stare.","properties":{"beast":true},"behaviors":{"pack":true},"combat":{"maximum_health":12,"attack":3,"defense":1,"experience_reward":4,"respawn_seconds":45},"loot":[{"type":"experience","amount":2}]},
@@ -44,17 +44,19 @@
   },
   "pools": {
     "rooms":[
-      {"id":"entrance","conditions":{"roles":["entrance"]},"names":[{"text":"The Stone Stair"}],"descriptions":[{"text":"A worn stair descends from the surface into a broad stone landing. Old torch brackets line the walls, and a draft carries the smell of earth below."}]},
-      {"id":"exit","conditions":{"roles":["exit"]},"names":[{"text":"The Outer Gate"}],"descriptions":[{"text":"A heavy gate opens toward a shaft of daylight and the road beyond. Dusty banners mark this as the dungeon's old outer threshold."}]},
-      {"id":"treasure-vault","conditions":{"roles":["treasure"]},"names":[{"text":"The Sealed Vault"}],"descriptions":[{"text":"A square vault is set with empty shelves and a locked chest beneath a faded stone crest. The floor is unusually clean, as if someone still tends this place."}]},
-      {"id":"warden-crypt","conditions":{"roles":["boss"]},"names":[{"text":"The Warden's Crypt"}],"descriptions":[{"text":"A sunken crypt lies beneath a domed ceiling. A stone bier stands at its center, ringed by old weapons and a sealed silver door."}]},
+      {"id":"entrance","conditions":{"roles":["entrance"]},"names":[{"text":"The Stone Stair"}],"descriptions":[{"text":"Worn steps descend from the surface to a landing beneath a three-towered crest. Empty torch brackets line the walls, and a draft carries the smell of wet earth from below."}]},
+      {"id":"exit","conditions":{"roles":["exit"]},"names":[{"text":"The Outer Gate"}],"descriptions":[{"text":"A heavy gate stands beneath dusty banners bearing three towers. Beyond its bars, daylight reaches the old road out of the fortress."}]},
+      {"id":"treasure-vault","conditions":{"roles":["treasure"]},"names":[{"text":"The Sealed Vault"}],"descriptions":[{"text":"Empty shelves ring a square vault. An iron-banded chest sits beneath a faded stone crest; fresh scuffs in the dust suggest someone has tried its lock recently."}]},
+      {"id":"warden-crypt","conditions":{"roles":["boss"]},"names":[{"text":"The Warden's Crypt"}],"descriptions":[{"text":"A stone bier rises from the floor of a sunken crypt. Rusted weapons stand around it like a silent guard, while a silver-bound door waits beneath the far arch."}]},
       {"id":"corridor","conditions":{"roles":["normal"]},"names":[{"text":"Damp Stone Corridor","weight":3},{"text":"Torchlit Passage","weight":2},{"text":"Buried Underground Way","weight":2}],"descriptions":[{"text":"Rough-cut blocks form a narrow passage. Water beads on the walls and the dust holds several overlapping trails."},{"text":"Iron brackets support guttering torches along a low corridor. Their smoke stains the ceiling black."},{"text":"The passage slopes through packed earth and ancient masonry. Every footstep echoes farther than it should."}]},
-      {"id":"guard-chamber","conditions":{"roles":["normal"]},"names":[{"text":"Guard Chamber"}],"descriptions":[{"text":"A cramped barracks contains splintered bunks, a weapon rack, and a table scarred by dice games."}]},
+      {"id":"guard-chamber","conditions":{"roles":["normal"]},"names":[{"text":"Guard Chamber"}],"descriptions":[{"text":"Splintered bunks and a bare weapon rack crowd this former barracks. Dice lie where a game was abandoned, and boot prints cross the dust toward the lower halls."}]},
       {"id":"storage","conditions":{"roles":["normal"]},"names":[{"text":"Forgotten Storeroom"}],"descriptions":[{"text":"Crates and clay jars crowd this storeroom. Most are empty, but a few have survived behind a curtain of cobwebs."}]},
-      {"id":"crypt","conditions":{"roles":["normal"]},"names":[{"text":"Dusty Crypt"}],"descriptions":[{"text":"Rows of stone niches disappear into the darkness. Faded names and chipped carvings suggest generations were buried here."}]},
+      {"id":"crypt","conditions":{"roles":["normal"]},"names":[{"text":"Dusty Crypt"}],"descriptions":[{"text":"Rows of burial niches recede into darkness. Most seals bear names worn smooth by time; one has been broken from the inside."}]},
       {"id":"cistern","conditions":{"roles":["normal"]},"names":[{"text":"Underground Cistern"}],"descriptions":[{"text":"A shallow pool fills the center of this chamber. A narrow ledge circles the water beneath dripping arches."}]},
       {"id":"collapsed-tunnel","conditions":{"roles":["normal"]},"names":[{"text":"Collapsed Tunnel"}],"descriptions":[{"text":"A partial cave-in blocks one side of the tunnel. The open route passes beneath cracked supports and loose stones."}]},
-      {"id":"hidden-chamber","conditions":{"roles":["normal"],"dead_end":true},"names":[{"text":"Hidden Side Chamber"}],"descriptions":[{"text":"A concealed door has opened onto a small chamber. A cold draft leaks through a seam behind the masonry, and old scratch marks cover the floor."}]}
+      {"id":"hidden-chamber","conditions":{"roles":["normal"],"dead_end":true},"names":[{"text":"Hidden Side Chamber"}],"descriptions":[{"text":"A narrow door opens behind the masonry. Scratches on the floor show where someone dragged a chest across the room, and a cold draft slips through the back wall."}]},
+      {"id":"watch-post","conditions":{"roles":["normal"],"min_depth_ratio":0.3},"names":[{"text":"Abandoned Watch Post"}],"descriptions":[{"text":"A cracked bell hangs above a sentry's stool. From here, narrow sightlines overlook two passages, though dust has gathered on the alarm rope."}]},
+      {"id":"old-kitchen","conditions":{"roles":["normal"]},"names":[{"text":"Cold Kitchen"}],"descriptions":[{"text":"Soot coats a broad hearth and overturned pots fill the sink. A few dry rations remain tucked into a high cupboard, beyond the reach of the rats."}]}
     ],
     "environments":[
       {"id":"dripping-stone","conditions":{"roles":["normal","treasure","boss"]},"descriptions":[{"text":"Water drips at a slow, steady pace, masking quieter sounds."}]},
@@ -62,7 +64,9 @@
       {"id":"mildew","conditions":{"roles":["normal"]},"descriptions":[{"text":"The air is thick with mildew and the sour scent of old straw."}]},
       {"id":"echoes","conditions":{"roles":["normal","boss"]},"descriptions":[{"text":"Distant knocks echo through the stone, making it difficult to tell how far away they are."}]},
       {"id":"failing-torches","conditions":{"roles":["normal","entrance"]},"descriptions":[{"text":"Several old torches burn low, throwing restless shadows across the walls."}]},
-      {"id":"rubble","conditions":{"roles":["normal"]},"descriptions":[{"text":"Loose rubble crunches underfoot; a wrong step could send stones rattling into the dark."}]}
+      {"id":"rubble","conditions":{"roles":["normal"]},"descriptions":[{"text":"Loose rubble crunches underfoot; a wrong step could send stones rattling into the dark."}]},
+      {"id":"bell-echo","conditions":{"roles":["normal"],"min_depth_ratio":0.3},"descriptions":[{"text":"A faint metallic knock carries through the halls, then falls silent before its source can be found."}]},
+      {"id":"old-incense","conditions":{"roles":["normal","boss"],"min_depth_ratio":0.5},"descriptions":[{"text":"The damp air holds a trace of incense beneath the smell of old stone."}]}
     ],
     "npcs":[{"id":"scouts-and-survivors","chance":0.8,"count":{"minimum":1,"maximum":1},"choices":[{"local_id":"wounded-scout","weight":3},{"local_id":"prisoner","weight":1}]}],
     "enemies":[
