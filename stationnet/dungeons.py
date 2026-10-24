@@ -1319,11 +1319,12 @@ def init_app(app):
     app.config.setdefault("DUNGEON_THEMES_DIR", str(Path(app.config["DATA_DIR"]) / "dungeon_themes"))
     themes_path = Path(app.config["DUNGEON_THEMES_DIR"])
     themes_path.mkdir(parents=True, exist_ok=True)
-    # Ship the conventional starter theme as an immediately available library
-    # entry.  User-installed themes remain authoritative and are never
-    # overwritten.
-    bundled_theme = Path(__file__).with_name("dungeon_templates") / "generic-fantasy-dungeon.json"
-    installed_theme = themes_path / bundled_theme.name
-    if bundled_theme.is_file() and not installed_theme.exists():
-        shutil.copyfile(bundled_theme, installed_theme)
+    # Bundled playable themes are available on existing and new stations.
+    # Files already installed by a user remain authoritative.
+    bundled_dir = Path(__file__).with_name("dungeon_templates")
+    for name in ("generic-fantasy-dungeon.json", "desert.json"):
+        bundled_theme = bundled_dir / name
+        installed_theme = themes_path / name
+        if bundled_theme.is_file() and not installed_theme.exists():
+            shutil.copyfile(bundled_theme, installed_theme)
     app.cli.add_command(dungeon_cli)

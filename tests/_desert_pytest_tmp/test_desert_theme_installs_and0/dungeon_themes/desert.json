@@ -1,0 +1,95 @@
+{
+  "$schema": "./theme-schema.json",
+  "schema_version": 1,
+  "id": "desert",
+  "version": "1.0.0",
+  "name": "Desert Temples",
+  "description": "Cross wind-scoured ruins and descend into a buried temple of the sun. Read the old signs, salvage water and relics, and confront the guardian of the sealed heart chamber.",
+  "definitions": {
+    "items": [
+      {"id":"bronze-khopesh","name":"Bronze Khopesh","description":"A curved bronze blade with a leather-wrapped grip.","item_type":"equipment","equipment_slot":"main_hand","properties":{"damage":4},"behaviors":{}},
+      {"id":"reed-spear","name":"Reed Shaft Spear","description":"A long spear with a bronze point and a tightly bound reed shaft.","item_type":"equipment","equipment_slot":"main_hand","properties":{"damage":3},"behaviors":{}},
+      {"id":"sun-ward-shield","name":"Sun Ward Shield","description":"A round wooden shield painted with a faded sun disk.","item_type":"equipment","equipment_slot":"off_hand","properties":{"armor":2},"behaviors":{}},
+      {"id":"linen-wraps","name":"Linen Armor","description":"Layered linen reinforced with small bronze scales.","item_type":"equipment","equipment_slot":"body","properties":{"armor":2},"behaviors":{}},
+      {"id":"water-skin","name":"Water Skin","description":"A sealed skin of cool water recovered from a shaded alcove.","item_type":"consumable","properties":{"use_message":"You drink deeply from the water skin. (The expedition's standard recovery rules apply.)"},"behaviors":{"consumable":true}},
+      {"id":"date-ration","name":"Date Ration","description":"A small packet of dates wrapped in palm fiber.","item_type":"consumable","properties":{"use_message":"The dates are sweet and filling. (The expedition's standard recovery rules apply.)"},"behaviors":{"consumable":true}},
+      {"id":"oil-lamp","name":"Oil Lamp","description":"A clay lamp with enough oil to light the painted corridors.","item_type":"consumable","properties":{"use_message":"The lamp catches, throwing warm light across the carvings."},"behaviors":{"consumable":true}},
+      {"id":"bronze-seal","name":"Bronze Seal","description":"A bronze seal marked with the temple's sun emblem.","item_type":"key","properties":{},"behaviors":{"opens":"sun court cache"}},
+      {"id":"lapis-signet","name":"Lapis Signet","description":"A blue stone signet cut to fit the lock of the heart chamber.","item_type":"key","properties":{},"behaviors":{"opens":"heart chamber"}},
+      {"id":"scarab-amulet","name":"Scarab Amulet","description":"A glazed blue amulet shaped like a scarab.","item_type":"misc","properties":{},"behaviors":{}},
+      {"id":"gold-leaf-token","name":"Gold Leaf Token","description":"A palm-sized offering token covered in flaking gold leaf.","item_type":"misc","properties":{},"behaviors":{}},
+      {"id":"painted-coffer","name":"Painted Coffer","description":"A cedar coffer painted with lotus flowers, still held shut by a bronze clasp.","item_type":"container","properties":{},"behaviors":{"requires_key":"bronze-seal"}},
+      {"id":"sun-reliquary","name":"Sun Reliquary","description":"A stone reliquary from the temple's innermost shrine.","item_type":"container","properties":{},"behaviors":{"requires_key":"lapis-signet"}}
+    ],
+    "npcs": [
+      {"id":"lost-cartographer","name":"Lost Cartographer","description":"A dust-covered surveyor sheltering beside a toppled column, clutching a charcoal map.","properties":{},"behaviors":{"friendly":true},"conversation":{"name":"The Cartographer's Map","nodes":[{"id":"start","body":"'The sun court hides a coffer behind the western relief. I marked it before the sand erased my tracks. Watch for loose floor tiles near the offering hall.'","start":true,"responses":[{"id":"thank","text":"I will follow your map carefully.","state_key":"map_warning","state_value":"heard"}]}]}},
+      {"id":"temple-keeper","name":"Temple Keeper","description":"An elderly keeper tending a sheltered lamp and brushing sand from a wall of names.","properties":{},"behaviors":{"friendly":true},"conversation":{"name":"The Keeper's Warning","nodes":[{"id":"start","body":"'The jackal guardian holds the lapis signet. Its post is below the pillared hall. Leave the old offerings undisturbed until you know which doors they mark.'","start":true,"responses":[{"id":"listen","text":"Tell me where the pillared hall lies.","next_node_id":"directions"}]},{"id":"directions","body":"'Follow the blue ceiling stars into the deeper rooms. The exit opens beyond the heart chamber.'","responses":[{"id":"thanks","text":"Thank you, keeper.","state_key":"keeper_directions","state_value":"heard"}]}]}}
+    ],
+    "enemies": [
+      {"id":"sand-scorpion","name":"Sand Scorpion","description":"A broad, pale scorpion that bursts from a seam in the warm sand.","properties":{"beast":true},"behaviors":{"ambush":true},"combat":{"maximum_health":14,"attack":4,"defense":1,"experience_reward":5,"respawn_seconds":45},"loot":[{"type":"experience","amount":2}]},
+      {"id":"tomb-jackal","name":"Tomb Jackal","description":"A lean jackal with dust-caked fur and eyes fixed on the next opening.","properties":{"beast":true},"behaviors":{"pack":true},"combat":{"maximum_health":24,"attack":7,"defense":2,"experience_reward":11,"respawn_seconds":75},"loot":[{"type":"experience","amount":5},{"type":"item","item_local_id":"date-ration","amount":1}]},
+      {"id":"mummified-sentinel","name":"Mummified Sentinel","description":"An ancient guard wrapped in crumbling linen, still gripping a bronze spear.","properties":{"undead":true},"behaviors":{"patrol":true},"combat":{"maximum_health":32,"attack":8,"defense":4,"experience_reward":17,"respawn_seconds":100},"equipment":[{"slot":"main_hand","item_local_id":"reed-spear"},{"slot":"body","item_local_id":"linen-wraps"}],"loot":[{"type":"experience","amount":8},{"type":"item","item_local_id":"bronze-seal","amount":1}]},
+      {"id":"bronze-idol","name":"Bronze Idol","description":"A heavy temple idol whose jointed arms grind to life when the shrine is disturbed.","properties":{"construct":true},"behaviors":{"guardian":true},"combat":{"maximum_health":48,"attack":10,"defense":7,"experience_reward":28,"respawn_seconds":150},"loot":[{"type":"experience","amount":14},{"type":"item","item_local_id":"scarab-amulet","amount":1}]},
+      {"id":"jackal-guardian","name":"Jackal Guardian","description":"A towering jackal-headed guardian clad in tarnished bronze, keeping watch over the heart chamber.","properties":{"boss":true},"behaviors":{"guardian":true,"boss":true},"combat":{"maximum_health":82,"attack":14,"defense":8,"experience_reward":65,"respawn_seconds":300},"equipment":[{"slot":"main_hand","item_local_id":"bronze-khopesh"},{"slot":"off_hand","item_local_id":"sun-ward-shield"},{"slot":"body","item_local_id":"linen-wraps"}],"loot":[{"type":"experience","amount":32},{"type":"item","item_local_id":"lapis-signet","amount":1},{"type":"item","item_local_id":"gold-leaf-token","amount":1},{"type":"item","item_local_id":"water-skin","amount":2}]}
+    ]
+  },
+  "generation": {
+    "size":{"minimum":8,"default":14,"maximum":30},
+    "difficulty":{"minimum":1,"default":2,"maximum":8},
+    "layouts":[{"type":"linear","weight":2},{"type":"branching","weight":4},{"type":"maze","weight":2},{"type":"hub","weight":2}],
+    "special_roles":[
+      {"role":"treasure","count":1,"min_depth_ratio":0.25,"max_depth_ratio":0.8,"prefer_dead_ends":true},
+      {"role":"boss","count":1,"min_depth_ratio":0.25,"max_depth_ratio":1.0,"prefer_dead_ends":true}
+    ]
+  },
+  "pools": {
+    "rooms":[
+      {"id":"entrance","conditions":{"roles":["entrance"]},"names":[{"text":"The Buried Stair"}],"descriptions":[{"text":"A stair of sun-bleached limestone descends beneath a half-buried gateway. Wind drives sand across the first steps, but the painted sun above the arch is still visible."}]},
+      {"id":"exit","conditions":{"roles":["exit"]},"names":[{"text":"The Eastern Gate"}],"descriptions":[{"text":"A narrow gate opens toward the dunes and the first clear sky seen since the stair. Blue inlay traces the final threshold of the temple."}]},
+      {"id":"sun-court","conditions":{"roles":["treasure"]},"names":[{"text":"The Sun Court"}],"descriptions":[{"text":"Slanted light reaches a court choked with sand. Behind a weathered relief, a painted cedar coffer rests where offerings were once collected."}]},
+      {"id":"heart-chamber","conditions":{"roles":["boss"]},"names":[{"text":"The Heart Chamber"}],"descriptions":[{"text":"A ring of tall pillars surrounds a sealed stone reliquary. Gold paint catches the lamp light, and a jackal-shaped shadow falls across the only path forward."}]},
+      {"id":"sand-choked-passage","conditions":{"roles":["normal"]},"names":[{"text":"Sand-Choked Passage","weight":3},{"text":"Wind-Carved Corridor","weight":2}],"descriptions":[{"text":"Drifts pile against carved walls, leaving a narrow trail between them. Fresh tracks vanish where sand spills from a crack overhead."},{"text":"Wind whistles through a slit in the masonry. Fine grit has polished the lower carvings almost smooth."}]},
+      {"id":"hypostyle-hall","conditions":{"roles":["normal"]},"names":[{"text":"Pillared Hall"}],"descriptions":[{"text":"Rows of painted columns disappear into the dimness. Their capitals hold traces of blue and gold, and broken pottery lies between the bases."}]},
+      {"id":"offering-hall","conditions":{"roles":["normal"]},"names":[{"text":"Offering Hall"}],"descriptions":[{"text":"Low stone tables hold empty bowls and dried flower stems. A few floor tiles sit unevenly beneath the layers of dust."}]},
+      {"id":"scribe-room","conditions":{"roles":["normal"]},"names":[{"text":"Scribes' Chamber"}],"descriptions":[{"text":"Reed pens and shattered ink pots scatter across a long desk. Faded symbols record shipments of grain, oil, and blue stone."}]},
+      {"id":"cistern","conditions":{"roles":["normal"]},"names":[{"text":"Hidden Cistern"}],"descriptions":[{"text":"Cool air rises from a deep stone basin. A little clear water remains below the rope marks on its rim."}]},
+      {"id":"burial-gallery","conditions":{"roles":["normal"],"min_depth_ratio":0.3},"names":[{"text":"Burial Gallery"}],"descriptions":[{"text":"Niches line the walls beneath a ceiling painted with blue stars. Several linen wrappings have fallen across the passage."}]},
+      {"id":"collapsed-shrine","conditions":{"roles":["normal"]},"names":[{"text":"Collapsed Shrine"}],"descriptions":[{"text":"A fallen roof slab has crushed one side of the shrine. The surviving wall shows a procession carrying lamps toward the temple's inner rooms."}]},
+      {"id":"sealed-alcove","conditions":{"roles":["normal"],"dead_end":true},"names":[{"text":"Sealed Alcove"}],"descriptions":[{"text":"A narrow recess lies behind a displaced stone panel. Scratch marks around its edge suggest someone searched it recently."}]},
+      {"id":"star-ceiling","conditions":{"roles":["normal"],"min_depth_ratio":0.5},"names":[{"text":"Hall of Blue Stars"}],"descriptions":[{"text":"Tiny blue stones set into the ceiling form a trail toward the deeper temple. A bronze brazier stands cold beneath them."}]}
+    ],
+    "environments":[
+      {"id":"blowing-sand","conditions":{"roles":["normal","entrance","treasure"]},"descriptions":[{"text":"Fine sand whispers across the floor and gathers in every footprint."}]},
+      {"id":"lamp-smoke","conditions":{"roles":["normal","boss"]},"descriptions":[{"text":"A trace of old lamp smoke clings to the stone ceiling."}]},
+      {"id":"cool-stone","conditions":{"roles":["normal","boss"],"min_depth_ratio":0.35},"descriptions":[{"text":"The air turns cool beneath the heavy stone, far from the heat above."}]},
+      {"id":"distant-drumming","conditions":{"roles":["normal","boss"],"min_depth_ratio":0.5},"descriptions":[{"text":"A hollow knocking travels through the pillars and then stops."}]},
+      {"id":"painted-walls","conditions":{"roles":["normal","treasure"]},"descriptions":[{"text":"Faded painted figures carry offerings along the wall toward the inner shrine."}]},
+      {"id":"loose-grit","conditions":{"roles":["normal"]},"descriptions":[{"text":"Grit shifts beneath your boots, exposing the edges of older floor tiles."}]}
+    ],
+    "npcs":[{"id":"survivors","chance":1.0,"count":{"minimum":1,"maximum":1},"choices":[{"local_id":"lost-cartographer","weight":2},{"local_id":"temple-keeper","weight":1}]}],
+    "enemies":[
+      {"id":"scorpions","chance":1.0,"count":{"minimum":1,"maximum":3},"choices":[{"local_id":"sand-scorpion"}]},
+      {"id":"jackals","chance":1.0,"count":{"minimum":1,"maximum":2},"choices":[{"local_id":"tomb-jackal"}]},
+      {"id":"sentinels","chance":1.0,"count":{"minimum":1,"maximum":2},"choices":[{"local_id":"mummified-sentinel"}]},
+      {"id":"idols","chance":1.0,"count":{"minimum":1,"maximum":1},"choices":[{"local_id":"bronze-idol"}]},
+      {"id":"guardian","chance":1.0,"count":{"minimum":1,"maximum":1},"choices":[{"local_id":"jackal-guardian"}]}
+    ],
+    "items":[
+      {"id":"traveler-supplies","chance":0.85,"count":{"minimum":1,"maximum":2},"choices":[{"local_id":"water-skin","weight":4},{"local_id":"date-ration","weight":3},{"local_id":"oil-lamp","weight":2}]},
+      {"id":"court-cache","chance":1.0,"count":{"minimum":1,"maximum":1},"choices":[{"local_id":"painted-coffer","weight":3},{"local_id":"scarab-amulet","weight":1}]},
+      {"id":"temple-relics","chance":0.6,"count":{"minimum":1,"maximum":1},"choices":[{"local_id":"scarab-amulet","weight":3},{"local_id":"gold-leaf-token","weight":2}]},
+      {"id":"inner-reliquary","chance":1.0,"count":{"minimum":1,"maximum":1},"choices":[{"local_id":"sun-reliquary"}]}
+    ],
+    "encounters":[
+      {"id":"heart-guardian","weight":1,"chance":1.0,"conditions":{"roles":["boss"]},"enemy_pool":"guardian","item_pool":"inner-reliquary","config":{"encounter":"boss","objective":"Defeat the jackal guardian and recover the lapis signet."}},
+      {"id":"court-offerings","weight":1,"chance":1.0,"conditions":{"roles":["treasure"]},"item_pool":"court-cache","config":{"encounter":"treasure","requires_key":"bronze-seal","secret":"The western relief conceals a small offering niche."}},
+      {"id":"scorpion-nest","weight":3,"chance":0.72,"conditions":{"roles":["normal"],"max_depth_ratio":0.45},"enemy_pool":"scorpions","item_pool":"traveler-supplies","config":{"encounter":"vermin"}},
+      {"id":"hungry-jackals","weight":2,"chance":0.68,"conditions":{"roles":["normal"],"min_depth_ratio":0.15},"enemy_pool":"jackals","item_pool":"traveler-supplies","config":{"encounter":"combat"}},
+      {"id":"ancient-sentinels","weight":3,"chance":0.7,"conditions":{"roles":["normal"],"min_depth_ratio":0.3},"enemy_pool":"sentinels","item_pool":"traveler-supplies","config":{"encounter":"combat"}},
+      {"id":"awakened-idol","weight":2,"chance":0.58,"conditions":{"roles":["normal"],"min_depth_ratio":0.5},"enemy_pool":"idols","item_pool":"temple-relics","config":{"encounter":"combat"}},
+      {"id":"sheltered-guide","weight":1,"chance":0.48,"conditions":{"roles":["normal"],"dead_end":true},"npc_pool":"survivors","item_pool":"traveler-supplies","config":{"encounter":"conversation"}},
+      {"id":"quiet-shrine","weight":2,"chance":0.4,"conditions":{"roles":["normal"]},"item_pool":"temple-relics","config":{"encounter":"exploration","secret":"Search the wall carvings for a recessed shelf."}}
+    ]
+  }
+}
+
