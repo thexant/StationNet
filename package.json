@@ -1,0 +1,14 @@
+{
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build:midi": "node scripts/build-midi.mjs",
+    "test:midi": "node tests/test_midi_engine.mjs"
+  },
+  "dependencies": {
+    "spessasynth_lib": "4.3.14"
+  },
+  "devDependencies": {
+    "esbuild": "0.28.0"
+  }
+}

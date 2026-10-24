@@ -30,6 +30,41 @@ for position, pause/resume, skip, duration correction, looping, and frequency
 occupancy. Non-file actions carry `action_type`, `action_text`, and `content_id`; the
 receiver reuses its Web Audio Morse oscillator, SSTV canvas, and WebRTC voice path.
 
+## MIDI files
+
+The private audio library accepts Standard MIDI Files (`.mid` and `.midi`) alongside
+MP3, OGG, and WAV. MIDI works in ordinary playlists, unified programs, and legacy
+automated broadcasts. Uploads are limited to 2 MB, 128 tracks, 200,000 events,
+and 24 hours. The server validates type 0/1 structure and a PPQN tempo map, then
+stores the computed duration on the existing `radio_audio_files` row. SMPTE time
+division, format 2, embedded banks, and large SysEx data are unsupported. The
+existing storage quota, host permissions, and tuned-listener file authorization
+still apply.
+
+The receiver loads `stationnet/static/midi/gm.sf2` on first MIDI playback and
+uses the locally bundled SpessaSynth worklet. On HTTP LAN clients where
+AudioWorklet is unavailable, it uses the same SoundFont through a
+ScriptProcessor fallback. Both paths render GM programs 0–127 and channel-10
+percussion in the browser; MIDI files themselves are sent through the
+existing authorized audio file endpoint. Other radio paths still use their
+existing audio element or WebRTC transport. The server's track serial and offset
+remain authoritative for late join, pause, skip, shuffle, repeat, and automated
+transitions. Receivers seek when drift exceeds 1.5 seconds. Local rendering can
+vary slightly by device; the ScriptProcessor fallback can glitch if its main
+thread is busy. Track changes are discovered by the existing receiver poll, so
+network latency may leave a brief gap between different formats. MIDI is not
+re-encoded into external HLS/ICY streams; external radio continues to use its
+existing audio stream path.
+
+The compact 14 MB FM-style GM SoundFont covers all 128 melodic programs and the
+standard percussion notes. Its timbres are synthetic rather than acoustic. It
+is distributed under GPL-3.0-only; its license is in
+`stationnet/static/midi/SOUNDFONT-LICENSE.txt`. SpessaSynth's Apache-2.0 license
+files are adjacent to the bundled engine and worklet. No CDN or runtime npm
+installation is required. To rebuild the checked-in engine after changing its
+source, run `npm ci` and `npm run build:midi`. Distribution builds copy the
+prebuilt assets from `stationnet/static/midi`.
+
 ## HTTP endpoints
 
 All mutating endpoints require the existing CSRF token. Host endpoints also recheck

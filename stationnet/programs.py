@@ -51,6 +51,7 @@ def _audio_track(database, file_id, action_type="music", label="", content_id=No
     return {"file_id": row["id"], "name": label or row["display_name"],
             "title": label or row["title"] or Path(row["display_name"]).stem,
             "artist": row["artist"], "duration": max(.1, float(row["duration_seconds"])),
+            "media_type": row["media_type"],
             "action_type": action_type, "content_id": content_id}
 
 
@@ -75,7 +76,7 @@ def compile_program(database, program_id):
                     continue
                 last_playlist = playlist_id
                 rows = database.execute(
-                    "SELECT t.*,f.duration_seconds,f.title,f.artist,f.owner_id,f.stored_name "
+                    "SELECT t.*,f.duration_seconds,f.title,f.artist,f.owner_id,f.stored_name,f.media_type "
                     "FROM radio_playlist_tracks t JOIN radio_audio_files f ON f.id=t.audio_file_id "
                     "WHERE t.playlist_id=? ORDER BY t.position,t.id", (playlist_id,)).fetchall()
                 for row in rows:
@@ -84,6 +85,7 @@ def compile_program(database, program_id):
                         result.append({"file_id": row["audio_file_id"], "name": row["display_name"],
                                        "title": row["title"] or Path(row["display_name"]).stem,
                                        "artist": row["artist"], "duration": max(.1, float(row["duration_seconds"])),
+                                       "media_type": row["media_type"],
                                        "action_type": "music", "source_action_id": action["id"]})
                 continue
             if kind in {"music", "announcement", "jingle"}:

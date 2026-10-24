@@ -32,6 +32,11 @@ def build_workspace():
 
 
 def copy_app(destination):
+    for asset in ("gm.sf2", "engine.js", "spessasynth_processor.min.js",
+                  "SOUNDFONT-LICENSE.txt", "SPESSASYNTH-LICENSE.txt",
+                  "SPESSASYNTH-CORE-LICENSE.txt", "THIRD-PARTY-NOTICES.md"):
+        if not (ROOT / "stationnet" / "static" / "midi" / asset).is_file():
+            raise FileNotFoundError(f"MIDI distribution asset is missing: {asset}")
     destination.mkdir(parents=True, exist_ok=True)
     shutil.copy2(ROOT / "run.py", destination / "run.py")
     shutil.copy2(ROOT / "requirements.txt", destination / "requirements.txt")
@@ -91,6 +96,7 @@ def build_source():
         copy_app(package)
         for name in (
             "README.md", "DISTRIBUTION.md", "BROADCASTING.md",
+            "package.json", "package-lock.json",
             "build-all.ps1", "install.bat", "uninstall.bat", "install.sh",
             "uninstall.sh", "run.sh",
         ):
@@ -102,6 +108,7 @@ def build_source():
             shutil.copy2(ROOT / "LICENSE", package / "LICENSE")
         shutil.copytree(ROOT / "packaging", package / "packaging",
                         ignore=shutil.ignore_patterns("__pycache__", "*.pyc"))
+        shutil.copytree(ROOT / "scripts", package / "scripts")
         shutil.copytree(ROOT / "android", package / "android", ignore=shutil.ignore_patterns(
             ".gradle", "build", "__pycache__", "*.pyc", "stationnet"
         ))

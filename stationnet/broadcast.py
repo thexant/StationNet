@@ -17,6 +17,7 @@ from .radio import (can_manage_broadcasts, effective_access, find_band,
                     format_frequency, parse_frequency, transmission_authorized)
 from .security import validate_csrf
 from .external_radio import inspect_stream, validate_stream_url
+from .midi import InvalidMidi, MAX_MIDI_BYTES, inspect_midi
 
 bp = Blueprint("broadcast", __name__, url_prefix="/radio/manage")
 
@@ -27,6 +28,8 @@ AUDIO_FORMATS = {
     ".mp3": "audio/mpeg",
     ".ogg": "audio/ogg",
     ".wav": "audio/wav",
+    ".mid": "audio/midi",
+    ".midi": "audio/midi",
 }
 BROADCAST_NAME_MAX_LENGTH = 80
 BROADCAST_MESSAGE_MAX_LENGTH = 240
@@ -132,6 +135,7 @@ class HostedBroadcastStore:
             "action_type": track.get("action_type", "music"),
             "action_text": track.get("text", ""),
             "content_id": track.get("content_id"),
+            "audio_media_type": track.get("media_type"),
         }
 
     def _shuffle_ids(self, item, exclude_file_id=None):
@@ -668,6 +672,7 @@ class HostedBroadcastStore:
                 "track_title": track.get("title") or Path(track["name"]).stem,
                 "track_artist": track.get("artist") or "",
                 "audio_file_id": track["file_id"], "track_offset": round(offset, 3),
+                "audio_media_type": track.get("media_type"),
                 "track_serial": item["track_serial"],
                 "status": "waiting" if waiting else ("paused" if paused else "playing"),
                 "remaining_seconds": remaining,
@@ -857,7 +862,7 @@ def _owned_playlist(database, playlist_id):
 def _available_tracks(database, playlist_id):
     rows = database.execute(
         "SELECT t.id entry_id,t.position,t.display_name,f.id file_id,f.owner_id,"
-        "f.stored_name,f.duration_seconds,f.title,f.artist FROM radio_playlist_tracks t "
+        "f.stored_name,f.media_type,f.duration_seconds,f.title,f.artist FROM radio_playlist_tracks t "
         "JOIN radio_audio_files f ON f.id=t.audio_file_id "
         "WHERE t.playlist_id=? ORDER BY t.position,t.id", (playlist_id,),
     ).fetchall()
@@ -870,6 +875,7 @@ def _available_tracks(database, playlist_id):
                 "file_id": row["file_id"], "name": row["display_name"],
                 "title": row["title"] or Path(row["display_name"]).stem or "Untitled track",
                 "artist": row["artist"] or "",
+                "media_type": row["media_type"],
                 "duration": max(.1, float(row["duration_seconds"])),
             })
     return result
@@ -1295,18 +1301,27 @@ def upload_audio():
             flash("One of the selected audio file names is invalid or too long.", "error")
             return _redirect()
         if suffix not in AUDIO_FORMATS:
-            flash(f"{filename}: audio files must use MP3, OGG, or WAV format.", "error")
+            flash(f"{filename}: files must use MP3, OGG, WAV, MID, or MIDI format.", "error")
             return _redirect()
-        payload = uploaded.read(MAX_AUDIO_FILE_BYTES + 1)
+        limit = MAX_MIDI_BYTES if suffix in {".mid", ".midi"} else MAX_AUDIO_FILE_BYTES
+        payload = uploaded.read(limit + 1)
         if not payload:
             flash(f"{filename}: audio file is empty.", "error")
             return _redirect()
-        if len(payload) > MAX_AUDIO_FILE_BYTES:
-            flash(f"{filename}: audio files cannot exceed 64 MB each.", "error")
+        if len(payload) > limit:
+            flash(f"{filename}: file exceeds the {limit // MIB} MB limit.", "error")
             return _redirect()
-        if not _valid_audio(payload, suffix):
+        if suffix in {".mid", ".midi"}:
+            try:
+                duration = inspect_midi(payload)
+            except InvalidMidi as problem:
+                flash(f"{filename}: {problem}", "error")
+                return _redirect()
+        elif not _valid_audio(payload, suffix):
             flash(f"{filename}: the file does not contain valid supported audio data.", "error")
             return _redirect()
+        else:
+            duration = _audio_duration(payload, suffix)
         batch_size += len(payload)
         if batch_size > remaining:
             flash("The selected audio batch would exceed your radio library storage quota.", "error")
@@ -1314,7 +1329,7 @@ def upload_audio():
         batch.append({
             "filename": filename, "suffix": suffix, "payload": payload,
             "stored_name": f"{secrets.token_hex(20)}{suffix}",
-            "duration": _audio_duration(payload, suffix),
+            "duration": duration,
             "metadata": _audio_metadata(payload, suffix, filename),
         })
 
@@ -1694,6 +1709,9 @@ def broadcast_timing():
     match = _tuned_broadcast(file_id, track_serial)
     if not match:
         return jsonify(updated=False), 200
+    media = get_db().execute("SELECT media_type FROM radio_audio_files WHERE id=?", (file_id,)).fetchone()
+    if media and media["media_type"] == "audio/midi":
+        return jsonify(error="MIDI duration is determined from its tempo map."), 400
     updated = _store().correct_duration(match["session_key"], file_id, track_serial, duration)
     if updated:
         get_db().execute(

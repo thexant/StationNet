@@ -32,7 +32,7 @@
   <div class="quota-meter" role="meter" aria-label="Radio library storage used" aria-valuemin="0" aria-valuemax="{{ quota_bytes }}" aria-valuenow="{{ used_bytes }}"><i style="width: {{ usage_percent }}%"></i></div>
   <form method="post" action="{{ url_for('broadcast.upload_audio') }}" enctype="multipart/form-data" class="form-grid">
     <input type="hidden" name="csrf_token" value="{{ session.csrf_token }}">
-    <label>Audio files<input type="file" name="file" accept=".mp3,.ogg,.wav,audio/mpeg,audio/ogg,audio/wav" multiple required><small>Select up to {{ max_batch_files }} {{ accepted_formats }} files. Maximum 64 MB per file. The complete batch must fit your remaining quota or no files will be added.</small></label>
+    <label>Audio files<input type="file" name="file" accept=".mp3,.ogg,.wav,.mid,.midi,audio/mpeg,audio/ogg,audio/wav,audio/midi" multiple required><small>Select up to {{ max_batch_files }} {{ accepted_formats }} files. Maximum 64 MB per conventional audio file or 2 MB per MIDI file. The complete batch must fit your remaining quota or no files will be added.</small></label>
     <button>UPLOAD BATCH TO LIBRARY +</button>
   </form>
   <div class="file-list compact-files">

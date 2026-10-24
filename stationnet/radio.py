@@ -428,6 +428,7 @@ class RadioStore:
             result["track_title"] = transmission.get("track_title") or transmission.get("track_name")
             result["track_artist"] = transmission.get("track_artist") or ""
             result["audio_file_id"] = transmission.get("audio_file_id")
+            result["audio_media_type"] = transmission.get("audio_media_type")
             result["external"] = bool(transmission.get("external"))
             result["external_url"] = transmission.get("external_url") if transmission.get("external") else None
             result["external_hls"] = bool(transmission.get("external_hls"))
