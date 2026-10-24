@@ -36,6 +36,19 @@
 .wiki-document :is(img, video, svg, canvas) { max-width: 100%; height: auto; }
 .wiki-document :is(figure, .thumb, .infobox, .toc, .mw-parser-output, .mw-body-content) { max-width: 100%; }
 .wiki-document :is(table, .infobox, .wikitable, .toc, .thumbinner, blockquote) { color: var(--white) !important; background-color: rgba(var(--theme-rgb),.035) !important; border-color: var(--green-dim) !important; }
+/* Current Wikipedia articles use figure/figcaption media cards while older
+   archives use .thumbinner/.thumbcaption. Theme both forms so Kiwix's light
+   card background cannot show through the terminal palette. */
+.wiki-document :is(figure, .thumb, .thumbinner, .gallerybox) {
+  color: var(--white) !important;
+  background-color: rgba(var(--theme-rgb),.035) !important;
+  border-color: var(--green-dim) !important;
+}
+.wiki-document :is(figcaption, .thumbcaption, .gallerytext) {
+  color: var(--white) !important;
+  background-color: transparent !important;
+  border-color: var(--green-dim) !important;
+}
 .wiki-document table { max-width: 100%; border-collapse: collapse; }
 .wiki-document :is(th, td) { color: var(--white) !important; border-color: var(--green-dim) !important; }
 .wiki-document th { color: var(--green-bright) !important; background-color: rgba(var(--theme-rgb),.08) !important; }
