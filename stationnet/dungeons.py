@@ -1322,7 +1322,7 @@ def init_app(app):
     # Bundled playable themes are available on existing and new stations.
     # Files already installed by a user remain authoritative.
     bundled_dir = Path(__file__).with_name("dungeon_templates")
-    for name in ("generic-fantasy-dungeon.json", "desert.json", "jungle-ruins.json"):
+    for name in ("generic-fantasy-dungeon.json", "desert.json", "jungle-ruins.json", "frozen-frontier.json"):
         bundled_theme = bundled_dir / name
         installed_theme = themes_path / name
         if bundled_theme.is_file() and not installed_theme.exists():

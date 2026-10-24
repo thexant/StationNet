@@ -5,11 +5,12 @@ replace its bracketed placeholders, and keep authored text and data in the file.
 StationNet does not invent content or execute theme scripts.
 
 The bundled `generic-fantasy-dungeon.json` is the conventional default starter
-theme. `desert.json` explores buried desert temples, and `jungle-ruins.json`
-explores a river valley's overgrown stone terraces. StationNet copies all three
-into the configured theme directory when each file is
-missing, so they are available in Dungeon Portals; user-installed theme files
-are never overwritten.
+theme. `desert.json` explores buried desert temples, `jungle-ruins.json`
+explores a river valley's overgrown stone terraces, and `frozen-frontier.json`
+crosses a snowbound expedition route into ruins beneath a glacier. StationNet
+copies all four into the configured theme directory when each file is missing,
+so they are available in Dungeon Portals; user-installed theme files are never
+overwritten.
 
 ## A self-contained theme
 
