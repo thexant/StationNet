@@ -181,7 +181,8 @@ class BroadcastCoordinator:
             self.store.start(key, rule["name"], rule["frequency_khz"], -rule["program_id"],
                              program["name"], tracks, program["loop_enabled"],
                              rule["runtime_minutes"] * 60, False,
-                             permission_user_id=rule["created_by"], public_user_id=None, automated=True)
+                             permission_user_id=rule["created_by"], public_user_id=None, automated=True,
+                             resume_kind="rule", resume_id=rule["id"])
         except (RuntimeError, ValueError):
             pass
         now = datetime.now(timezone.utc)
@@ -511,7 +512,8 @@ def _start_program(program_id, frequency, owner_key=None, automated=False, ident
     return current_app.extensions["hosted_broadcasts"].start(
         key, identity or g.user["callsign"], frequency, -program_id, program["name"], tracks,
         program["loop_enabled"], limit, False, permission_user_id=g.user["id"],
-        public_user_id=None if automated else g.user["id"], automated=automated)
+        public_user_id=None if automated else g.user["id"], automated=automated,
+        resume_kind="program", resume_id=program_id)
 
 
 @bp.post("/programs/<int:program_id>/start")

@@ -48,7 +48,43 @@ class HostedBroadcastStore:
         self._waiting = {}
         self._external = {}
 
-    def start_external(self, key, definition, permission_user_id):
+    def _save_resume(self, owner_key, item, force=False):
+        """Remember only broadcasts whose configured behavior is restart-safe."""
+        kind, source_id = item.get("resume_kind"), item.get("resume_id")
+        resumable = force or item.get("indefinite") or item.get("loop") or item.get("delay_seconds")
+        if self.app is None or not kind or source_id is None:
+            return
+        from .db import get_db
+        with self.app.app_context():
+            database = get_db()
+            if resumable:
+                database.execute(
+                    "INSERT INTO radio_broadcast_resume"
+                    "(owner_key,kind,source_id,frequency_khz,permission_user_id,indefinite) "
+                    "VALUES(?,?,?,?,?,?) ON CONFLICT(owner_key) DO UPDATE SET "
+                    "kind=excluded.kind,source_id=excluded.source_id,"
+                    "frequency_khz=excluded.frequency_khz,"
+                    "permission_user_id=excluded.permission_user_id,"
+                    "indefinite=excluded.indefinite,updated_at=CURRENT_TIMESTAMP",
+                    (str(owner_key), kind, source_id, item["frequency"],
+                     item.get("permission_user_id", owner_key), bool(item.get("indefinite"))),
+                )
+            else:
+                database.execute("DELETE FROM radio_broadcast_resume WHERE owner_key=?",
+                                 (str(owner_key),))
+            database.commit()
+
+    def _clear_resume(self, owner_key):
+        if self.app is None:
+            return
+        from .db import get_db
+        with self.app.app_context():
+            database = get_db()
+            database.execute("DELETE FROM radio_broadcast_resume WHERE owner_key=?",
+                             (str(owner_key),))
+            database.commit()
+
+    def start_external(self, key, definition, permission_user_id, resume_id=None):
         """A continuous arbiter reservation with no playlist clock or expiry timer."""
         with self._lock:
             if key in self._external:
@@ -73,7 +109,10 @@ class HostedBroadcastStore:
                                    "permission_user_id": permission_user_id,
                                    "stream_url": definition["stream_url"],
                                    "name": definition["name"], "message": definition["message"],
-                                   "station": details["station"], "details": details}
+                                   "station": details["station"], "details": details,
+                                   "resume_kind": "external",
+                                   "resume_id": resume_id if resume_id is not None else definition["id"]}
+            self._save_resume(key, self._external[key], force=True)
             self._schedule_external_metadata(key)
             return self.public(key)
 
@@ -290,6 +329,8 @@ class HostedBroadcastStore:
                 item["timer"] = timer
                 self._waiting[owner_key] = item
                 timer.start()
+                return
+        self._clear_resume(owner_key)
 
     def _restart_waiting(self, owner_key):
         with self._lock:
@@ -305,6 +346,7 @@ class HostedBroadcastStore:
                     )
                 if not allowed:
                     self._waiting.pop(owner_key, None)
+                    self._clear_resume(owner_key)
                     return
             first = item["current_track"]
             try:
@@ -384,7 +426,8 @@ class HostedBroadcastStore:
 
     def start(self, user_id, callsign, frequency, playlist_id, playlist_name,
               tracks, loop, limit_seconds, shuffle=False, delay_seconds=0,
-              permission_user_id=None, public_user_id=None, automated=False):
+              permission_user_id=None, public_user_id=None, automated=False,
+              resume_kind=None, resume_id=None, indefinite=False):
         with self._lock:
             self.refresh(user_id)
             if user_id in self._sessions:
@@ -394,13 +437,14 @@ class HostedBroadcastStore:
                     "public_user_id": (user_id if public_user_id is None and not automated
                                        else public_user_id),
                     "automated": bool(automated), "delay_seconds": max(0, delay_seconds),
+                    "resume_kind": resume_kind, "resume_id": resume_id,
                     "callsign": callsign, "frequency": frequency,
                     "playlist_id": playlist_id, "playlist_name": playlist_name,
                     "tracks": tracks, "loop": bool(loop) if not delay_seconds else False,
                     "shuffle": bool(shuffle),
                     "pending_shuffle": None, "shuffle_remaining": [],
                     "limit_seconds": limit_seconds,
-                    "indefinite": False, "base_loop": bool(loop),
+                    "indefinite": bool(indefinite), "base_loop": bool(loop),
                     "clock_started": monotonic(), "resume_elapsed": 0,
                     "timeline_elapsed": 0, "track_offset": 0, "track_serial": -1}
             if not self._advance_track(item):
@@ -416,6 +460,9 @@ class HostedBroadcastStore:
             )
             item["transmission_id"] = transmission_id
             self._sessions[user_id] = item
+            if item["indefinite"]:
+                item["loop"] = True
+            self._save_resume(user_id, item)
             self._schedule_end(item)
             return self.public(user_id)
 
@@ -426,6 +473,7 @@ class HostedBroadcastStore:
             if existed and existed.get("timer"):
                 existed["timer"].cancel()
             self.radio.end_hosted(user_id, reason)
+            self._clear_resume(user_id)
             return existed is not None
 
     def pause(self, user_id):
@@ -441,6 +489,7 @@ class HostedBroadcastStore:
                 item.pop("timer", None)
             self.radio.end_hosted(user_id, "paused")
             self._paused[user_id] = item
+            self._clear_resume(user_id)
             return True
 
     def resume(self, user_id):
@@ -464,6 +513,7 @@ class HostedBroadcastStore:
             item["timeline_elapsed"] = item["resume_elapsed"]
             self._paused.pop(user_id)
             self._sessions[user_id] = item
+            self._save_resume(user_id, item)
             self.refresh(user_id)
             self._schedule_end(item)
             return True
@@ -497,6 +547,7 @@ class HostedBroadcastStore:
                 item["current_track"] = next(
                     track for track in tracks if track["entry_id"] == current["entry_id"]
                 )
+            self._save_resume(user_id, item)
             if user_id in self._sessions:
                 position, _elapsed, reason = self._position(item)
                 if reason:
@@ -639,6 +690,7 @@ class HostedBroadcastStore:
                 return False
             item["indefinite"] = bool(enabled)
             item["loop"] = True if enabled else item["base_loop"]
+            self._save_resume(user_id, item)
             if user_id in self._sessions:
                 self._schedule_end(item)
             return True
@@ -703,6 +755,117 @@ class HostedBroadcastStore:
         self.refresh()
         user_ids = set(self._sessions) | set(self._paused) | set(self._waiting) | set(self._external)
         return {user_id: self.public(user_id) for user_id in user_ids}
+
+
+def restore_resumable_broadcasts(app):
+    """Recreate broadcasts that were meant to survive a process restart."""
+    from .radio import transmission_authorized
+    from .programs import _validate_program_for_frequency, compile_program
+
+    store = app.extensions["hosted_broadcasts"]
+    with app.app_context():
+        database = get_db()
+        rows = database.execute(
+            "SELECT * FROM radio_broadcast_resume ORDER BY updated_at,owner_key"
+        ).fetchall()
+        for saved in rows:
+            key = saved["owner_key"]
+            try:
+                if not transmission_authorized(saved["permission_user_id"], saved["frequency_khz"],
+                                               "HOSTED_BROADCAST"):
+                    raise ValueError("permission or band settings changed")
+                if saved["kind"] == "external":
+                    definition = database.execute(
+                        "SELECT * FROM radio_external_broadcasts WHERE id=?", (saved["source_id"],)
+                    ).fetchone()
+                    if not definition:
+                        raise ValueError("definition was removed")
+                    store.start_external(key, definition, saved["permission_user_id"], saved["source_id"])
+                    continue
+                if saved["kind"] == "automated":
+                    definition = database.execute(
+                        "SELECT a.*,p.name playlist_name,p.loop_enabled,p.shuffle_enabled "
+                        "FROM radio_automated_broadcasts a JOIN radio_playlists p ON p.id=a.playlist_id "
+                        "WHERE a.id=?", (saved["source_id"],)
+                    ).fetchone()
+                    if not definition:
+                        raise ValueError("definition was removed")
+                    tracks = _available_tracks(database, definition["playlist_id"])
+                    if not tracks:
+                        raise ValueError("playlist has no playable tracks")
+                    store.start(
+                        key, definition["name"], definition["frequency_khz"],
+                        definition["playlist_id"], definition["playlist_name"], tracks,
+                        definition["loop_enabled"], definition["runtime_minutes"] * 60,
+                        definition["shuffle_enabled"], definition["delay_minutes"] * 60,
+                        permission_user_id=saved["permission_user_id"], public_user_id=None,
+                        automated=True, resume_kind="automated", resume_id=saved["source_id"],
+                        indefinite=bool(saved["indefinite"]),
+                    )
+                    continue
+                if saved["kind"] == "playlist":
+                    playlist = database.execute(
+                        "SELECT p.*,u.callsign FROM radio_playlists p JOIN users u ON u.id=p.owner_id "
+                        "WHERE p.id=? AND p.owner_id=?",
+                        (saved["source_id"], saved["permission_user_id"]),
+                    ).fetchone()
+                    if not playlist:
+                        raise ValueError("playlist was removed")
+                    tracks = _available_tracks(database, playlist["id"])
+                    if not tracks:
+                        raise ValueError("playlist has no playable tracks")
+                    limit = database.execute(
+                        "SELECT radio_broadcast_limit_minutes FROM station WHERE id=1"
+                    ).fetchone()[0] * 60
+                    owner_key = saved["permission_user_id"]
+                    store.start(
+                        owner_key, playlist["callsign"], saved["frequency_khz"], playlist["id"],
+                        playlist["name"], tracks, playlist["loop_enabled"], limit,
+                        playlist["shuffle_enabled"], permission_user_id=owner_key,
+                        resume_kind="playlist", resume_id=playlist["id"],
+                        indefinite=bool(saved["indefinite"]),
+                    )
+                    continue
+                program, tracks = compile_program(database, saved["source_id"] if saved["kind"] == "program"
+                                                  else database.execute(
+                                                      "SELECT program_id FROM radio_automation_rules WHERE id=?",
+                                                      (saved["source_id"],),
+                                                  ).fetchone()[0])
+                program_id = program["id"]
+                if _validate_program_for_frequency(database, program_id, saved["frequency_khz"]) or not tracks:
+                    raise ValueError("program is incompatible with current band settings")
+                if saved["kind"] == "rule":
+                    definition = database.execute(
+                        "SELECT * FROM radio_automation_rules WHERE id=?", (saved["source_id"],)
+                    ).fetchone()
+                    if not definition:
+                        raise ValueError("automation rule was removed")
+                    callsign, limit, public_user_id = definition["name"], definition["runtime_minutes"] * 60, None
+                else:
+                    user = database.execute("SELECT callsign FROM users WHERE id=?",
+                                            (saved["permission_user_id"],)).fetchone()
+                    if not user:
+                        raise ValueError("broadcast owner was removed")
+                    callsign = user["callsign"]
+                    limit = database.execute(
+                        "SELECT radio_broadcast_limit_minutes FROM station WHERE id=1"
+                    ).fetchone()[0] * 60
+                    public_user_id = saved["permission_user_id"]
+                    key = saved["permission_user_id"]
+                store.start(
+                    key, callsign, saved["frequency_khz"], -program_id, program["name"], tracks,
+                    program["loop_enabled"], limit, False,
+                    permission_user_id=saved["permission_user_id"], public_user_id=public_user_id,
+                    automated=saved["kind"] == "rule", resume_kind=saved["kind"],
+                    resume_id=saved["source_id"], indefinite=bool(saved["indefinite"]),
+                )
+            except (IndexError, RuntimeError, TypeError, ValueError) as problem:
+                logging.getLogger(__name__).warning(
+                    "Resumable broadcast %s was not restored: %s", key, problem
+                )
+                database.execute("DELETE FROM radio_broadcast_resume WHERE owner_key=?",
+                                 (saved["owner_key"],))
+                database.commit()
 
 
 def _store():
@@ -1099,7 +1262,7 @@ def control_external(broadcast_id):
             flash("Your radio groups do not authorize hosted broadcasts at that frequency.", "error")
         else:
             try:
-                result = _store().start_external(key, definition, g.user["id"])
+                result = _store().start_external(key, definition, g.user["id"], broadcast_id)
                 if result.get("connection_error"):
                     flash(f"External broadcast started, but the stream is unavailable: {result['connection_error']}", "warning")
                 else:
@@ -1215,6 +1378,7 @@ def control_automated(broadcast_id):
             definition["runtime_minutes"] * 60, definition["shuffle_enabled"],
             delay_seconds=definition["delay_minutes"] * 60,
             permission_user_id=g.user["id"], public_user_id=None, automated=True,
+            resume_kind="automated", resume_id=broadcast_id,
         )
         flash("Automated broadcast started.", "success")
     except RuntimeError as problem:
@@ -1687,7 +1851,7 @@ def start_broadcast():
         result = _store().start(
             g.user["id"], g.user["callsign"], frequency, playlist["id"], playlist["name"],
             tracks, playlist["loop_enabled"], station["radio_broadcast_limit_minutes"] * 60,
-            playlist["shuffle_enabled"],
+            playlist["shuffle_enabled"], resume_kind="playlist", resume_id=playlist_id,
         )
     except RuntimeError as problem:
         return jsonify(error=str(problem)), 409

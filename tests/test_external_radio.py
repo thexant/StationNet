@@ -6,6 +6,7 @@ import pytest
 from stationnet import create_app
 from stationnet.db import get_db
 from stationnet.external_radio import _playlist_target, open_audio_stream, validate_stream_url
+from stationnet.radio import reconcile_radio_permissions
 
 
 def test_playlist_resolution_and_private_origin_rejection():
@@ -89,6 +90,11 @@ def test_external_broadcast_management_and_continuous_playback(tmp_path, monkeyp
     assert b"Loop Indefinitely" not in page.data  # No local session is running.
     assert client.post("/radio/manage/automated/external/1/control",
                        data={"csrf_token": "token", "action": "start"}).status_code == 302
+    restarted = create_app({"TESTING": True, "DATA_DIR": tmp_path})
+    with restarted.app_context():
+        resumed = restarted.extensions["hosted_broadcasts"].public("external:1")
+        assert resumed["status"] == "playing"
+        assert resumed["external"] is True
     directory = client.get("/radio/manage/status").get_json()["directory"]
     assert directory == [{
         "broadcasting": True,
@@ -149,3 +155,70 @@ def test_external_broadcast_management_and_continuous_playback(tmp_path, monkeyp
     with app.app_context():
         assert app.extensions["radio"].current(7100) is None
     assert client.get(f"/radio/external/{transmission_id}/audio").status_code == 404
+
+
+def test_looping_automation_resumes_and_only_affected_radio_changes_stop_it(tmp_path):
+    app = create_app({"TESTING": True, "DATA_DIR": tmp_path})
+    audio_dir = tmp_path / "radio_audio" / "1"
+    audio_dir.mkdir(parents=True)
+    (audio_dir / "loop.mp3").write_bytes(b"ID3" + b"\0" * 32)
+    with app.app_context():
+        database = get_db()
+        database.execute("INSERT INTO station(id,name,description,callsign) VALUES(1,'Test','','TST-001')")
+        database.execute("INSERT INTO users(id,username,callsign,password_hash,is_admin) "
+                         "VALUES(1,'sysop','SYS-001','test',1)")
+        database.execute("INSERT INTO radio_group_memberships(user_id,group_id) "
+                         "SELECT 1,id FROM radio_permission_groups WHERE name='OPERATORS'")
+        file_id = database.execute(
+            "INSERT INTO radio_audio_files(owner_id,display_name,stored_name,media_type,size_bytes,duration_seconds) "
+            "VALUES(1,'Loop','loop.mp3','audio/mpeg',35,120)"
+        ).lastrowid
+        playlist_id = database.execute(
+            "INSERT INTO radio_playlists(owner_id,name,loop_enabled) VALUES(1,'Always',1)"
+        ).lastrowid
+        database.execute(
+            "INSERT INTO radio_playlist_tracks(playlist_id,audio_file_id,display_name,position) "
+            "VALUES(?,?,?,0)", (playlist_id, file_id, "Loop")
+        )
+        broadcast_id = database.execute(
+            "INSERT INTO radio_automated_broadcasts"
+            "(created_by,name,frequency_khz,playlist_id,runtime_minutes,delay_minutes) "
+            "VALUES(1,'Always On',7100,?,120,0)", (playlist_id,)
+        ).lastrowid
+        database.commit()
+
+    client = app.test_client()
+    with client.session_transaction() as session:
+        session.update(user_id=1, csrf_token="token")
+    response = client.post(
+        f"/radio/manage/automated/{broadcast_id}/control",
+        data={"csrf_token": "token", "action": "start"},
+    )
+    assert response.status_code == 302
+
+    restarted = create_app({"TESTING": True, "DATA_DIR": tmp_path})
+    with restarted.app_context():
+        store = restarted.extensions["hosted_broadcasts"]
+        assert store.public(f"automated:{broadcast_id}")["status"] == "playing"
+        database = get_db()
+        active_band = database.execute(
+            "SELECT id FROM radio_bands WHERE start_khz<=7100 AND end_khz>=7100"
+        ).fetchone()["id"]
+        other_band = database.execute(
+            "SELECT id FROM radio_bands WHERE id<>? ORDER BY id LIMIT 1", (active_band,)
+        ).fetchone()["id"]
+        database.execute("UPDATE radio_bands SET name=name || ' UPDATED' WHERE id=?", (other_band,))
+        database.commit()
+        reconcile_radio_permissions()
+        assert store.public(f"automated:{broadcast_id}")["status"] == "playing"
+
+        database.execute(
+            "UPDATE radio_bands SET supports_hosted_broadcasts=0 WHERE id=?", (active_band,)
+        )
+        database.commit()
+        reconcile_radio_permissions()
+        assert store.public(f"automated:{broadcast_id}") is None
+        assert database.execute(
+            "SELECT 1 FROM radio_broadcast_resume WHERE owner_key=?",
+            (f"automated:{broadcast_id}",),
+        ).fetchone() is None

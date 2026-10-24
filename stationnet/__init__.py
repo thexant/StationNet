@@ -67,6 +67,7 @@ def create_app(test_config=None):
     app.register_blueprint(programs.bp)
     with app.app_context():
         db.init_db()
+    broadcast.restore_resumable_broadcasts(app)
     app.extensions["broadcast_coordinator"] = programs.BroadcastCoordinator(
         app, app.extensions["hosted_broadcasts"]
     )

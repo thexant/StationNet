@@ -7,7 +7,8 @@ frequency assignments, and legacy `radio_automated_broadcasts` remain compatible
 
 External broadcasts use `radio_external_broadcasts` and reserve the same arbiter
 frequencies as local broadcasts. They have no playlist clock, runtime limit, restart
-delay, or indefinite-loop setting. Tuned listeners receive MP3 and AAC audio through
+delay, or indefinite-loop setting. An external broadcast that was on air is restored
+automatically after a server restart. Tuned listeners receive MP3 and AAC audio through
 `GET /radio/external/<transmission_id>/audio` on the StationNet origin. This avoids
 browser mixed-content and cross-origin playback problems. The route requires a logged-in
 receiver tuned to the active broadcast and closes its upstream connection when that
@@ -29,6 +30,9 @@ should not contain private credentials.
 - `radio_automation_rules` persists time, interval, track, completion, DJ-connect,
   and DJ-disconnect triggers. `next_run_at` lets the process resume schedules after
   restart.
+- `radio_broadcast_resume` records active continuous, looping, repeating, and
+  indefinite broadcasts. They restart from the beginning after a process restart,
+  provided their source, frequency, band capabilities, and permissions remain valid.
 
 At start time `compile_program()` resolves a program to the same timeline item shape
 used by legacy playlists. The existing `HostedBroadcastStore` remains authoritative

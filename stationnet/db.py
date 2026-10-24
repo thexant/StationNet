@@ -283,6 +283,14 @@ CREATE TABLE IF NOT EXISTS radio_external_broadcasts (
  stream_url TEXT NOT NULL,
  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);
+CREATE TABLE IF NOT EXISTS radio_broadcast_resume (
+ owner_key TEXT PRIMARY KEY,
+ kind TEXT NOT NULL CHECK(kind IN ('playlist','program','automated','external','rule')),
+ source_id INTEGER NOT NULL,
+ frequency_khz INTEGER NOT NULL CHECK(frequency_khz BETWEEN 100 AND 999990),
+ permission_user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+ indefinite INTEGER NOT NULL DEFAULT 0 CHECK(indefinite IN (0,1)),
+ updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);
 CREATE TABLE IF NOT EXISTS radio_broadcast_content (
  id INTEGER PRIMARY KEY AUTOINCREMENT,
  owner_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
