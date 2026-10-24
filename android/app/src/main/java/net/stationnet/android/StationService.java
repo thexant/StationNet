@@ -18,7 +18,8 @@ public class StationService extends Service {
     public static final String STOP = "net.stationnet.android.STOP";
     public static volatile String status = "Stopped";
     private static final String CHANNEL = "stationnet_host";
-    private Thread worker;
+    private volatile Thread worker;
+    private volatile boolean stopRequested;
     private PowerManager.WakeLock wakeLock;
     private WifiManager.WifiLock wifiLock;
 
@@ -30,6 +31,7 @@ public class StationService extends Service {
             return START_NOT_STICKY;
         }
         if (worker != null && worker.isAlive()) return START_NOT_STICKY;
+        stopRequested = false;
         NotificationManager manager = getSystemService(NotificationManager.class);
         manager.createNotificationChannel(new NotificationChannel(CHANNEL, "Station hosting", NotificationManager.IMPORTANCE_LOW));
         Notification notification = notification("Starting station");
@@ -57,6 +59,7 @@ public class StationService extends Service {
                 if (!status.startsWith("Error:")) status = "Stopped";
                 releaseLocks();
                 stopForeground(STOP_FOREGROUND_REMOVE);
+                worker = null;
                 stopSelf();
             }
         }, "StationNet server");
@@ -88,6 +91,8 @@ public class StationService extends Service {
             stopSelf();
             return;
         }
+        if (stopRequested) return;
+        stopRequested = true;
         status = "Stopping";
         try { Python.getInstance().getModule("stationnet_android").callAttr("stop"); }
         catch (Exception error) { status = "Error: " + error.getMessage(); }

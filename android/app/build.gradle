@@ -3,6 +3,16 @@ plugins {
     id 'com.chaquo.python'
 }
 
+def releaseVersion = providers.gradleProperty('stationnetVersion').get()
+def releaseVersionCode = providers.gradleProperty('stationnetVersionCode').get().toInteger()
+def signingPropertiesFile = rootProject.file('keystore.properties')
+def signingProperties = new Properties()
+if (signingPropertiesFile.isFile()) {
+    signingPropertiesFile.withInputStream { signingProperties.load(it) }
+}
+def signingKeys = ['storeFile', 'storePassword', 'keyAlias', 'keyPassword']
+def signingReady = signingKeys.every { signingProperties.getProperty(it)?.trim() }
+
 android {
     namespace 'net.stationnet.android'
     compileSdk 35
@@ -10,12 +20,40 @@ android {
         applicationId 'net.stationnet.android'
         minSdk 26
         targetSdk 35
-        versionCode 1
-        versionName '1.0'
+        versionCode releaseVersionCode
+        versionName releaseVersion
         ndk { abiFilters 'arm64-v8a' }
     }
-    buildTypes { release { minifyEnabled false } }
+    signingConfigs {
+        release {
+            if (signingReady) {
+                storeFile rootProject.file(signingProperties.getProperty('storeFile'))
+                storePassword signingProperties.getProperty('storePassword')
+                keyAlias signingProperties.getProperty('keyAlias')
+                keyPassword signingProperties.getProperty('keyPassword')
+            }
+        }
+    }
+    buildTypes {
+        release {
+            minifyEnabled false
+            signingConfig signingConfigs.release
+        }
+    }
+    applicationVariants.all { variant ->
+        if (variant.buildType.name == 'release') {
+            variant.outputs.all { output ->
+                output.outputFileName = "StationNet-Android-v${releaseVersion}.apk"
+            }
+        }
+    }
     compileOptions { sourceCompatibility JavaVersion.VERSION_17; targetCompatibility JavaVersion.VERSION_17 }
+}
+
+gradle.taskGraph.whenReady { graph ->
+    if (graph.allTasks.any { it.path == ':app:assembleRelease' || it.path == ':app:packageRelease' } && !signingReady) {
+        throw new GradleException('Release signing requires android/keystore.properties with storeFile, storePassword, keyAlias, and keyPassword.')
+    }
 }
 
 chaquopy {

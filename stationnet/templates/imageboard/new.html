@@ -1,0 +1,11 @@
+{% extends 'base.html' %}
+{% block title %}New imageboard thread{% endblock %}
+{% block content %}
+<p><a href="{{ url_for('imageboard.catalog') }}">RETURN TO CATALOG</a></p>
+<section class="terminal-card narrow"><p class="eyebrow">STATION IMAGEBOARD</p><h1>New image thread</h1><form method="post" enctype="multipart/form-data" class="form-grid">
+<input type="hidden" name="csrf_token" value="{{ session.csrf_token }}">
+<label>Subject<input name="subject" maxlength="120" required></label>
+<label>Message (optional)<textarea name="body" maxlength="5000" rows="6"></textarea></label>
+<label>Image (required)<input type="file" name="image" accept="image/png,image/jpeg,image/gif,image/webp" required><small>PNG, JPEG, GIF, or WebP. Maximum 10 MB. Animated images use their first frame.</small></label>
+<button>POST THREAD</button></form></section>
+{% endblock %}

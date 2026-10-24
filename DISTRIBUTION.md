@@ -18,26 +18,35 @@ The script builds every platform supported by the installed tools, prints a
 status for each, and places successful packages plus `packages.json` in
 `dist/`. The Get Your Own Station page reads this manifest for versions, sizes,
 and SHA-256 checksums. It serves the files directly from `dist/` by default.
+The script also creates `build/` at the checkout root with the finished ZIPs
+from that run, named for each platform. The Android ZIP contains its signed APK.
+Running the script again replaces those generated ZIPs, so `build/` does not
+retain packages for platforms that were skipped or failed on the latest run.
 Set `STATIONNET_DISTRIBUTION_DIR` before both building and starting the station
 to use a different local download directory. You can limit a run with
-`-Platforms Source,Windows` or select Python with `-Python py`.
+`-Platforms Source,Windows` or select Python with `-Python py`. By default,
+the script uses `.venv/Scripts/python.exe` when present, then the Windows `py`
+launcher, then `python`.
 For a release gate, pass `-RequireAll` with the platforms you intend to ship;
 the command then exits unsuccessfully if any selected platform is unavailable
 or fails. For example, `-Platforms Source,Windows -RequireAll` requires both
-archives to build. An Android build from this script is a debug APK; it is
-not a signed production release APK.
+archives to build. Android requires the local release keystore described below.
 
 Install Python 3.11+ and the application requirements first. Windows bundles
-also need `python -m pip install PyInstaller`. Linux builds need WSL with a
-Linux distribution containing Python 3.11+, pip, venv, and any native wheel
-build prerequisites. Use `-LinuxDistro Ubuntu` to select it; otherwise WSL's
-default distribution is used. Raspberry Pi bundles need an **ARM** Linux build
+also need PyInstaller in the Python selected above (for this checkout,
+`.\.venv\Scripts\python.exe -m pip install PyInstaller`). Linux builds need WSL
+with a Linux distribution containing Python 3.11+, pip, venv, and any native
+wheel build prerequisites. Use `-LinuxDistro Ubuntu` to select it; otherwise
+WSL's default distribution is used. Docker Desktop's internal WSL distribution
+is not a Linux build environment for this script. Raspberry Pi bundles need an **ARM** Linux build
 environment (usually a Pi or ARM VM; an ordinary x64 WSL distro cannot make
 compatible native wheels). If an ARM WSL distro is available, select it with
 `-PiDistro NAME`. Android needs JDK 17, Gradle 8.11.1, desktop Python 3.11,
-Android SDK platform 35 and build tools, and `ANDROID_HOME` or
-`ANDROID_SDK_ROOT`. The Android project uses its existing debug builder and
-signing key. Keep that key for future APK upgrades.
+Android SDK platform 35 and build tools. The PowerShell Android builder detects
+the usual per-user Android SDK, Gradle 8.11.1, and Eclipse Adoptium JDK 17
+install locations; for other locations, set `ANDROID_HOME` or
+`ANDROID_SDK_ROOT`, add Gradle to PATH, and set `JAVA_HOME` to JDK 17. Keep the
+release keystore for future APK upgrades.
 
 Each build uses the current checkout. Builds stage into a temporary directory;
 only successful artifacts replace prior downloads. Unavailable and failed
@@ -52,7 +61,7 @@ The unified build script stages packages in the station's `dist/` directory. The
 **Get Your Own Station** footer link inventories that directory and serves only
 the package files actually present, so it works on an isolated LAN. Set
 `STATIONNET_DISTRIBUTION_DIR` if the packages live elsewhere. Android builds
-are also discovered from their normal debug APK output directory; set
+are also discovered from their normal release APK output directory; set
 `STATIONNET_ANDROID_APK_DIR` to use another APK output directory.
 
 To make a locally downloadable source archive, run:
@@ -134,16 +143,54 @@ wheel. The image APIs StationNet uses are present in 11.0.0.
 
 To build, install JDK 17, Gradle 8.11.1, Android SDK platform 35 and build
 tools, plus desktop Python 3.11 for Chaquopy's *build* process. Set
-`ANDROID_HOME` or `ANDROID_SDK_ROOT`, then run `android/build.ps1` on Windows or
-`sh android/build.sh` on Linux. Gradle downloads build plugins, embedded Python,
-and Android dependency wheels while building; build on a connected machine.
-The debug APK is `android/app/build/outputs/apk/debug/app-debug.apk`. Each build
-syncs the current `stationnet/` source and assets before compilation. Install
-the APK directly or with `adb install -r app-debug.apk`. Keep the same Android
-application ID and signing key for upgrades; a different signature requires
-uninstalling the old app, which deletes its private data. Keep the original
-build machine's debug keystore or configure a stable release signing key for
-long-term deployments.
+`ANDROID_HOME` or `ANDROID_SDK_ROOT`. Gradle downloads build plugins, embedded
+Python, and Android dependency wheels while building; build on a connected
+machine. Each build syncs the current `stationnet/` source and assets.
+
+Create a release signing key once, on a trusted computer:
+
+```powershell
+keytool -genkeypair -v -keystore android/stationnet-release.jks -alias stationnet -keyalg RSA -keysize 3072 -validity 10000
+```
+
+Enter and securely record the passwords when prompted. Create the local file
+`android/keystore.properties` with these four lines (replace the placeholders):
+
+```properties
+storeFile=stationnet-release.jks
+storePassword=YOUR_STORE_PASSWORD
+keyAlias=stationnet
+keyPassword=YOUR_KEY_PASSWORD
+```
+
+Both files are gitignored. Back up the keystore and passwords securely; all
+future release builds must use the same key. Keep the application ID
+`net.stationnet.android` unchanged, and increase `stationnetVersionCode` in
+`android/gradle.properties` for every update. Set `stationnetVersion` there
+to the matching public version; it controls the installed version and APK name.
+
+Build a signed release with `android/build.ps1` on Windows or
+`sh android/build.sh` on Linux. The output is
+`android/app/build/outputs/apk/release/StationNet-Android-v1.0.0.apk` for the
+current version. `build-all.ps1 -Platforms Android -RequireAll` stages that
+same APK in `dist/`, records its version and SHA-256 in `packages.json`, and
+puts a ZIP containing the APK in `build/`. The Get Your Own Station page
+offers the staged APK. For development, use `android/build.ps1 -Debug` or
+`sh android/build.sh --debug`; debug APKs are not offered as public downloads.
+
+Verify a release with the Android SDK tools, then test an upgrade on a device:
+
+```powershell
+apksigner verify --verbose --print-certs android/app/build/outputs/apk/release/StationNet-Android-v1.0.0.apk
+adb install -r android/app/build/outputs/apk/release/StationNet-Android-v1.0.0.apk
+```
+
+Check that the certificate matches the backed-up key, the installed label and
+icon display correctly, and the station's data remains after upgrading. A
+previously installed debug APK uses a different certificate and cannot be
+upgraded in place to this release key. Preserve or migrate its data before
+uninstalling it; all subsequent releases signed with the same release key can
+upgrade in place.
 
 Open StationNet, tap **Start station**, and use the local browser button for
 first-run sysop setup before enabling the hotspot. The screen shows active
@@ -170,6 +217,5 @@ main README.
 
 The source and bridge tests can run on desktop Python. The Windows executable,
 Linux/Pi wheel archives, and Android APK must each be built and smoke-tested on
-their target build environment. This checkout does not bundle Gradle, Android
-SDK, a device emulator, or a signing key, so an APK cannot be verified here.
-Hotspot routing and background lifetime also require a physical Android test.
+their target build environment. Hotspot routing and background lifetime require
+a physical Android test.

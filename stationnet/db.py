@@ -29,6 +29,7 @@ CREATE TABLE IF NOT EXISTS station (
  user_feeds_enabled INTEGER NOT NULL DEFAULT 1 CHECK(user_feeds_enabled IN (0,1)),
  kiwix_enabled INTEGER NOT NULL DEFAULT 0 CHECK(kiwix_enabled IN (0,1)),
  videos_enabled INTEGER NOT NULL DEFAULT 0 CHECK(videos_enabled IN (0,1)),
+ imageboard_enabled INTEGER NOT NULL DEFAULT 0 CHECK(imageboard_enabled IN (0,1)),
  videos_mode TEXT NOT NULL DEFAULT 'community' CHECK(videos_mode IN ('community','curated')),
  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);
 CREATE TABLE IF NOT EXISTS users (
@@ -56,6 +57,25 @@ CREATE TABLE IF NOT EXISTS posts (
  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
  CHECK((parent_id IS NULL AND title IS NOT NULL) OR parent_id IS NOT NULL));
 CREATE INDEX IF NOT EXISTS idx_posts_parent ON posts(parent_id);
+CREATE TABLE IF NOT EXISTS imageboard_threads (
+ id INTEGER PRIMARY KEY AUTOINCREMENT,
+ author_id INTEGER NOT NULL REFERENCES users(id) ON DELETE RESTRICT,
+ subject TEXT NOT NULL, body TEXT NOT NULL DEFAULT '',
+ image_name TEXT NOT NULL, image_type TEXT NOT NULL,
+ thumb_name TEXT NOT NULL,
+ created_at TEXT NOT NULL, bumped_at TEXT NOT NULL,
+ locked INTEGER NOT NULL DEFAULT 0 CHECK(locked IN (0,1)),
+ pinned INTEGER NOT NULL DEFAULT 0 CHECK(pinned IN (0,1)));
+CREATE INDEX IF NOT EXISTS idx_imageboard_threads_catalog
+ ON imageboard_threads(pinned DESC,bumped_at DESC,id DESC);
+CREATE TABLE IF NOT EXISTS imageboard_replies (
+ id INTEGER PRIMARY KEY AUTOINCREMENT,
+ thread_id INTEGER NOT NULL REFERENCES imageboard_threads(id) ON DELETE CASCADE,
+ author_id INTEGER NOT NULL REFERENCES users(id) ON DELETE RESTRICT,
+ body TEXT NOT NULL DEFAULT '', image_name TEXT, image_type TEXT, thumb_name TEXT,
+ created_at TEXT NOT NULL,
+ CHECK(length(body)>0 OR image_name IS NOT NULL));
+CREATE INDEX IF NOT EXISTS idx_imageboard_replies_thread ON imageboard_replies(thread_id,id);
 CREATE TABLE IF NOT EXISTS user_feed_posts (
  id INTEGER PRIMARY KEY AUTOINCREMENT,
  owner_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
@@ -100,7 +120,7 @@ CREATE TABLE IF NOT EXISTS moderation_audit (
 CREATE INDEX IF NOT EXISTS idx_moderation_audit_user ON moderation_audit(user_id,id);
 CREATE TABLE IF NOT EXISTS moderation_reports (
  id INTEGER PRIMARY KEY AUTOINCREMENT, reporter_id INTEGER NOT NULL REFERENCES users(id),
- target_type TEXT NOT NULL CHECK(target_type IN ('user','chat','bulletin','file','feed_post','feed_comment')),
+ target_type TEXT NOT NULL CHECK(target_type IN ('user','chat','bulletin','file','feed_post','feed_comment','imageboard_thread','imageboard_reply')),
  target_id INTEGER NOT NULL, subject_user_id INTEGER REFERENCES users(id),
  reason TEXT NOT NULL, created_at TEXT NOT NULL,
  status TEXT NOT NULL DEFAULT 'open' CHECK(status IN ('open','resolved','dismissed')),
@@ -163,7 +183,8 @@ CREATE TABLE IF NOT EXISTS radio_bands (
 CREATE TABLE IF NOT EXISTS radio_permission_groups (
  id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL COLLATE NOCASE UNIQUE,
  is_default INTEGER NOT NULL DEFAULT 0 CHECK(is_default IN (0,1)),
- host_broadcasts INTEGER NOT NULL DEFAULT 0 CHECK(host_broadcasts IN (0,1)));
+ host_broadcasts INTEGER NOT NULL DEFAULT 0 CHECK(host_broadcasts IN (0,1)),
+ moderate_imageboard INTEGER NOT NULL DEFAULT 0 CHECK(moderate_imageboard IN (0,1)));
 CREATE UNIQUE INDEX IF NOT EXISTS idx_radio_default_group
  ON radio_permission_groups(is_default) WHERE is_default=1;
 CREATE TABLE IF NOT EXISTS radio_group_memberships (
@@ -922,6 +943,7 @@ def init_db():
     _migrate_user_feeds(database)
     _migrate_kiwix(database)
     _migrate_videos(database)
+    _migrate_imageboard(database)
     _migrate_registration_policy(database)
     _migrate_community_fields(database)
     _migrate_mail_threads(database)
@@ -1198,6 +1220,35 @@ def _migrate_radio_permissions(database):
         "INSERT OR IGNORE INTO radio_group_memberships(user_id,group_id) "
         "SELECT id,? FROM users", (default_id,),
     )
+
+def _migrate_imageboard(database):
+    station_columns = {row["name"] for row in database.execute("PRAGMA table_info(station)")}
+    if "imageboard_enabled" not in station_columns:
+        database.execute("ALTER TABLE station ADD COLUMN imageboard_enabled INTEGER NOT NULL DEFAULT 0 CHECK(imageboard_enabled IN (0,1))")
+    group_columns = {row["name"] for row in database.execute("PRAGMA table_info(radio_permission_groups)")}
+    if "moderate_imageboard" not in group_columns:
+        database.execute("ALTER TABLE radio_permission_groups ADD COLUMN moderate_imageboard INTEGER NOT NULL DEFAULT 0 CHECK(moderate_imageboard IN (0,1))")
+    sql = database.execute(
+        "SELECT sql FROM sqlite_master WHERE type='table' AND name='moderation_reports'"
+    ).fetchone()[0]
+    if "'imageboard_thread'" not in sql:
+        database.execute("ALTER TABLE moderation_reports RENAME TO moderation_reports_old")
+        database.execute("""CREATE TABLE moderation_reports (
+         id INTEGER PRIMARY KEY AUTOINCREMENT,
+         reporter_id INTEGER NOT NULL REFERENCES users(id),
+         target_type TEXT NOT NULL CHECK(target_type IN
+           ('user','chat','bulletin','file','feed_post','feed_comment','imageboard_thread','imageboard_reply')),
+         target_id INTEGER NOT NULL, subject_user_id INTEGER REFERENCES users(id),
+         reason TEXT NOT NULL, created_at TEXT NOT NULL,
+         status TEXT NOT NULL DEFAULT 'open' CHECK(status IN ('open','resolved','dismissed')),
+         resolver_id INTEGER REFERENCES users(id), resolution_note TEXT NOT NULL DEFAULT '',
+         resolved_at TEXT)""")
+        database.execute("INSERT INTO moderation_reports SELECT * FROM moderation_reports_old")
+        database.execute("DROP TABLE moderation_reports_old")
+        database.execute("CREATE INDEX idx_moderation_reports_queue ON moderation_reports(status,id)")
+        database.execute("CREATE UNIQUE INDEX idx_moderation_reports_open_unique "
+                         "ON moderation_reports(reporter_id,target_type,target_id) WHERE status='open'")
+
 
 def _migrate_videos(database):
     columns = {row["name"] for row in database.execute("PRAGMA table_info(station)")}

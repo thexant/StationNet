@@ -4,7 +4,7 @@ import secrets
 from datetime import timedelta
 from pathlib import Path
 from flask import Flask, g, jsonify, redirect, render_template, request, url_for
-from . import announcements, applications, archive, auth, board, broadcast, chat, db, downloads, dungeons, feeds, kiwix, mail, moderation, mud, programs, radio, station, users, videos
+from . import announcements, applications, archive, auth, board, broadcast, chat, db, downloads, dungeons, feeds, imageboard, kiwix, mail, moderation, mud, programs, radio, station, users, videos
 from .ansi import station_banner
 from .realtime import DirectChatStore
 from .radio import RadioStore
@@ -31,7 +31,7 @@ def create_app(test_config=None):
         PERMANENT_SESSION_LIFETIME=timedelta(days=3650),
         SESSION_COOKIE_SECURE=os.environ.get("STATIONNET_HTTPS") == "1", MAX_CONTENT_LENGTH=128 * 1024 * 1024,
         DISTRIBUTION_DIR=os.environ.get("STATIONNET_DISTRIBUTION_DIR", str(Path(__file__).resolve().parents[1] / "dist")),
-        ANDROID_APK_DIR=os.environ.get("STATIONNET_ANDROID_APK_DIR", str(Path(__file__).resolve().parents[1] / "android" / "app" / "build" / "outputs" / "apk" / "debug")),
+        ANDROID_APK_DIR=os.environ.get("STATIONNET_ANDROID_APK_DIR", str(Path(__file__).resolve().parents[1] / "android" / "app" / "build" / "outputs" / "apk" / "release")),
     )
     if test_config:
         app.config.update(test_config)
@@ -48,6 +48,7 @@ def create_app(test_config=None):
     app.register_blueprint(station.bp)
     app.register_blueprint(downloads.bp)
     app.register_blueprint(board.bp)
+    app.register_blueprint(imageboard.bp)
     app.register_blueprint(chat.bp)
     app.register_blueprint(moderation.bp)
     app.register_blueprint(moderation.report_bp)

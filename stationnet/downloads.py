@@ -1,5 +1,6 @@
 """Station-hosted StationNet distribution packages."""
 import json
+import re
 from pathlib import Path
 
 from flask import Blueprint, abort, current_app, render_template, send_file
@@ -41,21 +42,17 @@ def available_packages():
         manifest = {item["name"]: item for item in metadata["packages"]}
     except (OSError, ValueError, KeyError, TypeError):
         pass
-    staged_android = any(
-        path.name.startswith("StationNet-Android") and path.suffix.casefold() == ".apk"
-        for path in Path(current_app.config["DISTRIBUTION_DIR"]).glob("*")
-    )
     for root in _package_roots():
         if not root.is_dir():
             continue
         for path in root.iterdir():
-            if staged_android and path.name == "app-debug.apk":
-                continue
             if not path.is_file() or path.suffix.casefold() not in PACKAGE_SUFFIXES:
                 continue
             # Build output directories can contain metadata files.  Keep the
             # public surface to StationNet-named archives and APKs only.
-            if not path.name.startswith("StationNet") and path.name != "app-debug.apk":
+            if path.suffix.casefold() == ".apk" and not re.fullmatch(r"StationNet-Android-v\d+\.\d+\.\d+\.apk", path.name):
+                continue
+            if not path.name.startswith("StationNet"):
                 continue
             resolved = path.resolve()
             if resolved in seen:

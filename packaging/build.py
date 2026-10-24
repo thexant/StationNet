@@ -70,6 +70,7 @@ def build_windows():
     with build_workspace() as workspace:
         subprocess.run([sys.executable, "-m", "PyInstaller", "--noconfirm", "--clean",
                         "--onedir", "--name", "StationNet", "--collect-all", "stationnet",
+                        "--collect-all", "pyfiglet",
                         "--distpath", str(workspace / "frozen"), "--workpath", str(workspace / "build"),
                         "--specpath", str(workspace), str(ROOT / "run.py")], cwd=ROOT, check=True)
         package = workspace / "StationNet"

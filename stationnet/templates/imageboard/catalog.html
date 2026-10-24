@@ -1,0 +1,14 @@
+{% extends 'base.html' %}
+{% block title %}Imageboard catalog{% endblock %}
+{% block content %}
+<header class="board-head"><div><p class="eyebrow">STATION IMAGEBOARD</p><h1>Thread catalog</h1><p class="muted">Image threads from station members. Replies bump threads; pinned threads stay first.</p></div><a class="button" href="{{ url_for('imageboard.create') }}">NEW THREAD +</a></header>
+<section class="imageboard-catalog" aria-label="Imageboard threads">
+{% for thread in threads %}
+<article class="terminal-card imageboard-card">
+  <a class="imageboard-card-image" href="{{ url_for('imageboard.thread',thread_id=thread.id) }}"><img src="{{ url_for('imageboard.media',name=thread.thumb_name) }}" alt="Preview for {{ thread.subject }}" loading="lazy"></a>
+  <div class="imageboard-card-copy"><p class="eyebrow">#{{ thread.id }} {% if thread.pinned %}/ PINNED{% endif %} {% if thread.locked %}/ LOCKED{% endif %}</p><h2><a href="{{ url_for('imageboard.thread',thread_id=thread.id) }}">{{ thread.subject }}</a></h2><p>{{ thread.body|truncate(180) }}</p><p class="muted">{{ thread.username }} - [{{ thread.callsign }}] · {{ thread.reply_count }} replies</p><time class="muted" datetime="{{ thread.bumped_at }}">Bumped {{ thread.bumped_at }} UTC</time></div>
+</article>
+{% else %}<div class="empty-state"><h2>No threads yet.</h2><a class="button" href="{{ url_for('imageboard.create') }}">POST FIRST THREAD</a></div>{% endfor %}
+</section>
+{% if pages > 1 %}<nav class="subnav" aria-label="Catalog pages">{% if page > 1 %}<a href="{{ url_for('imageboard.catalog',page=page-1) }}">PREVIOUS</a>{% endif %}<span>PAGE {{ page }} / {{ pages }}</span>{% if page < pages %}<a href="{{ url_for('imageboard.catalog',page=page+1) }}">NEXT</a>{% endif %}</nav>{% endif %}
+{% endblock %}

@@ -11,8 +11,12 @@ instance/
 .coverage
 run.bat
 dist/
+build/
 android/.gradle/
 android/app/build/
+android/keystore.properties
+android/*.jks
+android/*.keystore
 android/app/src/main/python/stationnet/
 scratch-check/
 pytest-cache-files-*/

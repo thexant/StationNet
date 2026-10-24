@@ -10,7 +10,7 @@ Build and stage the StationNet downloads from this checkout.
 param(
     [ValidateSet('Windows','Linux','RaspberryPi','Android','Source')]
     [string[]]$Platforms = @('Windows','Linux','RaspberryPi','Android','Source'),
-    [string]$Python = 'python',
+    [string]$Python = '',
     [string]$LinuxDistro = '',
     [string]$PiDistro = '',
     [string]$DistributionDir = '',
@@ -19,6 +19,12 @@ param(
 
 $ErrorActionPreference = 'Stop'
 $root = $PSScriptRoot
+if (-not $Python) {
+    $venvPython = Join-Path $root '.venv/Scripts/python.exe'
+    if (Test-Path -LiteralPath $venvPython -PathType Leaf) { $Python = $venvPython }
+    elseif (Get-Command py.exe -ErrorAction SilentlyContinue) { $Python = 'py.exe' }
+    else { $Python = 'python' }
+}
 if (-not $DistributionDir) {
     $DistributionDir = if ($env:STATIONNET_DISTRIBUTION_DIR) { $env:STATIONNET_DISTRIBUTION_DIR } else { Join-Path $root 'dist' }
 }
@@ -32,6 +38,7 @@ $env:TEMP = $work
 $env:TMP = $work
 $results = [ordered]@{}
 $published = @{}
+$releasePackages = @{}
 $version = (Get-Date).ToUniversalTime().ToString('yyyyMMdd.HHmmss')
 $revision = 'local'
 if (Get-Command git -ErrorAction SilentlyContinue) {
@@ -60,6 +67,7 @@ function Invoke-Build([string]$Label, [scriptblock]$Action) {
             } else { [IO.File]::Move($pending, $target) }
         } finally { if (Test-Path -LiteralPath $pending) { Remove-Item -LiteralPath $pending -Force } }
         $script:published[(Split-Path $target -Leaf)] = @{ platform = $Label; version = $version }
+        $script:releasePackages[$Label] = $target
         $script:results[$Label] = "SUCCESS: $target"
         Write-Host $script:results[$Label]
     } catch {
@@ -80,16 +88,21 @@ function Invoke-PythonPackage([string]$Kind, [string]$Expected) {
 
 function Invoke-WslPackage([string]$Distro, [string]$Arch, [string]$Label) {
     if (-not (Get-Command wsl.exe -ErrorAction SilentlyContinue)) { throw 'WSL is unavailable.' }
+    $distroName = if ($Distro) { $Distro } else { 'default' }
     $args = @()
     if ($Distro) { $args += @('-d', $Distro) }
     $machine = & wsl.exe @args --exec uname -m
-    if ($LASTEXITCODE -ne 0) { throw "WSL distro '$Distro' is unavailable or cannot start." }
+    if ($LASTEXITCODE -ne 0) { throw "WSL distro '$distroName' is unavailable or cannot start." }
     $machine = ($machine | Select-Object -Last 1).Trim()
     if ($Arch -eq 'pi' -and $machine -notin @('aarch64','armv7l','armv6l')) {
-        throw "WSL distro '$Distro' is $machine; Raspberry Pi needs an ARM build environment."
+        throw "WSL distro '$distroName' is $machine; Raspberry Pi needs an ARM build environment."
     }
     if ($Arch -eq 'linux' -and $machine -in @('aarch64','armv7l','armv6l')) {
-        throw "WSL distro '$Distro' is $machine; use -PiDistro for ARM."
+        throw "WSL distro '$distroName' is $machine; use -PiDistro for ARM."
+    }
+    & wsl.exe @args --exec sh -c 'command -v python3 >/dev/null && python3 -m pip --version >/dev/null'
+    if ($LASTEXITCODE -ne 0) {
+        throw "Python 3 with pip is unavailable in WSL distro '$distroName'. Install python3 and python3-pip there."
     }
     $linuxRoot = & wsl.exe @args --exec wslpath -a -u $root
     if ($LASTEXITCODE -ne 0) { throw 'Could not map source path into WSL.' }
@@ -120,17 +133,18 @@ try {
                 Invoke-Build $platform { Invoke-WslPackage $PiDistro 'pi' 'RaspberryPi' }
             }
             'Android' {
-                if (-not (Get-Command gradle -ErrorAction SilentlyContinue) -or (-not $env:ANDROID_HOME -and -not $env:ANDROID_SDK_ROOT)) {
-                    $results[$platform] = 'UNAVAILABLE: Gradle or Android SDK is missing.'; break
+                if (-not (Test-Path -LiteralPath (Join-Path $root 'android/keystore.properties'))) {
+                    $results[$platform] = 'UNAVAILABLE: configure android/keystore.properties for release signing.'; break
                 }
                 Invoke-Build $platform {
                     & (Join-Path $root 'android/build.ps1') | Out-Host
                     if ($LASTEXITCODE -ne 0) { throw "Android builder exited with code $LASTEXITCODE." }
-                    $apk = Join-Path $root 'android/app/build/outputs/apk/debug/app-debug.apk'
+                    $versionLine = Get-Content (Join-Path $root 'android/gradle.properties') | Where-Object { $_ -match '^stationnetVersion=' } | Select-Object -First 1
+                    if (-not $versionLine) { throw 'stationnetVersion is missing from android/gradle.properties.' }
+                    $androidVersion = ($versionLine -split '=', 2)[1].Trim()
+                    $apk = Join-Path $root "android/app/build/outputs/apk/release/StationNet-Android-v$androidVersion.apk"
                     if (-not (Test-Path -LiteralPath $apk)) { throw 'Android APK is missing.' }
-                    $named = Join-Path $work 'StationNet-Android-arm64-v8a.apk'
-                    Copy-Item -LiteralPath $apk -Destination $named
-                    return $named
+                    return $apk
                 }
             }
             'Source' { Invoke-Build $platform { Invoke-PythonPackage 'source' 'StationNet-source.zip' } }
@@ -153,7 +167,8 @@ try {
                 elseif ($name -match 'source') { 'Source' }
                 elseif ($name -match 'aarch64|armv[67]|Raspberry') { 'RaspberryPi' }
                 else { 'Linux' }
-            $packageVersion = if ($published.ContainsKey($name)) { $published[$name].version }
+            $packageVersion = if ($name -match '^StationNet-Android-v(\d+\.\d+\.\d+)\.apk$') { $Matches[1] }
+                elseif ($published.ContainsKey($name)) { $published[$name].version }
                 elseif ($old.ContainsKey($name)) { $old[$name].version }
                 else { 'unknown' }
             [ordered]@{ name = $name; platform = $platform; version = $packageVersion; size = $file.Length; sha256 = (Get-FileHash -LiteralPath $file.FullName -Algorithm SHA256).Hash.ToLowerInvariant() }
@@ -170,6 +185,29 @@ try {
         if (Test-Path -LiteralPath $backup) { Remove-Item -LiteralPath $backup -Force }
     } else { [IO.File]::Move($tempManifest, $manifestPath) }
     Write-Host "`nManifest: $manifestPath"
+
+    # Keep build/ limited to ZIPs produced by this run. dist/ remains the
+    # download directory and may retain older working packages after failures.
+    $buildDir = Join-Path $root 'build'
+    $stagedBuild = Join-Path $work 'release-zips'
+    New-Item -ItemType Directory -Path $stagedBuild | Out-Null
+    foreach ($platform in $Platforms) {
+        if (-not $releasePackages.ContainsKey($platform)) { continue }
+        $artifact = $releasePackages[$platform]
+        $name = [IO.Path]::GetFileName($artifact)
+        if ([IO.Path]::GetExtension($name) -ieq '.apk') {
+            $zip = Join-Path $stagedBuild ([IO.Path]::ChangeExtension($name, '.zip'))
+            Compress-Archive -LiteralPath $artifact -DestinationPath $zip
+        } else {
+            Copy-Item -LiteralPath $artifact -Destination (Join-Path $stagedBuild $name)
+        }
+    }
+    New-Item -ItemType Directory -Force -Path $buildDir | Out-Null
+    Get-ChildItem -LiteralPath $buildDir -File -Filter 'StationNet-*.zip' |
+        Remove-Item -Force
+    Get-ChildItem -LiteralPath $stagedBuild -File |
+        Copy-Item -Destination $buildDir
+    Write-Host "Release ZIPs: $buildDir"
 } finally {
     $env:TEMP = $originalTemp
     $env:TMP = $originalTmp

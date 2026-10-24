@@ -437,6 +437,13 @@ def settings():
             database.commit()
             flash("User Feeds enabled." if enabled else "User Feeds disabled.", "success")
             return redirect(url_for("station.settings") + "#user-feeds")
+        if request.form.get("settings_section") == "imageboard":
+            enabled = request.form.get("imageboard_enabled") == "on"
+            database = get_db()
+            database.execute("UPDATE station SET imageboard_enabled=? WHERE id=1", (enabled,))
+            database.commit()
+            flash("Imageboard enabled." if enabled else "Imageboard disabled.", "success")
+            return redirect(url_for("station.settings") + "#imageboard-service")
         if request.form.get("settings_section") == "kiwix":
             enabled = request.form.get("kiwix_enabled") == "on"
             database = get_db()
@@ -748,8 +755,9 @@ def create_radio_group():
     else:
         try:
             get_db().execute(
-                "INSERT INTO radio_permission_groups(name,host_broadcasts) VALUES(?,?)",
-                (name, request.form.get("host_broadcasts") == "on"),
+                "INSERT INTO radio_permission_groups(name,host_broadcasts,moderate_imageboard) VALUES(?,?,?)",
+                (name, request.form.get("host_broadcasts") == "on",
+                 request.form.get("moderate_imageboard") == "on"),
             )
             get_db().commit()
             flash(f"Radio group {name} created.", "success")
@@ -794,14 +802,15 @@ def save_radio_group_capabilities(group_id):
         flash("Radio group not found.", "error")
     else:
         enabled = request.form.get("host_broadcasts") == "on"
+        imageboard_enabled = request.form.get("moderate_imageboard") == "on"
         database.execute(
-            "UPDATE radio_permission_groups SET host_broadcasts=? WHERE id=?",
-            (enabled, group_id),
+            "UPDATE radio_permission_groups SET host_broadcasts=?,moderate_imageboard=? WHERE id=?",
+            (enabled, imageboard_enabled, group_id),
         )
         database.commit()
         reconcile_radio_permissions()
         state = "enabled" if enabled else "disabled"
-        flash(f"{group['name']}: HOST BROADCASTS {state}.", "success")
+        flash(f"{group['name']}: capabilities saved (HOST BROADCASTS {state}).", "success")
     return _radio_permissions_redirect(group_id)
 
 

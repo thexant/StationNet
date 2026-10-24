@@ -69,9 +69,13 @@ Open `http://127.0.0.1:8080` and complete first-run setup. By default the statio
 | `STATIONNET_DATA` | `./data` | Directory for `station.db` and `secret.key`. |
 | `STATIONNET_HTTPS` | unset | Set to `1` only when HTTPS is terminated in front of the app. |
 | `STATIONNET_DISTRIBUTION_DIR` | `./dist` | Local ZIP/source package directory served on **Get Your Own Station**. |
-| `STATIONNET_ANDROID_APK_DIR` | Android debug APK output | Local directory scanned for the StationNet Android APK. |
+| `STATIONNET_ANDROID_APK_DIR` | Android release APK output | Local directory scanned for signed StationNet Android releases. |
 
 Back up the data directory to preserve station identity, accounts, messages, mail, announcements, the `uploads/` file archive, and sysop-installed games and apps in `applications/`. Bundled games and apps remain in StationNet's program files. Never publish the data directory's files.
+
+### Optional imageboard
+
+The imageboard is disabled by default. A SYSOP can enable it under **SYSOP CONTROL → IMAGEBOARD**. Signed-in station members can start image threads and post text replies with optional images. The catalog orders pinned threads first, then threads by their latest reply. SYSOPs can pin, lock, and delete threads or replies; the existing permission groups can grant **MODERATE IMAGEBOARD** to other members. Image uploads accept PNG, JPEG, GIF, and WebP up to 10 MB and use the first frame of animated images. The database and `imageboard/` image directory are both inside the station data directory; back up the whole directory to preserve them.
 
 ### Optional WIKI (Kiwix)
 

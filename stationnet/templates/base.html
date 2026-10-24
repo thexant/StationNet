@@ -30,6 +30,7 @@
         <a href="{{ url_for('station.terminal') }}" {% if request.endpoint=='station.terminal' %}aria-current="page"{% endif %}>STATION</a>
         <i aria-hidden="true">*</i>
         <a href="{{ url_for('board.index') }}" {% if request.blueprint=='board' %}aria-current="page"{% endif %}>BULLETIN BOARD</a>
+        {% if g.station.imageboard_enabled and g.user %}<i aria-hidden="true">*</i><a href="{{ url_for('imageboard.catalog') }}" {% if request.blueprint=='imageboard' %}aria-current="page"{% endif %}>IMAGEBOARD</a>{% endif %}
         <i aria-hidden="true">*</i>
         <a href="{{ url_for('announcements.index') }}" {% if request.blueprint=='announcements' %}aria-current="page"{% endif %}>ANNOUNCEMENTS</a>
         {% if g.station.kiwix_enabled %}<i>*</i><a href="{{ url_for('kiwix.index') }}" {% if request.blueprint=='kiwix' %}aria-current="page"{% endif %}>WIKI</a>{% endif %}
