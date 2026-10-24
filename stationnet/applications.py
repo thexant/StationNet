@@ -38,8 +38,8 @@ PACKAGE_PART_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,79}")
 WINDOWS_DEVICE_NAMES = {"CON", "PRN", "AUX", "NUL", *(f"COM{i}" for i in range(1, 10)), *(f"LPT{i}" for i in range(1, 10))}
 STORAGE_KEY_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,79}$")
 STORAGE_MAX_KEYS = 100
-STORAGE_MAX_VALUE_BYTES = 64 * 1024
-STORAGE_USER_BYTES = 512 * 1024
+STORAGE_MAX_VALUE_BYTES = 2 * 1024 * 1024
+STORAGE_USER_BYTES = 16 * 1024 * 1024
 STORAGE_SHARED_BYTES = 2 * 1024 * 1024
 SCORE_MAX = 1_000_000_000
 MANIFEST_PERMISSIONS = frozenset({"multiplayer"})
@@ -661,7 +661,7 @@ def storage(slug):
         return _storage_error("Storage values must be JSON-compatible.")
     size = len(serialized.encode("utf-8"))
     if size > STORAGE_MAX_VALUE_BYTES:
-        return _storage_error("Storage value exceeds the 64 KiB limit.", 413)
+        return _storage_error("Storage value exceeds the 2 MiB limit.", 413)
     usage = database.execute(
         "SELECT COUNT(*) AS key_count,COALESCE(SUM(size_bytes),0) AS used_bytes "
         "FROM application_storage WHERE application_slug=? AND storage_scope=? AND owner_key=?", params,

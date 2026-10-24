@@ -577,12 +577,48 @@ Persistent JSON-compatible values are available asynchronously through
 `keys` resolves to an array of key strings. Storage is private to the current
 user and app by default; pass `{ scope: "shared" }` for community data. Apps
 cannot choose another user or application namespace.
+Each JSON value can occupy up to 2 MiB. An app may use up to 16 MiB per user
+and 2 MiB of shared storage, across at most 100 keys in each namespace.
 
 `ui.clipboard.writeText(text)`, `ui.download.text(filename, text)`, and
 `ui.download.cellImage(filename, rows, options)` each return a `Promise` that
 resolves to `true` after the browser accepts the request, or rejects on failure.
 `render`, `append`, `update`, `remove`, `clear`, and every `ui.sound.*` method
 return `undefined` rather than a promise.
+
+### Binary files and General MIDI playback
+
+`await ui.files.open({ accept: ".mid,.midi,audio/midi" })` displays a trusted
+**Choose file** control. It resolves to `{ name, bytes }`, where `bytes` is an
+array of byte values. The user chooses the file explicitly. File size is limited
+to 2 MiB. Cancelling rejects the promise. `await ui.download.binary(filename,
+bytes, mime)` downloads up to 2 MiB; the host checks every byte, sanitizes the
+filename, and creates the Blob outside the isolated worker.
+
+`await ui.display.viewport()` returns the available display width and browser
+height in CSS pixels. Use it when a canvas needs a compact touch layout.
+
+The bundled SoundFont renderer is available through `ui.midi`. Pass Standard
+MIDI File bytes to `await ui.midi.load(bytes)`, then call `play()`, `pause()`,
+`stop()`, `seek(seconds)`, or `position()` (seconds). Loading a new file replaces
+the previous sequence. Playback uses the same General MIDI engine and SoundFont
+as StationNet Radio; the host stops the sequence when the app closes. Browser
+audio must be unlocked by a user gesture, so start playback from a button or
+pointer action. The methods return promises and report loading or synthesis
+errors to the app. For example:
+
+```js
+StationNet.start(async (ui) => {
+  ui.render(ui.button("Open and play MIDI", async () => {
+    const file = await ui.files.open({ accept: ".mid,.midi" });
+    await ui.midi.load(file.bytes);
+    await ui.midi.play();
+  }));
+});
+```
+
+`midi-composer` is a bundled example using these APIs, private project storage,
+and a pointer driven piano roll. Its MIDI parser and writer are in `midi.js`.
 
 Games can use `ui.scores.submit(score)` and `ui.scores.leaderboard()` for a
 station-local leaderboard. Both return promises resolving to an object of the

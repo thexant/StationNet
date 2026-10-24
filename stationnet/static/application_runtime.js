@@ -707,6 +707,9 @@
     }),
     download: Object.freeze({
       text(filename, value) { return capability("download-text", { filename: String(filename), text: String(value) }); },
+      binary(filename, bytes, mime = "application/octet-stream") {
+        return capability("download-binary", { filename: String(filename), bytes: Array.from(bytes), mime: String(mime) });
+      },
       cellImage(filename, rows, settings) {
         const opts = options(settings);
         return capability("download-cell-image", {
@@ -714,6 +717,18 @@
           cellWidth: opts.cellWidth, cellHeight: opts.cellHeight, fontSize: opts.fontSize
         });
       }
+    }),
+    files: Object.freeze({
+      open(settings) { return capability("open-binary", { accept: String(options(settings).accept || "") }); }
+    }),
+    display: Object.freeze({ viewport() { return capability("viewport", {}); } }),
+    midi: Object.freeze({
+      load(bytes) { return capability("midi-load", { bytes: Array.from(bytes) }); },
+      play() { return capability("midi-play", {}); },
+      pause() { return capability("midi-pause", {}); },
+      stop() { return capability("midi-stop", {}); },
+      seek(seconds) { return capability("midi-seek", { seconds: Number(seconds) }); },
+      position() { return capability("midi-position", {}); }
     }),
     start(handler) {
       if (typeof handler !== "function") throw new TypeError("StationNet.start expects a function");

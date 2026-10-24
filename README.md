@@ -90,6 +90,8 @@ Guests can read bulletins when guest access is enabled and can always read stati
 
 Unread mail is shown in the MAIL navigation badge. Direct chat notifications appear in the CHAT navigation badge and as sender links on every signed-in page. They update through the existing two-second chat polling, use the interface sound preference, and clear when the conversation is viewed. Alerts are claimed once across tabs sharing a session. Direct messages and unread state remain in memory for the current online connections only; when either participant disconnects, the conversation and its alerts disappear. A notification opened after the sender leaves returns to the user directory with an availability notice.
 
+The Apps & Games program manager includes **MIDI Composer**, a multi-track piano roll with account-saved projects, touch controls, General MIDI instruments and drums, tempo changes, MIDI import, and `.mid` downloads for sharing or Radio uploads.
+
 ## Station banner customization
 
 Under **SYSOP CONTROL → Station settings**, the ASCII banner editor lists every FIGlet font installed with pyfiglet, with a compact searchable browser. It can use the station name or a separate banner text, size, theme-default/preset/custom hexadecimal colour, and a live preview rendered by the same server-side FIGlet path used by the masthead. Changes are only applied after saving; **Cancel Changes** restores the form and **Restore Banner Default** resets the banner controls before saving. Existing stations retain their current banner configuration; a no-longer-installed saved font safely falls back to `small` until a valid style is saved.

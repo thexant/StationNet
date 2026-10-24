@@ -105,6 +105,35 @@ export class MidiPlaybackEngine {
     if (this.synth) this.synth.stopAll(true);
   }
 
+  async loadBinary(binary) {
+    this.stop();
+    const generation = this.generation;
+    await this.initialize();
+    if (generation !== this.generation) return;
+    this.key = `local-${generation}`;
+    this.sequencer.pause();
+    this.synth.stopAll(true);
+    await new Promise((resolve, reject) => {
+      const listener = `stationnet-local-${generation}`;
+      const timeout = setTimeout(() => {
+        this.sequencer.eventHandler.removeEvent("songChange", listener);
+        reject(new Error("MIDI load timed out."));
+      }, 15000);
+      this.sequencer.eventHandler.addEvent("songChange", listener, () => {
+        clearTimeout(timeout);
+        this.sequencer.eventHandler.removeEvent("songChange", listener);
+        resolve();
+      });
+      this.sequencer.loadNewSongList([{ binary }]);
+    });
+    if (generation === this.generation) this.sequencer.currentTime = 0;
+  }
+
+  play() { if (this.key && this.sequencer) this.sequencer.play(); }
+  pause() { if (this.sequencer) { this.sequencer.pause(); this.synth?.stopAll(true); } }
+  seek(seconds) { if (this.sequencer?.midiData) { this.sequencer.currentTime = Math.max(0, Number(seconds) || 0); this.synth?.stopAll(true); } }
+  get position() { return this.sequencer?.currentTime || 0; }
+
   async sync(key, url, offset, ducking = 1) {
     this.target = Math.max(0, Number(offset) || 0);
     if (this.gain) this.gain.gain.setTargetAtTime(ducking, this.context.currentTime, .03);

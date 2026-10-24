@@ -3,7 +3,7 @@
   "type": "module",
   "scripts": {
     "build:midi": "node scripts/build-midi.mjs",
-    "test:midi": "node tests/test_midi_engine.mjs"
+    "test:midi": "node tests/test_midi_engine.mjs && node tests/test_midi_composer.mjs"
   },
   "dependencies": {
     "spessasynth_lib": "4.3.14"

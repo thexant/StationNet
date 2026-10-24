@@ -1,0 +1,100 @@
+{
+  "$schema": "./theme-schema.json",
+  "schema_version": 1,
+  "id": "frozen-frontier",
+  "version": "1.0.0",
+  "name": "Frozen Frontier",
+  "description": "Follow the lost Northwatch expedition across a wind-scoured frontier, through an empty settlement and blue ice caves, to a buried observatory beneath the glacier. Find the missing route markers, recover supplies from abandoned camps, and face the ancient guardian awakened under the ice.",
+  "definitions": {
+    "items": [
+      {"id":"ice-axe","name":"Ice Axe","description":"A steel climbing axe with a sturdy spike, useful when a route turns hostile.","item_type":"equipment","equipment_slot":"main_hand","properties":{"damage":4},"behaviors":{}},
+      {"id":"expedition-sabre","name":"Expedition Sabre","description":"A short sabre kept sharp inside an oiled sheath.","item_type":"equipment","equipment_slot":"main_hand","properties":{"damage":5},"behaviors":{}},
+      {"id":"frostbound-staff","name":"Frostbound Staff","description":"A pale staff carved with the same stars as the buried observatory.","item_type":"equipment","equipment_slot":"main_hand","properties":{"damage":6},"behaviors":{}},
+      {"id":"hide-buckler","name":"Hide Buckler","description":"A small wooden shield covered in thick cured hide.","item_type":"equipment","equipment_slot":"off_hand","properties":{"armor":2},"behaviors":{}},
+      {"id":"fur-hood","name":"Fur Hood","description":"A weathered hood lined with white winter fur.","item_type":"equipment","equipment_slot":"head","properties":{"armor":1},"behaviors":{}},
+      {"id":"padded-parka","name":"Padded Parka","description":"A heavy expedition coat reinforced at the shoulders.","item_type":"equipment","equipment_slot":"body","properties":{"armor":3},"behaviors":{}},
+      {"id":"warming-broth","name":"Warming Broth","description":"A sealed flask of spiced broth, still safe to drink.","item_type":"consumable","properties":{"use_message":"The broth warms your hands and steadies your breathing. (The expedition's standard recovery rules apply.)"},"behaviors":{"consumable":true}},
+      {"id":"field-dressing","name":"Field Dressing","description":"Clean bandages and salve packed in waxed cloth.","item_type":"consumable","properties":{"use_message":"You bind your wounds and take a moment to recover. (The expedition's standard recovery rules apply.)"},"behaviors":{"consumable":true}},
+      {"id":"storm-lantern","name":"Storm Lantern","description":"A shuttered lantern with enough oil to light a stretch of ice cave.","item_type":"consumable","properties":{"use_message":"The lantern throws amber light through the blue ice."},"behaviors":{"consumable":true}},
+      {"id":"watch-key","name":"Northwatch Key","description":"A brass key stamped with the crest of the deserted watch station.","item_type":"key","properties":{},"behaviors":{"opens":"Northwatch supply locker"}},
+      {"id":"star-seal","name":"Star Seal","description":"A stone seal cut to fit the observatory's inner door.","item_type":"key","properties":{},"behaviors":{"opens":"observatory inner door"}},
+      {"id":"expedition-journal","name":"Expedition Journal","description":"A water-stained log that charts a route from Northwatch to the glacier.","item_type":"misc","properties":{},"behaviors":{}},
+      {"id":"etched-compass","name":"Etched Compass","description":"A brass compass whose lid bears an unfamiliar constellation.","item_type":"misc","properties":{},"behaviors":{}},
+      {"id":"watch-locker","name":"Northwatch Locker","description":"A locked supply locker dragged clear of a collapsed wall.","item_type":"container","properties":{},"behaviors":{"requires_key":"watch-key"}},
+      {"id":"glacial-reliquary","name":"Glacial Reliquary","description":"A sealed stone case from the observatory, rimmed with blue ice.","item_type":"container","properties":{},"behaviors":{"requires_key":"star-seal"}}
+    ],
+    "npcs": [
+      {"id":"stranded-cartographer","name":"Stranded Cartographer","description":"A frostbitten mapmaker huddled beside a sheltered fire, guarding a bundle of route sketches.","properties":{},"behaviors":{"friendly":true},"conversation":{"name":"The Lost Route","nodes":[{"id":"start","body":"'Northwatch emptied when the ice began to move. We followed the old survey stakes into a blue cave, but something was walking below us.'","start":true,"responses":[{"id":"ask","text":"How do I reach the buried observatory?","next_node_id":"route"}]},{"id":"route","body":"'Keep the carved stars on your right. The watch captain carried the locker key, and the guardian below holds the seal for the inner door.'","responses":[{"id":"thanks","text":"I will follow the markers.","state_key":"route_known","state_value":"yes"}]}]}},
+      {"id":"settlement-keeper","name":"Northwatch Keeper","description":"The last keeper of the frozen settlement, wrapped in blankets inside a boarded-up storehouse.","properties":{},"behaviors":{"friendly":true},"conversation":{"name":"Northwatch's Last Days","nodes":[{"id":"start","body":"'The other explorers took our stores and headed for the glacier. Check the old signal tower for the captain's journal, but stay off the lake ice near the shore.'","start":true,"responses":[{"id":"thanks","text":"Thank you. I will watch the lake.","state_key":"lake_warning","state_value":"heard"}]}]}}
+    ],
+    "enemies": [
+      {"id":"snow-wolf","name":"Snow Wolf","description":"A lean white wolf stalking the trail from behind a drift.","properties":{"beast":true},"behaviors":{"pack":true},"combat":{"maximum_health":20,"attack":5,"defense":2,"experience_reward":8,"respawn_seconds":60},"loot":[{"type":"experience","amount":4}]},
+      {"id":"ice-cave-stalker","name":"Ice Cave Stalker","description":"A pale predator that waits in the blue crevasses for warmth and movement.","properties":{"beast":true},"behaviors":{"ambush":true},"combat":{"maximum_health":30,"attack":8,"defense":3,"experience_reward":16,"respawn_seconds":90},"loot":[{"type":"experience","amount":8},{"type":"item","item_local_id":"field-dressing","amount":1}]},
+      {"id":"rogue-explorer","name":"Rogue Explorer","description":"A desperate member of the lost expedition who now raids every camp along the route.","properties":{},"behaviors":{"patrol":true},"combat":{"maximum_health":34,"attack":9,"defense":4,"experience_reward":20,"respawn_seconds":110},"equipment":[{"slot":"main_hand","item_local_id":"expedition-sabre"},{"slot":"body","item_local_id":"padded-parka"}],"loot":[{"type":"experience","amount":10},{"type":"item","item_local_id":"warming-broth","amount":1}]},
+      {"id":"yeti","name":"Yeti","description":"A towering shaggy hunter that follows the mountain passes above the ice caves.","properties":{"beast":true},"behaviors":{"ambush":true},"combat":{"maximum_health":50,"attack":12,"defense":5,"experience_reward":32,"respawn_seconds":160},"loot":[{"type":"experience","amount":16}]},
+      {"id":"ice-elemental","name":"Ice Elemental","description":"A figure of fractured glacier ice, animated by light from the buried observatory.","properties":{"elemental":true},"behaviors":{"guardian":true},"combat":{"maximum_health":44,"attack":11,"defense":7,"experience_reward":28,"respawn_seconds":150},"loot":[{"type":"experience","amount":14},{"type":"item","item_local_id":"watch-key","amount":1}]},
+      {"id":"glacier-warden","name":"Glacier Warden","description":"An ancient armored sentinel entombed with the observatory, now risen beneath a crown of ice.","properties":{"construct":true,"boss":true},"behaviors":{"guardian":true,"boss":true},"combat":{"maximum_health":84,"attack":14,"defense":8,"experience_reward":68,"respawn_seconds":300},"equipment":[{"slot":"main_hand","item_local_id":"frostbound-staff"}],"loot":[{"type":"experience","amount":34},{"type":"item","item_local_id":"star-seal","amount":1},{"type":"item","item_local_id":"etched-compass","amount":1},{"type":"item","item_local_id":"field-dressing","amount":2}]}
+    ]
+  },
+  "generation": {
+    "size":{"minimum":8,"default":14,"maximum":30},
+    "difficulty":{"minimum":1,"default":2,"maximum":8},
+    "layouts":[{"type":"linear","weight":1},{"type":"branching","weight":4},{"type":"maze","weight":2},{"type":"hub","weight":2}],
+    "special_roles":[
+      {"role":"treasure","count":1,"min_depth_ratio":0.25,"max_depth_ratio":0.8,"prefer_dead_ends":true},
+      {"role":"boss","count":1,"min_depth_ratio":0.25,"max_depth_ratio":1.0,"prefer_dead_ends":true}
+    ]
+  },
+  "pools": {
+    "rooms": [
+      {"id":"entrance","conditions":{"roles":["entrance"]},"names":[{"text":"The Snowbound Trailhead"}],"descriptions":[{"text":"Half-buried survey stakes lead away from the last sheltered pass. A Northwatch sign points across a white plain toward the glacier."}]},
+      {"id":"exit","conditions":{"roles":["exit"]},"names":[{"text":"The Southern Pass"}],"descriptions":[{"text":"The narrow pass opens below the storm line. Old sled tracks wind toward safer ground between wind-bent pines."}]},
+      {"id":"supply-cache","conditions":{"roles":["treasure"]},"names":[{"text":"Northwatch Supply Cellar"}],"descriptions":[{"text":"Snow has filled the stairs to a stone cellar. A locked expedition locker rests beyond scattered crates and a collapsed shelf."}]},
+      {"id":"buried-observatory","conditions":{"roles":["boss"]},"names":[{"text":"The Buried Observatory"}],"descriptions":[{"text":"A domed hall lies beneath the glacier. Constellations cut into the floor shine under clear ice, and an armored warden stands before the sealed inner door."}]},
+      {"id":"snowfield","conditions":{"roles":["normal"]},"names":[{"text":"Wind-Scoured Snowfield","weight":3},{"text":"White Ridge","weight":2}],"descriptions":[{"text":"Drifts erase the trail between a line of dark rocks. Only the tops of survey stakes remain above the snow."},{"text":"A narrow ridge crosses open ground. Wind combs loose snow from its edge and exposes old boot prints underneath."}]},
+      {"id":"abandoned-camp","conditions":{"roles":["normal"]},"names":[{"text":"Abandoned Expedition Camp"}],"descriptions":[{"text":"Two canvas tents sag beneath ice. A dead fire and a cooking pot mark where the expedition left in haste."}]},
+      {"id":"frozen-settlement","conditions":{"roles":["normal"],"min_depth_ratio":0.15},"names":[{"text":"Northwatch Street"}],"descriptions":[{"text":"Boarded houses flank a street buried to its windowsills. A bell hangs silent over the settlement storehouse."}]},
+      {"id":"signal-tower","conditions":{"roles":["normal"],"dead_end":true},"names":[{"text":"Ruined Signal Tower"}],"descriptions":[{"text":"The upper platform has fallen into the snow. Beneath its broken signal brazier, a dry compartment holds scraps of an expedition log."}]},
+      {"id":"frozen-lake","conditions":{"roles":["normal"]},"names":[{"text":"Frozen Lake Crossing"}],"descriptions":[{"text":"Clouded ice stretches between steep banks. Dark seams and trapped air bubbles reveal where the crossing is weakest."}]},
+      {"id":"ice-cave","conditions":{"roles":["normal"],"min_depth_ratio":0.25},"names":[{"text":"Blue Ice Cave"}],"descriptions":[{"text":"Smooth walls glow blue around a winding passage. Fresh claw marks cut across older chisel marks beside the floor."}]},
+      {"id":"crevasse","conditions":{"roles":["normal"],"min_depth_ratio":0.35},"names":[{"text":"Crevasse Bridge"}],"descriptions":[{"text":"A natural ice span crosses a deep crack. Frayed expedition rope still hangs from an anchor on the far side."}]},
+      {"id":"glacial-gallery","conditions":{"roles":["normal"],"min_depth_ratio":0.45},"names":[{"text":"Glacial Gallery"}],"descriptions":[{"text":"Ancient pillars show through the ice on both sides of this long chamber. Their carved stars point deeper beneath the glacier."}]},
+      {"id":"buried-village","conditions":{"roles":["normal"],"min_depth_ratio":0.3},"names":[{"text":"Buried Village Square"}],"descriptions":[{"text":"Stone roofs protrude from packed snow around a small square. A frozen well stands beneath an arch older than Northwatch."}]},
+      {"id":"old-archive","conditions":{"roles":["normal"],"min_depth_ratio":0.55},"names":[{"text":"Icebound Archive"}],"descriptions":[{"text":"Shelves of carved tablets stand behind clear ice. A narrow aisle leads toward the observatory's sealed chambers."}]}
+    ],
+    "environments": [
+      {"id":"cutting-wind","conditions":{"roles":["entrance","normal","exit"]},"descriptions":[{"text":"Wind drives loose snow across the ground, hiding tracks within minutes."}]},
+      {"id":"wolf-howls","conditions":{"roles":["normal"],"max_depth_ratio":0.5},"descriptions":[{"text":"A wolf howl carries over the ridge, followed by an answer farther away."}]},
+      {"id":"creaking-ice","conditions":{"roles":["normal","treasure"]},"descriptions":[{"text":"The ice creaks under slow pressure somewhere out of sight."}]},
+      {"id":"abandoned-gear","conditions":{"roles":["normal","treasure"]},"descriptions":[{"text":"Broken sled fittings and frozen rope show where the expedition struggled onward."}]},
+      {"id":"blue-light","conditions":{"roles":["normal","boss"],"min_depth_ratio":0.4},"descriptions":[{"text":"Blue light passes through the glacier, revealing old stone beneath it."}]},
+      {"id":"star-carvings","conditions":{"roles":["normal","boss"],"min_depth_ratio":0.5},"descriptions":[{"text":"Carved constellations appear on exposed pillars, all pointing toward the inner hall."}]}
+    ],
+    "npcs":[{"id":"survivors","chance":1.0,"count":{"minimum":1,"maximum":1},"choices":[{"local_id":"stranded-cartographer","weight":2},{"local_id":"settlement-keeper","weight":1}]}],
+    "enemies":[
+      {"id":"wolves","chance":1.0,"count":{"minimum":1,"maximum":3},"choices":[{"local_id":"snow-wolf"}]},
+      {"id":"cave-stalkers","chance":1.0,"count":{"minimum":1,"maximum":2},"choices":[{"local_id":"ice-cave-stalker"}]},
+      {"id":"rogue-explorers","chance":1.0,"count":{"minimum":1,"maximum":2},"choices":[{"local_id":"rogue-explorer"}]},
+      {"id":"yetis","chance":1.0,"count":{"minimum":1,"maximum":1},"choices":[{"local_id":"yeti"}]},
+      {"id":"elementals","chance":1.0,"count":{"minimum":1,"maximum":1},"choices":[{"local_id":"ice-elemental"}]},
+      {"id":"warden","chance":1.0,"count":{"minimum":1,"maximum":1},"choices":[{"local_id":"glacier-warden"}]}
+    ],
+    "items":[
+      {"id":"field-supplies","chance":0.85,"count":{"minimum":1,"maximum":2},"choices":[{"local_id":"warming-broth","weight":3},{"local_id":"field-dressing","weight":3},{"local_id":"storm-lantern","weight":2}]},
+      {"id":"watch-treasure","chance":1.0,"count":{"minimum":1,"maximum":1},"choices":[{"local_id":"watch-locker"}]},
+      {"id":"expedition-relics","chance":0.65,"count":{"minimum":1,"maximum":1},"choices":[{"local_id":"expedition-journal","weight":2},{"local_id":"etched-compass","weight":1}]},
+      {"id":"inner-reliquary","chance":1.0,"count":{"minimum":1,"maximum":1},"choices":[{"local_id":"glacial-reliquary"}]}
+    ],
+    "encounters": [
+      {"id":"glacier-warden","weight":1,"chance":1.0,"conditions":{"roles":["boss"]},"enemy_pool":"warden","item_pool":"inner-reliquary","config":{"encounter":"boss","objective":"Defeat the glacier warden and recover the star seal."}},
+      {"id":"northwatch-cache","weight":1,"chance":1.0,"conditions":{"roles":["treasure"]},"item_pool":"watch-treasure","config":{"encounter":"treasure","requires_key":"watch-key","secret":"Search beneath the collapsed shelf for the expedition locker."}},
+      {"id":"wolf-pack","weight":3,"chance":0.72,"conditions":{"roles":["normal"],"max_depth_ratio":0.5},"enemy_pool":"wolves","item_pool":"field-supplies","config":{"encounter":"combat"}},
+      {"id":"raided-camp","weight":3,"chance":0.68,"conditions":{"roles":["normal"],"min_depth_ratio":0.15},"enemy_pool":"rogue-explorers","item_pool":"field-supplies","config":{"encounter":"combat"}},
+      {"id":"cave-ambush","weight":2,"chance":0.65,"conditions":{"roles":["normal"],"min_depth_ratio":0.25},"enemy_pool":"cave-stalkers","item_pool":"expedition-relics","config":{"encounter":"combat","hazard":"Thin ice covers a narrow crack in the cave floor."}},
+      {"id":"yeti-trail","weight":2,"chance":0.55,"conditions":{"roles":["normal"],"min_depth_ratio":0.35},"enemy_pool":"yetis","item_pool":"field-supplies","config":{"encounter":"combat"}},
+      {"id":"elemental-sentinel","weight":3,"chance":0.68,"conditions":{"roles":["normal"],"min_depth_ratio":0.45},"enemy_pool":"elementals","item_pool":"expedition-relics","config":{"encounter":"combat"}},
+      {"id":"sheltered-survivor","weight":1,"chance":0.5,"conditions":{"roles":["normal"],"dead_end":true},"npc_pool":"survivors","item_pool":"field-supplies","config":{"encounter":"conversation"}},
+      {"id":"lost-supplies","weight":2,"chance":0.45,"conditions":{"roles":["normal"]},"item_pool":"field-supplies","config":{"encounter":"exploration","secret":"Search the lee side of a buried survey marker."}}
+    ]
+  }
+}

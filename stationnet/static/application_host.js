@@ -26,6 +26,8 @@
   let totalEvents = 0;
   let closed = false;
   let audioContext = null;
+  let midiEngine = null;
+  let midiLoading = null;
   let startupTimer = null;
   let immersive = false;
   let immersiveFocus = null;
@@ -104,6 +106,17 @@
   function stopSounds() {
     activeTones.forEach((tone) => { try { tone.stop(); } catch (_) {} });
     activeTones.clear();
+  }
+
+  async function composerMidi() {
+    if (!midiLoading) midiLoading = import("./midi/engine.js?v=composer-1").then(async ({ MidiPlaybackEngine }) => {
+      const context = audio();
+      if (!context) throw new Error("Audio is unavailable in this browser.");
+      midiEngine = new MidiPlaybackEngine(context, context.destination, "/static/midi");
+      await midiEngine.initialize();
+      return midiEngine;
+    }).catch(error => { midiLoading = null; throw error; });
+    return midiLoading;
   }
 
   function sound(message) {
@@ -514,7 +527,7 @@
         node = document.createElement("label"); node.textContent = text(component.label, 200);
         const input = document.createElement("select"); input.dataset.appInput = "";
         input.name = text(component.name, 80).replace(/[^a-zA-Z0-9_-]/g, "_");
-        (Array.isArray(component.items) ? component.items : []).slice(0, LIMITS.items).forEach((item) => {
+        (Array.isArray(component.items) ? component.items : []).slice(0, 128).forEach((item) => {
           const option = document.createElement("option"); option.value = text(item && item.value, 500);
           option.textContent = text(item && item.label, 200); input.append(option);
         });
@@ -636,7 +649,7 @@
           const bounds = canvas.getBoundingClientRect();
           const x = (event.clientX - bounds.left) * Number(canvas.dataset.logicalWidth) / Math.max(1, bounds.width);
           const y = (event.clientY - bounds.top) * Number(canvas.dataset.logicalHeight) / Math.max(1, bounds.height);
-          interact(canvas.dataset.canvasAction, { x, y, phase });
+          interact(canvas.dataset.canvasAction, { x, y, phase, shiftKey: event.shiftKey, ctrlKey: event.ctrlKey, metaKey: event.metaKey });
         };
         canvas.addEventListener("pointerdown", (event) => { event.preventDefault(); canvas.setPointerCapture(event.pointerId); point(event, "start"); });
         canvas.addEventListener("pointermove", (event) => { if (event.buttons || event.pointerType === "touch" || canvas.dataset.canvasHover === "1") point(event, "move"); });
@@ -893,6 +906,53 @@
     const request = message.request;
     const value = text(message.text, LIMITS.capabilityText);
     try {
+      if (message.operation === "viewport") { capabilityResult(request, true, { width: Math.max(80, Math.floor(surface.clientWidth - 32)), height: window.innerHeight }); return; }
+      if (message.operation === "open-binary") {
+        const input = document.createElement("input");
+        input.type = "file";
+        input.accept = text(message.accept, 100);
+        input.style.display = "none";
+        const prompt = document.createElement("div");
+        prompt.className = "application-pointer-prompt";
+        const label = document.createElement("span"); label.textContent = "Select a file for this application";
+        const choose = document.createElement("button"); choose.type = "button"; choose.textContent = "CHOOSE FILE";
+        const cancel = document.createElement("button"); cancel.type = "button"; cancel.className = "secondary"; cancel.textContent = "CANCEL";
+        prompt.append(label, choose, cancel, input);
+        display.insertBefore(prompt, display.querySelector(".application-viewport"));
+        const file = await new Promise((resolve) => {
+          const finish = value => { prompt.remove(); resolve(value); };
+          input.addEventListener("change", () => finish(input.files?.[0] || null), { once: true });
+          input.addEventListener("cancel", () => finish(null), { once: true });
+          choose.addEventListener("click", () => input.click());
+          cancel.addEventListener("click", () => finish(null), { once: true });
+        });
+        if (!file) throw new Error("No file selected.");
+        if (file.size > 2 * 1024 * 1024) throw new Error("File exceeds the 2 MB import limit.");
+        capabilityResult(request, true, { name: text(file.name, 120), bytes: Array.from(new Uint8Array(await file.arrayBuffer())) }); return;
+      }
+      if (message.operation === "download-binary") {
+        if (!Array.isArray(message.bytes) || message.bytes.length > 2 * 1024 * 1024 ||
+            !message.bytes.every(byte => Number.isInteger(byte) && byte >= 0 && byte <= 255)) throw new Error("Invalid binary download.");
+        const filename = text(message.filename, 120).replace(/[^a-zA-Z0-9._-]/g, "-") || "stationnet-download.bin";
+        const mime = /^[\w.+-]+\/[\w.+-]+$/.test(message.mime) ? message.mime : "application/octet-stream";
+        const url = URL.createObjectURL(new Blob([Uint8Array.from(message.bytes)], { type: mime }));
+        const link = document.createElement("a"); link.href = url; link.download = filename; link.hidden = true;
+        document.body.append(link); link.click(); link.remove(); setTimeout(() => URL.revokeObjectURL(url), 1000);
+        capabilityResult(request, true, true); return;
+      }
+      if (message.operation?.startsWith("midi-")) {
+        if (message.operation === "midi-stop") { midiEngine?.stop(); capabilityResult(request, true, true); return; }
+        if (message.operation === "midi-position") { capabilityResult(request, true, midiEngine?.position || 0); return; }
+        if (message.operation === "midi-pause") { midiEngine?.pause(); capabilityResult(request, true, true); return; }
+        if (message.operation === "midi-seek") { midiEngine?.seek(number(message.seconds, 0, 0, 86400)); capabilityResult(request, true, true); return; }
+        if (message.operation === "midi-load") {
+          if (!Array.isArray(message.bytes) || message.bytes.length > 2 * 1024 * 1024 ||
+              !message.bytes.every(byte => Number.isInteger(byte) && byte >= 0 && byte <= 255)) throw new Error("Invalid MIDI data.");
+          await (await composerMidi()).loadBinary(Uint8Array.from(message.bytes).buffer);
+          capabilityResult(request, true, true); return;
+        }
+        if (message.operation === "midi-play") { (await composerMidi()).play(); capabilityResult(request, true, true); return; }
+      }
       if (message.operation === "pointer-lock-request") {
         requestPointerLock(message); return;
       }
@@ -997,6 +1057,7 @@
   });
   const preventGameKeyDefault = (event) => {
     if (["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown", " ", "Backspace", "Delete"].includes(event.key)) event.preventDefault();
+    if ((event.ctrlKey || event.metaKey) && ["KeyS", "KeyZ", "KeyY", "KeyC", "KeyV", "KeyD", "KeyA"].includes(event.code)) event.preventDefault();
   };
   const releasePressedKeys = () => {
     pressedKeys.forEach((event) => keyboardActions.forEach((action) => interact(action, { ...event, phase: "up", repeat: false })));
@@ -1046,6 +1107,7 @@
     setImmersive(false);
     if (frame.contentWindow) frame.contentWindow.postMessage({ protocol: PROTOCOL, type: "terminate" }, "*");
     stopSounds();
+    midiEngine?.stop();
     images.forEach((bitmap) => bitmap?.close?.()); images.clear(); tileMaps.clear();
     frame.remove(); keyboardActions.clear(); lifecycleActions.clear(); pressedKeys.clear();
   }
