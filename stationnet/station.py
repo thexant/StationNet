@@ -462,6 +462,28 @@ def save_videos_user_quota(user_id):
 def settings():
     if request.method == "POST":
         validate_csrf()
+        if request.form.get("settings_section") == "events":
+            permission = request.form.get("events_create_permission")
+            if permission not in {"sysops", "groups", "members"}:
+                flash("Select a valid event creation permission.", "error")
+                return redirect(url_for("station.settings") + "#events-service")
+            database = get_db()
+            selected = request.form.getlist("event_group_id")
+            if any(not value.isdigit() for value in selected):
+                flash("Select valid permission groups.", "error")
+                return redirect(url_for("station.settings") + "#events-service")
+            valid = {row["id"] for row in database.execute("SELECT id FROM radio_permission_groups")}
+            ids = {int(value) for value in selected}
+            if not ids <= valid:
+                flash("Select valid permission groups.", "error")
+                return redirect(url_for("station.settings") + "#events-service")
+            database.execute("UPDATE station SET events_enabled=?,events_create_permission=? WHERE id=1",
+                             (request.form.get("events_enabled") == "on", permission))
+            database.execute("DELETE FROM event_creation_groups")
+            database.executemany("INSERT INTO event_creation_groups(group_id) VALUES(?)", [(item,) for item in ids])
+            database.commit()
+            flash("Events settings updated.", "success")
+            return redirect(url_for("station.settings") + "#events-service")
         if request.form.get("settings_section") == "user_feeds":
             enabled = request.form.get("user_feeds_enabled") == "on"
             database = get_db()
@@ -649,7 +671,9 @@ def settings():
         "SELECT theme_id,theme_version,seed,message,created_at "
         "FROM mud_dungeon_generation_log WHERE status='failure' ORDER BY id DESC LIMIT 10"
     ).fetchall()
+    event_creation_groups = {row["group_id"] for row in database.execute("SELECT group_id FROM event_creation_groups")}
     return render_template("settings.html", header_fonts=header_fonts,
+                           event_creation_groups=event_creation_groups,
                            bands=bands, groups=groups, users=users,
                            memberships=memberships, effective=effective,
                            broadcast_hosts=broadcast_hosts,

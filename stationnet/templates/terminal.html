@@ -13,6 +13,9 @@
     {% set services = services + [('imageboard.catalog', 'IMAGEBOARD', 'IMAGE THREADS FROM STATION MEMBERS')] %}
   {% endif %}
   {% set services = services + [('announcements.index', 'ANNOUNCEMENTS', 'OFFICIAL STATION NOTICES')] %}
+  {% if g.station.events_enabled %}
+    {% set services = services + [('events.index', 'EVENTS', 'UPCOMING STATION EVENTS AND RSVPS')] %}
+  {% endif %}
   {% if g.station.kiwix_enabled %}
     {% set services = services + [('kiwix.index', 'WIKI', "READ THE STATION'S OFFLINE KNOWLEDGE LIBRARY")] %}
   {% endif %}

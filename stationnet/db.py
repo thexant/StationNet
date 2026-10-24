@@ -33,6 +33,8 @@ CREATE TABLE IF NOT EXISTS station (
  kiwix_enabled INTEGER NOT NULL DEFAULT 0 CHECK(kiwix_enabled IN (0,1)),
  videos_enabled INTEGER NOT NULL DEFAULT 0 CHECK(videos_enabled IN (0,1)),
  imageboard_enabled INTEGER NOT NULL DEFAULT 0 CHECK(imageboard_enabled IN (0,1)),
+ events_enabled INTEGER NOT NULL DEFAULT 0 CHECK(events_enabled IN (0,1)),
+ events_create_permission TEXT NOT NULL DEFAULT 'sysops' CHECK(events_create_permission IN ('sysops','groups','members')),
  videos_mode TEXT NOT NULL DEFAULT 'community' CHECK(videos_mode IN ('community','curated')),
  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);
 CREATE TABLE IF NOT EXISTS users (
@@ -42,6 +44,25 @@ CREATE TABLE IF NOT EXISTS users (
  tagline TEXT NOT NULL DEFAULT '', about TEXT NOT NULL DEFAULT '', birthday TEXT,
  gender TEXT NOT NULL DEFAULT '', last_seen TEXT, connection_id TEXT,
  radio_quota_mb INTEGER, videos_quota_mb INTEGER, profile_photo_filename TEXT);
+CREATE TABLE IF NOT EXISTS events (
+ id INTEGER PRIMARY KEY AUTOINCREMENT,
+ creator_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+ name TEXT NOT NULL CHECK(length(name) BETWEEN 1 AND 150),
+ description TEXT NOT NULL CHECK(length(description) BETWEEN 1 AND 5000),
+ start_at TEXT NOT NULL, end_at TEXT, timezone TEXT NOT NULL,
+ location TEXT NOT NULL DEFAULT '', url TEXT NOT NULL DEFAULT '',
+ cancelled INTEGER NOT NULL DEFAULT 0 CHECK(cancelled IN (0,1)),
+ created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);
+CREATE INDEX IF NOT EXISTS idx_events_start ON events(start_at,id);
+CREATE TABLE IF NOT EXISTS event_rsvps (
+ event_id INTEGER NOT NULL REFERENCES events(id) ON DELETE CASCADE,
+ user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+ response TEXT NOT NULL CHECK(response IN ('going','interested')),
+ updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+ PRIMARY KEY(event_id,user_id));
+CREATE INDEX IF NOT EXISTS idx_event_rsvps_user ON event_rsvps(user_id);
+CREATE TABLE IF NOT EXISTS event_creation_groups (
+ group_id INTEGER PRIMARY KEY REFERENCES radio_permission_groups(id) ON DELETE CASCADE);
 CREATE TABLE IF NOT EXISTS registration_invites (
  id INTEGER PRIMARY KEY AUTOINCREMENT,
  token_hash TEXT NOT NULL UNIQUE,
@@ -955,9 +976,18 @@ def close_db(_error=None):
     if connection is not None:
         connection.close()
 
+def _migrate_events(database):
+    columns = {row["name"] for row in database.execute("PRAGMA table_info(station)")}
+    if "events_enabled" not in columns:
+        database.execute("ALTER TABLE station ADD COLUMN events_enabled INTEGER NOT NULL DEFAULT 0 CHECK(events_enabled IN (0,1))")
+    if "events_create_permission" not in columns:
+        database.execute("ALTER TABLE station ADD COLUMN events_create_permission TEXT NOT NULL DEFAULT 'sysops' CHECK(events_create_permission IN ('sysops','groups','members'))")
+
+
 def init_db():
     database = get_db()
     database.executescript(SCHEMA)
+    _migrate_events(database)
     _migrate_mud_dungeon_content_types(database)
     _migrate_station_customization(database)
     _migrate_user_feeds(database)

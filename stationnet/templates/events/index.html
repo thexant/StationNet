@@ -1,0 +1,10 @@
+{% extends 'base.html' %}
+{% block title %}Events{% endblock %}
+{% block content %}
+<header class="board-head"><div><p class="eyebrow">STATION SERVICE / EVENTS</p><h1>Community Events</h1><p class="muted">Events and activities from the station community.</p></div>{% if can_create %}<a class="button" href="{{ url_for('events.create') }}">CREATE EVENT +</a>{% endif %}</header>
+<section class="event-list" aria-labelledby="upcoming-events"><h2 id="upcoming-events">Upcoming &amp; In Progress</h2>
+{% for event,status in active %}<article class="terminal-card event-card" data-event-start="{{ event.start_at }}" data-event-end="{{ event.end_at or '' }}"><div class="bulletin-meta"><strong data-event-status>{{ status }}</strong><span>By {{ event.organizer or 'Deleted member' }}</span></div><h3><a href="{{ url_for('events.detail',event_id=event.id) }}">{{ event.name }}</a></h3><p>{{ event.description|truncate(240) }}</p><p><strong>Starts:</strong> <time datetime="{{ event.start_at }}" data-local-time>{{ event.start_at }} UTC</time>{% if event.location %} · {{ event.location }}{% endif %}</p><p>{{ event.going_count }} Going · {{ event.interested_count }} Interested</p><p class="event-countdown" data-event-countdown aria-live="off"></p>{% include 'events/_moderation.html' %}</article>{% else %}<div class="empty-state"><h3>No upcoming events.</h3></div>{% endfor %}</section>
+<section class="event-list" aria-labelledby="past-events"><h2 id="past-events">Past &amp; Cancelled</h2>
+{% for event,status in past %}<article class="terminal-card event-card"><div class="bulletin-meta"><strong>{{ status }}</strong><span>By {{ event.organizer or 'Deleted member' }}</span></div><h3><a href="{{ url_for('events.detail',event_id=event.id) }}">{{ event.name }}</a></h3><p><time datetime="{{ event.start_at }}" data-local-time>{{ event.start_at }} UTC</time> · {{ event.going_count }} Going · {{ event.interested_count }} Interested</p>{% include 'events/_moderation.html' %}</article>{% else %}<p class="muted">No past events.</p>{% endfor %}</section>
+<script src="{{ url_for('static',filename='events.js',v='1') }}" defer></script>
+{% endblock %}

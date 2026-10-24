@@ -34,6 +34,7 @@
         {% if g.station.imageboard_enabled and g.user %}<i aria-hidden="true">*</i><a href="{{ url_for('imageboard.catalog') }}" {% if request.blueprint=='imageboard' %}aria-current="page"{% endif %}>IMAGEBOARD</a>{% endif %}
         <i aria-hidden="true">*</i>
         <a href="{{ url_for('announcements.index') }}" {% if request.blueprint=='announcements' %}aria-current="page"{% endif %}>ANNOUNCEMENTS</a>
+        {% if g.station.events_enabled %}<i aria-hidden="true">*</i><a href="{{ url_for('events.index') }}" {% if request.blueprint=='events' %}aria-current="page"{% endif %}>EVENTS</a>{% endif %}
         {% if g.station.kiwix_enabled %}<i>*</i><a href="{{ url_for('kiwix.index') }}" {% if request.blueprint=='kiwix' %}aria-current="page"{% endif %}>WIKI</a>{% endif %}
         {% if g.station.videos_enabled %}<i>*</i><a href="{{ url_for('videos.index') }}" {% if request.blueprint=='videos' %}aria-current="page"{% endif %}>VIDEOS</a>{% endif %}
         {% if g.user %}

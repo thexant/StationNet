@@ -1,0 +1,10 @@
+{% if g.user and g.user.is_admin %}
+<details class="moderation-actions">
+  <summary aria-label="Event moderation tools for {{ event.name }}" title="Event moderation tools"><span aria-hidden="true">&#9662;</span></summary>
+  <div class="button-row">
+    <a class="button secondary" href="{{ url_for('events.edit',event_id=event.id) }}">EDIT EVENT</a>
+    {% if not event.cancelled %}<form method="post" action="{{ url_for('events.cancel',event_id=event.id) }}" data-confirm="Cancel this event?"><input type="hidden" name="csrf_token" value="{{ session.csrf_token }}"><button class="secondary">CANCEL EVENT</button></form>{% endif %}
+    <form method="post" action="{{ url_for('events.delete',event_id=event.id) }}" data-confirm="Remove this event and all RSVPs?"><input type="hidden" name="csrf_token" value="{{ session.csrf_token }}"><button class="danger">SYSOP REMOVE EVENT</button></form>
+  </div>
+</details>
+{% endif %}

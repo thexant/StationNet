@@ -1040,6 +1040,14 @@ button:disabled { opacity: .5; cursor: not-allowed; }
 }
 
 /* Shared interaction and narrow-screen refinements. */
+.event-list { display: grid; gap: 1rem; margin-bottom: 2rem; }
+.event-list h2 { margin-bottom: 0; }
+.event-card h3 { margin: .6rem 0; }
+.event-card p, .event-detail p { overflow-wrap: anywhere; }
+.event-countdown { color: var(--green-bright); font-weight: bold; }
+.event-fields, .event-members { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 1rem; }
+.event-detail .button-row { flex-wrap: wrap; }
+@media (max-width: 600px) { .event-fields, .event-members { grid-template-columns: 1fr; } }
 :where(.station-shell, .main-panel, .terminal-card, .board-head, .mail-thread-head, .application-display, .radio-console-page, .builder-shell) { min-width: 0; }
 :where(h1, h2, h3, .screen-heading, .board-head, .mail-thread-head, .application-copy, .file-details, .traffic-row, .profile-data dd) { overflow-wrap: anywhere; }
 :where(button, .button, input, select, textarea, summary, a):focus-visible { outline: 2px solid var(--cyan); outline-offset: 2px; }

@@ -1,0 +1,13 @@
+{% extends 'base.html' %}
+{% block title %}{{ 'Edit Event' if event else 'Create Event' }}{% endblock %}
+{% block content %}<header class="board-head"><div><p class="eyebrow">STATION SERVICE / EVENTS</p><h1>{{ 'Edit Event' if event else 'Create Event' }}</h1></div></header>
+<section class="terminal-card narrow"><form method="post" class="form-grid" data-event-form><input type="hidden" name="csrf_token" value="{{ session.csrf_token }}">
+<label>Name<input name="name" required maxlength="150" value="{{ request.form.get('name',event.name if event else '') }}"></label>
+<label>Description<textarea name="description" required maxlength="5000" rows="7">{{ request.form.get('description',event.description if event else '') }}</textarea></label>
+<div class="event-fields"><label>Start date<input type="date" name="start_date" required value="{{ request.form.get('start_date',start_local.strftime('%Y-%m-%d') if event else '') }}"></label><label>Start time<input type="time" name="start_time" required value="{{ request.form.get('start_time',start_local.strftime('%H:%M') if event else '') }}"></label></div>
+<div class="event-fields"><label>End date (optional)<input type="date" name="end_date" value="{{ request.form.get('end_date',end_local.strftime('%Y-%m-%d') if end_local is defined and end_local else '') }}"></label><label>End time (optional)<input type="time" name="end_time" value="{{ request.form.get('end_time',end_local.strftime('%H:%M') if end_local is defined and end_local else '') }}"></label></div>
+<label>Timezone<input name="timezone" required maxlength="80" value="{{ request.form.get('timezone',event.timezone if event else '') }}" placeholder="America/Edmonton" data-event-timezone><small>IANA timezone. Defaults to your device timezone. Times display in each visitor's local timezone.</small></label>
+<label>Location (optional)<input name="location" maxlength="200" value="{{ request.form.get('location',event.location if event else '') }}"></label>
+<label>URL (optional)<input type="url" name="url" maxlength="2000" value="{{ request.form.get('url',event.url if event else '') }}" placeholder="https://example.com"></label>
+<div class="button-row"><button>{{ 'SAVE EVENT' if event else 'CREATE EVENT' }}</button><a class="button secondary" href="{{ url_for('events.detail',event_id=event.id) if event else url_for('events.index') }}">BACK</a></div></form></section>
+<script src="{{ url_for('static',filename='events.js',v='1') }}" defer></script>{% endblock %}
