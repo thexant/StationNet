@@ -1584,6 +1584,10 @@ def status():
         "SELECT id,name,message,frequency_khz FROM radio_automated_broadcasts "
         "ORDER BY frequency_khz"
     ).fetchall()
+    external_directory = database.execute(
+        "SELECT id,name,message,frequency_khz FROM radio_external_broadcasts "
+        "ORDER BY frequency_khz"
+    ).fetchall()
     program_directory = database.execute(
         "SELECT id,name,message,frequency_khz FROM radio_automation_rules ORDER BY frequency_khz"
     ).fetchall()
@@ -1607,6 +1611,18 @@ def status():
             directory_payload.append({
                 "user_id": None, "callsign": "STATION AUTOMATION", "username": None,
                 "name": row["name"], "message": row["message"],
+                "frequency": format_frequency(row["frequency_khz"]),
+                "broadcasting": True,
+                "now_playing": live.get("track_title") or live.get("track_name"),
+            })
+    for row in external_directory:
+        live = active.get(f"external:{row['id']}", {})
+        if (effective_access(g.user["id"], row["frequency_khz"]) != "DENIED" and
+                live.get("status") == "playing"):
+            directory_payload.append({
+                "user_id": None, "callsign": "STATION AUTOMATION", "username": None,
+                "name": live.get("station_name") or row["name"] or "External radio",
+                "message": row["message"] or live.get("description", ""),
                 "frequency": format_frequency(row["frequency_khz"]),
                 "broadcasting": True,
                 "now_playing": live.get("track_title") or live.get("track_name"),

@@ -89,6 +89,17 @@ def test_external_broadcast_management_and_continuous_playback(tmp_path, monkeyp
     assert b"Loop Indefinitely" not in page.data  # No local session is running.
     assert client.post("/radio/manage/automated/external/1/control",
                        data={"csrf_token": "token", "action": "start"}).status_code == 302
+    directory = client.get("/radio/manage/status").get_json()["directory"]
+    assert directory == [{
+        "broadcasting": True,
+        "callsign": "STATION AUTOMATION",
+        "frequency": "7.10",
+        "message": "Live from afar",
+        "name": "Origin FM",
+        "now_playing": "Current song",
+        "user_id": None,
+        "username": None,
+    }]
     with app.app_context():
         transmission_id = app.extensions["hosted_broadcasts"].public("external:1")["transmission_id"]
     assert client.get(f"/radio/external/{transmission_id}/audio").status_code == 403
