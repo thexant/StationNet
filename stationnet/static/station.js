@@ -273,15 +273,20 @@ for(const panel of document.querySelectorAll("[data-collapsible-panel]")){
   const content=panel.querySelector(":scope > [data-panel-content]");
   if(!toggle||!content)continue;
   const storageKey=`stationnet.panel.${panel.dataset.panelKey||content.id}`;
-  let expanded=true;
-  try{expanded=localStorage.getItem(storageKey)!=="collapsed"}catch(_){}
-  const setExpanded=value=>{
+  let expanded=panel.closest(".mud-shell")
+    ? (toggle.getAttribute("aria-expanded")==="true" || (panel.dataset.panelKey==="mud-inventory" && matchMedia("(min-width: 1180px)").matches))
+    : true;
+  try{
+    const saved=localStorage.getItem(storageKey);
+    if(saved!==null)expanded=saved!=="collapsed";
+  }catch(_){}
+  const setExpanded=(value,persist=true)=>{
     expanded=value;
     toggle.setAttribute("aria-expanded",String(expanded));
     content.hidden=!expanded;
-    try{localStorage.setItem(storageKey,expanded?"expanded":"collapsed")}catch(_){}
+    if(persist)try{localStorage.setItem(storageKey,expanded?"expanded":"collapsed")}catch(_){}
   };
-  setExpanded(expanded);
+  setExpanded(expanded,false);
   toggle.addEventListener("click",()=>setExpanded(!expanded));
 }
 

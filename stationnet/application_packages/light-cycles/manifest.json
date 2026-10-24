@@ -1,0 +1,11 @@
+{
+  "package_format": 1,
+  "slug": "light-cycles",
+  "name": "Light Cycles",
+  "description": "Neon trail battles for one to four local riders and computer opponents.",
+  "author": "StationNet Core",
+  "version": "1.0.0",
+  "category": "Games",
+  "entrypoint": "main.js",
+  "platforms": ["desktop", "touch"]
+}

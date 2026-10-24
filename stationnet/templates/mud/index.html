@@ -46,6 +46,16 @@
         </div>
       </section>
 
+      <form class="mud-command" data-mud-command>
+        <label for="mud-command-input">ROOM CHAT / COMMAND INPUT</label>
+        <div>
+          <input id="mud-command-input" name="command" data-command-input maxlength="1000" autocomplete="off" placeholder="Say something, or use /help" aria-describedby="mud-command-help" required>
+          <button>SEND</button>
+        </div>
+        <small id="mud-command-help">Plain text is speech; gameplay commands start with /. Use /combat or /attack &lt;enemy&gt; to fight.</small>
+        <span class="mud-error" data-mud-error role="alert"></span>
+      </form>
+
       <details class="mud-history" open>
         <summary><span>EVENT LOG</span><small>Chat, system messages, and history</small></summary>
         <div class="mud-events" data-mud-events role="log" aria-live="polite" aria-label="MUD events">
@@ -61,15 +71,6 @@
         </div>
       </details>
 
-      <form class="mud-command" data-mud-command>
-        <label for="mud-command-input">ROOM CHAT / COMMAND INPUT</label>
-        <div>
-          <input id="mud-command-input" name="command" data-command-input maxlength="1000" autocomplete="off" placeholder="Say something, or use /help" aria-describedby="mud-command-help" required>
-          <button>SEND</button>
-        </div>
-        <small id="mud-command-help">Plain text is speech; gameplay commands start with /. Use /combat or /attack &lt;enemy&gt; to fight.</small>
-        <span class="mud-error" data-mud-error role="alert"></span>
-      </form>
     </section>
 
     <aside class="mud-sidebar" aria-label="Character information">
