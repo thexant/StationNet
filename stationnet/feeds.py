@@ -77,7 +77,7 @@ def delete_post(post_id):
     database.execute("DELETE FROM user_feed_posts WHERE id=?", (post_id,))
     if post["owner_id"] != g.user["id"]:
         audit(database, g.user["id"], post["owner_id"], "delete_feed_post",
-              "SYSOP removal", "feed_post", post_id)
+              request.form.get("reason", "SYSOP removal")[:500], "feed_post", post_id)
     database.commit()
     flash("Post deleted.", "success")
     return redirect(_destination(post["owner_id"]))
@@ -132,7 +132,7 @@ def delete_comment(comment_id):
     database.execute("DELETE FROM user_feed_comments WHERE id=?", (comment_id,))
     if comment["author_id"] != g.user["id"]:
         audit(database, g.user["id"], comment["author_id"], "delete_feed_comment",
-              "SYSOP removal", "feed_comment", comment_id)
+              request.form.get("reason", "SYSOP removal")[:500], "feed_comment", comment_id)
     database.commit()
     flash("Comment deleted.", "success")
     return redirect(_destination(comment["owner_id"], comment["post_id"]))

@@ -15,6 +15,8 @@
       <span class="service-state">* ONLINE</span>
     </a>
     <a href="{{ url_for('announcements.index') }}"><span class="service-number">[02]</span><span class="service-copy"><strong>ANNOUNCEMENTS</strong><small>OFFICIAL STATION NOTICES</small></span><span class="service-state">* ONLINE</span></a>
+    {% if g.station.kiwix_enabled %}<a href="{{ url_for('kiwix.index') }}"><span class="service-number">[WIKI]</span><span class="service-copy"><strong>WIKI</strong><small>READ THE STATION'S OFFLINE KNOWLEDGE LIBRARY</small></span><span class="service-state">* ONLINE</span></a>{% endif %}
+    {% if g.station.videos_enabled %}<a href="{{ url_for('videos.index') }}"><span class="service-number">[VID]</span><span class="service-copy"><strong>VIDEOS</strong><small>WATCH STATION VIDEOS</small></span><span class="service-state">* ONLINE</span></a>{% endif %}
     {% if g.user %}
     <a href="{{ url_for('chat.station_chat') }}">
       <span class="service-number">[03]</span>

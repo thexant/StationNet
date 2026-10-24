@@ -437,8 +437,27 @@ def settings():
             database.commit()
             flash("User Feeds enabled." if enabled else "User Feeds disabled.", "success")
             return redirect(url_for("station.settings") + "#user-feeds")
+        if request.form.get("settings_section") == "kiwix":
+            enabled = request.form.get("kiwix_enabled") == "on"
+            database = get_db()
+            database.execute("UPDATE station SET kiwix_enabled=? WHERE id=1", (enabled,))
+            database.commit()
+            flash("Wiki enabled." if enabled else "Wiki disabled.", "success")
+            return redirect(url_for("station.settings") + "#kiwix-service")
         if request.form.get("settings_section") == "radio":
             return _save_radio_bands()
+        if request.form.get("settings_section") == "videos":
+            mode = request.form.get("videos_mode")
+            if mode not in {"community", "curated"}:
+                flash("Select a valid videos mode.", "error")
+            else:
+                enabled = request.form.get("videos_enabled") == "on"
+                database = get_db()
+                database.execute("UPDATE station SET videos_enabled=?,videos_mode=? WHERE id=1",
+                                 (enabled, mode))
+                database.commit()
+                flash("Videos settings updated.", "success")
+            return redirect(url_for("station.settings") + "#videos-service")
         name = request.form.get("name", "").strip()
         description = request.form.get("description", "").strip()
         landing_message = request.form.get(

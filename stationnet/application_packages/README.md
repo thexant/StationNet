@@ -116,11 +116,12 @@ Uninstall removes the installed program files and registration, but deliberately
 retains saved user/shared application data. Reinstalling the same slug can use
 that data again. StationNet does not currently provide a data purge control.
 
-Bundled applications use the same manifest, runtime, APIs, directory, and state
+Bundled applications use the same manifest, runtime, APIs, catalog, and state
 controls, and are labeled **BUILT-IN**. Their program files cannot be removed
 through the third-party uninstall control. Uploaded apps are labeled
-**THIRD-PARTY** and live in the station data directory rather than StationNet's
-source tree.
+**THIRD-PARTY** and live in the station data directory under `applications/`
+rather than StationNet's source tree. Copying the full station data directory
+preserves their files, registration, enabled state, and saved data.
 
 ## Runtime API quick reference
 

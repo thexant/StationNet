@@ -13,7 +13,7 @@
 <section class="terminal-card settings-section">
   <p class="eyebrow">PACKAGE RECEIVER / FORMAT 01</p>
   <h2>Install application</h2>
-  <p class="muted">Packages may contain only a root manifest and its JavaScript entrypoint. Maximum upload: 2 MiB.</p>
+  <p class="muted">Uploaded games and apps are stored in the station data directory under <code>applications/</code>. Back up that directory with the station data to preserve them. Maximum upload: 5 MiB.</p>
   <form method="post" action="{{ url_for('application_admin.install') }}" enctype="multipart/form-data" class="form-grid">
     <input type="hidden" name="csrf_token" value="{{ session.csrf_token }}">
     <label>StationNet application ZIP<input type="file" name="package" accept=".zip,application/zip" required></label>

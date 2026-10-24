@@ -1,0 +1,7 @@
+{% extends 'base.html' %}
+{% block title %}Upload Video{% endblock %}
+{% block content %}
+<p><a href="{{ url_for('videos.index') }}">RETURN TO VIDEOS</a></p>
+<section class="narrow terminal-card"><p class="eyebrow">VIDEOS / UPLOAD</p><h1>Upload video</h1>
+<form method="post" enctype="multipart/form-data" class="form-grid"><input type="hidden" name="csrf_token" value="{{ session.csrf_token }}"><label>Title<input name="title" maxlength="150" required></label><label>Description<textarea name="description" maxlength="5000" rows="5"></textarea></label><label>Video (MP4, WebM, or Ogg; up to 120 MB)<input type="file" name="file" accept="video/mp4,video/webm,video/ogg,.mp4,.webm,.ogv" required></label><button>UPLOAD VIDEO</button></form></section>
+{% endblock %}

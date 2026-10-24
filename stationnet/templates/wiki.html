@@ -1,0 +1,20 @@
+{% extends 'base.html' %}
+{% block title %}Wiki{% endblock %}
+{% block content %}
+<section class="wiki-screen">
+  <header class="screen-heading">
+    <p class="eyebrow">STATION SERVICE / KNOWLEDGE LIBRARY</p>
+    <h1>WIKI</h1>
+    <p>Read the station's offline reference collection.</p>
+  </header>
+  {% if ready %}
+  <iframe class="wiki-reader" src="{{ url_for('kiwix.content') }}" title="Kiwix knowledge library" loading="eager"></iframe>
+  {% else %}
+  <div class="terminal-card wiki-message">
+    <h2>LIBRARY UNAVAILABLE</h2>
+    <p>{{ error }}</p>
+    {% if g.user and g.user.is_admin %}<p class="muted">Place ZIM files in <code>{{ kiwix_dir }}</code> and make sure kiwix-serve is installed.</p>{% endif %}
+  </div>
+  {% endif %}
+</section>
+{% endblock %}

@@ -27,6 +27,9 @@ CREATE TABLE IF NOT EXISTS station (
  mud_traditional_enabled INTEGER NOT NULL DEFAULT 0 CHECK(mud_traditional_enabled IN (0,1)),
  mud_procedural_enabled INTEGER NOT NULL DEFAULT 0 CHECK(mud_procedural_enabled IN (0,1)),
  user_feeds_enabled INTEGER NOT NULL DEFAULT 1 CHECK(user_feeds_enabled IN (0,1)),
+ kiwix_enabled INTEGER NOT NULL DEFAULT 0 CHECK(kiwix_enabled IN (0,1)),
+ videos_enabled INTEGER NOT NULL DEFAULT 0 CHECK(videos_enabled IN (0,1)),
+ videos_mode TEXT NOT NULL DEFAULT 'community' CHECK(videos_mode IN ('community','curated')),
  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);
 CREATE TABLE IF NOT EXISTS users (
  id INTEGER PRIMARY KEY AUTOINCREMENT, username TEXT NOT NULL COLLATE NOCASE UNIQUE,
@@ -126,6 +129,20 @@ CREATE TABLE IF NOT EXISTS archive_files (
  display_name TEXT NOT NULL, stored_name TEXT NOT NULL UNIQUE,
  category TEXT NOT NULL, description TEXT NOT NULL DEFAULT '',
  size_bytes INTEGER NOT NULL, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);
+CREATE TABLE IF NOT EXISTS videos (
+ id INTEGER PRIMARY KEY AUTOINCREMENT,
+ uploader_id INTEGER NOT NULL REFERENCES users(id) ON DELETE RESTRICT,
+ station_post INTEGER NOT NULL DEFAULT 0 CHECK(station_post IN (0,1)),
+ title TEXT NOT NULL, description TEXT NOT NULL DEFAULT '',
+ stored_name TEXT NOT NULL UNIQUE, mime_type TEXT NOT NULL,
+ size_bytes INTEGER NOT NULL, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);
+CREATE INDEX IF NOT EXISTS idx_videos_created ON videos(id DESC);
+CREATE TABLE IF NOT EXISTS video_comments (
+ id INTEGER PRIMARY KEY AUTOINCREMENT,
+ video_id INTEGER NOT NULL REFERENCES videos(id) ON DELETE CASCADE,
+ author_id INTEGER NOT NULL REFERENCES users(id) ON DELETE RESTRICT,
+ body TEXT NOT NULL, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);
+CREATE INDEX IF NOT EXISTS idx_video_comments_video ON video_comments(video_id,id);
 CREATE TABLE IF NOT EXISTS announcements (
  id INTEGER PRIMARY KEY AUTOINCREMENT,
  author_id INTEGER NOT NULL REFERENCES users(id) ON DELETE RESTRICT,
@@ -903,6 +920,8 @@ def init_db():
     _migrate_mud_dungeon_content_types(database)
     _migrate_station_customization(database)
     _migrate_user_feeds(database)
+    _migrate_kiwix(database)
+    _migrate_videos(database)
     _migrate_registration_policy(database)
     _migrate_community_fields(database)
     _migrate_mail_threads(database)
@@ -1179,6 +1198,23 @@ def _migrate_radio_permissions(database):
         "INSERT OR IGNORE INTO radio_group_memberships(user_id,group_id) "
         "SELECT id,? FROM users", (default_id,),
     )
+
+def _migrate_videos(database):
+    columns = {row["name"] for row in database.execute("PRAGMA table_info(station)")}
+    if "videos_enabled" not in columns:
+        database.execute("ALTER TABLE station ADD COLUMN videos_enabled INTEGER NOT NULL DEFAULT 0")
+    if "videos_mode" not in columns:
+        database.execute("ALTER TABLE station ADD COLUMN videos_mode TEXT NOT NULL DEFAULT 'community'")
+
+
+def _migrate_kiwix(database):
+    columns = {row["name"] for row in database.execute("PRAGMA table_info(station)")}
+    if "kiwix_enabled" not in columns:
+        database.execute(
+            "ALTER TABLE station ADD COLUMN kiwix_enabled INTEGER NOT NULL DEFAULT 0 "
+            "CHECK(kiwix_enabled IN (0,1))"
+        )
+
 
 def _migrate_user_feeds(database):
     columns = {row["name"] for row in database.execute("PRAGMA table_info(station)")}

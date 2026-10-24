@@ -5,6 +5,8 @@ __pycache__/
 .pytest-tmp/
 *.py[cod]
 data/
+kiwix_data/*
+!kiwix_data/.gitkeep
 instance/
 .coverage
 run.bat

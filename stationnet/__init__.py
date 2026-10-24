@@ -4,7 +4,7 @@ import secrets
 from datetime import timedelta
 from pathlib import Path
 from flask import Flask, g, jsonify, redirect, render_template, request, url_for
-from . import announcements, applications, archive, auth, board, broadcast, chat, db, downloads, dungeons, feeds, mail, moderation, mud, programs, radio, station, users
+from . import announcements, applications, archive, auth, board, broadcast, chat, db, downloads, dungeons, feeds, kiwix, mail, moderation, mud, programs, radio, station, users, videos
 from .ansi import station_banner
 from .realtime import DirectChatStore
 from .radio import RadioStore
@@ -25,6 +25,8 @@ def create_app(test_config=None):
     app.config.from_mapping(
         DATABASE=str(data_dir / "station.db"), DATA_DIR=str(data_dir), SECRET_KEY=_secret(data_dir),
         APPLICATIONS_DIR=str(data_dir / "applications"),
+        KIWIX_DATA_DIR=str(data_dir.parent / "kiwix_data"),
+        KIWIX_SERVE_EXECUTABLE=os.environ.get("STATIONNET_KIWIX_SERVE", "kiwix-serve"),
         SESSION_COOKIE_HTTPONLY=True, SESSION_COOKIE_SAMESITE="Lax",
         PERMANENT_SESSION_LIFETIME=timedelta(days=3650),
         SESSION_COOKIE_SECURE=os.environ.get("STATIONNET_HTTPS") == "1", MAX_CONTENT_LENGTH=128 * 1024 * 1024,
@@ -33,6 +35,8 @@ def create_app(test_config=None):
     )
     if test_config:
         app.config.update(test_config)
+    Path(app.config["KIWIX_DATA_DIR"]).mkdir(parents=True, exist_ok=True)
+    kiwix.init_app(app)
     db.init_app(app)
     dungeons.init_app(app)
     app.extensions["direct_chat"] = DirectChatStore()
@@ -49,12 +53,14 @@ def create_app(test_config=None):
     app.register_blueprint(moderation.report_bp)
     app.register_blueprint(mail.bp)
     app.register_blueprint(archive.bp)
+    app.register_blueprint(videos.bp)
     app.register_blueprint(users.bp)
     app.register_blueprint(feeds.bp)
     app.register_blueprint(announcements.bp)
     app.register_blueprint(applications.bp)
     app.register_blueprint(applications.admin_bp)
     app.register_blueprint(mud.bp)
+    app.register_blueprint(kiwix.bp)
     app.register_blueprint(radio.bp)
     app.register_blueprint(broadcast.bp)
     app.register_blueprint(programs.bp)
@@ -133,6 +139,14 @@ def create_app(test_config=None):
                 "style-src 'none'; object-src 'none'; child-src blob:; "
                 "frame-src 'none'; worker-src blob:; base-uri 'none'; "
                 "form-action 'none'; frame-ancestors 'self'"
+            )
+        if request.blueprint == "kiwix" and request.endpoint == "kiwix.content":
+            response.headers["X-Frame-Options"] = "SAMEORIGIN"
+            response.headers["Content-Security-Policy"] = (
+                "default-src 'self' data: blob:; script-src 'self' 'unsafe-inline' blob:; "
+                "style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; "
+                "connect-src 'self'; font-src 'self' data:; object-src 'none'; "
+                "frame-ancestors 'self'"
             )
         if g.get("user") is not None and request.endpoint != "static":
             response.headers["Cache-Control"] = "no-store"

@@ -287,8 +287,9 @@ for(const chat of document.querySelectorAll("[data-live-chat]")){
     body.textContent=message.body;
     row.append(meta,body);
     if(chat.dataset.reportUrl||chat.dataset.deleteUrl){
-      const menu=document.createElement("details");
-      const summary=document.createElement("summary");summary.textContent="ACTIONS";menu.append(summary);
+      const menu=document.createElement("details");menu.className="moderation-actions";
+      const summary=document.createElement("summary");summary.setAttribute("aria-label","Message actions");summary.title="Message actions";
+      const arrow=document.createElement("span");arrow.setAttribute("aria-hidden","true");arrow.textContent="▾";summary.append(arrow);menu.append(summary);
       if(chat.dataset.reportUrl&&!message.mine){
         const report=document.createElement("button");report.type="button";report.textContent="REPORT";
         report.addEventListener("click",async()=>{

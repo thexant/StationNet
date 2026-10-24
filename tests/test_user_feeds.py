@@ -149,16 +149,25 @@ class UserFeedTests(unittest.TestCase):
     def test_reports_and_sysop_removal(self):
         self.post("/feeds/users/1/posts", body="Needs moderation")
         self.login(2)
+        self.post("/feeds/posts/1/comments", body="Needs comment moderation")
         self.assertEqual(self.post("/reports", target_type="feed_post", target_id="1",
                                    reason="A valid report reason").status_code, 302)
         self.login(3)
         self.assertIn("feed_post #1", self.client.get("/sysop/moderation").data.decode())
+        page = self.client.get("/users/1").data.decode()
+        self.assertIn('aria-label="Post actions"', page)
+        self.assertIn('aria-label="Comment actions"', page)
+        self.assertNotIn('<summary>ACTIONS</summary>', page)
+        self.assertEqual(self.post("/feeds/comments/1/delete", reason="Spam comment").status_code, 302)
         self.assertEqual(self.post("/feeds/posts/1/delete").status_code, 302)
         with self.app.app_context():
             database = db.get_db()
             self.assertEqual(database.execute(
                 "SELECT action FROM moderation_audit WHERE target_type='feed_post'"
             ).fetchone()[0], "delete_feed_post")
+            self.assertEqual(tuple(database.execute(
+                "SELECT action,reason FROM moderation_audit WHERE target_type='feed_comment'"
+            ).fetchone()), ("delete_feed_comment", "Spam comment"))
 
 
 if __name__ == "__main__":
