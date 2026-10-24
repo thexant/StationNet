@@ -4,7 +4,9 @@ from io import BytesIO
 from email.message import Message
 from tempfile import TemporaryDirectory
 from unittest import TestCase
-from unittest.mock import patch
+from unittest.mock import Mock, patch
+import subprocess
+import sys
 
 from stationnet import create_app, db
 
@@ -63,6 +65,51 @@ class KiwixTests(TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertIn(b"class=\"wiki-reader\"", response.data)
         self.assertIn(b"/wiki/content/", response.data)
+
+    def test_startup_failure_records_reader_output_and_skips_invalid_archives(self):
+        (self.kiwix_dir / "sample.zim").write_bytes(b"not a ZIM")
+        server = self.app.extensions["kiwix"]
+        real_popen = subprocess.Popen
+        commands = []
+
+        def start(command, **kwargs):
+            commands.append(command)
+            return real_popen(command, **kwargs)
+
+        with patch("stationnet.kiwix.find_executable", return_value=sys.executable), \
+             patch("stationnet.kiwix.subprocess.Popen", side_effect=start):
+            ready, error = server.ready()
+
+        self.assertFalse(ready)
+        self.assertEqual(error, "kiwix-serve stopped while opening the ZIM library.")
+        self.assertIn("--skipInvalid", commands[0])
+        self.assertIn("--address=127.0.0.1", commands[0])
+        self.assertTrue(server.diagnostic)
+
+    def test_running_process_is_not_ready_until_port_opens(self):
+        archive = self.kiwix_dir / "sample.zim"
+        archive.write_bytes(b"sample")
+        server = self.app.extensions["kiwix"]
+        server.process = Mock()
+        server.process.poll.return_value = None
+        server.port = 12345
+        server.signature = ((archive.name, archive.stat().st_size, archive.stat().st_mtime_ns),)
+        with patch("stationnet.kiwix.socket.create_connection", side_effect=OSError):
+            ready, error = server.ready()
+        self.assertFalse(ready)
+        self.assertIn("starting", error)
+
+    def test_startup_detail_is_visible_only_to_sysop(self):
+        with self.app.app_context():
+            db.get_db().execute("UPDATE station SET kiwix_enabled=1 WHERE id=1")
+            db.get_db().commit()
+        server = self.app.extensions["kiwix"]
+        server.diagnostic = "Unable to read example.zim"
+        with patch.object(server, "ready", return_value=(False, "Reader failed.")):
+            self.assertNotIn(b"Unable to read", self.client.get("/wiki/").data)
+            with self.client.session_transaction() as session:
+                session["user_id"] = 1
+            self.assertIn(b"Unable to read", self.client.get("/wiki/").data)
 
     def test_content_is_proxied_and_kept_inside_station(self):
         with self.app.app_context():

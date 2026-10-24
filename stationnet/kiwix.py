@@ -4,6 +4,7 @@ import shutil
 import socket
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 from pathlib import Path
@@ -43,14 +44,34 @@ class KiwixServer:
         self.process = None
         self.port = None
         self.signature = None
+        self.output_file = None
+        self.diagnostic = None
         atexit.register(self.stop)
+
+    def _close_output(self):
+        if self.output_file:
+            self.output_file.close()
+            self.output_file = None
+
+    def _read_output(self):
+        if not self.output_file:
+            return None
+        self.output_file.seek(0, 2)
+        self.output_file.seek(max(0, self.output_file.tell() - 8192))
+        return self.output_file.read().decode("utf-8", errors="replace").strip() or None
 
     def stop(self):
         with self.lock:
             if self.process and self.process.poll() is None:
                 self.process.terminate()
+                try:
+                    self.process.wait(timeout=5)
+                except subprocess.TimeoutExpired:
+                    self.process.kill()
+                    self.process.wait()
             self.process = None
             self.port = None
+            self._close_output()
 
     def ready(self):
         with self.lock:
@@ -60,7 +81,11 @@ class KiwixServer:
             signature = tuple((file.name, file.stat().st_size, file.stat().st_mtime_ns)
                               for file in files)
             if self.process and self.process.poll() is None and signature == self.signature:
-                return True, None
+                try:
+                    with socket.create_connection(("127.0.0.1", self.port), timeout=.1):
+                        return True, None
+                except OSError:
+                    return False, "Kiwix is starting. Refresh this page in a few seconds."
             if self.process and self.process.poll() is None:
                 self.process.terminate()
                 try:
@@ -69,6 +94,8 @@ class KiwixServer:
                     self.process.kill()
                     self.process.wait()
             self.process = None
+            self._close_output()
+            self.diagnostic = None
             executable = find_executable(self.executable)
             if not executable:
                 return False, "The StationNet WIKI reader is missing. Run the StationNet installer again."
@@ -76,19 +103,24 @@ class KiwixServer:
                 sock.bind(("127.0.0.1", 0))
                 port = sock.getsockname()[1]
             try:
+                self.output_file = tempfile.TemporaryFile()
                 self.process = subprocess.Popen(
                     [executable, "--address=127.0.0.1", f"--port={port}",
-                     f"--urlRootLocation={ROOT}", str(self.data_dir)],
-                    stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
-                    stderr=subprocess.DEVNULL,
+                     f"--urlRootLocation={ROOT}", "--skipInvalid", str(self.data_dir)],
+                    stdin=subprocess.DEVNULL, stdout=self.output_file,
+                    stderr=subprocess.STDOUT,
                     creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
                 )
-            except OSError:
+            except OSError as error:
+                self.diagnostic = str(error)
+                self._close_output()
                 return False, "Could not start kiwix-serve."
             self.port = port
             self.signature = signature
             for _ in range(30):
                 if self.process.poll() is not None:
+                    self.diagnostic = self._read_output() or f"kiwix-serve exited with code {self.process.returncode}."
+                    self._close_output()
                     return False, "kiwix-serve stopped while opening the ZIM library."
                 try:
                     with socket.create_connection(("127.0.0.1", port), timeout=.1):
@@ -114,6 +146,7 @@ def index():
     _enabled()
     ready, error = current_app.extensions["kiwix"].ready()
     return render_template("wiki.html", ready=ready, error=error,
+                           diagnostic=current_app.extensions["kiwix"].diagnostic,
                            kiwix_dir=current_app.config["KIWIX_DATA_DIR"])
 
 
