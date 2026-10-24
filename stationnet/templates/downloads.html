@@ -5,7 +5,7 @@
   <header>
     <p class="eyebrow">STATIONNET // SELF-HOSTING</p>
     <h1>Get Your Own Station</h1>
-    <p>Run an independent StationNet for yourself, your LAN, or your community. These packages are served by this station; no account or internet connection is needed to download them.</p>
+    <p>Run an independent StationNet for yourself, your LAN, or your community.</p>
   </header>
 
   <section aria-labelledby="available-packages">
@@ -20,23 +20,15 @@
       {% endfor %}
     </div>
     {% else %}
-    <p class="muted">No install packages are stored on this station yet. A sysop can run <code>build-all.ps1</code> on the Windows development machine.</p>
+    <p class="muted">No install packages are stored on this station yet.</p>
     {% endif %}
   </section>
-
-  <div class="download-notes">
-    <section><h2>Windows</h2><p>Download the Windows ZIP, extract it, then run <code>install.bat</code>. Start from the created StationNet shortcut or <code>start.bat</code>. The offline package includes its runtime.</p></section>
-    <section><h2>Linux & Raspberry Pi</h2><p>Use a ZIP built for the same OS, CPU, and Python 3.11+ ABI. Extract it, run <code>sh install.sh</code>, then <code>~/.local/share/stationnet/start.sh</code>. No network is needed after download.</p></section>
-    <section><h2>Android</h2><p>On a 64-bit ARM Android 8+ device, install the APK, open it, and tap <strong>Start station</strong>. Complete setup in the local browser screen; nearby devices can join the same Wi-Fi or hotspot.</p></section>
-    <section><h2>Where to host</h2><p><strong>Personal:</strong> use <code>127.0.0.1</code>. <strong>LAN:</strong> allow TCP 8080 through the host firewall and share the host’s LAN URL. <strong>Public:</strong> use an HTTPS reverse proxy and a trusted certificate; do not expose plain HTTP logins publicly.</p></section>
-  </div>
 
   <section class="operator-block" aria-labelledby="stationnet-docs">
     <h2 id="stationnet-docs">Source, licence & full instructions</h2>
     <p class="muted">The local guides below remain available on isolated networks. Source packages and licence text appear in the package list when this station’s sysop has placed them in the distribution directory.</p>
     <div class="button-row">
       {% for document in docs %}<a class="button secondary" href="{{ url_for('downloads.info', filename=document.filename) }}">{{ document.label }}</a>{% endfor %}
-      <a class="button secondary" href="https://github.com/thexant/StationNet">PROJECT SOURCE</a>
     </div>
   </section>
 </article>
