@@ -6,6 +6,7 @@ does not retain radio messages, decoded text, or completed pictures.
 import base64
 import binascii
 import json
+import logging
 import re
 from collections import defaultdict, deque
 from datetime import datetime, timezone
@@ -383,7 +384,16 @@ class RadioStore:
         with self._lock:
             self._prune(now)
             receiver = self._receivers.get(connection_id)
-            if not receiver or receiver["frequency"] != frequency:
+            if receiver is None:
+                # A sleeping tab or brief network outage can outlive receiver_lifetime.
+                # Restore its listening lease without retuning (which would also end a
+                # transmission and discard the event cursor).
+                receiver = {"user_id": user_id, "frequency": frequency, "stamp": now}
+                self._receivers[connection_id] = receiver
+                logging.getLogger(__name__).info(
+                    "Restored radio receiver lease for user %s on %s kHz", user_id, frequency
+                )
+            if receiver["frequency"] != frequency:
                 raise ValueError("Receiver tuning changed; tune again before receiving.")
             receiver.update(user_id=user_id, stamp=now)
             events = []
