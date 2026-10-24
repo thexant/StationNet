@@ -9,8 +9,8 @@ printf '\n============================================================\n'
 printf ' StationNet uninstaller\n'
 printf '============================================================\n'
 printf ' This resets StationNet to a clean extracted copy.\n\n'
-printf ' PRESERVED:\n  %s\n  Application source, scripts, and documentation\n  kiwix_data (offline WIKI archives)\n\n' "$INSTALL_DIR"
-printf ' REMOVED:\n  Python environment, station data, and generated caches\n\n'
+printf ' PRESERVED:\n  %s\n  Application source, scripts, and documentation\n\n' "$INSTALL_DIR"
+printf ' REMOVED:\n  Python environment, station data (including WIKI archives), and generated caches\n\n'
 
 if [[ ! -f "$INSTALL_DIR/run.py" || ! -f "$INSTALL_DIR/requirements.txt" || ! -f "$INSTALL_DIR/stationnet/__init__.py" || ! -f "$INSTALL_DIR/uninstall.sh" ]]; then
     printf 'ERROR: This does not appear to be a complete StationNet source folder.\n' >&2

@@ -338,6 +338,14 @@ CREATE TABLE IF NOT EXISTS application_states (
  application_slug TEXT PRIMARY KEY,
  enabled INTEGER NOT NULL DEFAULT 1 CHECK(enabled IN (0,1)),
  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);
+CREATE TABLE IF NOT EXISTS user_application_preferences (
+ user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+ application_slug TEXT NOT NULL,
+ pinned_at TEXT,
+ last_used_at TEXT,
+ PRIMARY KEY(user_id,application_slug));
+CREATE INDEX IF NOT EXISTS idx_user_application_recent
+ ON user_application_preferences(user_id,last_used_at DESC);
 CREATE TABLE IF NOT EXISTS application_multiplayer_sessions (
  id TEXT PRIMARY KEY, application_slug TEXT NOT NULL, name TEXT NOT NULL,
  visibility TEXT NOT NULL CHECK(visibility IN ('public','private')), join_code TEXT,

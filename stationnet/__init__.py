@@ -25,7 +25,7 @@ def create_app(test_config=None):
     app.config.from_mapping(
         DATABASE=str(data_dir / "station.db"), DATA_DIR=str(data_dir), SECRET_KEY=_secret(data_dir),
         APPLICATIONS_DIR=str(data_dir / "applications"),
-        KIWIX_DATA_DIR=str(data_dir.parent / "kiwix_data"),
+        KIWIX_DATA_DIR=str(data_dir / "kiwix_data"),
         KIWIX_SERVE_EXECUTABLE=os.environ.get("STATIONNET_KIWIX_SERVE"),
         SESSION_COOKIE_HTTPONLY=True, SESSION_COOKIE_SAMESITE="Lax",
         PERMANENT_SESSION_LIFETIME=timedelta(days=3650),
@@ -35,7 +35,6 @@ def create_app(test_config=None):
     )
     if test_config:
         app.config.update(test_config)
-    Path(app.config["KIWIX_DATA_DIR"]).mkdir(parents=True, exist_ok=True)
     kiwix.init_app(app)
     db.init_app(app)
     dungeons.init_app(app)
@@ -141,13 +140,11 @@ def create_app(test_config=None):
                 "frame-src 'none'; worker-src blob:; base-uri 'none'; "
                 "form-action 'none'; frame-ancestors 'self'"
             )
-        if request.blueprint == "kiwix" and request.endpoint == "kiwix.content":
-            response.headers["X-Frame-Options"] = "SAMEORIGIN"
+        if request.endpoint in {"kiwix.content", "kiwix.search_source"}:
             response.headers["Content-Security-Policy"] = (
-                "default-src 'self' data: blob:; script-src 'self' 'unsafe-inline' blob:; "
-                "style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; "
-                "connect-src 'self'; font-src 'self' data:; object-src 'none'; "
-                "frame-ancestors 'self'"
+                "default-src 'none'; script-src 'none'; style-src 'self' 'unsafe-inline'; "
+                "img-src 'self' data: blob:; media-src 'self'; font-src 'self' data:; "
+                "object-src 'none'; base-uri 'none'; frame-ancestors 'none'"
             )
         if g.get("user") is not None and request.endpoint != "static":
             response.headers["Cache-Control"] = "no-store"

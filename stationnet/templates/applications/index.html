@@ -1,40 +1,82 @@
 {% extends 'base.html' %}
-{% block title %}Games and Apps{% endblock %}
+{% block title %}Program Manager{% endblock %}
 {% block content %}
-<header class="board-head">
+<header class="board-head program-head">
   <div>
-    <p class="eyebrow">STATION GAMES  & SOFTWARE</p>
-    <h1>Games and Apps</h1>
-    <p class="muted">Station-hosted software and games.</p>
+    <p class="eyebrow">STATION SOFTWARE / PROGRAM DIRECTORY</p>
+    <h1>Program Manager</h1>
+    <p class="muted">Select a program to inspect it, then launch it from the station.</p>
   </div>
+  <span class="program-total">{{ applications|length }} PROGRAM{{ '' if applications|length == 1 else 'S' }} AVAILABLE</span>
 </header>
 
-<nav class="subnav" aria-label="Software categories">
-  {% for category in categories %}<a href="#{{ category|lower }}">{{ category|upper }}</a>{% endfor %}
-</nav>
+<div class="program-manager" data-program-manager>
+  <aside class="program-shortcuts" aria-label="Personal programs">
+    <section class="program-shortcut-group" aria-labelledby="program-pinned-title">
+      <h2 id="program-pinned-title"><span aria-hidden="true">*</span> PINNED</h2>
+      {% if pinned %}<ul>
+        {% for application in pinned %}<li><a href="{{ url_for('applications.display', slug=application.slug) }}" data-select-program="{{ application.slug }}">{{ application.name }}</a></li>{% endfor %}
+      </ul>{% else %}<p>Pin programs from their details for quick access.</p>{% endif %}
+    </section>
+    <section class="program-shortcut-group" aria-labelledby="program-recent-title">
+      <h2 id="program-recent-title"><span aria-hidden="true">&gt;</span> RECENTLY USED</h2>
+      {% if recent %}<ol>
+        {% for application in recent %}<li><a href="{{ url_for('applications.display', slug=application.slug) }}" data-select-program="{{ application.slug }}">{{ application.name }}</a></li>{% endfor %}
+      </ol>{% else %}<p>Launched programs will appear here.</p>{% endif %}
+    </section>
+  </aside>
 
-{% for category in categories %}
-<section class="application-category" id="{{ category|lower }}">
-  <div class="application-category-heading">
-    <p class="eyebrow">CAT://{{ '%02d'|format(loop.index) }}</p>
-    <h2>{{ category }}</h2>
-  </div>
-  <div class="application-list">
-    {% for application in applications[category] %}
-    <article class="application-card">
-      <div class="application-copy">
-        <span>{{ application.category|upper }} / V{{ application.version }}</span>
-        <h3>{{ application.name }}</h3>
-        <p>{{ application.description }}</p>
-        <small class="application-requirements">{{ 'UNIVERSAL' if application.platforms|length == 2 else application.platforms|join(' + ')|upper }}{% if application.required_inputs %} / {{ application.required_inputs|join(' + ')|upper }} REQUIRED{% endif %} / {{ application.preferred_presentation|upper }}</small>
-        <small>AUTHOR: {{ application.author }}</small>
+  <section class="program-directory" aria-labelledby="program-directory-title">
+    <div class="program-panel-heading"><span>01 / DIRECTORY</span><h2 id="program-directory-title">Available programs</h2></div>
+    <div class="program-tools">
+      <label for="program-search">FIND PROGRAM
+        <input id="program-search" type="search" placeholder="Search by name" autocomplete="off" data-program-search>
+      </label>
+      <div class="program-filters" role="group" aria-label="Filter programs">
+        <button type="button" class="secondary" data-program-filter="all" aria-pressed="true">ALL</button>
+        <button type="button" class="secondary" data-program-filter="Apps" aria-pressed="false">APPS</button>
+        <button type="button" class="secondary" data-program-filter="Games" aria-pressed="false">GAMES</button>
       </div>
-      <a class="button" href="{{ url_for('applications.display', slug=application.slug) }}">VIEW / LAUNCH</a>
+    </div>
+    <p class="program-list-label"><span>NAME</span><span>TYPE / VERSION</span></p>
+    <ul class="program-list" data-program-list>
+      {% for application in applications %}
+      <li data-program-row data-slug="{{ application.slug }}" data-category="{{ application.category }}" data-name="{{ application.name|lower }}">
+        <a href="{{ url_for('applications.display', slug=application.slug) }}" data-select-program="{{ application.slug }}"{% if selected == application.slug %} aria-current="true"{% endif %}>
+          <span class="program-row-name"><span class="program-glyph" aria-hidden="true">{{ '[G]' if application.category == 'Games' else '[A]' }}</span>{{ application.name }}</span>
+          <span class="program-row-meta">{{ application.category|upper }} / {{ application.version }}</span>
+        </a>
+      </li>
+      {% else %}<li class="program-empty">NO PROGRAMS AVAILABLE</li>{% endfor %}
+    </ul>
+    <p class="program-empty" data-program-no-results hidden>NO MATCHING PROGRAMS</p>
+    <p class="program-key-hint">KEYS: ↑ ↓ SELECT / ENTER OPEN</p>
+  </section>
+
+  <section class="program-details" aria-labelledby="program-details-title" data-program-details>
+    <div class="program-panel-heading"><span>02 / PROGRAM INFO</span><h2 id="program-details-title">Details</h2></div>
+    {% for application in applications %}
+    <article class="program-detail" data-program-detail="{{ application.slug }}"{% if selected != application.slug %} hidden{% endif %}>
+      <p class="program-detail-type">{{ application.category|upper }} / {{ 'BUILT-IN' if application.builtin else 'THIRD-PARTY' }}</p>
+      <h3>{{ application.name }}</h3>
+      <p class="program-description">{{ application.description }}</p>
+      <dl class="program-facts">
+        <div><dt>VERSION</dt><dd>{{ application.version }}</dd></div>
+        <div><dt>AUTHOR</dt><dd>{{ application.author }}</dd></div>
+        <div><dt>PLATFORMS</dt><dd>{{ 'DESKTOP + TOUCH' if application.platforms|length == 2 else application.platforms|join(' + ')|upper }}</dd></div>
+        {% if application.required_inputs %}<div><dt>INPUT</dt><dd>{{ application.required_inputs|join(' + ')|upper }}</dd></div>{% endif %}
+        <div><dt>DISPLAY</dt><dd>{{ application.preferred_presentation|upper }}</dd></div>
+      </dl>
+      <div class="program-detail-actions">
+        <a class="button" href="{{ url_for('applications.display', slug=application.slug) }}">LAUNCH PROGRAM &gt;</a>
+        <form method="post" action="{{ url_for('applications.toggle_pin', slug=application.slug) }}">
+          <input type="hidden" name="csrf_token" value="{{ session.csrf_token }}">
+          <button type="submit" class="secondary">{{ 'UNPIN' if application in pinned else 'PIN TO FAVORITES' }}</button>
+        </form>
+      </div>
     </article>
-    {% else %}
-    <div class="empty-state small"><p>NO {{ category|upper }} REGISTERED</p></div>
-    {% endfor %}
-  </div>
-</section>
-{% endfor %}
+    {% else %}<p class="program-empty">NO PROGRAM SELECTED</p>{% endfor %}
+  </section>
+</div>
+<script src="{{ url_for('static', filename='program_manager.js', v='1') }}" defer></script>
 {% endblock %}

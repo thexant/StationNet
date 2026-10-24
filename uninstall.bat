@@ -17,10 +17,9 @@ echo.
 echo  PRESERVED:
 echo    %INSTALL_DIR%
 echo    Application source, scripts, and documentation
-echo    kiwix_data (offline WIKI archives)
 echo.
 echo  REMOVED:
-echo    Python environment, station data, run.bat, and generated caches
+echo    Python environment, station data (including WIKI archives), run.bat, and generated caches
 echo.
 
 rem Refuse to operate unless this looks like the StationNet source folder.

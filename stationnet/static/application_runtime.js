@@ -10,6 +10,11 @@
   const storageRequests = new Map();
   const multiplayerRequests = new Map();
   const multiplayerHandlers = new Set();
+  const realtimeHandlers = new Set();
+  const syncStatusHandlers = new Set();
+  const synchronizers = new Set();
+  const realtimeRequests = new Map();
+  let realtimeConnected = false;
   let multiplayerSession = null, multiplayerCursor = 0, multiplayerTimer = null;
   const scoreRequests = new Map();
   const capabilityRequests = new Map();
@@ -21,6 +26,7 @@
   const packageFiles = self.__stationnetPackageFiles;
   delete self.__stationnetPackageFiles;
   const moduleCache = new Map();
+  const registeredImages = new Set();
   let nextAction = 1;
   let nextRequest = 1;
   let messagesSent = 0;
@@ -35,6 +41,29 @@
 
   function bundledText(path) {
     return new TextDecoder("utf-8", { fatal: true }).decode(bundledBytes(path));
+  }
+
+  function image(path) {
+    if (typeof path !== "string" || !/\.(?:png|jpe?g|gif|webp)$/i.test(path))
+      throw new Error("Image must be a bundled PNG, JPEG, GIF, or WebP file");
+    if (!registeredImages.has(path)) {
+      const bytes = bundledBytes(path);
+      registeredImages.add(path);
+      send("graphics-image", { path, data: packageFiles[path] });
+    }
+    return path;
+  }
+
+  function sprite(source, frame, x, y, settings) {
+    const opts = options(settings);
+    const sheet = source && typeof source === "object" ? source : null;
+    if (!sheet) throw new TypeError("sprite requires a sheet descriptor");
+    const index = Math.max(0, Math.trunc(Number(frame) || 0));
+    const columns = Math.max(1, Math.trunc(Number(sheet.columns) || 1));
+    return { type: "image", image: sheet.image, x, y,
+      sx: (index % columns) * sheet.frameWidth, sy: Math.floor(index / columns) * sheet.frameHeight,
+      sw: sheet.frameWidth, sh: sheet.frameHeight, width: opts.width ?? sheet.frameWidth,
+      height: opts.height ?? sheet.frameHeight, flipX: opts.flipX, flipY: opts.flipY, opacity: opts.opacity };
   }
 
   function loadModule(path) {
@@ -115,6 +144,161 @@
       multiplayerRequests.set(request, { resolve, reject, operation });
       send("multiplayer", { request, operation, payload });
     });
+  }
+
+  function realtime(operation, payload = {}) {
+    const request = `realtime-${nextRequest++}`;
+    return new Promise((resolve, reject) => {
+      realtimeRequests.set(request, { resolve, reject });
+      send("realtime", { request, operation, ...payload });
+    });
+  }
+
+  function interpolateState(a, b, blend) {
+    if (typeof a === "number" && typeof b === "number" && Number.isFinite(a) && Number.isFinite(b))
+      return a + (b - a) * blend;
+    if (Array.isArray(a) && Array.isArray(b) && a.length === b.length)
+      return a.map((value, index) => interpolateState(value, b[index], blend));
+    if (a && b && typeof a === "object" && typeof b === "object" && !Array.isArray(a) && !Array.isArray(b)) {
+      const result = { ...b };
+      for (const key of Object.keys(b)) if (Object.hasOwn(a, key)) result[key] = interpolateState(a[key], b[key], blend);
+      return result;
+    }
+    return blend < 1 ? a : b;
+  }
+
+  function createSynchronization(settings = {}) {
+    const tickRate = settings.tickRate ?? 20;
+    const delay = settings.interpolationDelay ?? 100;
+    if (!Number.isInteger(tickRate) || tickRate < 1 || tickRate > 30) throw new RangeError("tickRate must be 1-30");
+    if (!Number.isFinite(delay) || delay < 0 || delay > 1000) throw new RangeError("interpolationDelay must be 0-1000 ms");
+    let timer = null, unsubscribe = null, reconnectTimer = null, active = false;
+    let epoch = 0, tick = -1, hostId = null;
+    let state = null, inputId = 0, localPlayerId = null;
+    let inputs = [], samples = [];
+    const notify = (name, ...args) => {
+      if (typeof settings[name] === "function") Promise.resolve().then(() => settings[name](...args)).catch(fail);
+    };
+    const receive = (packet) => {
+      if (!packet) return;
+      if (packet.type === "host" || packet.type === "sync") {
+        if (packet.epoch < epoch) return;
+        if (packet.epoch !== epoch) { inputs = []; samples = []; tick = -1; }
+        epoch = packet.epoch;
+        hostId = packet.host_id || packet.player_id;
+        if (packet.state !== null && packet.state !== undefined) {
+          state = packet.state;
+          tick = packet.tick ?? tick;
+          samples = [{ at: Date.now(), state }];
+          notify("onState", state, packet);
+        }
+        notify("onHost", hostId, packet);
+      } else if (packet.type === "input" && hostId === localPlayerId && packet.epoch === epoch) {
+        if (typeof settings.validateInput !== "function" || settings.validateInput(packet.data, packet.player, packet)) {
+          if (inputs.length < 256) inputs.push(packet);
+          notify("onInput", packet);
+        }
+      } else if (packet.type === "state" && packet.epoch === epoch && packet.tick > tick) {
+        tick = packet.tick; state = packet.data;
+        samples.push({ at: Date.now(), state });
+        if (samples.length > 2) samples.shift();
+        notify("onState", state, packet);
+      } else if (packet.type === "presence") notify("onPresence", packet);
+    };
+    const reconnect = async () => {
+      reconnectTimer = null;
+      if (!active || !multiplayerSession) return;
+      try {
+        const connected = await realtime("connect", { session_id: multiplayerSession, max_rate: settings.maxRate ?? 30 });
+        if (!active) return;
+        receive(connected.sync);
+        notify("onReconnect", connected.sync);
+      } catch (_) {
+        if (active && reconnectTimer === null) reconnectTimer = setTimeout(reconnect, 2000);
+      }
+    };
+    const status = (connected) => {
+      if (connected || !active || reconnectTimer !== null) return;
+      notify("onDisconnect");
+      reconnectTimer = setTimeout(() => { reconnectTimer = null; reconnect(); }, 2000);
+    };
+    const controller = Object.freeze({
+      async start(playerId) {
+        if (active) return;
+        if (!multiplayerSession) throw new Error("Join a multiplayer session first");
+        active = true;
+        synchronizers.add(controller);
+        localPlayerId = String(playerId);
+        unsubscribe = (packet) => receive(packet);
+        realtimeHandlers.add(unsubscribe);
+        syncStatusHandlers.add(status);
+        try {
+          const connected = await realtime("connect", { session_id: multiplayerSession, max_rate: settings.maxRate ?? 30 });
+          receive(connected.sync);
+          timer = setInterval(() => {
+            if (!realtimeConnected) return;
+            const host = hostId === localPlayerId;
+            const pending = host ? inputs.splice(0) : [];
+            if (typeof settings.onTick !== "function") return;
+            try {
+              const next = settings.onTick({ state, inputs: pending, dt: 1 / tickRate,
+                tick: tick + 1, isHost: host, epoch });
+              if (host && next !== undefined) {
+                tick += 1; state = next;
+                samples = [{ at: Date.now(), state }];
+                realtime("send", { session_id: multiplayerSession, kind: "state", tick, epoch, data: state }).catch(fail);
+              }
+            } catch (error) { fail(error); }
+          }, 1000 / tickRate);
+        } catch (error) {
+          active = false;
+          synchronizers.delete(controller);
+          realtimeHandlers.delete(unsubscribe); unsubscribe = null;
+          syncStatusHandlers.delete(status);
+          throw error;
+        }
+      },
+      input(data) {
+        if (timer === null || !realtimeConnected) return Promise.reject(new Error("Synchronization is disconnected"));
+        inputId += 1;
+        if (hostId === localPlayerId) {
+          const packet = { type: "input", input_id: inputId, data,
+            player: { id: localPlayerId }, epoch };
+          receive(packet);
+          return Promise.resolve({ queued: true });
+        }
+        if (typeof settings.predict === "function") {
+          try {
+            state = settings.predict(state, data);
+            samples = [{ at: Date.now(), state }];
+          } catch (error) { fail(error); }
+        }
+        return realtime("send", { session_id: multiplayerSession, kind: "input", input_id: inputId, data });
+      },
+      sample() {
+        if (samples.length < 2) return state;
+        const [a, b] = samples;
+        const blend = Math.max(0, Math.min(1, (Date.now() - delay - a.at) / Math.max(1, b.at - a.at)));
+        return interpolateState(a.state, b.state, blend);
+      },
+      get state() { return state; },
+      get isHost() { return hostId === localPlayerId; },
+      get epoch() { return epoch; },
+      resync() { return realtime("send", { session_id: multiplayerSession, kind: "resync" }); },
+      stop() {
+        active = false;
+        if (timer !== null) clearInterval(timer);
+        timer = null;
+        if (reconnectTimer !== null) clearTimeout(reconnectTimer);
+        reconnectTimer = null;
+        if (unsubscribe) realtimeHandlers.delete(unsubscribe);
+        unsubscribe = null;
+        syncStatusHandlers.delete(status);
+        synchronizers.delete(controller);
+        return realtime("disconnect");
+      }
+    });
+    return controller;
   }
 
   function stopMultiplayerPolling() {
@@ -260,6 +444,37 @@
         })) : undefined
       }, opts);
     },
+    graphics: Object.freeze({
+      image(source, x, y, settings) {
+        const opts = options(settings);
+        return { type: "image", image: source, x, y, sx: opts.sx, sy: opts.sy,
+          sw: opts.sw, sh: opts.sh, width: opts.width, height: opts.height,
+          flipX: opts.flipX, flipY: opts.flipY, opacity: opts.opacity };
+      },
+      sheet(source, frameWidth, frameHeight, settings) {
+        const opts = options(settings);
+        if (!Number.isInteger(frameWidth) || frameWidth < 1 || !Number.isInteger(frameHeight) || frameHeight < 1)
+          throw new RangeError("Sheet frame dimensions must be positive integers");
+        return Object.freeze({ image: source, frameWidth, frameHeight,
+          columns: Math.max(1, Math.trunc(Number(opts.columns) || 1)) });
+      },
+      sprite,
+      tileMap(id, tiles, settings) {
+        const opts = options(settings);
+        if (typeof id !== "string" || !/^[A-Za-z0-9_.:-]{1,80}$/.test(id)) throw new Error("Invalid tile map id");
+        if (!Array.isArray(tiles) || !Number.isInteger(opts.columns) || opts.columns < 1 ||
+            tiles.length < 1 || tiles.length > 262144 || tiles.length % opts.columns)
+          throw new RangeError("Tile map must be a rectangular array of at most 262144 cells");
+        send("graphics-map", { id, tiles, columns: opts.columns, image: opts.image,
+          tileWidth: opts.tileWidth, tileHeight: opts.tileHeight, sheetColumns: opts.sheetColumns });
+        return id;
+      },
+      tileLayer(id, x, y, width, height, settings) {
+        const opts = options(settings);
+        return { type: "tilemap", map: id, x, y, width, height,
+          cameraX: opts.cameraX || 0, cameraY: opts.cameraY || 0, opacity: opts.opacity };
+      }
+    }),
     render(...components) {
       send("render", { mode: "replace", components: components.length === 1 && Array.isArray(components[0]) ? components[0] : components });
     },
@@ -293,7 +508,8 @@
     assets: Object.freeze({
       bytes(path) { return bundledBytes(path); },
       text(path) { return bundledText(path); },
-      json(path) { return JSON.parse(bundledText(path)); }
+      json(path) { return JSON.parse(bundledText(path)); },
+      image
     }),
     modules: Object.freeze({ load: loadModule }),
     scores: Object.freeze({
@@ -302,17 +518,23 @@
     }),
     multiplayer: Object.freeze({
       async create(settings = {}) {
+        for (const sync of [...synchronizers]) await sync.stop();
+        if (multiplayerSession) await realtime("disconnect");
         const value = await multiplayer("create", { name: settings.name, max_players: settings.maxPlayers, visibility: settings.visibility, state: settings.state });
         multiplayerSession = value.session.id; multiplayerCursor = 0; startMultiplayerPolling(); return value;
       },
       discover() { return multiplayer("discover"); },
       async join(sessionId, settings = {}) {
+        for (const sync of [...synchronizers]) await sync.stop();
+        if (multiplayerSession) await realtime("disconnect");
         const value = await multiplayer("join", { session_id: String(sessionId), join_code: settings.joinCode });
         multiplayerSession = value.session.id; multiplayerCursor = 0; startMultiplayerPolling(); return value;
       },
       async leave() {
         if (!multiplayerSession) return { ok: true, left: false };
+        for (const sync of [...synchronizers]) await sync.stop();
         const id = multiplayerSession; multiplayerSession = null; stopMultiplayerPolling();
+        await realtime("disconnect");
         return multiplayer("leave", { session_id: id });
       },
       send(event, data) {
@@ -331,6 +553,20 @@
       onEvent(handler) {
         if (typeof handler !== "function") throw new TypeError("A multiplayer event handler is required");
         multiplayerHandlers.add(handler); return () => multiplayerHandlers.delete(handler);
+      },
+      connectRealtime(settings = {}) {
+        if (!multiplayerSession) return Promise.reject(new Error("Join a multiplayer session first"));
+        return realtime("connect", { session_id: multiplayerSession, max_rate: settings.maxRate ?? 30 });
+      },
+      sendRealtime(event, data) {
+        if (!multiplayerSession) return Promise.reject(new Error("Join a multiplayer session first"));
+        return realtime("send", { session_id: multiplayerSession, event: String(event), data });
+      },
+      createSync: createSynchronization,
+      disconnectRealtime() { return realtime("disconnect"); },
+      onRealtimeEvent(handler) {
+        if (typeof handler !== "function") throw new TypeError("A real-time event handler is required");
+        realtimeHandlers.add(handler); return () => realtimeHandlers.delete(handler);
       }
     }),
     sound: Object.freeze({
@@ -463,6 +699,22 @@
       message.ok ? pending.resolve(message.value) : pending.reject(new Error(message.error || "Multiplayer request failed"));
       return;
     }
+    if (message.type === "realtime-result") {
+      const pending = realtimeRequests.get(message.request);
+      if (!pending) return;
+      realtimeRequests.delete(message.request);
+      message.ok ? pending.resolve(message.value) : pending.reject(new Error(message.error || "Real-time request failed"));
+      return;
+    }
+    if (message.type === "realtime-status") {
+      realtimeConnected = Boolean(message.connected);
+      for (const handler of syncStatusHandlers) handler(realtimeConnected);
+      return;
+    }
+    if (message.type === "realtime-event") {
+      for (const handler of realtimeHandlers) Promise.resolve().then(() => handler(Object.freeze(message.value))).catch(fail);
+      return;
+    }
     if (message.type === "capability-result") {
       const pending = capabilityRequests.get(message.request);
       if (!pending) return;
@@ -487,8 +739,10 @@
 
   function shutdown() {
     if (stopped) return;
+    for (const sync of [...synchronizers]) sync.stop().catch(() => {});
     cleanups.splice(0).forEach((handler) => { try { handler(); } catch (_) {} });
     stopMultiplayerPolling();
+    if (realtimeConnected) send("realtime", { operation: "disconnect" });
     if (multiplayerSession) send("multiplayer", { operation: "disconnect", payload: { session_id: multiplayerSession } });
     storageRequests.forEach(({ reject }) => reject(new Error("Application terminated")));
     storageRequests.clear();
@@ -496,6 +750,9 @@
     scoreRequests.clear();
     multiplayerRequests.forEach(({ reject }) => reject(new Error("Application terminated")));
     multiplayerRequests.clear(); multiplayerHandlers.clear();
+    realtimeRequests.forEach(({ reject }) => reject(new Error("Application terminated")));
+    realtimeRequests.clear(); realtimeHandlers.clear();
+    syncStatusHandlers.clear();
     capabilityRequests.forEach(({ reject }) => reject(new Error("Application terminated")));
     capabilityRequests.clear();
     pointerLockChangeHandlers.clear(); pointerLockMoveHandlers.clear(); presentationHandlers.clear();

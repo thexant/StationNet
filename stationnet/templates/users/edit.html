@@ -1,9 +1,10 @@
 {% extends 'base.html' %}
-{% block title %}Edit {{ profile.callsign }} Profile{% endblock %}
+{% block title %}Edit {{ profile.username }} Profile{% endblock %}
 {% block content %}
 <section class="narrow terminal-card">
   <p class="eyebrow">USER PROFILE / EDIT</p>
-  <h1>Edit {{ profile.callsign }}</h1>
+  <h1>Edit {{ profile.username }}</h1>
+  <p class="muted">CALLSIGN / {{ profile.callsign }}</p>
   <form method="post" enctype="multipart/form-data" class="form-grid">
     <input type="hidden" name="csrf_token" value="{{ session.csrf_token }}">
     <label>Profile photo
@@ -13,7 +14,7 @@
     {% if profile.profile_photo_filename %}<img class="profile-photo profile-photo-preview" src="{{ url_for('users.profile_photo',user_id=profile.id) }}" alt="Current profile photo" width="128" height="128">{% endif %}
     <label>Tagline<input name="tagline" maxlength="120" value="{{ profile.tagline }}"></label>
     <label>About me<textarea name="about" maxlength="2000" rows="8">{{ profile.about }}</textarea></label>
-    <label>Birthday<input type="date" name="birthday" value="{{ profile.birthday or '' }}"></label>
+    <label>Birthday<input type="text" name="birthday" value="{{ profile.birthday or '' }}" maxlength="10" inputmode="numeric" pattern="(?:\d{2}/\d{2}|\d{4}-\d{2}-\d{2})" placeholder="MM/DD or YYYY-MM-DD"><small>Year optional: enter MM/DD, or YYYY-MM-DD for a full birth date.</small></label>
     <label>Gender<input name="gender" maxlength="40" value="{{ profile.gender }}"></label>
     <div class="button-row"><button>UPDATE MY PROFILE</button><a class="button secondary" href="{{ url_for('users.profile',user_id=profile.id) }}">RETURN TO PROFILE</a></div>
   </form>

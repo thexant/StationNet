@@ -26,7 +26,7 @@
       ('radio.console', 'RADIO', 'AUDIO RECEIVER AND TRANSMISSION CONSOLE'),
       ('archive.index', 'FILE ARCHIVE', 'SHARED STATION FILES'),
       ('users.directory', 'USER DIRECTORY', 'LIST OF REGISTERED USERS ON THIS STATION'),
-      ('applications.index', 'GAMES AND APPS', 'STATION-HOSTED SOFTWARE AND GAMES DIRECTORY')
+      ('applications.index', 'PROGRAM MANAGER', 'STATION-HOSTED SOFTWARE AND GAMES DIRECTORY')
     ] %}
     {% if g.station.mud_enabled %}
       {% set services = services + [('mud.index', 'STATION MUD', 'TEXT BASED MULTIPLAYER RPG')] %}
@@ -46,7 +46,7 @@
     <aside class="operator-block">
       <h2>&gt; CURRENT OPERATOR</h2>
       {% if g.user %}
-      <div class="operator-summary"><strong>{{ g.user.callsign }}</strong><span>{{ g.user.username }} / {{ 'SYSOP' if g.user.is_admin else 'MEMBER' }}</span><small class="positive">* AUTHENTICATED</small></div>
+      <div class="operator-summary"><strong>{{ g.user.username }}</strong><span>{{ g.user.callsign }} / {{ 'SYSOP' if g.user.is_admin else 'MEMBER' }}</span><small class="positive">* AUTHENTICATED</small></div>
       <div class="operator-actions"><a href="{{ url_for('users.profile',user_id=g.user.id) }}">[ PROFILE ]</a><form method="post" action="{{ url_for('auth.logout') }}"><input type="hidden" name="csrf_token" value="{{ session.csrf_token }}"><button class="text-button">[ DISCONNECT ]</button></form></div>
       {% else %}
       <div class="operator-summary"><strong>UNASSIGNED</strong><span>READ ONLY</span><small class="warning-text">* ANONYMOUS</small></div>
@@ -74,6 +74,12 @@
           <span>NEWEST FILE</span>
           {% if activity.file %}<strong>{{ activity.file.display_name }}</strong><time datetime="{{ activity.file.created_at|replace(' ', 'T') }}Z" data-local-time>{{ activity.file.created_at }} UTC</time>{% else %}<em>NO FILES UPLOADED</em>{% endif %}
         </a>
+        {% if activity.member %}<a class="activity-item" href="{{ url_for('users.profile', user_id=activity.member.id) }}">
+          <span>NEWEST MEMBER</span>
+          <strong>{{ activity.member.username }}</strong><time datetime="{{ activity.member.created_at|replace(' ', 'T') }}Z" data-local-time>{{ activity.member.created_at }} UTC</time>
+        </a>{% else %}<div class="activity-item">
+          <span>NEWEST MEMBER</span><em>NO REGISTERED MEMBERS</em>
+        </div>{% endif %}
         <a class="activity-item activity-count" href="{{ url_for('mail.inbox') }}">
           <span>UNOPENED MESSAGES</span><strong>{{ activity.unread_mail }}</strong><small>{{ 'UNREAD MESSAGE' if activity.unread_mail == 1 else 'UNREAD MESSAGES' }}</small>
         </a>

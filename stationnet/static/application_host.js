@@ -32,7 +32,14 @@
   let immersiveScroll = [0, 0];
   let pointerLockRequest = null;
   const multiplayerConnection = (crypto.randomUUID ? crypto.randomUUID() : `${Date.now()}-${Math.random()}`);
+  let realtimeSocket = null;
+  let realtimeSession = null;
   const activeTones = new Set();
+  const images = new Map();
+  const tileMaps = new Map();
+  const canvasScenes = new WeakMap();
+  let imageBytes = 0;
+  let imagePixels = 0;
 
   const parseMetadata = (name) => {
     try { const value = JSON.parse(display?.dataset[name] || "[]"); return Array.isArray(value) ? value : []; }
@@ -204,7 +211,105 @@
 
   const lineWidth = (command) => number(command.width, 1, .25, 64);
 
+  function redrawScenes() {
+    surface.querySelectorAll(".app-canvas").forEach((canvas) => {
+      const scene = canvasScenes.get(canvas);
+      if (scene) drawCanvas(canvas, scene);
+    });
+  }
+
+  function registerImage(message) {
+    const path = text(message.path, 200);
+    const mime = /\.png$/i.test(path) ? "image/png" : /\.jpe?g$/i.test(path) ? "image/jpeg" :
+      /\.gif$/i.test(path) ? "image/gif" : /\.webp$/i.test(path) ? "image/webp" : null;
+    if (!mime || images.has(path) || images.size >= 32 || typeof message.data !== "string" ||
+        message.data.length > 1400000 || imageBytes + message.data.length > 6000000) return;
+    imageBytes += message.data.length;
+    images.set(path, null);
+    try {
+      const binary = atob(message.data);
+      const bytes = Uint8Array.from(binary, (character) => character.charCodeAt(0));
+      const blob = new Blob([bytes], { type: mime });
+      const decode = typeof createImageBitmap === "function" ? createImageBitmap(blob) : new Promise((resolve, reject) => {
+        const url = URL.createObjectURL(blob);
+        const picture = new Image();
+        picture.onload = () => { URL.revokeObjectURL(url); resolve(picture); };
+        picture.onerror = () => { URL.revokeObjectURL(url); reject(new Error("Invalid image")); };
+        picture.src = url;
+      });
+      decode.then((bitmap) => {
+        if (closed) { bitmap.close?.(); return; }
+        const pixels = bitmap.width * bitmap.height;
+        if (bitmap.width > 2048 || bitmap.height > 2048 || pixels > 4194304 || imagePixels + pixels > 8388608) {
+          bitmap.close?.(); return;
+        }
+        imagePixels += pixels;
+        images.set(path, bitmap);
+        redrawScenes();
+      }).catch(() => {});
+    } catch (_) { /* malformed image data is ignored */ }
+  }
+
+  function registerMap(message) {
+    const id = text(message.id, 80);
+    if (!/^[A-Za-z0-9_.:-]{1,80}$/.test(id) || (!tileMaps.has(id) && tileMaps.size >= 16) ||
+        !Array.isArray(message.tiles) || !message.tiles.length || message.tiles.length > 262144 ||
+        !Number.isInteger(message.columns) || message.columns < 1 || message.tiles.length % message.columns) return;
+    const tileWidth = Math.trunc(number(message.tileWidth, 0, 1, 256));
+    const tileHeight = Math.trunc(number(message.tileHeight, 0, 1, 256));
+    const sheetColumns = Math.trunc(number(message.sheetColumns, 0, 1, 256));
+    if (!tileWidth || !tileHeight || !sheetColumns || !images.has(message.image) ||
+        !message.tiles.every((tile) => Number.isInteger(tile) && tile >= -1 && tile <= 65535)) return;
+    tileMaps.set(id, { tiles: Int32Array.from(message.tiles), columns: message.columns,
+      rows: message.tiles.length / message.columns, image: message.image, tileWidth, tileHeight, sheetColumns });
+    redrawScenes();
+  }
+
+  function drawImage(context, command, bitmap, x, y, sw, sh, sx, sy, dw, dh) {
+    if (!bitmap || sw <= 0 || sh <= 0 || dw <= 0 || dh <= 0 || sx < 0 || sy < 0 ||
+        sx + sw > bitmap.width || sy + sh > bitmap.height) return;
+    context.save();
+    context.globalAlpha = number(command.opacity, 1, 0, 1);
+    context.imageSmoothingEnabled = false;
+    context.translate(x + (command.flipX ? dw : 0), y + (command.flipY ? dh : 0));
+    context.scale(command.flipX ? -1 : 1, command.flipY ? -1 : 1);
+    context.drawImage(bitmap, sx, sy, sw, sh, 0, 0, dw, dh);
+    context.restore();
+  }
+
+  function drawTileMap(context, command, width, height) {
+    const map = tileMaps.get(command.map), bitmap = map && images.get(map.image);
+    if (!map || !bitmap) return;
+    const x = number(command.x, 0, -width, width * 2), y = number(command.y, 0, -height, height * 2);
+    const viewWidth = number(command.width, width, 0, width * 2);
+    const viewHeight = number(command.height, height, 0, height * 2);
+    const cameraX = number(command.cameraX, 0, 0, map.columns * map.tileWidth);
+    const cameraY = number(command.cameraY, 0, 0, map.rows * map.tileHeight);
+    const firstColumn = Math.floor(cameraX / map.tileWidth), firstRow = Math.floor(cameraY / map.tileHeight);
+    const lastColumn = Math.min(map.columns, Math.ceil((cameraX + viewWidth) / map.tileWidth));
+    const lastRow = Math.min(map.rows, Math.ceil((cameraY + viewHeight) / map.tileHeight));
+    context.save(); context.beginPath(); context.rect(x, y, viewWidth, viewHeight); context.clip();
+    context.globalAlpha = number(command.opacity, 1, 0, 1);
+    context.imageSmoothingEnabled = false;
+    let visited = 0;
+    for (let row = firstRow; row < lastRow && visited < 4096; row++) {
+      for (let column = firstColumn; column < lastColumn && visited < 4096; column++) {
+        visited++;
+        const tile = map.tiles[row * map.columns + column];
+        if (tile < 0) continue;
+        const sx = (tile % map.sheetColumns) * map.tileWidth;
+        const sy = Math.floor(tile / map.sheetColumns) * map.tileHeight;
+        if (sx + map.tileWidth > bitmap.width || sy + map.tileHeight > bitmap.height) continue;
+        context.drawImage(bitmap, sx, sy, map.tileWidth, map.tileHeight,
+          x + column * map.tileWidth - cameraX, y + row * map.tileHeight - cameraY,
+          map.tileWidth, map.tileHeight);
+      }
+    }
+    context.restore();
+  }
+
   function drawCanvas(canvas, component) {
+    canvasScenes.set(canvas, component);
     const width = Math.trunc(number(component.width, 640, 80, 1200));
     const height = Math.trunc(number(component.height, 400, 80, 800));
     // Assigning either bitmap dimension clears the context and reallocates its
@@ -212,6 +317,7 @@
     // only resize when an application actually requests it.
     if (canvas.width !== width) canvas.width = width;
     if (canvas.height !== height) canvas.height = height;
+    canvas.style.setProperty("--app-canvas-ratio", String(width / height));
     if (canvas.dataset.logicalWidth !== String(width)) canvas.dataset.logicalWidth = String(width);
     if (canvas.dataset.logicalHeight !== String(height)) canvas.dataset.logicalHeight = String(height);
     if (component.action) canvas.dataset.canvasAction = text(component.action, 80);
@@ -273,6 +379,16 @@
         }
         if (command.fill == null && command.stroke == null) { context.fillStyle = canvasColor(command.color); context.fill(); }
         vertices += points.length; polygons += 1;
+      } else if (command.type === "image") {
+        const bitmap = images.get(command.image);
+        if (!bitmap) return;
+        const sx = number(command.sx, 0, 0, bitmap.width), sy = number(command.sy, 0, 0, bitmap.height);
+        const sw = number(command.sw, bitmap.width - sx, 0, bitmap.width);
+        const sh = number(command.sh, bitmap.height - sy, 0, bitmap.height);
+        const dw = number(command.width, sw, 0, width * 2), dh = number(command.height, sh, 0, height * 2);
+        drawImage(context, command, bitmap, x, y, sw, sh, sx, sy, dw, dh);
+      } else if (command.type === "tilemap") {
+        drawTileMap(context, command, width, height);
       }
     });
     context.restore();
@@ -543,10 +659,69 @@
       });
       const result = await response.json();
       if (!response.ok || !result.ok) throw new Error(result.error || `Multiplayer request failed (${response.status})`);
+      if ((message.operation === "leave" || message.operation === "disconnect") && realtimeSocket) {
+        realtimeSocket.close(); realtimeSocket = null; realtimeSession = null;
+      }
       if (requestId && frame.contentWindow) frame.contentWindow.postMessage({ protocol: PROTOCOL, type: "multiplayer-result", request: requestId, ok: true, value: result }, "*");
     } catch (error) {
       if (requestId && frame.contentWindow) frame.contentWindow.postMessage({ protocol: PROTOCOL, type: "multiplayer-result", request: requestId, ok: false, error: text(error.message || error, 500) }, "*");
     }
+  }
+
+  function realtime(message) {
+    const requestId = text(message.request, 80);
+    const reply = (ok, value, error) => {
+      if (requestId && frame.contentWindow) frame.contentWindow.postMessage({ protocol: PROTOCOL, type: "realtime-result", request: requestId, ok, value, error }, "*");
+    };
+    if (message.operation === "disconnect") {
+      if (realtimeSocket) realtimeSocket.close();
+      realtimeSocket = null; realtimeSession = null; reply(true, { connected: false }); return;
+    }
+    if (message.operation === "send") {
+      if (!realtimeSocket || realtimeSocket.readyState !== WebSocket.OPEN || realtimeSession !== message.session_id) {
+        reply(false, null, "Real-time connection is unavailable."); return;
+      }
+      try {
+        const payload = JSON.stringify({ type: message.kind || "event", event: message.event,
+          data: message.data, input_id: message.input_id, tick: message.tick, epoch: message.epoch });
+        if (new TextEncoder().encode(payload).length > 16384 || realtimeSocket.bufferedAmount > 65536) throw new Error("Real-time buffer limit reached.");
+        realtimeSocket.send(payload); reply(true, { queued: true });
+      } catch (error) { reply(false, null, text(error.message || error, 500)); }
+      return;
+    }
+    if (message.operation !== "connect" || typeof message.session_id !== "string") { reply(false, null, "Invalid real-time request."); return; }
+    if (realtimeSocket) realtimeSocket.close();
+    const socketUrl = new URL(surface.dataset.appRealtimeUrl, location.href);
+    socketUrl.protocol = location.protocol === "https:" ? "wss:" : "ws:";
+    let socket;
+    try { socket = new WebSocket(socketUrl); }
+    catch (error) { reply(false, null, text(error.message || error, 500)); return; }
+    realtimeSocket = socket; realtimeSession = message.session_id;
+    let answered = false;
+    const failConnection = () => {
+      if (!answered) { answered = true; reply(false, null, "Real-time connection failed."); }
+      if (realtimeSocket === socket) {
+        realtimeSocket = null; realtimeSession = null;
+        if (frame.contentWindow) frame.contentWindow.postMessage({ protocol: PROTOCOL, type: "realtime-status", connected: false }, "*");
+      }
+    };
+    socket.onopen = () => socket.send(JSON.stringify({ type: "hello", csrf: surface.dataset.appCsrf,
+      session_id: message.session_id, connection_id: multiplayerConnection, max_rate: message.max_rate }));
+    socket.onmessage = (event) => {
+      if (realtimeSocket !== socket) return;
+      try {
+        const value = JSON.parse(event.data);
+        if (value.type === "ready") {
+          answered = true; reply(true, { connected: true, maxRate: value.max_rate, sync: value.sync,
+            serverTime: value.server_time });
+          frame.contentWindow?.postMessage({ protocol: PROTOCOL, type: "realtime-status", connected: true }, "*");
+        } else if (["event", "presence", "host", "input", "state", "sync"].includes(value.type)) {
+          frame.contentWindow?.postMessage({ protocol: PROTOCOL, type: "realtime-event", value }, "*");
+        }
+      } catch (_) { socket.close(); }
+    };
+    socket.onerror = failConnection;
+    socket.onclose = failConnection;
   }
 
   function capabilityResult(request, ok, value, error) {
@@ -710,9 +885,12 @@
       if (display?.dataset.appPresentation === "immersive") setImmersive(true);
     }
     else if (message.type === "render") render(message);
+    else if (message.type === "graphics-image") registerImage(message);
+    else if (message.type === "graphics-map") registerMap(message);
     else if (message.type === "storage") storage(message);
     else if (message.type === "scores") scores(message);
     else if (message.type === "multiplayer") multiplayer(message);
+    else if (message.type === "realtime") realtime(message);
     else if (message.type === "capability") capability(message);
     else if (message.type === "sound") sound(message);
     else if (message.type === "keyboard") {
@@ -778,6 +956,7 @@
   addEventListener("focus", reportVisibility);
 
   function terminate() {
+    if (realtimeSocket) { realtimeSocket.close(); realtimeSocket = null; realtimeSession = null; }
     if (closed) return; closed = true;
     clearTimeout(startupTimer);
     dismissPointerPrompt(new Error("Application terminated"));
@@ -785,6 +964,7 @@
     setImmersive(false);
     if (frame.contentWindow) frame.contentWindow.postMessage({ protocol: PROTOCOL, type: "terminate" }, "*");
     stopSounds();
+    images.forEach((bitmap) => bitmap?.close?.()); images.clear(); tileMaps.clear();
     frame.remove(); keyboardActions.clear(); lifecycleActions.clear(); pressedKeys.clear();
   }
   if (immersiveButton) immersiveButton.addEventListener("click", () => setImmersive(!immersive));

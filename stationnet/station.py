@@ -118,6 +118,10 @@ def terminal():
             "SELECT id,display_name,created_at FROM archive_files "
             "ORDER BY created_at DESC,id DESC LIMIT 1"
         ).fetchone()
+        newest_member = database.execute(
+            "SELECT id,username,created_at FROM users "
+            "ORDER BY created_at DESC,id DESC LIMIT 1"
+        ).fetchone()
         unread_mail = database.execute(
             "SELECT COUNT(*) FROM mail WHERE recipient_id=? AND recipient_deleted=0 AND is_read=0",
             (g.user["id"],),
@@ -169,6 +173,7 @@ def terminal():
             "reply": latest_reply,
             "chat": latest_chat,
             "file": newest_file,
+            "member": newest_member,
             "unread_mail": unread_mail,
             "broadcasts": broadcasts,
         }

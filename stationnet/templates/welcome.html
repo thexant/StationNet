@@ -31,7 +31,7 @@
 
   {% if g.user %}
   <div class="access-actions">
-    <p>IDENTITY ACCEPTED: <strong>{{ g.user.callsign }}</strong> / {{ g.user.username }}</p>
+    <p>IDENTITY ACCEPTED: <strong>{{ g.user.username }}</strong> / {{ g.user.callsign }}</p>
     <a class="button enter-button" href="{{ url_for('station.terminal') }}">&gt; ENTER THE STATION &lt;</a>
     <form method="post" action="{{ url_for('auth.logout') }}"><input type="hidden" name="csrf_token" value="{{ session.csrf_token }}"><button class="text-button">[ DISCONNECT LINK ]</button></form>
   </div>

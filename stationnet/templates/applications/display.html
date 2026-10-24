@@ -12,7 +12,7 @@
     </div>
     <div class="application-display-actions">
       {% if application.runnable %}<button type="button" class="secondary" data-app-immersive aria-pressed="false">IMMERSIVE MODE</button>{% endif %}
-      <a class="button secondary" href="{{ url_for('applications.index') }}">&lt; DIRECTORY</a>
+      <a class="button secondary" href="{{ url_for('applications.index') }}">&lt; PROGRAM MANAGER</a>
     </div>
   </header>
 
@@ -23,7 +23,7 @@
   <div class="application-launch-warning" data-app-launch-warning role="alert" hidden>
     <p data-app-launch-message></p>
     <button type="button" data-app-launch-anyway>LAUNCH ANYWAY</button>
-    <a class="button secondary" href="{{ url_for('applications.index') }}">RETURN TO DIRECTORY</a>
+    <a class="button secondary" href="{{ url_for('applications.index') }}">RETURN TO PROGRAM MANAGER</a>
   </div>
 
   <div class="application-viewport">
@@ -33,6 +33,7 @@
       data-app-storage-url="{{ url_for('applications.storage', slug=application.slug) }}"
       data-app-scores-url="{{ url_for('applications.scores', slug=application.slug) }}"
       data-app-multiplayer-url="{{ url_for('applications.multiplayer', slug=application.slug) }}"
+      data-app-realtime-url="/games-apps/{{ application.slug }}/realtime"
       data-app-csrf="{{ session.csrf_token }}">
       <p class="muted">Establishing isolated program session...</p>
     </div>
@@ -58,7 +59,7 @@
     {% endif %}
   </div>
 
-  <a class="button application-return" href="{{ url_for('applications.index') }}">&lt; RETURN TO GAMES AND APPS</a>
+  <a class="button application-return" href="{{ url_for('applications.index') }}">&lt; RETURN TO PROGRAM MANAGER</a>
 </section>
 {% if application.runnable %}<button type="button" class="application-immersive-exit" data-app-immersive-exit hidden aria-label="Exit immersive application mode">EXIT IMMERSIVE</button>{% endif %}
 {% if application.runnable %}<script src="{{ url_for('static', filename='application_host.js') }}" defer></script>{% endif %}

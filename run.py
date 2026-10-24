@@ -2,19 +2,9 @@
 import os
 import sys
 from pathlib import Path
-from waitress import serve
+import uvicorn
 from stationnet import create_app
-
-
-def _thread_count():
-    """Return a sensible worker-pool size for the app's polling workload."""
-    try:
-        threads = int(os.environ.get("STATIONNET_THREADS", "16"))
-    except ValueError as error:
-        raise ValueError("STATIONNET_THREADS must be a positive whole number.") from error
-    if threads < 1:
-        raise ValueError("STATIONNET_THREADS must be a positive whole number.")
-    return threads
+from stationnet.multiplayer_socket import create_asgi_app
 
 
 def main():
@@ -24,9 +14,9 @@ def main():
         os.environ["STATIONNET_DATA"] = str(Path(__file__).resolve().parent / "data")
     host = os.environ.get("STATIONNET_HOST", "0.0.0.0")
     port = int(os.environ.get("STATIONNET_PORT", "8080"))
-    threads = _thread_count()
-    print(f"StationNet listening on http://{host}:{port} ({threads} worker threads)")
-    serve(create_app(), host=host, port=port, threads=threads)
+    print(f"StationNet listening on http://{host}:{port} (WebSocket enabled)")
+    uvicorn.run(create_asgi_app(create_app()), host=host, port=port,
+                ws_max_size=16 * 1024, ws_max_queue=64, workers=1)
 
 if __name__ == "__main__":
     main()

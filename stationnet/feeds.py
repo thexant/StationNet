@@ -9,7 +9,7 @@ from .moderation import active_restriction, audit
 from .security import validate_csrf
 
 bp = Blueprint("feeds", __name__, url_prefix="/feeds")
-REACTIONS = ("like", "heart", "laugh")
+REACTIONS = ("like", "heart", "laugh", "sad", "angry")
 
 
 def require_enabled():

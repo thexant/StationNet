@@ -39,7 +39,7 @@
         {% for user in users %}
         <form method="post" action="{{ url_for('mud.builder_permission',user_id=user.id) }}">
           <input type="hidden" name="csrf_token" value="{{ session.csrf_token }}">
-          <span><strong>{{ user.callsign }}</strong> <small>{{ user.username }}</small></span>
+          <span><strong>{{ user.username }}</strong> <small>{{ user.callsign }}</small></span>
           {% if user.is_admin %}
           <span class="mud-builder-badge">SYSOP / INHERITED</span>
           {% elif user.is_builder %}

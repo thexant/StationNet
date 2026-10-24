@@ -84,8 +84,12 @@ allowed. Everything needed to run must be inside the ZIP.
 `ui.assets.bytes(path)` returns a fresh `Uint8Array`; `ui.assets.text(path)`
 decodes UTF-8; `ui.assets.json(path)` parses UTF-8 JSON. These methods are
 synchronous and throw if the exact package-relative path is missing or invalid.
-They do not expose file URLs. Binary assets are available as application data;
-the current StationNet UI does not render packaged images or play packaged audio.
+They do not expose file URLs. `ui.assets.image(path)` registers a bundled PNG,
+JPEG, GIF, or WebP image for canvas drawing and returns its package-relative
+path. Call it once during setup. The trusted renderer decodes and caches the
+image asynchronously, and redraws the latest canvas scene when it is ready.
+GIFs use their first frame; use sprite sheets for game animation. No package
+file becomes a web URL. Audio files are not played.
 
 `await ui.modules.load(path)` imports a bundled `.js` ES module and returns its
 exports. Imports are cached by path. Use this API for each module; ordinary
@@ -312,6 +316,8 @@ the stated default when missing or invalid.
 | `line` | `type: "line"`, `x1`, `y1`, `x2`, `y2`, `color`, `width` | Endpoints must be finite numbers in the range −1,000,000 to 1,000,000. `width` defaults to `1` and is clamped to 0.25–64. Color defaults to `#00ed45`. |
 | `lines` | `type: "lines"`, `segments`, `color`, `width` | `segments` is an array of `[x1, y1, x2, y2]` arrays using the line ranges. Invalid segment entries are skipped. All accepted segments are stroked in one batch. |
 | `polygon` | `type: "polygon"`, `points`, `fill`, `stroke`, `width` | `points` is an array of at least three `[x, y]` pairs using the line coordinate range. `fill` and `stroke` are independent colors; omit either to disable it. If both are omitted, the polygon is filled with `color` or the default green. `width` controls the stroke as for lines. |
+| `image` | `type: "image"`, `image`, `x`, `y`, `sx`, `sy`, `sw`, `sh`, `width`, `height`, `flipX`, `flipY`, `opacity` | `image` is a path returned by `ui.assets.image`. The source rectangle defaults to the whole image and destination size defaults to the crop size. Out-of-bounds crops are skipped. Opacity is clamped to 0–1. |
+| `tilemap` | `type: "tilemap"`, `map`, `x`, `y`, `width`, `height`, `cameraX`, `cameraY`, `opacity` | Draws the visible part of a registered map into a clipped viewport. Camera coordinates are in map pixels and default to zero. |
 
 Colors must use 3-, 4-, 6-, or 8-digit hexadecimal CSS notation (for example
 `#0f0`, `#0f08`, `#00ed45`, or `#00ed45cc`) or `rgb(r, g, b)` with decimal
@@ -321,6 +327,59 @@ are skipped; unknown fields are silently ignored. The host also silently clamps
 or normalizes invalid supported values. There is currently no development-mode
 warning facility for ignored fields, so validate command construction in your
 own tests.
+
+### Packaged images, sprites, and tile maps
+
+`ui.graphics.image(image, x, y, options)` builds an `image` canvas command.
+Use `{ sx, sy, sw, sh }` to crop, `{ width, height }` to scale, and `flipX`,
+`flipY`, or `opacity` for transparency effects. PNG alpha and other image alpha
+are preserved. The renderer uses nearest-neighbor sampling for source scaling;
+the canvas also uses pixelated CSS scaling on desktop and mobile.
+
+`ui.graphics.sheet(image, frameWidth, frameHeight, { columns })` describes a
+grid of equal-sized frames. `columns` is the number of frames per row (default
+1). `ui.graphics.sprite(sheet, frame, x, y, options)` builds an image command
+for a zero-based frame. Options are `width`, `height`, `flipX`, `flipY`, and
+`opacity`; changing `frame` in `ui.animate` produces animation without reloading
+the image. Frame dimensions must be positive integers.
+
+`ui.graphics.tileMap(id, tiles, { columns, image, tileWidth, tileHeight,
+sheetColumns })` registers a rectangular row-major tile array once. Each cell
+is a zero-based frame index in the image sheet, or `-1` for an empty cell.
+`columns` is the map width in cells; `sheetColumns` is the image width in tile
+frames. The method returns `id`. Register again with the same id after editing
+the map. `ui.graphics.tileLayer(id, x, y, width, height, { cameraX, cameraY,
+opacity })` builds a viewport command; move its camera to scroll. The renderer
+draws only visible cells, clips them to the viewport, and caps one layer at
+4,096 inspected cells per frame. Maps are cached in the trusted renderer, so
+the tile array is transferred only when registered, not on every frame.
+
+```js
+StationNet.start((ui) => {
+  const atlas = ui.assets.image("assets/atlas.png");
+  const hero = ui.graphics.sheet(atlas, 16, 16, { columns: 8 });
+  const map = ui.graphics.tileMap("level", [0, 1, 2, 3, 3, 2, 1, 0], {
+    columns: 4, image: atlas, tileWidth: 16, tileHeight: 16, sheetColumns: 8
+  });
+  ui.render(ui.canvas(320, 180, [], { id: "game", label: "Game scene" }));
+  let time = 0;
+  ui.animate(({ delta }) => {
+    time += delta;
+    ui.update("game", ui.canvas(320, 180, [
+      ui.graphics.tileLayer(map, 0, 0, 320, 180, { cameraX: time * 8 }),
+      ui.graphics.sprite(hero, Math.floor(time * 8) % 4, 100, 80,
+        { width: 32, height: 32, flipX: true })
+    ], { id: "game", label: "Game scene" }));
+  });
+});
+```
+
+Up to 32 images (at most 2,048 × 2,048 pixels each, with an 8-million-pixel
+combined decoded budget) and 16 maps (at most
+262,144 cells each) may be registered per app. Existing package limits remain:
+pixel art PNG sheets typically fit within the 1 MiB per-file limit. Image
+decode may briefly leave a newly loaded sprite blank; the renderer redraws it
+once decoding finishes. Keep source images and map cell sizes modest on mobile.
 
 A frame may contain up to 10,000 line segments, 20,000 polygon vertices, and
 256 polygons. One polygon may contain up to 4,096 vertices. These geometry
@@ -400,10 +459,12 @@ range. Frame rate remains dependent on the browser, hardware, other page work,
 and the complexity of the application's command list.
 
 The remaining hot path is structured-cloning each frame's command data from the
-worker and replaying those commands through Canvas 2D. Keep stable page controls
-outside the loop, update one canvas id, batch wireframes with `lines`, and avoid
-allocating more commands than the scene needs. Large text/geometry command lists
-will become CPU and message-copy bound before simple sprite-style scenes do.
+worker and replaying those commands through Canvas 2D. Images and tile arrays
+are registered once and cached by the host; each frame sends only sprite commands
+and tile viewport positions. Keep stable page controls outside the loop, update
+one canvas id, batch wireframes with `lines`, and avoid allocating more commands
+than the scene needs. Large text/geometry command lists can become CPU and
+message-copy bound.
 
 ## Synthesized sound
 
@@ -512,6 +573,11 @@ The API is available at `ui.multiplayer`:
 | `snapshot()` | Returns session metadata, permission-safe players, authoritative state/revision, and recent events. |
 | `setState(state, { expectedRevision })` | Host-only replacement of authoritative shared state (256 KiB maximum). The optional revision provides optimistic concurrency control. |
 | `onEvent(handler)` | Subscribes to 500 ms polling updates and returns an unsubscribe function. The handler receives `(event, snapshot)`. |
+| `connectRealtime({ maxRate })` | Opens a station-local WebSocket for the current room. `maxRate` is an integer from 1 to 60 events per second (default 30). Resolves with `{ connected: true, maxRate }`. |
+| `sendRealtime(event, data)` | Queues a transient JSON event for other connected players in this room. Resolves with `{ queued: true }`; it does not acknowledge delivery to each player. |
+| `onRealtimeEvent(handler)` | Subscribes to transient `{ type: "event", event, data, player }` messages and connection updates `{ type: "presence", player_id, connected }`. Returns an unsubscribe function. A host change is `{ type: "host", player_id }`. |
+| `disconnectRealtime()` | Closes this runtime's WebSocket. Lobby membership remains until `leave()` or reconnect expiry. |
+| `createSync(options)` | Creates an optional fixed-rate host simulation helper with input validation, snapshot interpolation, and reconnect handling. Call `await sync.start(playerId)` after joining. |
 
 State is persisted in StationNet's SQLite database. Event history is bounded to
 500 entries per lobby and each poll returns at most 100. The trusted host relays
@@ -520,6 +586,96 @@ access. A closed page is marked disconnected and the same account can reconnect.
 Missing heartbeats are inferred after 30 seconds, membership is retained for a
 five-minute reconnect grace period, empty sessions close, and old closed
 sessions are removed.
+
+Use real-time events for movement, inputs, cursor positions, and other replaceable
+updates. They are delivered only to connected members of the same room, are not
+written to SQLite, and are not included in `snapshot()` or `onEvent()`. Open the
+socket after `create()` or `join()`. A disconnected client should call
+`connectRealtime()` again and use `snapshot()` to restore durable state. The
+existing `send()`, `onEvent()`, `setState()`, discovery, private join codes,
+revisions, and host migration continue to work unchanged. The browser host owns
+the socket; sandboxed application code receives only the StationNet API and has
+no direct network access.
+
+On a local station network, WebSocket events normally arrive within one network
+round trip plus server scheduling, without the 500 ms polling interval. This is
+an expected behavior, not a latency guarantee; Wi-Fi, device load, and rendering
+can add delay. Use a fixed game tick or interpolation if the game needs smooth
+motion. The server allows one active socket per player and room, 512 total
+connections, 16 KiB frames, a 64-message outgoing queue per socket, and at most
+the configured 1-60 inbound updates per second with a one-second burst. It
+closes sockets that exceed limits or send invalid messages. Event payloads must
+be JSON. Real-time delivery is best effort: keep critical game results in the
+existing durable state or event API. The in-memory relay requires one StationNet
+server process; the supplied desktop and Android launchers use one process.
+
+### Synchronized action games
+
+`createSync` keeps game rules in your application. The current host receives
+authenticated, ordered input packets and advances the simulation at `tickRate`
+(20 Hz by default). Return compact JSON state from `onTick` to publish it.
+Other players render `sync.sample()`, which interpolates numeric fields between
+the two latest snapshots with a 100 ms delay by default. Input validation and
+collision rules belong in the host callback.
+
+```js
+// Both signed-in players run this after create() or join().
+const joined = await ui.multiplayer.join(roomId); // host uses create() instead
+const sync = ui.multiplayer.createSync({
+  tickRate: 20,
+  validateInput(input) {
+    return input && Number.isInteger(input.dx) && Math.abs(input.dx) <= 1;
+  },
+  onTick({ state, inputs, dt, isHost }) {
+    if (!isHost) return;
+    const next = { players: { ...(state?.players || {}) } };
+    for (const packet of inputs) {
+      const id = packet.player.id; // authenticated by StationNet
+      const x = next.players[id]?.x || 0;
+      next.players[id] = { x: Math.max(0, Math.min(100, x + packet.data.dx * 4 * dt)) };
+    }
+    return next;
+  },
+  onState() { draw(sync.sample()); },
+  onHost(playerId) { /* The new host resumes simulation. */ },
+  onReconnect() { draw(sync.sample()); }
+});
+await sync.start(joined.player_id);
+await sync.input({ dx: 1 });
+// Call sync.stop() when leaving the game.
+```
+
+`sync.input(data)` sends increasing input ids; the relay stamps server time and
+room sequence and forwards inputs only to the host. The host may reject an input
+in `validateInput`, then publishes state with a monotonic tick. The relay rejects
+state from nonhosts and old host epochs. `sync.state` is the latest authoritative
+state. `sync.sample()` is for presentation. Optional `predict(state, input)`
+shows provisional local motion; the next host snapshot replaces it. Apps that
+need full replay reconciliation can maintain their own input history.
+
+The helper reconnects its socket and restores the latest in-memory state from
+the relay. `sync.resync()` requests that state explicitly. If the host departs,
+authority transfers to a connected member and the relay announces a new epoch
+with its last accepted state. The new host resumes from that state and starts
+ticks at zero. Cached state is kept for up to five minutes after all sockets
+disconnect. Use `setState` for durable checkpoints at game milestones. Movement
+snapshots do not write to SQLite. After a server restart, restore from
+`snapshot()` or initialize a fresh round. StationNet checks membership and host
+identity; each app defines its own game rules.
+
+```js
+await ui.multiplayer.join(roomId, { joinCode });
+await ui.multiplayer.connectRealtime({ maxRate: 30 });
+const unsubscribe = ui.multiplayer.onRealtimeEvent((message) => {
+  if (message.type === "event" && message.event === "position") {
+    // Draw or interpolate message.data for message.player.id.
+  }
+  if (message.type === "presence") {
+    // message.player_id is connected or disconnected.
+  }
+});
+await ui.multiplayer.sendRealtime("position", { x: 10, y: 20 });
+```
 
 Event objects are `{ id, event, data, player, created_at }`. For player-sent
 events, `player` contains only `{ id, username }`. StationNet also emits the

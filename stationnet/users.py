@@ -1,5 +1,6 @@
 """Station user directory and owner-editable profiles."""
 import secrets
+import re
 from datetime import date, datetime, timedelta, timezone
 from io import BytesIO
 from pathlib import Path
@@ -18,10 +19,28 @@ bp = Blueprint("users", __name__, url_prefix="/users")
 PROFILE_PHOTO_MAX_BYTES = 10 * 1024 * 1024
 PROFILE_PHOTO_MAX_PIXELS = 20_000_000
 PROFILE_PHOTO_SIZE = (128, 128)
+BIRTHDAY_WITH_YEAR_RE = re.compile(r"\d{4}-\d{2}-\d{2}")
+BIRTHDAY_WITHOUT_YEAR_RE = re.compile(r"\d{2}/\d{2}")
 
 
 def _cutoff():
     return (datetime.now(timezone.utc) - timedelta(seconds=45)).replace(microsecond=0).isoformat()
+
+
+def _valid_birthday(value):
+    """Accept an ISO date or a recurring month/day birthday without a year."""
+    try:
+        if BIRTHDAY_WITH_YEAR_RE.fullmatch(value):
+            date.fromisoformat(value)
+        elif BIRTHDAY_WITHOUT_YEAR_RE.fullmatch(value):
+            month, day = (int(part) for part in value.split("/"))
+            # Use a leap year so February 29 can be represented without a year.
+            date(2000, month, day)
+        else:
+            return False
+    except ValueError:
+        return False
+    return True
 
 
 def _profile_photo_dir():
@@ -214,11 +233,8 @@ def edit_profile(user_id):
             error = "About me cannot exceed 2000 characters."
         elif len(gender) > 40:
             error = "Gender cannot exceed 40 characters."
-        elif birthday:
-            try:
-                date.fromisoformat(birthday)
-            except ValueError:
-                error = "Birthday must be a valid date."
+        elif birthday and not _valid_birthday(birthday):
+            error = "Birthday must be a valid MM/DD or YYYY-MM-DD date."
         uploaded = request.files.get("profile_photo")
         new_photo = None
         if error is None and uploaded and uploaded.filename:

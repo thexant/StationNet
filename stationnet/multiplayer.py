@@ -81,6 +81,34 @@ def _touch(database, session_id, user_id, connection_id):
     )
 
 
+def _promote_connected_host(database, session_id):
+    """Move authority only when the old host has left or lost its connection."""
+    session = database.execute(
+        "SELECT host_user_id FROM application_multiplayer_sessions WHERE id=? AND status='open'", (session_id,)
+    ).fetchone()
+    if not session:
+        return None
+    current = database.execute(
+        "SELECT connected FROM application_multiplayer_members WHERE session_id=? AND user_id=?",
+        (session_id, session["host_user_id"]),
+    ).fetchone()
+    if current and current["connected"]:
+        return None
+    replacement = database.execute(
+        "SELECT user_id FROM application_multiplayer_members WHERE session_id=? AND connected=1 "
+        "ORDER BY joined_at,user_id LIMIT 1", (session_id,),
+    ).fetchone()
+    if not replacement:
+        return None
+    new_host = replacement["user_id"]
+    database.execute(
+        "UPDATE application_multiplayer_sessions SET host_user_id=?,updated_at=CURRENT_TIMESTAMP WHERE id=?",
+        (new_host, session_id),
+    )
+    _emit(database, session_id, None, "host_changed", {"player_id": f"player:{new_host}"})
+    return new_host
+
+
 def _summary(database, row, include_code=False):
     count = database.execute(
         "SELECT COUNT(*) FROM application_multiplayer_members WHERE session_id=?", (row["id"],)
@@ -115,6 +143,7 @@ def _cleanup(database):
         )
         _emit(database, item["session_id"], item["user_id"], "player_disconnected",
               {"player_id": f"player:{item['user_id']}"})
+        _promote_connected_host(database, item["session_id"])
     expired_sessions = database.execute(
         "SELECT DISTINCT session_id FROM application_multiplayer_members "
         "WHERE connected=0 AND last_seen < datetime('now', ?)", (f"-{RECONNECT_GRACE_SECONDS} seconds",),
@@ -253,6 +282,7 @@ def handle_multiplayer(slug, user, data):
         )
         if cursor.rowcount:
             _emit(database, session_id, user_id, "player_disconnected", {"player_id": f"player:{user_id}"})
+            _promote_connected_host(database, session_id)
         database.commit()
         return {"connected": not bool(cursor.rowcount)}
 

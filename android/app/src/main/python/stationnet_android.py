@@ -1,11 +1,10 @@
 """Android bridge for the shared StationNet application factory."""
 import os
 import threading
-from waitress import create_server
+import uvicorn
 
 _lock = threading.Lock()
 _server = None
-_stop_event = threading.Event()
 
 
 def run(data_dir):
@@ -13,33 +12,23 @@ def run(data_dir):
     global _server
     os.environ["STATIONNET_DATA"] = data_dir
     from stationnet import create_app
-    server = create_server(create_app(), host="0.0.0.0", port=8080, threads=4)
+    from stationnet.multiplayer_socket import create_asgi_app
+    server = uvicorn.Server(uvicorn.Config(
+        create_asgi_app(create_app()), host="0.0.0.0", port=8080,
+        ws_max_size=16 * 1024, ws_max_queue=64,
+    ))
     with _lock:
         _server = server
     try:
-        # Waitress's run() loops while any socket remains in its map. Closing
-        # only the listener leaves browser keep-alive connections in that map.
-        while not _stop_event.is_set():
-            server.asyncore.loop(
-                timeout=server.adj.asyncore_loop_timeout,
-                map=server._map,
-                use_poll=server.adj.asyncore_use_poll,
-                count=1,
-            )
+        server.run()
     finally:
-        server.close()
-        for channel in list(server.active_channels.values()):
-            channel.close()
-        server.task_dispatcher.shutdown()
         with _lock:
             if _server is server:
                 _server = None
-            _stop_event.clear()
 
 
 def stop():
     with _lock:
-        _stop_event.set()
         server = _server
     if server is not None:
-        server.trigger.pull_trigger()
+        server.should_exit = True

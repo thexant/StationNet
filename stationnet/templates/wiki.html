@@ -1,14 +1,58 @@
-{% extends 'base.html' %}
-{% block title %}Wiki{% endblock %}
+﻿{% extends 'base.html' %}
+{% block title %}Reference Library{% endblock %}
 {% block content %}
-<section class="wiki-screen">
+<section class="wiki-screen" data-wiki>
   <header class="screen-heading">
     <p class="eyebrow">STATION SERVICE / KNOWLEDGE LIBRARY</p>
-    <h1>WIKI</h1>
-    <p>Read the station's offline reference collection.</p>
+    <h1>REFERENCE LIBRARY</h1>
+    <p>Read the station's offline collection.</p>
   </header>
   {% if ready %}
-  <iframe class="wiki-reader" src="{{ url_for('kiwix.content') }}" title="Kiwix knowledge library" loading="eager"></iframe>
+    {% if diagnostic and g.user and g.user.is_admin %}<div class="terminal-card wiki-message"><h2>WIKI ARCHIVE WARNING</h2><pre class="muted">{{ diagnostic }}</pre></div>{% endif %}
+    <nav class="wiki-toolbar" aria-label="Library controls">
+      <a href="{{ url_for('kiwix.index') }}">ALL COLLECTIONS</a>
+      {% if article_source %}
+      <button type="button" data-wiki-back aria-label="Go back">← BACK</button>
+      <button type="button" data-wiki-forward aria-label="Go forward">FORWARD →</button>
+      {% endif %}
+      {% if books %}
+      <label for="wiki-book">COLLECTION</label>
+      <select id="wiki-book" data-wiki-collection>
+        <option value="">CHOOSE A COLLECTION</option>
+        {% for book in books %}<option value="{{ url_for('kiwix.read', path=book.name) }}" {% if book.name == active_book %}selected{% endif %}>{{ book.title }}</option>{% endfor %}
+      </select>
+      {% endif %}
+    </nav>
+    <form class="wiki-search" action="{{ url_for('kiwix.search') }}" method="get" role="search">
+      <label for="wiki-search-input">SEARCH THE COLLECTION</label>
+      <div class="wiki-search-fields">
+        <select name="book" aria-label="Collection" required>
+          <option value="">SELECT COLLECTION</option>
+          {% for book in books %}<option value="{{ book.name }}" {% if book.name == active_book %}selected{% endif %}>{{ book.title }}</option>{% endfor %}
+        </select>
+        <input id="wiki-search-input" name="q" type="search" value="{{ query or '' }}" placeholder="Find articles and pages" required>
+        <button type="submit">SEARCH</button>
+      </div>
+    </form>
+    {% if article_source %}
+      <div class="wiki-location"><a href="{{ url_for('kiwix.index') }}">LIBRARY</a><span aria-hidden="true">/</span><span>{{ (query and 'SEARCH RESULTS') or (books|selectattr('name', 'equalto', active_book)|map(attribute='title')|first)|default(active_book, true) }}</span></div>
+      <div class="wiki-reading" data-wiki-reading data-source="{{ article_source }}" data-kiwix-root="{{ url_for('kiwix.content') }}" data-content-prefix="{{ url_for('kiwix.content') }}content/" data-read-prefix="{{ url_for('kiwix.read', path='__path__')|replace('__path__', '') }}" data-theme-css="{{ url_for('static', filename='wiki_article.css', v='4') }}">
+        <p class="muted" data-wiki-loading>OPENING PAGE…</p>
+      </div>
+      <script src="{{ url_for('static', filename='wiki.js', v='3') }}" defer></script>
+    {% else %}
+      <div class="wiki-library">
+        {% for book in books %}
+        <a class="wiki-book" href="{{ url_for('kiwix.read', path=book.name) }}">
+          <span class="eyebrow">COLLECTION {{ '%02d'|format(loop.index) }}</span>
+          <strong>{{ book.title }}</strong>
+          {% if book.description %}<span>{{ book.description|striptags|truncate(180) }}</span>{% endif %}
+          <small>OPEN COLLECTION →</small>
+        </a>
+        {% else %}<p class="muted">No collections are available yet.</p>{% endfor %}
+      </div>
+      <script src="{{ url_for('static', filename='wiki.js', v='3') }}" defer></script>
+    {% endif %}
   {% else %}
   <div class="terminal-card wiki-message">
     <h2>LIBRARY UNAVAILABLE</h2>

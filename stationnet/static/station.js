@@ -215,6 +215,14 @@ for(const editor of document.querySelectorAll("[data-banner-editor]")){
   syncPreset();
 }
 for(const form of document.querySelectorAll("form[data-confirm]"))form.addEventListener("submit",e=>{if(!confirm(form.dataset.confirm))e.preventDefault()});
+for(const toggle of document.querySelectorAll("[data-feed-comment-toggle]"))toggle.addEventListener("click",()=>{
+  const form=document.getElementById(toggle.getAttribute("aria-controls"));
+  if(!form)return;
+  const expanded=form.hidden;
+  form.hidden=!expanded;
+  toggle.setAttribute("aria-expanded",String(expanded));
+  if(expanded)form.querySelector("textarea")?.focus();
+});
 for(const form of document.querySelectorAll('form[method="post"]:not([data-chat-form]):not([data-sfx-submit])'))form.addEventListener("submit",event=>{
   if(event.defaultPrevented||!form.checkValidity())return;
   const button=event.submitter;

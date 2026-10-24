@@ -65,7 +65,8 @@ chaquopy {
             // but does not have the desktop pin (11.3.0).
             install 'Pillow==11.0.0'
             install 'pyfiglet==1.0.4'
-            install 'waitress==3.0.2'
+            install 'uvicorn>=0.30,<1'
+            install 'websockets>=12,<17'
             install 'tzdata>=2025.2'
         }
     }

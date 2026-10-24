@@ -441,11 +441,53 @@ def install_package(package_bytes: bytes) -> Application:
 @login_required
 def index():
     visible = tuple(item for item in catalog() if item.enabled and item.runnable)
-    grouped = {
-        category: tuple(item for item in visible if item.category == category)
-        for category in CATEGORIES
+    preferences = {
+        row["application_slug"]: row for row in get_db().execute(
+            "SELECT application_slug,pinned_at,last_used_at FROM user_application_preferences WHERE user_id=?",
+            (g.user["id"],),
+        )
     }
-    return render_template("applications/index.html", categories=CATEGORIES, applications=grouped)
+    pinned = tuple(sorted(
+        (item for item in visible if preferences.get(item.slug) and preferences[item.slug]["pinned_at"]),
+        key=lambda item: item.name.casefold(),
+    ))
+    recent = tuple(sorted(
+        (item for item in visible if preferences.get(item.slug) and preferences[item.slug]["last_used_at"]),
+        key=lambda item: preferences[item.slug]["last_used_at"], reverse=True,
+    ))[:6]
+    selected = request.args.get("selected")
+    if selected not in {item.slug for item in visible}:
+        selected = visible[0].slug if visible else None
+    return render_template("applications/index.html", applications=visible,
+                           pinned=pinned, recent=recent, selected=selected)
+
+
+@bp.post("/<slug>/pin")
+@login_required
+def toggle_pin(slug):
+    validate_csrf()
+    application = find(slug)
+    if application is None or not application.enabled or not application.runnable:
+        abort(404)
+    database = get_db()
+    existing = database.execute(
+        "SELECT pinned_at FROM user_application_preferences WHERE user_id=? AND application_slug=?",
+        (g.user["id"], slug),
+    ).fetchone()
+    if existing and existing["pinned_at"]:
+        database.execute(
+            "UPDATE user_application_preferences SET pinned_at=NULL WHERE user_id=? AND application_slug=?",
+            (g.user["id"], slug),
+        )
+    else:
+        database.execute(
+            "INSERT INTO user_application_preferences(user_id,application_slug,pinned_at) "
+            "VALUES(?,?,CURRENT_TIMESTAMP) ON CONFLICT(user_id,application_slug) "
+            "DO UPDATE SET pinned_at=CURRENT_TIMESTAMP",
+            (g.user["id"], slug),
+        )
+    database.commit()
+    return redirect(url_for("applications.index", selected=slug))
 
 
 @bp.get("/<slug>")
@@ -454,6 +496,14 @@ def display(slug):
     application = find(slug)
     if application is None or not application.enabled or not application.runnable:
         abort(404)
+    database = get_db()
+    database.execute(
+        "INSERT INTO user_application_preferences(user_id,application_slug,last_used_at) "
+        "VALUES(?,?,strftime('%Y-%m-%d %H:%M:%f','now')) "
+        "ON CONFLICT(user_id,application_slug) DO UPDATE SET last_used_at=excluded.last_used_at",
+        (g.user["id"], slug),
+    )
+    database.commit()
     return render_template("applications/display.html", application=application)
 
 
@@ -689,9 +739,27 @@ def multiplayer(slug):
     if not session.get("csrf_token") or not hmac.compare_digest(token, session["csrf_token"]):
         return _storage_error("Invalid or expired request token.", 400)
     try:
-        value = handle_multiplayer(slug, g.user, request.get_json(silent=True))
+        payload = request.get_json(silent=True)
+        value = handle_multiplayer(slug, g.user, payload)
     except MultiplayerError as error:
         return _storage_error(str(error), error.status)
+    relay = current_app.extensions.get("multiplayer_relay")
+    if relay and isinstance(payload, dict):
+        operation = payload.get("operation")
+        room = payload.get("session_id")
+        if operation in {"join", "leave", "disconnect"} and isinstance(room, str):
+            relay.publish(room, {"type": "presence", "player_id": f"player:{g.user['id']}",
+                                 "connected": operation == "join"})
+        if operation == "leave" and isinstance(room, str):
+            host = get_db().execute("SELECT host_user_id FROM application_multiplayer_sessions WHERE id=? AND status='open'",
+                                    (room,)).fetchone()
+            if host:
+                relay.publish_host(room, host["host_user_id"])
+        if operation == "disconnect" and isinstance(room, str):
+            host = get_db().execute("SELECT host_user_id FROM application_multiplayer_sessions WHERE id=? AND status='open'",
+                                    (room,)).fetchone()
+            if host:
+                relay.publish_host(room, host["host_user_id"])
     return jsonify(ok=True, **value)
 
 

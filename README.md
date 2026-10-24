@@ -6,7 +6,7 @@ StationNet is a self-hosted, browser-accessible communications station inspired 
 
 - **Python 3.11+ and Flask** are small, readable, and cross-platform.
 - **SQLite** is built into Python and keeps station-owned records in one local file. WAL mode permits concurrent readers and writers.
-- **Waitress** is a production-oriented, pure-Python server for Windows and Linux that handles simultaneous connections.
+- **Uvicorn** serves HTTP and station-local WebSockets; Flask remains the application and HTTP API layer.
 - Server-rendered HTML and a little CSS/JavaScript work offline and need no frontend build chain.
 - Passwords use salted `scrypt`; forms have CSRF protection; sessions use signed, HTTP-only cookies; optional remembered logins use a rolling ten-year cookie and remain valid across server restarts; responses include baseline security headers.
 
@@ -25,7 +25,7 @@ Windows (easy setup):
 2. Use the generated `run.bat` to start StationNet at any time.
 3. Open `http://127.0.0.1:8080` and complete first-run setup.
 
-To reset an installed copy, double-click `uninstall.bat`. It optionally backs up station data, then removes only the generated environment, data, `run.bat`, and cache files. The StationNet directory, application source, and `kiwix_data/` archives remain intact, ready for `install.bat` to be run again.
+To reset an installed copy, double-click `uninstall.bat`. It optionally backs up station data, including `data/kiwix_data/`, then removes only the generated environment, data, `run.bat`, and cache files. The StationNet directory and application source remain intact, ready for `install.bat` to be run again.
 
 ### Linux, macOS, and Unix
 
@@ -37,7 +37,7 @@ chmod +x install.sh run.sh uninstall.sh
 ./run.sh
 ```
 
-`install.sh` requires Python 3.11 or newer and creates `.venv` in the StationNet folder. Run `./uninstall.sh` to optionally back up `data` and remove only generated runtime files, leaving the source copy and `kiwix_data/` archives intact. Android hosting uses the standalone APK described in the distribution guide.
+`install.sh` requires Python 3.11 or newer and creates `.venv` in the StationNet folder. Run `./uninstall.sh` to optionally back up `data`, including its `kiwix_data/` collection, and remove only generated runtime files, leaving the source copy intact. Android hosting uses the standalone APK described in the distribution guide.
 
 Windows PowerShell (manual setup):
 
@@ -65,7 +65,6 @@ Open `http://127.0.0.1:8080` and complete first-run setup. By default the statio
 | --- | --- | --- |
 | `STATIONNET_HOST` | `0.0.0.0` | Listening interface; use `127.0.0.1` for local-only. |
 | `STATIONNET_PORT` | `8080` | Listening port. |
-| `STATIONNET_THREADS` | `16` | Waitress request-worker count. Increase this if sustained queue-depth warnings occur with many active clients. |
 | `STATIONNET_DATA` | `./data` | Directory for `station.db` and `secret.key`. |
 | `STATIONNET_HTTPS` | unset | Set to `1` only when HTTPS is terminated in front of the app. |
 | `STATIONNET_DISTRIBUTION_DIR` | `./dist` | Local ZIP/source package directory served on **Get Your Own Station**. |
@@ -85,7 +84,7 @@ Under **SYSOP CONTROL → VIDEOS**, SYSOPs can set a default member upload quota
 
 ### Optional WIKI (Kiwix)
 
-The WIKI service is disabled by default. A SYSOP can enable it under **SYSOP CONTROL → WIKI**. The desktop installers include the official Kiwix reader; source installation downloads it automatically. Put `.zim` archives in `kiwix_data/` beside the main `data/` directory. StationNet starts the local reader when a visitor opens WIKI and displays its library inside the station interface. Set `STATIONNET_KIWIX_SERVE` only to override the included executable. The Kiwix archives live outside the regular data backup; back up `kiwix_data/` separately if you want to preserve them. When `STATIONNET_DATA` points to a different directory, `kiwix_data` is created beside that directory. Keep the ZIM files directly inside `kiwix_data/`.
+The WIKI service is disabled by default. A SYSOP can enable it under **SYSOP CONTROL → WIKI**. The desktop installers include the official Kiwix reader; source installation downloads it automatically. Put `.zim` archives directly in `data/kiwix_data/` (or `kiwix_data/` inside your `STATIONNET_DATA` directory). StationNet registers the archives and starts the local reader when a visitor opens WIKI. New or removed archives are picked up on the next WIKI request. The collection is included when you back up or restore the station data directory. On first use after an upgrade, StationNet moves archives from the older sibling `kiwix_data/` folder into the station data directory. Set `STATIONNET_KIWIX_SERVE` only to override the included executable.
 
 Guests can read bulletins when guest access is enabled and can always read station announcements. Registered users can join the persistent public chat, open temporary direct chats with online users, exchange persistent private mail, use the shared file archive, maintain a profile, and operate the radio from every authenticated station page. Authorized hosts can upload private audio, prepare playlists and reusable mixed-mode programs, and run server-timed stations on sysop-assigned frequencies; listeners joining midway synchronize to the current action. Programs combine playlists, announcements, jingles, Morse, SSTV, and live microphone breaks. Authorized DJs can take a single-controller lease, pause or skip, adjust music ducking, and use push-to-talk. SYSOPs can configure legacy playlist automation and persisted program schedules with time, interval, playback, and DJ lifecycle triggers. Radio signal events, active playback clocks, and direct traffic are held only in server memory and are discarded after expiry or server restart; program, content, and automation definitions remain saved. The SYSOP can manage announcements, archive policy, radio band ranges and transmission capabilities, broadcast assignments and limits, and independent multi-group radio permissions under **SYSOP CONTROL**. Every account belongs to the permanent `DEFAULT` radio group; additional groups combine with explicit `DENIED` taking precedence over `FULL`, then `LISTEN`. `HOST BROADCASTS` is a separate group capability and is effective only alongside `FULL` access. `/` focuses service navigation when not typing; Escape releases focus.
 
@@ -108,7 +107,7 @@ python -m pip install -r requirements-dev.txt
 python -m pytest
 ```
 
-`stationnet/` contains the app factory, SQLite layer, authentication, service blueprints, templates, and static UI. `tests/` covers setup, authentication, callsigns, community services, live radio occupancy/CW/SSTV/tuning/permissions, CSRF, and restart persistence. `run.py` is the normal Waitress entry point.
+`stationnet/` contains the app factory, SQLite layer, authentication, service blueprints, templates, and static UI. `tests/` covers setup, authentication, callsigns, community services, live radio occupancy/CW/SSTV/tuning/permissions, CSRF, and restart persistence. `run.py` starts the HTTP and WebSocket server.
 
 ## Networking and future work
 

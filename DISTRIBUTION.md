@@ -75,7 +75,7 @@ archive includes `install.bat`, `install.sh`, both uninstallers, and the run
 scripts, so it can be installed directly after extraction. Source installation
 downloads the Kiwix reader along with Python dependencies; build the Windows
 or Linux packages to provide an offline installation. The uninstallers
-preserve `kiwix_data/`; back up its ZIM files separately when moving stations.
+preserve `data/kiwix_data/` with the rest of station data when moving stations.
 The downloads page also exposes its local README and this guide. If a `LICENSE` file is added to
 the StationNet checkout, it is exposed there and included in source archives.
 
