@@ -346,6 +346,20 @@ button:focus-visible, .button:focus-visible, a:focus-visible, summary:focus-visi
 .profile-data { margin: 0 0 1.5rem; }
 .profile-data div { display: grid; grid-template-columns: 8rem minmax(0,1fr); gap: 1rem; padding: .5rem 0; border-bottom: 1px dotted var(--green-dim); }
 .profile-data dd { text-align: left; }
+.user-feed { width: min(720px,100%); }
+.user-feed .split-heading { align-items: start; }
+.feed-compose { margin: 1rem 0; }
+.feed-post { padding: 1rem 0; border-top: 1px dotted var(--green-dim); }
+.feed-post > .message-body { margin: .6rem 0; }
+.feed-meta { display: flex; flex-wrap: wrap; gap: .35rem 1rem; align-items: baseline; font-size: .75rem; }
+.feed-meta time { color: var(--grey); }
+.feed-reactions, .feed-pagination { display: flex; flex-wrap: wrap; gap: .5rem; margin: .8rem 0; }
+.feed-reactions button[aria-pressed="true"] { border-color: var(--cyan); color: var(--cyan); }
+.feed-comments { margin: .8rem 0 0; padding-left: .85rem; border-left: 1px dotted var(--green-dim); }
+.feed-comments h3 { font-size: .8rem; }
+.feed-comment { padding: .65rem 0; border-top: 1px dotted var(--green-dim); }
+.feed-comment .message-body { margin: .4rem 0; }
+.feed-comment .inline-form button, .feed-post > .inline-form button { min-height: 1.8rem; font-size: .7rem; }
 .presence { color: var(--grey); font-size: var(--text-xs); }
 .presence.online { color: var(--green-bright); text-shadow: 0 0 .45rem var(--green); }
 
@@ -439,6 +453,7 @@ button:focus-visible, .button:focus-visible, a:focus-visible, summary:focus-visi
 .application-metadata dd { color: var(--green-bright); text-align: left; }
 .application-return { margin: 0 1rem 1rem; }
 .application-immersive-exit { position: fixed; top: .65rem; right: .65rem; z-index: 40; color: #000; border-color: var(--amber); background: var(--amber); }
+.application-immersive-exit[hidden] { display: none; }
 
 body.application-immersive { overflow: hidden; }
 body.application-immersive .station-shell { width: 100%; height: 100dvh; padding: 0; grid-template-rows: 1fr; }
@@ -474,6 +489,7 @@ button:disabled { opacity: .5; cursor: not-allowed; }
 .mud-link-state { color: var(--green-bright); font-size: var(--text-xs); letter-spacing: .08em; white-space: nowrap; }
 .mud-layout { display: grid; grid-template-columns: minmax(0, 1fr) 15rem; min-height: 0; flex: 1; border: 1px solid var(--green); }
 .mud-main { display: grid; grid-template-rows: minmax(9rem, .85fr) auto minmax(10rem, 1.15fr) auto; min-width: 0; min-height: 0; overflow: hidden; border-right: 1px solid var(--green-dim); }
+.mud-main.mud-history-collapsed,
 .mud-main:has(.mud-history:not([open])) { grid-template-rows: minmax(9rem, 1fr) auto auto auto; }
 .mud-room { min-height: 0; padding: .7rem .85rem; overflow-y: auto; overflow-wrap: anywhere; border-bottom: 1px solid var(--green-dim); background: rgba(0,237,69,.035); scrollbar-color: var(--green-dim) #000; }
 .mud-room .eyebrow { margin: 0 0 .3rem; }
@@ -494,7 +510,7 @@ button:disabled { opacity: .5; cursor: not-allowed; }
 .mud-enemy small, .mud-enemy output { color: var(--grey); font-size: var(--text-xs); }
 .mud-enemy progress { width: 100%; height: .5rem; accent-color: var(--red); }
 .mud-enemy.defeated { opacity: .62; }
-.mud-events { min-height: 0; padding: .45rem .7rem; overflow-y: auto; overscroll-behavior: contain; background: #010401; scrollbar-color: var(--green-dim) #000; }
+.mud-events { min-height: 0; max-height: 100%; padding: .45rem .7rem; overflow-y: auto; overscroll-behavior: contain; background: #010401; scrollbar-color: var(--green-dim) #000; }
 .mud-event { display: grid; grid-template-columns: 4.5rem minmax(0,1fr); gap: .65rem; padding: .3rem .2rem; border-bottom: 1px dotted #064d1d; }
 .mud-event span { color: var(--cyan); font-size: var(--text-xs); letter-spacing: .06em; }
 .mud-event p { margin: 0; color: var(--white); font-size: .76rem; white-space: pre-wrap; overflow-wrap: anywhere; }
@@ -823,6 +839,27 @@ button:disabled { opacity: .5; cursor: not-allowed; }
   .builder-inline-form, .builder-exit-row, .builder-add-exit, .builder-danger-zone form { grid-template-columns: 1fr; }
   .builder-permission-list form, .builder-room-heading { align-items: flex-start; flex-direction: column; }
 }
+
+/* Character creation uses the same terminal palette and control vocabulary. */
+.mud-creator { max-width: 900px; margin: 0 auto; min-width: 0; }
+.mud-creator > header { margin-bottom: 1.25rem; }
+.mud-creator-steps { display: flex; flex-wrap: wrap; gap: .4rem; padding: 0; list-style: none; }
+.mud-creator-steps li { padding: .35rem .6rem; border: 1px solid var(--border, #456); font-size: .85rem; }
+.mud-creator-steps [aria-current="step"] { color: var(--green-bright, #9f9); border-color: currentColor; }
+.mud-creator fieldset { min-width: 0; margin: 1rem 0; padding: 1rem; border: 1px solid var(--border, #456); }
+.mud-creator legend { padding: 0 .4rem; font-weight: bold; }
+.mud-creator-options, .mud-creator-attributes { display: grid; grid-template-columns: repeat(auto-fit,minmax(min(100%,240px),1fr)); gap: .65rem; }
+.mud-creator-choice, .mud-creator-attributes label { display: grid; align-content: start; gap: .35rem; min-width: 0; padding: .8rem; border: 1px solid var(--border, #456); cursor: pointer; }
+.mud-creator-choice:has(input:checked) { border-color: var(--green-bright, #9f9); }
+.mud-creator-choice input { justify-self: start; }
+.mud-creator-choice span, .mud-creator-attributes span { overflow-wrap: anywhere; }
+.mud-creator-choice small, .mud-creator-attributes small { color: var(--cyan, #8dd); }
+.mud-creator-attributes input { width: 6rem; }
+.mud-creator-nav { display: flex; flex-wrap: wrap; gap: .6rem; margin: 1rem 0; }
+.mud-creator [hidden] { display: none !important; }
+.mud-legacy-notice { padding: .75rem; margin: .5rem 0 1rem; border: 1px solid var(--cyan, #8dd); }
+.mud-legacy-notice .button { margin-left: .5rem; }
+.mud-character-origin, .mud-character-skills { margin: .35rem 0; }
 .moderation-list,.moderation-item{display:grid;gap:.6rem}
 .moderation-list>div,.moderation-item{padding:.75rem 0;border-bottom:1px solid #444}
 .moderation-item form{margin-top:.75rem}

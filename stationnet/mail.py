@@ -14,14 +14,16 @@ def notifications():
     after = max(0, request.args.get("after", 0, type=int))
     database = get_db()
     latest_id = database.execute(
-        "SELECT COALESCE(MAX(id),0) FROM mail WHERE recipient_id=?",
-        (g.user["id"],),
+        "SELECT COALESCE(MAX(id),0) FROM mail WHERE recipient_id=? "
+        "AND (? OR subject NOT LIKE 'FEED:%')",
+        (g.user["id"], g.station["user_feeds_enabled"]),
     ).fetchone()[0]
     counts = database.execute(
         "SELECT COUNT(*) FILTER (WHERE id>?) AS new_count, "
         "COUNT(*) FILTER (WHERE is_read=0) AS unread_count "
-        "FROM mail WHERE recipient_id=? AND recipient_deleted=0",
-        (after, g.user["id"]),
+        "FROM mail WHERE recipient_id=? AND recipient_deleted=0 "
+        "AND (? OR subject NOT LIKE 'FEED:%')",
+        (after, g.user["id"], g.station["user_feeds_enabled"]),
     ).fetchone()
     return jsonify(latest_id=latest_id, new_count=counts["new_count"],
                    unread_count=counts["unread_count"])
@@ -33,8 +35,9 @@ def inbox():
     messages = get_db().execute(
         "SELECT m.id,m.subject,m.is_read,m.created_at,u.callsign,u.username "
         "FROM mail m JOIN users u ON u.id=m.sender_id "
-        "WHERE m.recipient_id=? AND m.recipient_deleted=0 ORDER BY m.created_at DESC,m.id DESC",
-        (g.user["id"],),
+        "WHERE m.recipient_id=? AND m.recipient_deleted=0 "
+        "AND (? OR m.subject NOT LIKE 'FEED:%') ORDER BY m.created_at DESC,m.id DESC",
+        (g.user["id"], g.station["user_feeds_enabled"]),
     ).fetchall()
     return render_template("mail/index.html", messages=messages, folder="inbox")
 
@@ -97,6 +100,8 @@ def view(message_id):
     ).fetchone()
     if message is None:
         abort(404)
+    if message["subject"].startswith("FEED:") and not g.station["user_feeds_enabled"]:
+        abort(404)
     thread_id = message["thread_id"] or message["id"]
     messages = database.execute(
         "SELECT m.*,s.username sender_name,s.callsign sender_callsign,"
@@ -139,6 +144,8 @@ def reply(message_id):
         (message_id, g.user["id"], g.user["id"]),
     ).fetchone()
     if message is None:
+        abort(404)
+    if message["subject"].startswith("FEED:") and not g.station["user_feeds_enabled"]:
         abort(404)
 
     body = request.form.get("body", "").strip()

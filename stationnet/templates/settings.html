@@ -1,6 +1,16 @@
 {% extends 'base.html' %}
 {% block title %}SYSOP Settings{% endblock %}
 {% block content %}
+<section class="narrow terminal-card settings-section" id="user-feeds">
+  <p class="eyebrow">SYSOP CONTROL / USER FEEDS</p><h2>User Feeds</h2>
+  <p class="muted">Profile posts, comments, and reactions are hidden and blocked while disabled. Existing content is kept.</p>
+  <form method="post" action="{{ url_for('station.settings') }}" class="form-grid">
+    <input type="hidden" name="csrf_token" value="{{ session.csrf_token }}">
+    <input type="hidden" name="settings_section" value="user_feeds">
+    <label class="switch"><input type="checkbox" name="user_feeds_enabled" {% if g.station.user_feeds_enabled %}checked{% endif %}> Enable User Feeds</label>
+    <button>SAVE USER FEEDS SETTING</button>
+  </form>
+</section>
 <nav class="subnav settings-jump-nav" aria-label="Settings sections"><a href="#station-parameters">STATION</a><a href="#access-policy">ACCESS</a><a href="#mud-service">MUD</a><a href="#mud-daily">DAILY MUD</a><a href="#radio-storage">RADIO STORAGE</a><a href="#radio-spectrum">SPECTRUM</a><a href="#broadcast-frequencies">FREQUENCIES</a><a href="#radio-permissions">PERMISSIONS</a><a href="#radio-users">USERS</a><a href="{{ url_for('moderation.dashboard') }}">MODERATION</a><a href="{{ url_for('application_admin.manage') }}">GAMES + APPS</a></nav>
 <section class="narrow terminal-card collapsible-panel" id="station-parameters" data-collapsible-panel data-panel-key="sysop-station-parameters">
   <button type="button" class="collapsible-panel-toggle" data-panel-toggle aria-expanded="true" aria-controls="station-parameters-content">

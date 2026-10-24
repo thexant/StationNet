@@ -117,7 +117,76 @@ def profile(user_id):
     ).fetchone()
     if profile_user is None:
         abort(404)
-    return render_template("users/profile.html", profile=profile_user)
+    feed_posts = []
+    feed_comments = {}
+    feed_reactions = {}
+    feed_comment_counts = {}
+    feed_page = 1
+    feed_has_next = False
+    selected_post = None
+    comment_page = 1
+    comment_has_next = False
+    if g.station["user_feeds_enabled"]:
+        feed_page = min(1000, max(1, request.args.get("page", 1, type=int)))
+        selected_post = request.args.get("post", type=int)
+        if selected_post is not None:
+            if selected_post < 1:
+                abort(404)
+            comment_page = min(1000, max(1, request.args.get("comments", 1, type=int)))
+            feed_posts = database.execute(
+                "SELECT p.*,u.username,u.callsign FROM user_feed_posts p "
+                "JOIN users u ON u.id=p.owner_id WHERE p.owner_id=? AND p.id=?",
+                (user_id, selected_post),
+            ).fetchall()
+            if not feed_posts:
+                abort(404)
+        else:
+            rows = database.execute(
+                "SELECT p.*,u.username,u.callsign FROM user_feed_posts p "
+                "JOIN users u ON u.id=p.owner_id WHERE p.owner_id=? "
+                "ORDER BY p.id DESC LIMIT 21 OFFSET ?", (user_id, (feed_page - 1) * 20),
+            ).fetchall()
+            feed_has_next = len(rows) > 20
+            feed_posts = rows[:20]
+        for post in feed_posts:
+            feed_comment_counts[post["id"]] = database.execute(
+                "SELECT COUNT(*) FROM user_feed_comments WHERE post_id=?", (post["id"],)
+            ).fetchone()[0]
+            if selected_post is not None:
+                rows = database.execute(
+                    "SELECT c.*,u.username,u.callsign FROM user_feed_comments c "
+                    "JOIN users u ON u.id=c.author_id WHERE c.post_id=? "
+                    "ORDER BY c.id DESC LIMIT 31 OFFSET ?",
+                    (post["id"], (comment_page - 1) * 30),
+                ).fetchall()
+                comment_has_next = len(rows) > 30
+                feed_comments[post["id"]] = rows[:30]
+            else:
+                feed_comments[post["id"]] = database.execute(
+                    "SELECT c.*,u.username,u.callsign FROM user_feed_comments c "
+                    "JOIN users u ON u.id=c.author_id WHERE c.post_id=? "
+                    "ORDER BY c.id DESC LIMIT 3", (post["id"],),
+                ).fetchall()
+            counts = database.execute(
+                "SELECT kind,COUNT(*) count FROM user_feed_reactions WHERE post_id=? GROUP BY kind",
+                (post["id"],),
+            ).fetchall()
+            chosen = database.execute(
+                "SELECT kind FROM user_feed_reactions WHERE post_id=? AND user_id=?",
+                (post["id"], g.user["id"]),
+            ).fetchone()
+            feed_reactions[post["id"]] = {
+                "counts": {row["kind"]: row["count"] for row in counts},
+                "chosen": chosen["kind"] if chosen else None,
+            }
+    return render_template(
+        "users/profile.html", profile=profile_user, feed_posts=feed_posts,
+        feed_comments=feed_comments, feed_reactions=feed_reactions,
+        feed_comment_counts=feed_comment_counts,
+        feed_page=feed_page, feed_has_next=feed_has_next,
+        selected_post=selected_post, comment_page=comment_page,
+        comment_has_next=comment_has_next,
+    )
 
 
 @bp.route("/<int:user_id>/edit", methods=("GET", "POST"))

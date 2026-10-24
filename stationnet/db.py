@@ -26,6 +26,7 @@ CREATE TABLE IF NOT EXISTS station (
  mud_enabled INTEGER NOT NULL DEFAULT 0 CHECK(mud_enabled IN (0,1)),
  mud_traditional_enabled INTEGER NOT NULL DEFAULT 0 CHECK(mud_traditional_enabled IN (0,1)),
  mud_procedural_enabled INTEGER NOT NULL DEFAULT 0 CHECK(mud_procedural_enabled IN (0,1)),
+ user_feeds_enabled INTEGER NOT NULL DEFAULT 1 CHECK(user_feeds_enabled IN (0,1)),
  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);
 CREATE TABLE IF NOT EXISTS users (
  id INTEGER PRIMARY KEY AUTOINCREMENT, username TEXT NOT NULL COLLATE NOCASE UNIQUE,
@@ -52,6 +53,31 @@ CREATE TABLE IF NOT EXISTS posts (
  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
  CHECK((parent_id IS NULL AND title IS NOT NULL) OR parent_id IS NOT NULL));
 CREATE INDEX IF NOT EXISTS idx_posts_parent ON posts(parent_id);
+CREATE TABLE IF NOT EXISTS user_feed_posts (
+ id INTEGER PRIMARY KEY AUTOINCREMENT,
+ owner_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+ body TEXT NOT NULL CHECK(length(body) BETWEEN 1 AND 200),
+ created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);
+CREATE INDEX IF NOT EXISTS idx_user_feed_posts_owner ON user_feed_posts(owner_id,id DESC);
+CREATE TABLE IF NOT EXISTS user_feed_comments (
+ id INTEGER PRIMARY KEY AUTOINCREMENT,
+ post_id INTEGER NOT NULL REFERENCES user_feed_posts(id) ON DELETE CASCADE,
+ author_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+ body TEXT NOT NULL CHECK(length(body) BETWEEN 1 AND 500),
+ created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);
+CREATE INDEX IF NOT EXISTS idx_user_feed_comments_post ON user_feed_comments(post_id,id);
+CREATE TABLE IF NOT EXISTS user_feed_reactions (
+ post_id INTEGER NOT NULL REFERENCES user_feed_posts(id) ON DELETE CASCADE,
+ user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+ kind TEXT NOT NULL CHECK(kind IN ('like','heart','laugh')),
+ created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+ PRIMARY KEY(post_id,user_id));
+CREATE TABLE IF NOT EXISTS user_feed_reaction_events (
+ id INTEGER PRIMARY KEY AUTOINCREMENT,
+ user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+ created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);
+CREATE INDEX IF NOT EXISTS idx_user_feed_reaction_events_user
+ ON user_feed_reaction_events(user_id,created_at);
 CREATE TABLE IF NOT EXISTS station_chat_messages (
  id INTEGER PRIMARY KEY AUTOINCREMENT,
  author_id INTEGER NOT NULL REFERENCES users(id) ON DELETE RESTRICT,
@@ -71,7 +97,7 @@ CREATE TABLE IF NOT EXISTS moderation_audit (
 CREATE INDEX IF NOT EXISTS idx_moderation_audit_user ON moderation_audit(user_id,id);
 CREATE TABLE IF NOT EXISTS moderation_reports (
  id INTEGER PRIMARY KEY AUTOINCREMENT, reporter_id INTEGER NOT NULL REFERENCES users(id),
- target_type TEXT NOT NULL CHECK(target_type IN ('user','chat','bulletin','file')),
+ target_type TEXT NOT NULL CHECK(target_type IN ('user','chat','bulletin','file','feed_post','feed_comment')),
  target_id INTEGER NOT NULL, subject_user_id INTEGER REFERENCES users(id),
  reason TEXT NOT NULL, created_at TEXT NOT NULL,
  status TEXT NOT NULL DEFAULT 'open' CHECK(status IN ('open','resolved','dismissed')),
@@ -300,8 +326,17 @@ CREATE TABLE IF NOT EXISTS mud_characters (
  id TEXT PRIMARY KEY,
  user_id INTEGER NOT NULL UNIQUE REFERENCES users(id) ON DELETE CASCADE,
  display_name TEXT NOT NULL COLLATE NOCASE,
+ creation_state TEXT NOT NULL DEFAULT 'pending' CHECK(creation_state IN ('pending','legacy','complete')),
+ race_key TEXT,
+ class_key TEXT,
  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);
+CREATE TABLE IF NOT EXISTS mud_character_skills (
+ character_id TEXT NOT NULL REFERENCES mud_characters(id) ON DELETE CASCADE,
+ skill_key TEXT NOT NULL,
+ rank INTEGER NOT NULL DEFAULT 1 CHECK(rank BETWEEN 1 AND 20),
+ experience INTEGER NOT NULL DEFAULT 0 CHECK(experience>=0),
+ PRIMARY KEY(character_id,skill_key));
 CREATE TABLE IF NOT EXISTS mud_character_progression (
  character_id TEXT NOT NULL REFERENCES mud_characters(id) ON DELETE CASCADE,
  track_key TEXT NOT NULL CHECK(track_key IN ('shared','traditional','procedural')),
@@ -813,8 +848,8 @@ END;
 CREATE TRIGGER IF NOT EXISTS mud_character_after_user_insert
 AFTER INSERT ON users
 BEGIN
- INSERT OR IGNORE INTO mud_characters(id,user_id,display_name)
- VALUES('stationnet:character:' || NEW.id,NEW.id,NEW.callsign);
+ INSERT OR IGNORE INTO mud_characters(id,user_id,display_name,creation_state)
+ VALUES('stationnet:character:' || NEW.id,NEW.id,NEW.callsign,'pending');
  INSERT OR IGNORE INTO mud_character_progression(character_id,track_key)
  VALUES('stationnet:character:' || NEW.id,'shared');
  INSERT OR IGNORE INTO mud_character_progression(character_id,track_key)
@@ -867,6 +902,7 @@ def init_db():
     database.executescript(SCHEMA)
     _migrate_mud_dungeon_content_types(database)
     _migrate_station_customization(database)
+    _migrate_user_feeds(database)
     _migrate_registration_policy(database)
     _migrate_community_fields(database)
     _migrate_mail_threads(database)
@@ -878,6 +914,7 @@ def init_db():
     _migrate_mud_expeditions(database)
     _migrate_mud_crossover(database)
     _migrate_application_permissions(database)
+    _migrate_mud_character_creation(database)
     _initialize_mud_characters(database)
     _initialize_mud_world(database)
     database.execute("INSERT OR IGNORE INTO mud_portal_settings(id) VALUES(1)")
@@ -979,11 +1016,32 @@ def _migrate_mail_threads(database):
     )
 
 
+def _migrate_mud_character_creation(database):
+    """Offer existing characters one customization without resetting their saves."""
+    columns = {row["name"] for row in database.execute("PRAGMA table_info(mud_characters)")}
+    if "creation_state" not in columns:
+        database.execute(
+            "ALTER TABLE mud_characters ADD COLUMN creation_state TEXT NOT NULL DEFAULT 'pending'"
+        )
+        database.execute("UPDATE mud_characters SET creation_state='legacy'")
+    if "race_key" not in columns:
+        database.execute("ALTER TABLE mud_characters ADD COLUMN race_key TEXT")
+    if "class_key" not in columns:
+        database.execute("ALTER TABLE mud_characters ADD COLUMN class_key TEXT")
+    database.execute(
+        "CREATE TABLE IF NOT EXISTS mud_character_skills ("
+        "character_id TEXT NOT NULL REFERENCES mud_characters(id) ON DELETE CASCADE,"
+        "skill_key TEXT NOT NULL,rank INTEGER NOT NULL DEFAULT 1 CHECK(rank BETWEEN 1 AND 20),"
+        "experience INTEGER NOT NULL DEFAULT 0 CHECK(experience>=0),"
+        "PRIMARY KEY(character_id,skill_key))"
+    )
+
+
 def _initialize_mud_characters(database):
     """Backfill one identity and non-destructive mode-ready tracks per account."""
     database.execute(
-        "INSERT OR IGNORE INTO mud_characters(id,user_id,display_name) "
-        "SELECT 'stationnet:character:' || id,id,callsign FROM users"
+        "INSERT OR IGNORE INTO mud_characters(id,user_id,display_name,creation_state) "
+        "SELECT 'stationnet:character:' || id,id,callsign,'pending' FROM users"
     )
     database.execute(
         "INSERT OR IGNORE INTO mud_character_progression(character_id,track_key) "
@@ -1121,6 +1179,41 @@ def _migrate_radio_permissions(database):
         "INSERT OR IGNORE INTO radio_group_memberships(user_id,group_id) "
         "SELECT id,? FROM users", (default_id,),
     )
+
+def _migrate_user_feeds(database):
+    columns = {row["name"] for row in database.execute("PRAGMA table_info(station)")}
+    if "user_feeds_enabled" not in columns:
+        database.execute(
+            "ALTER TABLE station ADD COLUMN user_feeds_enabled INTEGER NOT NULL DEFAULT 1 "
+            "CHECK(user_feeds_enabled IN (0,1))"
+        )
+    # SQLite cannot alter a CHECK constraint in place. Rebuild only the report
+    # table on older installations so feed content can use the existing queue.
+    sql = database.execute(
+        "SELECT sql FROM sqlite_master WHERE type='table' AND name='moderation_reports'"
+    ).fetchone()[0]
+    if "'feed_post'" not in sql:
+        database.execute("ALTER TABLE moderation_reports RENAME TO moderation_reports_old")
+        database.execute("""CREATE TABLE moderation_reports (
+         id INTEGER PRIMARY KEY AUTOINCREMENT,
+         reporter_id INTEGER NOT NULL REFERENCES users(id),
+         target_type TEXT NOT NULL CHECK(target_type IN
+           ('user','chat','bulletin','file','feed_post','feed_comment')),
+         target_id INTEGER NOT NULL, subject_user_id INTEGER REFERENCES users(id),
+         reason TEXT NOT NULL, created_at TEXT NOT NULL,
+         status TEXT NOT NULL DEFAULT 'open' CHECK(status IN ('open','resolved','dismissed')),
+         resolver_id INTEGER REFERENCES users(id), resolution_note TEXT NOT NULL DEFAULT '',
+         resolved_at TEXT)""")
+        database.execute("INSERT INTO moderation_reports SELECT * FROM moderation_reports_old")
+        database.execute("DROP TABLE moderation_reports_old")
+        database.execute(
+            "CREATE INDEX idx_moderation_reports_queue ON moderation_reports(status,id)"
+        )
+        database.execute(
+            "CREATE UNIQUE INDEX idx_moderation_reports_open_unique "
+            "ON moderation_reports(reporter_id,target_type,target_id) WHERE status='open'"
+        )
+
 
 def _migrate_station_customization(database):
     """Add customizable station copy to databases created by older versions."""

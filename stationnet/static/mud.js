@@ -2,6 +2,8 @@
 
 for(const mud of document.querySelectorAll("[data-mud]")){
   const events=mud.querySelector("[data-mud-events]");
+  const main=mud.querySelector(".mud-main");
+  const history=mud.querySelector(".mud-history");
   const actions=mud.querySelector("[data-mud-actions]");
   const form=mud.querySelector("[data-mud-command]");
   const input=form.querySelector("[data-command-input]");
@@ -17,6 +19,8 @@ for(const mud of document.querySelectorAll("[data-mud]")){
   const characterName=mud.querySelector("[data-character-name]");
   const characterLevel=mud.querySelector("[data-character-level]");
   const characterTrack=mud.querySelector("[data-character-track]");
+  const characterOrigin=mud.querySelector("[data-character-origin]");
+  const characterSkills=mud.querySelector("[data-character-skills]");
   const characterMode=mud.querySelector("[data-character-mode]");
   const characterHealth=mud.querySelector("[data-character-health]");
   const characterHealthBar=mud.querySelector("[data-character-health-bar]");
@@ -30,6 +34,16 @@ for(const mud of document.querySelectorAll("[data-mud]")){
   const questCount=mud.querySelector("[data-mud-quest-count]");
   let busy=false, pollBusy=false;
   let lastId=Math.max(0,...Array.from(events.querySelectorAll("[data-event-id]"),row=>Number(row.dataset.eventId)||0));
+
+  const scrollEventsToLatest=()=>requestAnimationFrame(()=>{
+    events.scrollTop=Math.max(0,events.scrollHeight-events.clientHeight);
+  });
+  const syncHistoryLayout=()=>main?.classList.toggle("mud-history-collapsed",!history?.open);
+  history?.addEventListener("toggle",()=>{
+    syncHistoryLayout();
+    if(history.open)scrollEventsToLatest();
+  });
+  syncHistoryLayout();
 
   const requestId=()=>globalThis.crypto?.randomUUID?.()||`${Date.now()}-${Math.random().toString(36).slice(2)}`;
   let clientId;
@@ -53,7 +67,7 @@ for(const mud of document.querySelectorAll("[data-mud]")){
     while(events.querySelectorAll("[data-event-id]").length>200){
       events.querySelector("[data-event-id]")?.remove();
     }
-    events.scrollTop=events.scrollHeight;
+    scrollEventsToLatest();
   };
   const renderActions=available=>{
     const groups=new Map();
@@ -101,9 +115,8 @@ for(const mud of document.querySelectorAll("[data-mud]")){
       const entity=document.createElement("span");
       entity.className="mud-entity";
       entity.dataset.playerId=player.id;
-      entity.title=player.username;
       entity.dataset.characterId=player.character_id||"";
-      entity.textContent=player.character_name||player.callsign;
+      entity.textContent=player.character_name||"Adventurer";
       occupants.append(entity);
     }
   };
@@ -112,6 +125,8 @@ for(const mud of document.querySelectorAll("[data-mud]")){
     characterName.textContent=character.name;
     characterLevel.textContent=`LEVEL ${character.level}`;
     characterTrack.textContent=character.progression_label;
+    if(characterOrigin)characterOrigin.textContent=character.race?`${character.race} · ${character.class}`:"";
+    if(characterSkills)characterSkills.textContent=(character.skills||[]).map(skill=>`${skill.name} ${skill.rank}`).join(" · ");
     if(characterMode)characterMode.textContent=`${character.mode?.replace(/^./,letter=>letter.toUpperCase())||"Current"} mode`;
     characterHealth.textContent=`${character.health} / ${character.maximum_health}`;
     characterHealthBar.max=character.maximum_health;
@@ -235,7 +250,8 @@ for(const mud of document.querySelectorAll("[data-mud]")){
     data.set("csrf_token",mud.dataset.csrf);data.set("client_id",clientId);
     navigator.sendBeacon?.(mud.dataset.disconnectUrl,data);
   });
-  events.scrollTop=events.scrollHeight;
+  scrollEventsToLatest();
+  addEventListener("load",scrollEventsToLatest,{once:true});
   poll();
   setInterval(poll,2000);
 }

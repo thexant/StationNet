@@ -430,6 +430,13 @@ def save_radio_user_quota(user_id):
 def settings():
     if request.method == "POST":
         validate_csrf()
+        if request.form.get("settings_section") == "user_feeds":
+            enabled = request.form.get("user_feeds_enabled") == "on"
+            database = get_db()
+            database.execute("UPDATE station SET user_feeds_enabled=? WHERE id=1", (enabled,))
+            database.commit()
+            flash("User Feeds enabled." if enabled else "User Feeds disabled.", "success")
+            return redirect(url_for("station.settings") + "#user-feeds")
         if request.form.get("settings_section") == "radio":
             return _save_radio_bands()
         name = request.form.get("name", "").strip()

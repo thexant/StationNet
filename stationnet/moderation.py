@@ -49,7 +49,9 @@ def dashboard():
     reports = database.execute(
         "SELECT r.*,u.username reporter,s.username subject FROM moderation_reports r "
         "JOIN users u ON u.id=r.reporter_id LEFT JOIN users s ON s.id=r.subject_user_id "
-        "WHERE r.status='open' ORDER BY r.id DESC LIMIT 100"
+        "WHERE r.status='open' AND (? OR r.target_type NOT IN ('feed_post','feed_comment')) "
+        "ORDER BY r.id DESC LIMIT 100",
+        (g.station["user_feeds_enabled"],),
     ).fetchall()
     history = database.execute(
         "SELECT a.*,u.username actor,s.username subject FROM moderation_audit a "
@@ -138,6 +140,7 @@ def resolve_report(report_id):
     database = get_db()
     report = database.execute("SELECT * FROM moderation_reports WHERE id=? AND status='open'", (report_id,)).fetchone()
     if report is None: abort(404)
+    if report["target_type"] in {"feed_post", "feed_comment"} and not g.station["user_feeds_enabled"]: abort(404)
     database.execute("UPDATE moderation_reports SET status=?,resolution_note=?,resolver_id=?,resolved_at=? WHERE id=?",
                      (status, note, g.user["id"], utc_now(), report_id))
     audit(database, g.user["id"], report["subject_user_id"], f"report_{status}", note,
@@ -192,13 +195,16 @@ def create_report():
     target_type = request.form.get("target_type", "")
     target_id = request.form.get("target_id", type=int)
     reason = request.form.get("reason", "").strip()[:500]
-    if target_type not in {"user", "chat", "bulletin", "file"} or not target_id or len(reason) < 10: abort(400)
+    if target_type not in {"user", "chat", "bulletin", "file", "feed_post", "feed_comment"} or not target_id or len(reason) < 10: abort(400)
+    if target_type in {"feed_post", "feed_comment"} and not g.station["user_feeds_enabled"]: abort(404)
     database = get_db()
     if target_type == "user":
         target = database.execute("SELECT id subject FROM users WHERE id=?", (target_id,)).fetchone()
     else:
         table, owner = {"chat": ("station_chat_messages", "author_id"),
-                        "bulletin": ("posts", "author_id"), "file": ("archive_files", "uploader_id")}[target_type]
+                        "bulletin": ("posts", "author_id"), "file": ("archive_files", "uploader_id"),
+                        "feed_post": ("user_feed_posts", "owner_id"),
+                        "feed_comment": ("user_feed_comments", "author_id")}[target_type]
         target = database.execute(f"SELECT {owner} subject FROM {table} WHERE id=?", (target_id,)).fetchone()
     if target is None: abort(404)
     if target["subject"] == g.user["id"]: abort(400, "You cannot report yourself.")

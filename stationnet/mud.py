@@ -16,7 +16,7 @@ from flask import Blueprint, abort, flash, g, jsonify, redirect, render_template
 
 from .auth import admin_required, login_required
 from .db import get_db
-from . import dungeons
+from . import dungeons, character_creation
 from .security import validate_csrf
 
 bp = Blueprint("mud", __name__, url_prefix="/mud")
@@ -242,12 +242,28 @@ def _character_row(database, user_id, track_key=None):
 def character_state(database, user_id, track_key=None):
     """Return the authoritative identity and selected progression track."""
     row = _character_row(database, user_id, track_key)
+    origin = database.execute(
+        "SELECT creation_state,race_key,class_key FROM mud_characters WHERE id=?", (row["id"],)
+    ).fetchone()
+    config = character_creation.options()
+    race = next((item for item in config["races"] if item["key"] == origin["race_key"]), None)
+    archetype = next((item for item in config["classes"] if item["key"] == origin["class_key"]), None)
+    skills = [dict(skill) for skill in database.execute(
+        "SELECT skill_key,rank,experience FROM mud_character_skills WHERE character_id=? ORDER BY skill_key",
+        (row["id"],),
+    )]
     level_floor = experience_for_level(row["level"])
     next_floor = experience_for_level(row["level"] + 1)
     return {
         "id": row["id"],
         "user_id": row["user_id"],
         "name": row["display_name"],
+        "creation_state": origin["creation_state"],
+        "race": race["name"] if race else None,
+        "class": archetype["name"] if archetype else None,
+        "skills": [{**skill, "name": next((item["name"] for item in config["skills"]
+                                             if item["key"] == skill["skill_key"]), skill["skill_key"])}
+                   for skill in skills],
         "mode": _current_mode(database, user_id),
         "progression_track": row["track_key"],
         "progression_label": {
@@ -277,6 +293,11 @@ def award_experience(database, user_id, amount, track_key=None):
         raise ValueError("Experience award must be a positive integer.")
     resolved_track = track_key or _progression_track(database, user_id)
     before = character_state(database, user_id, resolved_track)
+    if before["creation_state"] == "complete":
+        bonus = max(0, before["attributes"]["intellect"] - 8)
+        bonus += _character_effects(database, before["id"])["experience_percent"]
+        amount += amount * bonus // 100
+        _practice_effect(database, before["id"], "experience_percent")
     experience = before["experience"] + amount
     if experience > MAX_EXPERIENCE:
         raise ValueError("Experience total exceeds the supported range.")
@@ -300,6 +321,36 @@ def award_experience(database, user_id, amount, track_key=None):
     }
 
 
+def _origin_options(database, character_id):
+    row = database.execute(
+        "SELECT race_key,class_key FROM mud_characters WHERE id=?", (character_id,)
+    ).fetchone()
+    config = character_creation.options()
+    return tuple(next((item for item in config[group] if item["key"] == row[key]), None)
+                 for group, key in (("races", "race_key"), ("classes", "class_key")))
+
+
+def _character_effects(database, character_id):
+    race, archetype = _origin_options(database, character_id)
+    totals = {key: 0 for key in ("attack", "defense", "experience_percent")}
+    for origin in (race, archetype):
+        for key, value in (origin or {}).get("effects", {}).items():
+            if key in totals:
+                totals[key] += value
+    ranks = character_creation.skill_ranks(database, character_id)
+    for skill in character_creation.options()["skills"]:
+        effect = skill.get("effect")
+        if effect in totals:
+            totals[effect] += ranks.get(skill["key"], 0) * skill.get("per_rank", 1)
+    return totals
+
+
+def _practice_effect(database, character_id, effect):
+    for skill in character_creation.options()["skills"]:
+        if skill.get("effect") == effect:
+            character_creation.practice(database, character_id, skill["key"])
+
+
 def _status_action(_database, _user, parameters):
     if parameters.get("arguments"):
         raise ActionError("The status action does not accept arguments.")
@@ -313,14 +364,17 @@ def _character_action(database, user, parameters):
         raise ActionError("The character action does not accept arguments.")
     character = character_state(database, user["id"])
     attributes = character["attributes"]
+    skills = ", ".join(f"{skill['name']} {skill['rank']}" for skill in character["skills"])
     return [EventDraft(
         f"{character['name']} — Level {character['level']}\n"
+        f"Origin: {character['race'] or 'Unchosen'} / {character['class'] or 'Unchosen'}\n"
         f"Health: {character['health']}/{character['maximum_health']}\n"
         f"Experience: {character['experience_into_level']}/"
         f"{character['experience_for_next_level']} "
         f"({character['experience_to_next_level']} to next level)\n"
         f"Strength {attributes['strength']} · Agility {attributes['agility']} · "
         f"Intellect {attributes['intellect']} · Vitality {attributes['vitality']}\n"
+        f"Skills: {skills or 'none'}\n"
         f"Track: {character['progression_label']}",
         event_type="character",
     )]
@@ -603,7 +657,7 @@ def _room_occupants(database, room_id, viewer_id, instance_id=None):
     location_type = ("dungeon_instance" if instance_id else
                      "portal" if room_id == PORTAL_ROOM_ID else "world_room")
     return [dict(row) for row in database.execute(
-        "SELECT DISTINCT u.id,u.username,u.callsign,c.id AS character_id,"
+        "SELECT DISTINCT u.id,c.id AS character_id,"
         "COALESCE(c.display_name,u.callsign) AS character_name FROM mud_presence AS p "
         "JOIN users AS u ON u.id=p.user_id "
         "LEFT JOIN mud_characters AS c ON c.user_id=u.id "
@@ -1418,8 +1472,10 @@ def _attack_action(database, user, parameters):
     )
     player_gear = _equipment_combat_totals(database, character_id=character["id"])
     enemy_gear = _equipment_combat_totals(database, npc_definition_id=npc["definition_id"])
+    effects = _character_effects(database, character["id"])
     damage = max(1, 4 + character["strength"] // 2 + player_gear["attack"]
-                 - (npc["combat_defense"] + enemy_gear["defense"]) // 2)
+                 + effects["attack"] - (npc["combat_defense"] + enemy_gear["defense"]) // 2)
+    _practice_effect(database, character["id"], "attack")
     remaining = max(0, encounter["current_health"] - damage)
     database.execute(
         "UPDATE mud_combat_encounters SET status=?,current_health=?,"
@@ -1459,7 +1515,9 @@ def _attack_action(database, user, parameters):
         drafts += _encounter_reward_drafts(database, defeated, npc)
         return drafts
     enemy_damage = max(1, npc["combat_attack"] + enemy_gear["attack"]
-                       - (character["vitality"] // 10 + player_gear["defense"]))
+                       - (character["vitality"] // 10 + character["agility"] // 5
+                          + player_gear["defense"] + effects["defense"]))
+    _practice_effect(database, character["id"], "defense")
     health = max(0, character["current_health"] - enemy_damage)
     database.execute(
         "UPDATE mud_character_progression SET current_health=?,updated_at=CURRENT_TIMESTAMP "
@@ -3075,6 +3133,11 @@ class MudService:
         database = get_db()
         try:
             database.execute("BEGIN IMMEDIATE")
+            creation = database.execute(
+                "SELECT creation_state FROM mud_characters WHERE user_id=?", (user["id"],)
+            ).fetchone()
+            if creation is None or creation["creation_state"] == "pending":
+                raise ActionError("Create your character before entering the MUD.", 409)
             if action_request.client_id:
                 _register_presence(database, user, action_request.client_id)
             else:
@@ -3150,6 +3213,11 @@ def _recent_events(database, user_id):
 def index():
     _require_enabled()
     database = get_db()
+    creation = database.execute(
+        "SELECT creation_state FROM mud_characters WHERE user_id=?", (g.user["id"],)
+    ).fetchone()
+    if creation is None or creation["creation_state"] == "pending":
+        return redirect(url_for("mud.create_character"))
     database.execute("BEGIN IMMEDIATE")
     _prune_presence(database)
     room = _room_state(database, g.user["id"])
@@ -3171,6 +3239,11 @@ def index():
 @login_required
 def updates():
     _require_enabled()
+    creation = get_db().execute(
+        "SELECT creation_state FROM mud_characters WHERE user_id=?", (g.user["id"],)
+    ).fetchone()
+    if creation is None or creation["creation_state"] == "pending":
+        return jsonify(error="Create your character before entering the MUD."), 409
     client_id = request.args.get("client_id", "").strip()
     after = max(0, request.args.get("after", 0, type=int))
     database = get_db()
@@ -3194,6 +3267,48 @@ def updates():
         raise
     return jsonify(events=events, room=room, character=character, inventory=inventory,
                    quests=quests, combat=combat, actions=available)
+
+
+@bp.route("/create", methods=["GET", "POST"])
+@login_required
+def create_character():
+    _require_enabled()
+    database = get_db()
+    row = database.execute(
+        "SELECT id,display_name,creation_state FROM mud_characters WHERE user_id=?",
+        (g.user["id"],),
+    ).fetchone()
+    if row is None:
+        _character_row(database, g.user["id"])
+        row = database.execute(
+            "SELECT id,display_name,creation_state FROM mud_characters WHERE user_id=?",
+            (g.user["id"],),
+        ).fetchone()
+        database.commit()
+    if row["creation_state"] == "complete":
+        return redirect(url_for("mud.index"))
+    config = character_creation.options()
+    error = None
+    selected = {}
+    if request.method == "POST":
+        validate_csrf()
+        try:
+            selected = json.loads(request.form.get("build", ""))
+            if not isinstance(selected, dict):
+                raise ValueError("Invalid character build.")
+            database.execute("BEGIN IMMEDIATE")
+            character_creation.complete(database, g.user["id"], selected,
+                                        _current_mode(database, g.user["id"]))
+            database.commit()
+            return redirect(url_for("mud.index"))
+        except (ValueError, json.JSONDecodeError, sqlite3.IntegrityError) as problem:
+            database.rollback()
+            error = ("Character choices could not be saved. Please try again."
+                     if isinstance(problem, sqlite3.IntegrityError) else str(problem))
+            if not isinstance(selected, dict):
+                selected = {}
+    return render_template("mud/create.html", config=config, character=row,
+                           selected=selected, error=error)
 
 
 @bp.post("/disconnect")
@@ -3221,6 +3336,11 @@ def disconnect():
 def perform_action():
     _require_enabled()
     validate_csrf()
+    creation = get_db().execute(
+        "SELECT creation_state FROM mud_characters WHERE user_id=?", (g.user["id"],)
+    ).fetchone()
+    if creation is None or creation["creation_state"] == "pending":
+        return jsonify(error="Create your character before entering the MUD."), 409
     try:
         action_request = service.normalize(request.form)
         action_key, events = service.execute(action_request, g.user)

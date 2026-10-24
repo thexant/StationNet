@@ -4,7 +4,7 @@ import secrets
 from datetime import timedelta
 from pathlib import Path
 from flask import Flask, g, jsonify, redirect, render_template, request, url_for
-from . import announcements, applications, archive, auth, board, broadcast, chat, db, downloads, dungeons, mail, moderation, mud, programs, radio, station, users
+from . import announcements, applications, archive, auth, board, broadcast, chat, db, downloads, dungeons, feeds, mail, moderation, mud, programs, radio, station, users
 from .ansi import station_banner
 from .realtime import DirectChatStore
 from .radio import RadioStore
@@ -50,6 +50,7 @@ def create_app(test_config=None):
     app.register_blueprint(mail.bp)
     app.register_blueprint(archive.bp)
     app.register_blueprint(users.bp)
+    app.register_blueprint(feeds.bp)
     app.register_blueprint(announcements.bp)
     app.register_blueprint(applications.bp)
     app.register_blueprint(applications.admin_bp)
@@ -76,8 +77,9 @@ def create_app(test_config=None):
         g.mail_latest_id = 0
         if g.user is not None:
             g.mail_latest_id = db.get_db().execute(
-                "SELECT COALESCE(MAX(id),0) FROM mail WHERE recipient_id=?",
-                (g.user["id"],),
+                "SELECT COALESCE(MAX(id),0) FROM mail WHERE recipient_id=? "
+                "AND (? OR subject NOT LIKE 'FEED:%')",
+                (g.user["id"], g.station["user_feeds_enabled"] if g.station else 0),
             ).fetchone()[0]
         g.mud_can_build = bool(g.user and mud.can_build(db.get_db(), g.user))
         try:

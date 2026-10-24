@@ -2,6 +2,7 @@
 {% block title %}Station MUD{% endblock %}
 {% block content %}
 <section class="mud-shell" data-mud data-action-url="{{ url_for('mud.perform_action') }}" data-updates-url="{{ url_for('mud.updates') }}" data-disconnect-url="{{ url_for('mud.disconnect') }}" data-csrf="{{ session.csrf_token }}">
+  {% if character.creation_state == 'legacy' %}<div class="mud-legacy-notice" role="note">Your existing character can be customized once while keeping levels, inventory, quests, and achievements. <a class="button secondary" href="{{ url_for('mud.create_character') }}">CUSTOMIZE CHARACTER</a></div>{% endif %}
   <header class="mud-header">
     <div>
       <p class="eyebrow">STATION MUD</p>
@@ -30,7 +31,7 @@
         </div>
         <div class="mud-occupants" data-mud-occupants aria-label="Other players in this room">
           <span>PLAYERS</span>
-          <div>{% if room.occupants %}{% for player in room.occupants %}<span class="mud-entity" data-player-id="{{ player.id }}" data-character-id="{{ player.character_id or '' }}" title="{{ player.username }}">{{ player.character_name or player.callsign }}</span>{% endfor %}{% else %}<span class="muted" data-mud-no-occupants>none</span>{% endif %}</div>
+          <div>{% if room.occupants %}{% for player in room.occupants %}<span class="mud-entity" data-player-id="{{ player.id }}" data-character-id="{{ player.character_id or '' }}">{{ player.character_name or 'Adventurer' }}</span>{% endfor %}{% else %}<span class="muted" data-mud-no-occupants>none</span>{% endif %}</div>
         </div>
       </section>
       <section class="mud-context" aria-labelledby="mud-actions-heading">
@@ -83,6 +84,8 @@
             <span data-character-level>LEVEL {{ character.level }}</span>
           </div>
           <p class="mud-character-track" data-character-track>{{ character.progression_label }}</p>
+          <p class="mud-character-origin" data-character-origin>{% if character.race %}{{ character.race }} · {{ character['class'] }}{% endif %}</p>
+          <p class="mud-character-skills" data-character-skills>{% for skill in character.skills %}{{ skill.name }} {{ skill.rank }}{% if not loop.last %} · {% endif %}{% endfor %}</p>
           <small data-character-mode>{{ character.mode|title }} mode</small>
           <div class="mud-character-meter">
             <span><span>HEALTH</span><output data-character-health>{{ character.health }} / {{ character.maximum_health }}</output></span>
