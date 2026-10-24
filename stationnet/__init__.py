@@ -135,7 +135,7 @@ def create_app(test_config=None):
             "X-Content-Type-Options": "nosniff", "X-Frame-Options": "DENY",
             "Referrer-Policy": "no-referrer" if request.endpoint == "auth.register" else "same-origin",
             "Permissions-Policy": "microphone=(self)",
-            "Content-Security-Policy": "default-src 'self'; style-src 'self'; script-src 'self'; img-src 'self' data: blob:; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'",
+            "Content-Security-Policy": "default-src 'self'; style-src 'self'; script-src 'self' 'wasm-unsafe-eval'; img-src 'self' data: blob:; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'",
         })
         if request.endpoint in {"applications.runtime", "applications.source"}:
             # The iframe has an opaque origin (no allow-same-origin). Its CSP

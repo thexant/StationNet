@@ -109,10 +109,11 @@
   }
 
   async function composerMidi() {
-    if (!midiLoading) midiLoading = import("./midi/engine.js?v=composer-1").then(async ({ MidiPlaybackEngine }) => {
+    if (!midiLoading) midiLoading = import("./midi/engine.js?v=composer-2").then(async ({ MidiPlaybackEngine }) => {
       const context = audio();
       if (!context) throw new Error("Audio is unavailable in this browser.");
-      midiEngine = new MidiPlaybackEngine(context, context.destination, "/static/midi");
+      midiEngine = new MidiPlaybackEngine(context, context.destination, "/static/midi", () => {},
+        { preferScriptProcessor: true });
       await midiEngine.initialize();
       return midiEngine;
     }).catch(error => { midiLoading = null; throw error; });
@@ -948,7 +949,13 @@
         if (message.operation === "midi-load") {
           if (!Array.isArray(message.bytes) || message.bytes.length > 2 * 1024 * 1024 ||
               !message.bytes.every(byte => Number.isInteger(byte) && byte >= 0 && byte <= 255)) throw new Error("Invalid MIDI data.");
-          await (await composerMidi()).loadBinary(Uint8Array.from(message.bytes).buffer);
+          let timeout;
+          try {
+            await Promise.race([
+              composerMidi().then(engine => engine.loadBinary(Uint8Array.from(message.bytes).buffer)),
+              new Promise((_, reject) => { timeout = setTimeout(() => reject(new Error("MIDI synthesizer did not finish loading.")), 30000); })
+            ]);
+          } finally { clearTimeout(timeout); }
           capabilityResult(request, true, true); return;
         }
         if (message.operation === "midi-play") { (await composerMidi()).play(); capabilityResult(request, true, true); return; }

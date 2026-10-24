@@ -6,7 +6,7 @@ StationNet.start(async (ui) => {
   let projects = [], projectId = null, doc = blank(), trackIndex = 0, selected = new Set();
   let undo = [], redo = [], clipboard = [], dirty = false, notice = "", savePromise = null;
   let tool = "draw", snap = 120, duration = 480, velocity = 96, zoom = 1, viewTick = 0, topPitch = 84;
-  let playing = false, position = 0, loop = false, loopStart = 0, loopEnd = 7680, drag = null, lastPoll = 0, deleteArmed = false;
+  let playing = false, loading = false, position = 0, loop = false, loopStart = 0, loopEnd = 7680, drag = null, lastPoll = 0, deleteArmed = false;
   let W = 1200, H = 624, ROW = 12, visibleRows = 49;
   const X = 66, Y = 34;
   const pxBeat = () => 72 * zoom;
@@ -64,7 +64,7 @@ StationNet.start(async (ui) => {
   function paste() {if(!clipboard.length)return;edit(()=>{const start=Math.min(...clipboard.map(n=>n.tick));const copies=clipboard.map(n=>({...n,id:uid(),tick:Math.max(0,n.tick-start+step(position))}));track().notes.push(...copies);selected=new Set(copies.map(n=>n.id));});}
   function history(back) {const from=back?undo:redo,to=back?redo:undo;if(!from.length)return;to.push(clone(doc));doc=from.pop();trackIndex=clamp(trackIndex,0,doc.tracks.length-1);selected.clear();changed();}
   function projectMidi() {const output=clone(doc), solo=output.tracks.some(t=>t.solo);output.tracks=output.tracks.filter(t=>!t.mute&&(!solo||t.solo));if(!output.tracks.length)output.tracks=[{...doc.tracks[0],notes:[]}];return writeMidi(output);}
-  async function play() {try {if(playing)return;await ui.midi.load(projectMidi());await ui.midi.seek(tickSeconds(doc,position));await ui.midi.play();playing=true;notice="Playing";render();}catch(e){notice=`Playback failed: ${e.message}`;render();}}
+  async function play() {if(playing||loading)return;try {const audible=doc.tracks.some(t=>!t.mute&&(!doc.tracks.some(s=>s.solo)||t.solo)&&t.notes.length);if(!audible){notice="Add a note to an unmuted track before playing.";render();return;}loading=true;notice="Loading General MIDI sounds…";render();await ui.midi.load(projectMidi());if(position>0)await ui.midi.seek(tickSeconds(doc,position));await ui.midi.play();playing=true;notice="Playing";}catch(e){notice=`Playback failed: ${e.message}`;}finally{loading=false;render();}}
   async function pause() {await ui.midi.pause();playing=false;render();}
   async function stop() {await ui.midi.stop();playing=false;position=0;render();}
   async function seek(tick) {position=Math.max(0,Math.round(tick));if(playing)await ui.midi.seek(tickSeconds(doc,position));draw();}
@@ -139,7 +139,7 @@ StationNet.start(async (ui) => {
     const t=track(),measure=Math.floor(position/measureTicks())+1;
     const controls=[
       ui.title("MIDI Composer"),ui.text(`${doc.name} · ${dirty?"Unsaved changes":"Saved"} · Bar ${measure} · ${t.notes.length} notes on ${t.name}`,{tone:"accent"}),
-      ui.menu("Transport",[{label:playing?"Pause":"Play",value:"play"},{label:"Stop",value:"stop"},{label:loop?"Loop on":"Loop off",value:"loop"},{label:"← Bar",value:"back"},{label:"Bar →",value:"forward"}],async({value})=>{if(value==="play")playing?await pause():await play();if(value==="stop")await stop();if(value==="loop"){loop=!loop;render();}if(value==="back")await seek(Math.max(0,position-measureTicks()));if(value==="forward")await seek(position+measureTicks());}),
+      ui.menu("Transport",[{label:loading?"Loading…":playing?"Pause":"Play",value:"play",disabled:loading},{label:"Stop",value:"stop"},{label:loop?"Loop on":"Loop off",value:"loop"},{label:"← Bar",value:"back"},{label:"Bar →",value:"forward"}],async({value})=>{if(value==="play")playing?await pause():await play();if(value==="stop")await stop();if(value==="loop"){loop=!loop;render();}if(value==="back")await seek(Math.max(0,position-measureTicks()));if(value==="forward")await seek(position+measureTicks());}),
       ui.menu("Project",[{label:"New",value:"new"},{label:"Save",value:"save"},{label:"Import MIDI",value:"import"},{label:"Download .mid",value:"export"},{label:deleteArmed?"Confirm delete":"Delete project",value:"delete"}],async({value})=>{try{if(value!=="delete")deleteArmed=false;if(value==="new")await create();if(value==="save")await save();if(value==="import"){if(dirty){await save();if(dirty)return;}const file=await ui.files.open({accept:".mid,.midi,audio/midi"});await stop();doc=readMidi(file.bytes);doc.name=file.name.replace(/\.midi?$/i,"").slice(0,100);projectId=null;trackIndex=0;selected.clear();undo=[];redo=[];dirty=true;scheduleSave();notice=`Imported ${file.name}.`;render();}if(value==="export")await ui.download.binary(`${doc.name.replace(/[^a-z0-9_-]+/gi,"-")||"composition"}.mid`,writeMidi(doc),"audio/midi");if(value==="delete"){if(deleteArmed){deleteArmed=false;await removeProject();}else{deleteArmed=true;notice="Select Confirm delete to remove this saved composition.";render();}}}catch(e){notice=e.message;render();}}),
       ui.input("projectName","Composition name",{value:doc.name,maxLength:100,onSubmit:({values})=>{edit(()=>doc.name=String(values.projectName||"Untitled composition").trim().slice(0,100));}}),
       ui.button("Rename",({values})=>edit(()=>doc.name=String(values.projectName||"Untitled composition").trim().slice(0,100))),
@@ -168,8 +168,8 @@ StationNet.start(async (ui) => {
       ui.text(`Tempo changes: ${doc.tempo.map(e=>`bar ${Math.floor(e.tick/measureTicks())+1}: ${e.bpm} BPM`).join(" · ")}`,{tone:"muted"}),
       ui.text(notice,{tone:notice.includes("failed")?"warning":"muted"})
     ];
-    ui.render(controls[0],controls[1],controls[2],controls[8],controls[9],controls[7],
-      controls[3],controls[4],controls[5],controls[6],...controls.slice(10));
+    ui.render(controls[0],controls[1],controls.at(-1),controls[2],controls[8],controls[9],controls[7],
+      controls[3],controls[4],controls[5],controls[6],...controls.slice(10,-1));
   }
   ui.onKey(({code,phase,ctrlKey,metaKey,shiftKey})=>{if(phase!=="down")return;const mod=ctrlKey||metaKey;
     if(mod&&code==="KeyS")save();else if(mod&&code==="KeyZ")history(!shiftKey);else if(mod&&code==="KeyY")history(false);

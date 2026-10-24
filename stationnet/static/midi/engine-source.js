@@ -3,7 +3,7 @@ import { Sequencer, WorkletSynthesizer } from "spessasynth_lib";
 import { BasicMIDI, SoundBankLoader, SpessaSynthProcessor, SpessaSynthSequencer } from "spessasynth_core";
 
 export class MidiPlaybackEngine {
-  constructor(context, destination, assetBase, onEnded = () => {}) {
+  constructor(context, destination, assetBase, onEnded = () => {}, options = {}) {
     this.context = context;
     this.destination = destination;
     this.assetBase = assetBase.replace(/\/$/, "");
@@ -12,6 +12,7 @@ export class MidiPlaybackEngine {
     this.key = null;
     this.target = 0;
     this.ready = null;
+    this.preferScriptProcessor = Boolean(options.preferScriptProcessor);
   }
 
   async initialize() {
@@ -19,7 +20,7 @@ export class MidiPlaybackEngine {
       const fontResponse = await fetch(`${this.assetBase}/gm.sf2`);
       if (!fontResponse.ok) throw new Error("The bundled General MIDI SoundFont is unavailable.");
       const font = await fontResponse.arrayBuffer();
-      if (!this.context.audioWorklet) {
+      if (!this.context.audioWorklet || (this.preferScriptProcessor && this.context.createScriptProcessor)) {
         await this.initializeScriptProcessor(font);
         return;
       }
@@ -131,7 +132,7 @@ export class MidiPlaybackEngine {
 
   play() { if (this.key && this.sequencer) this.sequencer.play(); }
   pause() { if (this.sequencer) { this.sequencer.pause(); this.synth?.stopAll(true); } }
-  seek(seconds) { if (this.sequencer?.midiData) { this.sequencer.currentTime = Math.max(0, Number(seconds) || 0); this.synth?.stopAll(true); } }
+  seek(seconds) { if (this.sequencer?.midiData) { this.synth?.stopAll(true); this.sequencer.currentTime = Math.max(0, Number(seconds) || 0); } }
   get position() { return this.sequencer?.currentTime || 0; }
 
   async sync(key, url, offset, ducking = 1) {
