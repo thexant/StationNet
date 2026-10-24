@@ -32,13 +32,13 @@
 .wiki-document a, .wiki-document a:visited { color: var(--cyan) !important; }
 .wiki-document a:hover, .wiki-document a:focus-visible { color: var(--magenta) !important; }
 .wiki-document :is(code, kbd, samp, pre) { color: var(--amber); font-family: var(--mono); }
-.wiki-document pre { max-width: 100%; overflow-x: auto; padding: .7rem; border: 1px solid var(--green-dim); background: rgba(0,237,69,.04) !important; white-space: pre; }
+.wiki-document pre { max-width: 100%; overflow-x: auto; padding: .7rem; border: 1px solid var(--green-dim); background: rgba(var(--theme-rgb),.04) !important; white-space: pre; }
 .wiki-document :is(img, video, svg, canvas) { max-width: 100%; height: auto; }
 .wiki-document :is(figure, .thumb, .infobox, .toc, .mw-parser-output, .mw-body-content) { max-width: 100%; }
-.wiki-document :is(table, .infobox, .wikitable, .toc, .thumbinner, blockquote) { color: var(--white) !important; background-color: rgba(0,237,69,.035) !important; border-color: var(--green-dim) !important; }
+.wiki-document :is(table, .infobox, .wikitable, .toc, .thumbinner, blockquote) { color: var(--white) !important; background-color: rgba(var(--theme-rgb),.035) !important; border-color: var(--green-dim) !important; }
 .wiki-document table { max-width: 100%; border-collapse: collapse; }
 .wiki-document :is(th, td) { color: var(--white) !important; border-color: var(--green-dim) !important; }
-.wiki-document th { color: var(--green-bright) !important; background-color: rgba(0,237,69,.08) !important; }
+.wiki-document th { color: var(--green-bright) !important; background-color: rgba(var(--theme-rgb),.08) !important; }
 .wiki-document :is(.infobox, .thumb) { margin: .5rem 0 1rem 1rem; }
 .wiki-document :is(hr, .mw-parser-output hr) { border-color: var(--green-dim); }
 .wiki-document :is(input, select, textarea, button) { max-width: 100%; color: var(--white); background: var(--black); border: 1px solid var(--green-dim); font: inherit; }

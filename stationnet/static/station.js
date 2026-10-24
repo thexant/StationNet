@@ -159,6 +159,16 @@ const localTimestamp=value=>{
 };
 for(const time of document.querySelectorAll("[data-local-time]"))time.textContent=localTimestamp(time.dateTime||time.textContent);
 document.addEventListener("keydown",e=>{const editing=e.target instanceof HTMLInputElement||e.target instanceof HTMLTextAreaElement||e.target instanceof HTMLSelectElement||e.target?.isContentEditable;if(e.key==="/"&&!editing&&!e.ctrlKey&&!e.metaKey&&!e.altKey){e.preventDefault();const command=document.querySelector("[data-command-input]");if(command){command.focus();if(!command.value)command.value="/"}else document.querySelector("#service-nav")?.focus()}});
+for(const selector of document.querySelectorAll("[data-theme-selector]")){
+  const preview=selector.closest("form")?.querySelector(`[data-theme-preview="${selector.dataset.themeSelector}"]`);
+  if(!preview)continue;
+  const update=()=>{
+    const id=selector.value||preview.dataset.inheritTheme||"cyan";
+    preview.className=preview.className.replace(/theme-swatch--[a-z-]+/g,"").trim()+` theme-swatch--${id}`;
+  };
+  selector.addEventListener("change",update);
+  selector.form?.addEventListener("reset",()=>setTimeout(update));
+}
 for(const editor of document.querySelectorAll("[data-banner-editor]")){
   const text=editor.querySelector("[data-banner-text]");
   const font=editor.querySelector("[data-font-browser]");
@@ -172,13 +182,18 @@ for(const editor of document.querySelectorAll("[data-banner-editor]")){
   const status=editor.querySelector("[data-banner-preview-status]");
   const restore=editor.querySelector("[data-banner-restore]");
   if(!text||!font||!size||!color||!picker||!preset||!preview||!output)continue;
-  const defaultColor="#00d8cf";
+  const mastheadTheme=editor.querySelector('[data-theme-selector="masthead"]');
+  const mastheadPreview=editor.querySelector('[data-theme-preview="masthead"]');
+  const selectedThemeColor=()=>mastheadPreview?getComputedStyle(mastheadPreview).getPropertyValue("--swatch-masthead").trim()||"#00d8cf":"#00d8cf";
   let timer, controller;
-  const setPreviewColor=()=>preview.style.setProperty("--banner-preview-color",color.value||"var(--cyan)");
+  const setPreviewColor=()=>{
+    preview.style.setProperty("--banner-preview-color",color.value||selectedThemeColor());
+    if(mastheadPreview)preview.style.setProperty("--masthead-shadow",getComputedStyle(mastheadPreview).getPropertyValue("--swatch-shadow"));
+  };
   const syncPreset=()=>{
     const matching=[...preset.options].find(option=>option.value===color.value);
     preset.value=matching?color.value:(color.value?"custom":"");
-    picker.value=color.value||defaultColor;
+    picker.value=color.value||selectedThemeColor();
     setPreviewColor();
   };
   const render=()=>{
@@ -208,6 +223,7 @@ for(const editor of document.querySelectorAll("[data-banner-editor]")){
     syncPreset();
   });
   picker.addEventListener("input",()=>{color.value=picker.value;syncPreset()});
+  mastheadTheme?.addEventListener("change",()=>{color.value="";syncPreset()});
   restore?.addEventListener("click",()=>{
     text.value="";font.value="small";size.value="100";color.value="";syncPreset();render();
   });

@@ -13,6 +13,7 @@ from PIL import Image, ImageOps, UnidentifiedImageError
 
 from .auth import login_required
 from .db import get_db
+from . import themes
 from .security import check_password, hash_password, validate_csrf, validate_password
 
 bp = Blueprint("users", __name__, url_prefix="/users")
@@ -261,7 +262,27 @@ def edit_profile(user_id):
                 _cleanup_orphaned_profile_photos(database)
             flash("Profile updated.", "success")
             return redirect(url_for("users.profile", user_id=user_id))
-    return render_template("users/edit.html", profile=profile_user)
+    return render_template("users/edit.html", profile=profile_user, themes=themes.THEMES)
+
+
+@bp.post("/<int:user_id>/themes")
+@login_required
+def save_themes(user_id):
+    if user_id != g.user["id"]:
+        abort(403)
+    validate_csrf()
+    site_theme = request.form.get("site_theme", "")
+    masthead_theme = request.form.get("masthead_theme", "")
+    if ((site_theme and not themes.valid(site_theme)) or
+            (masthead_theme and not themes.valid(masthead_theme))):
+        flash("Select valid theme preferences.", "error")
+    else:
+        database = get_db()
+        database.execute("UPDATE users SET site_theme=?,masthead_theme=? WHERE id=?",
+                         (site_theme or None, masthead_theme or None, user_id))
+        database.commit()
+        flash("Theme preferences updated.", "success")
+    return redirect(url_for("users.edit_profile", user_id=user_id) + "#theme-preferences")
 
 
 @bp.post("/<int:user_id>/password")

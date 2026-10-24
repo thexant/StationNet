@@ -9,6 +9,7 @@ from .auth import admin_required, invitation_digest
 from .ansi import available_header_fonts, is_available_header_font, station_banner
 from .db import get_db
 from . import dungeons
+from . import themes
 from .markdown import render_markdown
 from .radio import (can_host_broadcast, effective_access, format_frequency,
                     parse_frequency, reconcile_radio_permissions)
@@ -25,14 +26,18 @@ def _header_color(value):
 
 @bp.get("/masthead.css")
 def masthead_css():
-    """Serve the station-specific masthead scale without inline styles."""
+    """Serve the effective palettes and station-specific scale without inline styles."""
     size = g.masthead_font_size
     color = _header_color(g.station["header_color"] if g.station else "")
+    site_theme, masthead_theme = themes.effective(g.station, g.user)
+    if g.user and g.user["masthead_theme"]:
+        color = ""
     stylesheet = (
+        themes.css(site_theme, masthead_theme, color)
+        + "\n"
         ".ansi-logo { font-size: clamp("
         f"{size * 0.004:.3f}rem, {size * 0.0155:.3f}vw, "
-        f"{size * 0.0088:.3f}rem);"
-        + (f" color: {color};" if color else "") + " }"
+        f"{size * 0.0088:.3f}rem); }}"
     )
     response = Response(stylesheet, content_type="text/css")
     response.headers["Cache-Control"] = "no-store"
@@ -547,6 +552,10 @@ def settings():
         header_font = request.form.get("header_font", g.station["header_font"])
         header_text = request.form.get("header_text", g.station["header_text"]).strip()
         header_color = request.form.get("header_color", g.station["header_color"]).strip()
+        site_theme = request.form.get("site_theme", g.station["site_theme"])
+        masthead_theme = request.form.get("masthead_theme", g.station["masthead_theme"])
+        if masthead_theme != g.station["masthead_theme"] and header_color == g.station["header_color"]:
+            header_color = ""
         header_font_size = request.form.get(
             "header_font_size", g.station["header_font_size"], type=int
         )
@@ -561,6 +570,7 @@ def settings():
         elif len(header_text) > 80: flash("Banner text must be 80 characters or fewer.", "error")
         elif not is_available_header_font(header_font): flash("Select a valid FIGlet header style.", "error")
         elif header_color and not HEX_COLOR_RE.fullmatch(header_color): flash("Banner color must be a six-digit hexadecimal color.", "error")
+        elif not themes.valid(site_theme) or not themes.valid(masthead_theme): flash("Select valid station themes.", "error")
         elif header_font_size is None or not 5 <= header_font_size <= 200: flash("Header size must be between 5% and 200%.", "error")
         elif upload_permission not in {"members", "admins", "disabled"}: flash("Select a valid upload permission.", "error")
         elif storage_limit is None or not 1 <= storage_limit <= 10240: flash("Archive storage must be between 1 and 10240 MB.", "error")
@@ -582,7 +592,7 @@ def settings():
                 )
             database.execute(
                 "UPDATE station SET name=?,description=?,landing_message=?,landing_heading=?,"
-                "landing_message_enabled=?,brand_tagline=?,header_font=?,header_font_size=?,header_text=?,header_color=?,"
+                "landing_message_enabled=?,brand_tagline=?,header_font=?,header_font_size=?,header_text=?,header_color=?,site_theme=?,masthead_theme=?,"
                 "upload_permission=?,file_storage_limit_mb=?,file_size_limit_mb=?"
                 + access_update + " WHERE id=1",
                 (
@@ -596,6 +606,8 @@ def settings():
                     header_font_size,
                     header_text,
                     header_color,
+                    site_theme,
+                    masthead_theme,
                     upload_permission,
                     storage_limit,
                     file_limit,
@@ -672,7 +684,7 @@ def settings():
         "FROM mud_dungeon_generation_log WHERE status='failure' ORDER BY id DESC LIMIT 10"
     ).fetchall()
     event_creation_groups = {row["group_id"] for row in database.execute("SELECT group_id FROM event_creation_groups")}
-    return render_template("settings.html", header_fonts=header_fonts,
+    return render_template("settings.html", header_fonts=header_fonts, themes=themes.THEMES,
                            event_creation_groups=event_creation_groups,
                            bands=bands, groups=groups, users=users,
                            memberships=memberships, effective=effective,

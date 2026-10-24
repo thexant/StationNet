@@ -3,11 +3,11 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
-  <meta name="theme-color" content="#000000">
+  <meta name="theme-color" content="{{ g.theme_background }}">
   <title>{% block title %}StationNet{% endblock %}{% if g.station %} :: {{ g.station.name }}{% endif %}</title>
-  <link rel="stylesheet" href="{{ url_for('static',filename='station.css',v='calendar-2') }}">
+  <link rel="stylesheet" href="{{ url_for('static',filename='station.css',v='themes-1') }}">
   <link rel="stylesheet" href="{{ url_for('station.masthead_css') }}">
-  <script src="{{ url_for('static',filename='station.js',v='banner-editor-1') }}" defer></script>
+  <script src="{{ url_for('static',filename='station.js',v='themes-1') }}" defer></script>
   <script src="{{ url_for('static',filename='feeds.js',v='1') }}" defer></script>
   <script src="{{ url_for('static',filename='radio.js',v='external-radio-1') }}" defer></script>
 </head>

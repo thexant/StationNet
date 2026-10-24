@@ -18,6 +18,8 @@ CREATE TABLE IF NOT EXISTS station (
  header_font_size INTEGER NOT NULL DEFAULT 100,
  header_text TEXT NOT NULL DEFAULT '',
  header_color TEXT NOT NULL DEFAULT '',
+ site_theme TEXT NOT NULL DEFAULT 'cyan',
+ masthead_theme TEXT NOT NULL DEFAULT 'cyan',
  upload_permission TEXT NOT NULL DEFAULT 'members',
  file_storage_limit_mb INTEGER NOT NULL DEFAULT 100,
  file_size_limit_mb INTEGER NOT NULL DEFAULT 10,
@@ -43,7 +45,8 @@ CREATE TABLE IF NOT EXISTS users (
  is_admin INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
  tagline TEXT NOT NULL DEFAULT '', about TEXT NOT NULL DEFAULT '', birthday TEXT,
  gender TEXT NOT NULL DEFAULT '', last_seen TEXT, connection_id TEXT,
- radio_quota_mb INTEGER, videos_quota_mb INTEGER, profile_photo_filename TEXT);
+ radio_quota_mb INTEGER, videos_quota_mb INTEGER, profile_photo_filename TEXT,
+ site_theme TEXT, masthead_theme TEXT);
 CREATE TABLE IF NOT EXISTS events (
  id INTEGER PRIMARY KEY AUTOINCREMENT,
  creator_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
@@ -990,6 +993,7 @@ def init_db():
     _migrate_events(database)
     _migrate_mud_dungeon_content_types(database)
     _migrate_station_customization(database)
+    _migrate_themes(database)
     _migrate_user_feeds(database)
     _migrate_kiwix(database)
     _migrate_videos(database)
@@ -1358,6 +1362,16 @@ def _migrate_user_feeds(database):
             "CREATE UNIQUE INDEX idx_moderation_reports_open_unique "
             "ON moderation_reports(reporter_id,target_type,target_id) WHERE status='open'"
         )
+
+
+def _migrate_themes(database):
+    """Add independent palette choices without changing existing installations."""
+    for table, defaults in (("station", "TEXT NOT NULL DEFAULT 'cyan'"),
+                            ("users", "TEXT")):
+        columns = {row["name"] for row in database.execute(f"PRAGMA table_info({table})")}
+        for column in ("site_theme", "masthead_theme"):
+            if column not in columns:
+                database.execute(f"ALTER TABLE {table} ADD COLUMN {column} {defaults}")
 
 
 def _migrate_station_customization(database):

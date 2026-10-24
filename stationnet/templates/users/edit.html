@@ -20,6 +20,30 @@
   </form>
 </section>
 
+<section class="narrow terminal-card settings-section" id="theme-preferences">
+  <p class="eyebrow">USER PROFILE / APPEARANCE</p>
+  <h2>Theme preferences</h2>
+  <p class="muted">Choose each palette independently, or follow the station defaults.</p>
+  <form method="post" action="{{ url_for('users.save_themes',user_id=profile.id) }}" class="form-grid">
+    <input type="hidden" name="csrf_token" value="{{ session.csrf_token }}">
+    <label>Site-wide theme
+      <select name="site_theme" data-theme-selector="site">
+        <option value="" {% if not g.user.site_theme %}selected{% endif %}>Station default ({{ themes[g.station.site_theme][0] }})</option>
+        {% for id, theme in themes.items() %}<option value="{{ id }}" {% if g.user.site_theme==id %}selected{% endif %}>{{ theme[0] }}</option>{% endfor %}
+      </select>
+    </label>
+    <div class="theme-preview theme-swatch--{{ g.user.site_theme or g.station.site_theme }}" data-theme-preview="site" data-inherit-theme="{{ g.station.site_theme }}" aria-hidden="true"><span>STATION</span><strong>PREVIEW PANEL</strong><em>ACTIVE LINK</em><b>BUTTON</b></div>
+    <label>Masthead theme
+      <select name="masthead_theme" data-theme-selector="masthead">
+        <option value="" {% if not g.user.masthead_theme %}selected{% endif %}>Station default ({{ themes[g.station.masthead_theme][0] }})</option>
+        {% for id, theme in themes.items() %}<option value="{{ id }}" {% if g.user.masthead_theme==id %}selected{% endif %}>{{ theme[0] }}</option>{% endfor %}
+      </select>
+    </label>
+    <div class="theme-preview theme-preview-masthead theme-swatch--{{ g.user.masthead_theme or g.station.masthead_theme }}" data-theme-preview="masthead" data-inherit-theme="{{ g.station.masthead_theme }}" aria-hidden="true"><strong>STATIONNET</strong><span>// MASTHEAD SIGNAL //</span></div>
+    <div class="button-row"><button>SAVE THEME PREFERENCES</button></div>
+  </form>
+</section>
+
 <section class="narrow terminal-card settings-section" id="change-password">
   <p class="eyebrow">USER PROFILE / SECURITY</p>
   <h2>Change password</h2>

@@ -32,6 +32,21 @@
       <input name="brand_tagline" maxlength="160" required value="{{ g.station.brand_tagline }}">
       <small>Shown beneath the station logo on every page.</small>
     </label>
+    <div class="divider">STATION THEMES</div>
+    <label>Site-wide theme
+      <select name="site_theme" data-theme-selector="site">
+        {% for id, theme in themes.items() %}<option value="{{ id }}" {% if g.station.site_theme==id %}selected{% endif %}>{{ theme[0] }}</option>{% endfor %}
+      </select>
+      <small>Sets the station palette for pages, navigation, panels, controls, and interactive states. Members can override it.</small>
+    </label>
+    <div class="theme-preview theme-swatch--{{ g.station.site_theme }}" data-theme-preview="site" aria-hidden="true"><span>STATION</span><strong>PREVIEW PANEL</strong><em>ACTIVE LINK</em><b>BUTTON</b></div>
+    <label>Masthead theme
+      <select name="masthead_theme" data-theme-selector="masthead">
+        {% for id, theme in themes.items() %}<option value="{{ id }}" {% if g.station.masthead_theme==id %}selected{% endif %}>{{ theme[0] }}</option>{% endfor %}
+      </select>
+      <small>Sets the ASCII masthead colour and shadow independently of the site palette.</small>
+    </label>
+    <div class="theme-preview theme-preview-masthead theme-swatch--{{ g.station.masthead_theme }}" data-theme-preview="masthead" aria-hidden="true"><strong>STATIONNET</strong><span>// MASTHEAD SIGNAL //</span></div>
     <div class="divider">ASCII BANNER</div>
     <label>Banner text
       <input name="header_text" maxlength="80" value="{{ g.station.header_text }}" placeholder="{{ g.station.name }}" data-banner-text>
@@ -54,10 +69,10 @@
     </label>
     <label>Banner colour
       <span class="banner-color-controls"><select data-banner-color-preset aria-label="Banner colour preset">
-        <option value="">Theme default (cyan)</option><option value="#00ed45">Terminal green</option><option value="#71ff8a">Bright green</option><option value="#00d8cf">Cyan</option><option value="#e6a431">Amber</option><option value="#d829be">Magenta</option><option value="custom">Custom…</option>
+        <option value="">Selected masthead theme</option><option value="#00ed45">Terminal green</option><option value="#71ff8a">Bright green</option><option value="#00d8cf">Cyan</option><option value="#e6a431">Amber</option><option value="#d829be">Magenta</option><option value="custom">Custom…</option>
       </select><input type="color" value="{{ g.station.header_color or '#00d8cf' }}" data-banner-color-picker aria-label="Custom banner colour"></span>
       <input type="hidden" name="header_color" value="{{ g.station.header_color }}" data-banner-color>
-      <small>Theme default preserves the standard masthead color. A selected colour is applied wherever the ASCII banner appears.</small>
+      <small>Optional legacy/custom banner colour. Clear it to use the selected masthead palette. A personal masthead choice takes precedence.</small>
     </label>
     <section class="banner-preview" aria-labelledby="banner-preview-heading" data-banner-preview>
       <div><span class="eyebrow" id="banner-preview-heading">LIVE BANNER PREVIEW</span><small data-banner-preview-status aria-live="polite">Matches the saved masthead renderer.</small></div>
