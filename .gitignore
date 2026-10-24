@@ -6,6 +6,7 @@ __pycache__/
 *.py[cod]
 data/
 kiwix_data/*
+kiwix_tools/
 !kiwix_data/.gitkeep
 instance/
 .coverage

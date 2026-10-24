@@ -168,16 +168,33 @@ def create():
                 database = get_db()
                 try:
                     now = utc_now()
+                    database.execute("BEGIN IMMEDIATE")
                     cursor = database.execute(
                         "INSERT INTO imageboard_threads(author_id,subject,body,image_name,image_type,thumb_name,created_at,bumped_at) "
                         "VALUES(?,?,?,?,?,?,?,?)",
                         (g.user["id"], subject, body, name, mime, thumb, now, now),
                     )
+                    excess = database.execute(
+                        "SELECT MAX(0,COUNT(*)-?) FROM imageboard_threads",
+                        (g.station["imageboard_max_threads"],),
+                    ).fetchone()[0]
+                    pruned = database.execute(
+                        "SELECT id,image_name,thumb_name FROM imageboard_threads "
+                        "ORDER BY created_at,id LIMIT ?", (excess,)
+                    ).fetchall()
+                    images = list(pruned)
+                    for old in pruned:
+                        images.extend(database.execute(
+                            "SELECT image_name,thumb_name FROM imageboard_replies WHERE thread_id=?",
+                            (old["id"],),
+                        ).fetchall())
+                        database.execute("DELETE FROM imageboard_threads WHERE id=?", (old["id"],))
                     database.commit()
                 except Exception:
                     database.rollback()
                     _remove_images([{"image_name": name, "thumb_name": thumb}])
                     raise
+                _remove_images(images)
                 flash("Thread posted.", "success")
                 return redirect(url_for("imageboard.thread", thread_id=cursor.lastrowid))
     return render_template("imageboard/new.html")
@@ -209,6 +226,12 @@ def reply(thread_id):
     if (not body and not has_image) or len(body) > 5000:
         flash("Add a message or image; messages cannot exceed 5000 characters.", "error")
         return redirect(url_for("imageboard.thread", thread_id=thread_id) + "#reply-form")
+    if has_image and get_db().execute(
+        "SELECT COUNT(*) FROM imageboard_replies WHERE thread_id=? AND image_name IS NOT NULL",
+        (thread_id,),
+    ).fetchone()[0] >= g.station["imageboard_max_image_replies"]:
+        flash("This thread has reached its image reply limit. You can still post a text reply.", "error")
+        return redirect(url_for("imageboard.thread", thread_id=thread_id) + "#reply-form")
     name = mime = thumb = None
     if has_image:
         try:
@@ -219,16 +242,23 @@ def reply(thread_id):
     database = get_db()
     try:
         now = utc_now()
+        database.execute("BEGIN IMMEDIATE")
         cursor = database.execute(
             "INSERT INTO imageboard_replies(thread_id,author_id,body,image_name,image_type,thumb_name,created_at) "
-            "SELECT id,?,?,?,?,?,? FROM imageboard_threads WHERE id=? AND locked=0",
-            (g.user["id"], body, name, mime, thumb, now, thread_id),
+            "SELECT id,?,?,?,?,?,? FROM imageboard_threads WHERE id=? AND locked=0 "
+            "AND (? IS NULL OR (SELECT COUNT(*) FROM imageboard_replies "
+            "WHERE thread_id=? AND image_name IS NOT NULL) < ?)",
+            (g.user["id"], body, name, mime, thumb, now, thread_id, name, thread_id,
+             g.station["imageboard_max_image_replies"]),
         )
         if cursor.rowcount == 0:
             database.rollback()
             if name:
                 _remove_images([{"image_name": name, "thumb_name": thumb}])
-            abort(403, "Thread locked")
+            if not get_db().execute("SELECT 1 FROM imageboard_threads WHERE id=? AND locked=0", (thread_id,)).fetchone():
+                abort(403, "Thread locked")
+            flash("This thread has reached its image reply limit. You can still post a text reply.", "error")
+            return redirect(url_for("imageboard.thread", thread_id=thread_id) + "#reply-form")
         database.execute("UPDATE imageboard_threads SET bumped_at=? WHERE id=?", (now, thread_id))
         database.commit()
     except Exception:

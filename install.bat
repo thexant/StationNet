@@ -30,22 +30,26 @@ if not errorlevel 1 (
 if errorlevel 1 goto :python_old
 
 if not exist "%VENV_PYTHON%" (
-    echo [1/4] Creating the Python environment...
+    echo [1/5] Creating the Python environment...
     %PYTHON_COMMAND% -m venv "%VENV_DIR%"
     if errorlevel 1 goto :failed
 ) else (
-    echo [1/4] Existing Python environment found.
+    echo [1/5] Existing Python environment found.
 )
 
-echo [2/4] Installing StationNet dependencies...
+echo [2/5] Installing StationNet dependencies...
 "%VENV_PYTHON%" -m pip install --disable-pip-version-check -r "%INSTALL_DIR%\requirements.txt"
 if errorlevel 1 goto :failed
 
-echo [3/4] Preparing the data directory...
+echo [3/5] Installing the bundled WIKI reader...
+"%VENV_PYTHON%" "%INSTALL_DIR%\packaging\kiwix_tools.py" "%INSTALL_DIR%\kiwix_tools"
+if errorlevel 1 goto :failed
+
+echo [4/5] Preparing the data directory...
 if not exist "%INSTALL_DIR%\data" mkdir "%INSTALL_DIR%\data"
 if errorlevel 1 goto :failed
 
-echo [4/4] Creating run.bat...
+echo [5/5] Creating run.bat...
 (
     echo @echo off
     echo setlocal EnableExtensions

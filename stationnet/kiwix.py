@@ -3,6 +3,7 @@ import atexit
 import shutil
 import socket
 import subprocess
+import sys
 import threading
 import time
 from pathlib import Path
@@ -14,6 +15,16 @@ from flask import Blueprint, Response, abort, current_app, g, render_template, r
 
 bp = Blueprint("kiwix", __name__, url_prefix="/wiki")
 ROOT = "/wiki/content"
+
+
+def find_executable(override=None):
+    if override:
+        return shutil.which(override)
+    app_root = Path(sys.executable).parent if getattr(sys, "frozen", False) else Path(__file__).resolve().parents[1]
+    tools_dir = app_root / "kiwix_tools"
+    name = "kiwix-serve.exe" if sys.platform == "win32" else "kiwix-serve"
+    bundled = next(tools_dir.rglob(name), None) if tools_dir.is_dir() else None
+    return str(bundled) if bundled else shutil.which(name)
 
 
 class _NoRedirect(HTTPRedirectHandler):
@@ -58,9 +69,9 @@ class KiwixServer:
                     self.process.kill()
                     self.process.wait()
             self.process = None
-            executable = shutil.which(self.executable)
+            executable = find_executable(self.executable)
             if not executable:
-                return False, "kiwix-serve is not installed or is not on the server PATH."
+                return False, "The StationNet WIKI reader is missing. Run the StationNet installer again."
             with socket.socket() as sock:
                 sock.bind(("127.0.0.1", 0))
                 port = sock.getsockname()[1]

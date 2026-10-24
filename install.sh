@@ -32,16 +32,19 @@ if [[ -z "$PYTHON_COMMAND" ]]; then
 fi
 
 if [[ ! -x "$VENV_PYTHON" ]]; then
-    printf '[1/3] Creating the Python environment...\n'
+    printf '[1/4] Creating the Python environment...\n'
     "$PYTHON_COMMAND" -m venv "$VENV_DIR"
 else
-    printf '[1/3] Existing Python environment found.\n'
+    printf '[1/4] Existing Python environment found.\n'
 fi
 
-printf '[2/3] Installing StationNet dependencies...\n'
+printf '[2/4] Installing StationNet dependencies...\n'
 "$VENV_PYTHON" -m pip install --disable-pip-version-check -r "$INSTALL_DIR/requirements.txt"
 
-printf '[3/3] Preparing the data directory...\n'
+printf '[3/4] Installing the WIKI reader...\n'
+"$VENV_PYTHON" "$INSTALL_DIR/packaging/kiwix_tools.py" "$INSTALL_DIR/kiwix_tools"
+
+printf '[4/4] Preparing the data directory...\n'
 mkdir -p "$INSTALL_DIR/data"
 
 printf '\nStationNet is installed successfully.\n'

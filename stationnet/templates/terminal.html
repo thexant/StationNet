@@ -8,34 +8,38 @@
     <p>{{ g.station.description or 'Independent communications station.' }}</p>
   </header>
 
-  <div class="service-list">
-    <a href="{{ url_for('board.index') }}">
-      <span class="service-number">[01]</span>
-      <span class="service-copy"><strong>BULLETIN BOARD</strong><small>READ AND WRITE POSTS TO THE STATION BULLETIN BOARD</small></span>
-      <span class="service-state">* ONLINE</span>
-    </a>
-    <a href="{{ url_for('announcements.index') }}"><span class="service-number">[02]</span><span class="service-copy"><strong>ANNOUNCEMENTS</strong><small>OFFICIAL STATION NOTICES</small></span><span class="service-state">* ONLINE</span></a>
-    {% if g.station.kiwix_enabled %}<a href="{{ url_for('kiwix.index') }}"><span class="service-number">[WIKI]</span><span class="service-copy"><strong>WIKI</strong><small>READ THE STATION'S OFFLINE KNOWLEDGE LIBRARY</small></span><span class="service-state">* ONLINE</span></a>{% endif %}
-    {% if g.station.videos_enabled %}<a href="{{ url_for('videos.index') }}"><span class="service-number">[VID]</span><span class="service-copy"><strong>VIDEOS</strong><small>WATCH STATION VIDEOS</small></span><span class="service-state">* ONLINE</span></a>{% endif %}
-    {% if g.user %}
-    <a href="{{ url_for('chat.station_chat') }}">
-      <span class="service-number">[03]</span>
-      <span class="service-copy"><strong>STATION CHAT</strong><small>LIVE STATION CHAT</small></span>
-      <span class="service-state">* ONLINE</span>
-    </a>
-    <a href="{{ url_for('mail.inbox') }}"><span class="service-number">[04]</span><span class="service-copy"><strong>PRIVATE MAIL</strong><small>COMPOSE AND READ PRIVATE MESSAGES</small></span><span class="service-state">* ONLINE</span></a>
-    <a href="{{ url_for('radio.console') }}">
-      <span class="service-number">[05]</span>
-      <span class="service-copy"><strong>RADIO</strong><small>AUDIO RECEIVER AND TRANSMISSION CONSOLE</small></span>
-      <span class="service-state">* ONLINE</span>
-    </a>
-    <a href="{{ url_for('archive.index') }}"><span class="service-number">[06]</span><span class="service-copy"><strong>FILE ARCHIVE</strong><small>SHARED STATION FILES</small></span><span class="service-state">* ONLINE</span></a>
-    <a href="{{ url_for('users.directory') }}"><span class="service-number">[07]</span><span class="service-copy"><strong>USER DIRECTORY</strong><small>LIST OF REGISTERED USERS ON THIS STATION</small></span><span class="service-state">* ONLINE</span></a>
-    <a href="{{ url_for('applications.index') }}"><span class="service-number">[08]</span><span class="service-copy"><strong>GAMES AND APPS</strong><small>STATION-HOSTED SOFTWARE AND GAMES DIRECTORY</small></span><span class="service-state">* ONLINE</span></a>
+  {% set services = [('board.index', 'BULLETIN BOARD', 'READ AND WRITE POSTS TO THE STATION BULLETIN BOARD')] %}
+  {% if g.station.imageboard_enabled and g.user %}
+    {% set services = services + [('imageboard.catalog', 'IMAGEBOARD', 'IMAGE THREADS FROM STATION MEMBERS')] %}
+  {% endif %}
+  {% set services = services + [('announcements.index', 'ANNOUNCEMENTS', 'OFFICIAL STATION NOTICES')] %}
+  {% if g.station.kiwix_enabled %}
+    {% set services = services + [('kiwix.index', 'WIKI', "READ THE STATION'S OFFLINE KNOWLEDGE LIBRARY")] %}
+  {% endif %}
+  {% if g.station.videos_enabled %}
+    {% set services = services + [('videos.index', 'VIDEOS', 'WATCH STATION VIDEOS')] %}
+  {% endif %}
+  {% if g.user %}
+    {% set services = services + [
+      ('chat.station_chat', 'STATION CHAT', 'LIVE STATION CHAT'),
+      ('mail.inbox', 'PRIVATE MAIL', 'COMPOSE AND READ PRIVATE MESSAGES'),
+      ('radio.console', 'RADIO', 'AUDIO RECEIVER AND TRANSMISSION CONSOLE'),
+      ('archive.index', 'FILE ARCHIVE', 'SHARED STATION FILES'),
+      ('users.directory', 'USER DIRECTORY', 'LIST OF REGISTERED USERS ON THIS STATION'),
+      ('applications.index', 'GAMES AND APPS', 'STATION-HOSTED SOFTWARE AND GAMES DIRECTORY')
+    ] %}
     {% if g.station.mud_enabled %}
-    <a href="{{ url_for('mud.index') }}"><span class="service-number">[09]</span><span class="service-copy"><strong>STATION MUD</strong><small>TEXT BASED MULTIPLAYER RPG</small></span><span class="service-state">* ONLINE</span></a>
+      {% set services = services + [('mud.index', 'STATION MUD', 'TEXT BASED MULTIPLAYER RPG')] %}
     {% endif %}
-    {% endif %}
+  {% endif %}
+  <div class="service-list">
+    {% for endpoint, name, description in services %}
+    <a href="{{ url_for(endpoint) }}">
+      <span class="service-number">[{{ '%02d'|format(loop.index) }}]</span>
+      <span class="service-copy"><strong>{{ name }}</strong><small>{{ description }}</small></span>
+      <span class="service-state">* ONLINE</span>
+    </a>
+    {% endfor %}
   </div>
 
   <div class="directory-sidebar">

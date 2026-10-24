@@ -119,6 +119,27 @@ class VideoTests(unittest.TestCase):
         self.assertNotIn(b'aria-label="Video actions"', self.client.get("/videos/1").data)
         self.assertEqual(self.client.post("/videos/1/delete", data={"csrf_token": "test-token"}).status_code, 403)
 
+    def test_member_quota_override_and_station_upload_exemption(self):
+        self.setting()
+        self.assertIn(b'Default per-user upload quota', self.client.get('/sysop/settings').data)
+        with self.app.app_context():
+            database = db.get_db()
+            database.execute("UPDATE station SET videos_default_quota_mb=1 WHERE id=1")
+            database.execute("INSERT INTO videos(uploader_id,title,stored_name,mime_type,size_bytes) "
+                             "VALUES(1,'Existing','existing.mp4','video/mp4',1048500)")
+            database.commit()
+        self.login(1)
+        self.assertEqual(self.upload().status_code, 200)
+        with self.app.app_context():
+            self.assertEqual(db.get_db().execute("SELECT COUNT(*) FROM videos").fetchone()[0], 1)
+        self.login(2)
+        self.client.post('/sysop/videos/users/1/quota', data={'csrf_token': 'test-token',
+                                                               'videos_quota_mb': '2'})
+        self.login(1)
+        self.assertEqual(self.upload().status_code, 302)
+        self.login(2)
+        self.assertEqual(self.upload(station=True).status_code, 302)
+
 
 if __name__ == "__main__":
     unittest.main()

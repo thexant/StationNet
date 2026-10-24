@@ -425,6 +425,25 @@ def save_radio_user_quota(user_id):
         flash("User radio library quota updated.", "success")
     return redirect(url_for("station.settings") + "#radio-storage")
 
+
+@bp.post("/sysop/videos/users/<int:user_id>/quota")
+@admin_required
+def save_videos_user_quota(user_id):
+    validate_csrf()
+    database = get_db()
+    if database.execute("SELECT 1 FROM users WHERE id=?", (user_id,)).fetchone() is None:
+        flash("User not found.", "error")
+    else:
+        raw = request.form.get("videos_quota_mb", "").strip()
+        quota = int(raw) if raw.isdigit() else None
+        if raw and (quota is None or not 1 <= quota <= 10240):
+            flash("User videos quota must be blank or between 1 and 10240 MB.", "error")
+        else:
+            database.execute("UPDATE users SET videos_quota_mb=? WHERE id=?", (quota, user_id))
+            database.commit()
+            flash("User videos quota updated.", "success")
+    return redirect(url_for("station.settings") + "#videos-service")
+
 @bp.route("/sysop/settings", methods=("GET", "POST"))
 @admin_required
 def settings():
@@ -439,8 +458,16 @@ def settings():
             return redirect(url_for("station.settings") + "#user-feeds")
         if request.form.get("settings_section") == "imageboard":
             enabled = request.form.get("imageboard_enabled") == "on"
+            max_threads = request.form.get("imageboard_max_threads", g.station["imageboard_max_threads"], type=int)
+            max_image_replies = request.form.get("imageboard_max_image_replies", g.station["imageboard_max_image_replies"], type=int)
+            if (max_threads is None or not 1 <= max_threads <= 10000
+                    or max_image_replies is None or not 0 <= max_image_replies <= 10000):
+                flash("Imageboard limits must be 1–10000 threads and 0–10000 image replies.", "error")
+                return redirect(url_for("station.settings") + "#imageboard-service")
             database = get_db()
-            database.execute("UPDATE station SET imageboard_enabled=? WHERE id=1", (enabled,))
+            database.execute("UPDATE station SET imageboard_enabled=?,imageboard_max_threads=?,"
+                             "imageboard_max_image_replies=? WHERE id=1",
+                             (enabled, max_threads, max_image_replies))
             database.commit()
             flash("Imageboard enabled." if enabled else "Imageboard disabled.", "success")
             return redirect(url_for("station.settings") + "#imageboard-service")
@@ -455,13 +482,16 @@ def settings():
             return _save_radio_bands()
         if request.form.get("settings_section") == "videos":
             mode = request.form.get("videos_mode")
+            quota = request.form.get("videos_default_quota_mb", g.station["videos_default_quota_mb"], type=int)
             if mode not in {"community", "curated"}:
                 flash("Select a valid videos mode.", "error")
+            elif quota is None or not 1 <= quota <= 10240:
+                flash("Default videos quota must be between 1 and 10240 MB.", "error")
             else:
                 enabled = request.form.get("videos_enabled") == "on"
                 database = get_db()
-                database.execute("UPDATE station SET videos_enabled=?,videos_mode=? WHERE id=1",
-                                 (enabled, mode))
+                database.execute("UPDATE station SET videos_enabled=?,videos_mode=?,"
+                                 "videos_default_quota_mb=? WHERE id=1", (enabled, mode, quota))
                 database.commit()
                 flash("Videos settings updated.", "success")
             return redirect(url_for("station.settings") + "#videos-service")
@@ -547,7 +577,7 @@ def settings():
         "LEFT JOIN radio_bands b ON b.id=r.band_id ORDER BY r.group_id,r.id"
     ).fetchall()
     users = database.execute(
-        "SELECT id,username,callsign,radio_quota_mb FROM users ORDER BY username COLLATE NOCASE"
+        "SELECT id,username,callsign,radio_quota_mb,videos_quota_mb FROM users ORDER BY username COLLATE NOCASE"
     ).fetchall()
     assignments = {row["user_id"]: row for row in database.execute(
         "SELECT a.*,u.callsign FROM radio_broadcast_assignments a JOIN users u ON u.id=a.user_id"

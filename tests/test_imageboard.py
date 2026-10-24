@@ -119,6 +119,36 @@ class ImageboardTests(unittest.TestCase):
             self.assertEqual(database.execute("SELECT reason FROM moderation_reports WHERE id=1").fetchone()[0], "Old report")
             database.execute("INSERT INTO moderation_reports(reporter_id,target_type,target_id,subject_user_id,reason,created_at) VALUES(2,'imageboard_thread',1,1,'New report','2026-01-02')")
 
+    def test_pruning_and_image_reply_limit(self):
+        self.client.post('/sysop/settings', data={'csrf_token': 'test-token',
+                         'settings_section': 'imageboard', 'imageboard_enabled': 'on',
+                         'imageboard_max_threads': '2', 'imageboard_max_image_replies': '1'})
+        self.login(1)
+        self.create_thread('Oldest')
+        with self.app.app_context():
+            old = db.get_db().execute('SELECT image_name,thumb_name FROM imageboard_threads WHERE id=1').fetchone()
+        self.client.post('/imageboard/1/reply', data={'csrf_token': 'test-token',
+                         'image': self.image()}, content_type='multipart/form-data')
+        with self.app.app_context():
+            old_reply = db.get_db().execute('SELECT image_name,thumb_name FROM imageboard_replies WHERE thread_id=1').fetchone()
+        self.assertEqual(self.client.post('/imageboard/1/reply', data={'csrf_token': 'test-token',
+                         'image': self.image()}, content_type='multipart/form-data').status_code, 302)
+        self.assertEqual(self.client.post('/imageboard/1/reply', data={'csrf_token': 'test-token',
+                         'body': 'Text still works'}).status_code, 302)
+        with self.app.app_context():
+            self.assertEqual(db.get_db().execute('SELECT COUNT(*) FROM imageboard_replies').fetchone()[0], 2)
+        self.create_thread('Middle')
+        self.create_thread('Newest')
+        self.assertEqual(self.client.get('/imageboard/1').status_code, 404)
+        self.assertFalse((self.data_dir / 'imageboard' / old['image_name']).exists())
+        self.assertFalse((self.data_dir / 'imageboard' / old['thumb_name']).exists())
+        self.assertFalse((self.data_dir / 'imageboard' / old_reply['image_name']).exists())
+        self.assertFalse((self.data_dir / 'imageboard' / old_reply['thumb_name']).exists())
+        self.assertIn(b'Newest', self.client.get('/imageboard').data)
+        with self.app.app_context():
+            self.assertEqual(db.get_db().execute('SELECT COUNT(*) FROM imageboard_threads').fetchone()[0], 2)
+            self.assertEqual(db.get_db().execute('SELECT COUNT(*) FROM imageboard_replies').fetchone()[0], 0)
+
 
 if __name__ == "__main__":
     unittest.main()

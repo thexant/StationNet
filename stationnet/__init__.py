@@ -26,7 +26,7 @@ def create_app(test_config=None):
         DATABASE=str(data_dir / "station.db"), DATA_DIR=str(data_dir), SECRET_KEY=_secret(data_dir),
         APPLICATIONS_DIR=str(data_dir / "applications"),
         KIWIX_DATA_DIR=str(data_dir.parent / "kiwix_data"),
-        KIWIX_SERVE_EXECUTABLE=os.environ.get("STATIONNET_KIWIX_SERVE", "kiwix-serve"),
+        KIWIX_SERVE_EXECUTABLE=os.environ.get("STATIONNET_KIWIX_SERVE"),
         SESSION_COOKIE_HTTPONLY=True, SESSION_COOKIE_SAMESITE="Lax",
         PERMANENT_SESSION_LIFETIME=timedelta(days=3650),
         SESSION_COOKIE_SECURE=os.environ.get("STATIONNET_HTTPS") == "1", MAX_CONTENT_LENGTH=128 * 1024 * 1024,

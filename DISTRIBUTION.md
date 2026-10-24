@@ -72,7 +72,9 @@ python packaging/build.py source
 
 This creates `dist/StationNet-source.zip` without any station data. The
 archive includes `install.bat`, `install.sh`, both uninstallers, and the run
-scripts, so it can be installed directly after extraction. The uninstallers
+scripts, so it can be installed directly after extraction. Source installation
+downloads the Kiwix reader along with Python dependencies; build the Windows
+or Linux packages to provide an offline installation. The uninstallers
 preserve `kiwix_data/`; back up its ZIM files separately when moving stations.
 The downloads page also exposes its local README and this guide. If a `LICENSE` file is added to
 the StationNet checkout, it is exposed there and included in source archives.
@@ -86,7 +88,7 @@ python -m pip install -r requirements.txt PyInstaller
 python packaging/build.py windows
 ```
 
-The ZIP in `dist/` contains the embedded Python executable, dependencies, app
+The ZIP in `dist/` contains the embedded Python executable, dependencies, Kiwix reader, app
 assets, `start.bat`, and `install.ps1`. On the destination computer, unzip it
 and double-click `install.bat` (or run `start.bat` directly for a portable
 copy). The installer writes `%LOCALAPPDATA%\StationNet\app` and
@@ -110,7 +112,7 @@ python3 packaging/build.py posix
 ```
 
 This resolves all dependency wheels at build time and stores them inside the
-ZIP. Pillow may need native build prerequisites on some Pi distributions;
+ZIP. It also includes the native Kiwix reader for the build platform. Pillow may need native build prerequisites on some Pi distributions;
 the builder fails if it cannot make a wheel. Copy the ZIP to the destination,
 unzip it, then run:
 
@@ -137,6 +139,8 @@ The Android project in `android/` uses Chaquopy to embed CPython 3.11 and the
 same Flask/Jinja2/SQLite backend. The APK includes dependencies and needs no
 Python, pip, terminal app, root access, mobile data, or internet to *install
 or run*. It currently targets 64-bit ARM phones running Android 8 or newer.
+The native WIKI reader is bundled with the Windows and POSIX distributions;
+the Android APK does not yet include an Android build of `kiwix-serve`.
 The Android build uses Pillow 11.0.0 because Chaquopy's Android repository has
 that wheel for CPython 3.11, whereas the desktop 11.3.0 pin has no Android
 wheel. The image APIs StationNet uses are present in 11.0.0.

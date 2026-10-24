@@ -44,6 +44,16 @@ def _valid_signature(suffix, header):
             or suffix == ".ogv" and header.startswith(b"OggS"))
 
 
+def _quota_remaining(database):
+    row = database.execute(
+        "SELECT COALESCE(u.videos_quota_mb,s.videos_default_quota_mb) quota_mb,"
+        "(SELECT COALESCE(SUM(size_bytes),0) FROM videos "
+        "WHERE uploader_id=u.id AND station_post=0) used_bytes "
+        "FROM users u CROSS JOIN station s WHERE u.id=?", (g.user["id"],)
+    ).fetchone()
+    return row["quota_mb"] * 1024 * 1024 - row["used_bytes"]
+
+
 @bp.get("")
 def index():
     query = request.args.get("q", "").strip()[:100]
@@ -80,6 +90,9 @@ def _save_upload(station_post):
     header = uploaded.stream.read(16)
     if not _valid_signature(suffix, header):
         return "The selected file is not a supported video."
+    remaining = _quota_remaining(get_db()) if not station_post else None
+    if not station_post and remaining < len(header):
+        return "Video upload quota reached. Remove a video or ask a SYSOP to raise your quota."
     folder = Path(current_app.config["DATA_DIR"]) / "videos" / (
         "station" if station_post else f"users/{g.user['id']}")
     folder.mkdir(parents=True, exist_ok=True)
@@ -97,6 +110,8 @@ def _save_upload(station_post):
                 size += len(chunk)
                 if size > MAX_VIDEO_BYTES:
                     return "Video exceeds the 120 MB limit."
+                if not station_post and size > remaining:
+                    return "Video upload quota exceeded. Remove a video or ask a SYSOP to raise your quota."
                 output.write(chunk)
         thumbnail_path = destination.with_suffix(".jpg")
         try:
@@ -111,6 +126,11 @@ def _save_upload(station_post):
         except (FileNotFoundError, subprocess.TimeoutExpired):
             thumbnail_path.unlink(missing_ok=True)
         database = get_db()
+        if not station_post:
+            database.execute("BEGIN IMMEDIATE")
+            if size > _quota_remaining(database):
+                database.rollback()
+                return "Video upload quota exceeded. Remove a video or ask a SYSOP to raise your quota."
         cursor = database.execute(
             "INSERT INTO videos(uploader_id,station_post,title,description,stored_name,mime_type,size_bytes) "
             "VALUES(?,?,?,?,?,?,?)",

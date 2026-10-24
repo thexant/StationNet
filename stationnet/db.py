@@ -22,6 +22,9 @@ CREATE TABLE IF NOT EXISTS station (
  file_storage_limit_mb INTEGER NOT NULL DEFAULT 100,
  file_size_limit_mb INTEGER NOT NULL DEFAULT 10,
  radio_default_quota_mb INTEGER NOT NULL DEFAULT 100,
+ videos_default_quota_mb INTEGER NOT NULL DEFAULT 1024,
+ imageboard_max_threads INTEGER NOT NULL DEFAULT 100,
+ imageboard_max_image_replies INTEGER NOT NULL DEFAULT 50,
  radio_broadcast_limit_minutes INTEGER NOT NULL DEFAULT 120,
  mud_enabled INTEGER NOT NULL DEFAULT 0 CHECK(mud_enabled IN (0,1)),
  mud_traditional_enabled INTEGER NOT NULL DEFAULT 0 CHECK(mud_traditional_enabled IN (0,1)),
@@ -38,7 +41,7 @@ CREATE TABLE IF NOT EXISTS users (
  is_admin INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
  tagline TEXT NOT NULL DEFAULT '', about TEXT NOT NULL DEFAULT '', birthday TEXT,
  gender TEXT NOT NULL DEFAULT '', last_seen TEXT, connection_id TEXT,
- radio_quota_mb INTEGER, profile_photo_filename TEXT);
+ radio_quota_mb INTEGER, videos_quota_mb INTEGER, profile_photo_filename TEXT);
 CREATE TABLE IF NOT EXISTS registration_invites (
  id INTEGER PRIMARY KEY AUTOINCREMENT,
  token_hash TEXT NOT NULL UNIQUE,
@@ -1225,6 +1228,9 @@ def _migrate_imageboard(database):
     station_columns = {row["name"] for row in database.execute("PRAGMA table_info(station)")}
     if "imageboard_enabled" not in station_columns:
         database.execute("ALTER TABLE station ADD COLUMN imageboard_enabled INTEGER NOT NULL DEFAULT 0 CHECK(imageboard_enabled IN (0,1))")
+    for name, default in (("imageboard_max_threads", 100), ("imageboard_max_image_replies", 50)):
+        if name not in station_columns:
+            database.execute(f"ALTER TABLE station ADD COLUMN {name} INTEGER NOT NULL DEFAULT {default}")
     group_columns = {row["name"] for row in database.execute("PRAGMA table_info(radio_permission_groups)")}
     if "moderate_imageboard" not in group_columns:
         database.execute("ALTER TABLE radio_permission_groups ADD COLUMN moderate_imageboard INTEGER NOT NULL DEFAULT 0 CHECK(moderate_imageboard IN (0,1))")
@@ -1256,6 +1262,11 @@ def _migrate_videos(database):
         database.execute("ALTER TABLE station ADD COLUMN videos_enabled INTEGER NOT NULL DEFAULT 0")
     if "videos_mode" not in columns:
         database.execute("ALTER TABLE station ADD COLUMN videos_mode TEXT NOT NULL DEFAULT 'community'")
+    if "videos_default_quota_mb" not in columns:
+        database.execute("ALTER TABLE station ADD COLUMN videos_default_quota_mb INTEGER NOT NULL DEFAULT 1024")
+    user_columns = {row["name"] for row in database.execute("PRAGMA table_info(users)")}
+    if "videos_quota_mb" not in user_columns:
+        database.execute("ALTER TABLE users ADD COLUMN videos_quota_mb INTEGER")
 
 
 def _migrate_kiwix(database):

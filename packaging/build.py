@@ -14,6 +14,7 @@ import sys
 import uuid
 import zipfile
 from pathlib import Path
+from kiwix_tools import install as install_kiwix_tools
 
 ROOT = Path(__file__).resolve().parents[1]
 OUT = ROOT / "dist"
@@ -54,6 +55,7 @@ def build_posix():
     with build_workspace() as temp:
         package = temp / "StationNet"
         copy_app(package / "app")
+        install_kiwix_tools(package / "app" / "kiwix_tools")
         wheels = package / "wheels"
         wheels.mkdir(parents=True)
         subprocess.run([sys.executable, "-m", "pip", "wheel", "--wheel-dir", str(wheels),
@@ -75,6 +77,7 @@ def build_windows():
                         "--specpath", str(workspace), str(ROOT / "run.py")], cwd=ROOT, check=True)
         package = workspace / "StationNet"
         shutil.copytree(workspace / "frozen" / "StationNet", package / "app")
+        install_kiwix_tools(package / "app" / "kiwix_tools")
         shutil.copy2(ROOT / "packaging" / "windows-start.bat", package / "start.bat")
         shutil.copy2(ROOT / "packaging" / "windows-install.bat", package / "install.bat")
         shutil.copy2(ROOT / "packaging" / "windows-install.ps1", package / "install.ps1")
