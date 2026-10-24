@@ -455,8 +455,8 @@
     if (overlay.childElementCount) wrapper.append(overlay);
   }
 
-  function renderComponent(component) {
-    if (!component || typeof component !== "object") return null;
+  function renderComponent(component, depth = 0) {
+    if (!component || typeof component !== "object" || depth > 1) return null;
     let node;
     switch (component.type) {
       case "title":
@@ -486,11 +486,11 @@
           node.append(button);
         }); break;
       }
-      case "input": case "number": {
+      case "input": case "number": case "date": case "time": {
         node = document.createElement("label"); node.textContent = text(component.label, 200);
         const input = document.createElement("input"); input.dataset.appInput = "";
         input.name = text(component.name, 80).replace(/[^a-zA-Z0-9_-]/g, "_");
-        input.type = component.type === "number" ? "number" : "text";
+        input.type = component.type === "input" ? "text" : component.type;
         input.value = text(component.value, 500); input.placeholder = text(component.placeholder, 200);
         if (component.type === "input") input.maxLength = number(component.maxLength, 500, 1, 500);
         if (component.type === "number") {
@@ -545,6 +545,41 @@
           const tr = body.insertRow(); (Array.isArray(row) ? row : []).slice(0, LIMITS.columns).forEach((value) => { const td = tr.insertCell(); td.textContent = text(value, 1000); });
         });
         node.append(table); break;
+      }
+      case "panel": {
+        if (depth) return null;
+        node = document.createElement("section"); node.className = "app-panel";
+        const heading = document.createElement("h3"); heading.textContent = text(component.label, 200); node.append(heading);
+        (Array.isArray(component.components) ? component.components : []).slice(0, LIMITS.components).forEach((child) => {
+          const element = renderComponent(child, depth + 1); if (element) node.append(element);
+        });
+        break;
+      }
+      case "calendar": {
+        node = document.createElement("section"); node.className = "app-calendar";
+        node.setAttribute("aria-label", text(component.month, 100));
+        const grid = document.createElement("div"); grid.className = "app-calendar-grid";
+        ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"].forEach((name) => {
+          const label = document.createElement("div"); label.className = "app-calendar-weekday"; label.textContent = name; grid.append(label);
+        });
+        (Array.isArray(component.days) ? component.days : []).slice(0, 42).forEach((day) => {
+          if (!day || typeof day !== "object" || !/^\d{4}-\d{2}-\d{2}$/.test(day.date || "")) return;
+          const button = document.createElement("button"); button.type = "button"; button.className = "app-calendar-day";
+          if (day.outside) button.classList.add("outside");
+          if (day.today) button.classList.add("today");
+          if (day.selected) { button.classList.add("selected"); button.setAttribute("aria-pressed", "true"); }
+          const dayNumber = document.createElement("span"); dayNumber.className = "app-calendar-number"; dayNumber.textContent = text(day.number, 2); button.append(dayNumber);
+          const titles = [];
+          (Array.isArray(day.events) ? day.events : []).slice(0, 2).forEach((event) => {
+            const item = document.createElement("span"); item.className = "app-calendar-event"; item.textContent = text(event, 100);
+            titles.push(item.textContent); button.append(item);
+          });
+          const extra = Math.max(0, Math.floor(number(day.extra, 0, 0, 1000)));
+          if (extra) { const more = document.createElement("span"); more.className = "app-calendar-more"; more.textContent = `+${extra} more`; button.append(more); }
+          button.setAttribute("aria-label", `${day.date}${titles.length ? ": " + titles.join(", ") : ""}${extra ? `, ${extra} more` : ""}`);
+          bindPressable(button, { click: component.action }, { value: day.date }); grid.append(button);
+        });
+        node.append(grid); break;
       }
       case "pre": case "grid":
         node = document.createElement("pre"); node.className = component.type === "grid" ? "app-grid" : "app-pre";

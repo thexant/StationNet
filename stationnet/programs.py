@@ -623,7 +623,8 @@ def create_rule():
         error = "Automation names must be between 1 and 80 characters."
     elif frequency and (database.execute(
             "SELECT 1 FROM radio_broadcast_assignments WHERE frequency_khz=?", (frequency,)).fetchone() or
-            database.execute("SELECT 1 FROM radio_automated_broadcasts WHERE frequency_khz=?", (frequency,)).fetchone()):
+            database.execute("SELECT 1 FROM radio_automated_broadcasts WHERE frequency_khz=?", (frequency,)).fetchone() or
+            database.execute("SELECT 1 FROM radio_external_broadcasts WHERE frequency_khz=?", (frequency,)).fetchone()):
         error = "That frequency is reserved for an existing broadcast."
     if error: flash(error, "error")
     else:

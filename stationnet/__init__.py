@@ -120,6 +120,10 @@ def create_app(test_config=None):
             return redirect(url_for("auth.setup"))
         if g.station is not None and endpoint == "auth.setup":
             return redirect(url_for("station.index"))
+        if (g.station is not None and g.user is None and not g.station["guest_access"]
+                and (endpoint == "station.terminal"
+                     or request.blueprint in {"board", "announcements", "kiwix", "videos"})):
+            return redirect(url_for("auth.login", next=request.path))
 
     @app.after_request
     def headers(response):

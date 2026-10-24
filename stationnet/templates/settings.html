@@ -94,7 +94,7 @@
       <label class="radio"><input type="radio" name="registration_mode" value="private" {% if g.station.registration_mode=='private' %}checked{% endif %}> Private — require a single-use invitation</label>
       <label class="radio"><input type="radio" name="registration_mode" value="disabled" {% if g.station.registration_mode=='disabled' %}checked{% endif %}> Disabled — prevent new account creation</label>
     </fieldset>
-    <label class="switch"><input type="checkbox" name="guest_access" {% if g.station.guest_access %}checked{% endif %}> Allow guests to read bulletins</label>
+    <label class="switch"><input type="checkbox" name="guest_access" {% if g.station.guest_access %}checked{% endif %}> Allow guests to browse station services</label>
     <button>SAVE ACCESS POLICY</button>
   </form>
   <div class="invite-admin" id="invitations">

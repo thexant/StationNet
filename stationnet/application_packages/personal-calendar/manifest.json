@@ -1,0 +1,10 @@
+{
+  "package_format": 1,
+  "slug": "personal-calendar",
+  "name": "Personal Calendar",
+  "description": "A private month calendar and daily planner with repeating events.",
+  "author": "StationNet Core",
+  "version": "1.0.0",
+  "category": "Apps",
+  "entrypoint": "main.js"
+}

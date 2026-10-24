@@ -1,0 +1,11 @@
+{
+  "package_format": 1,
+  "slug": "clock",
+  "name": "Clock",
+  "description": "Time, alarms, timers, stopwatch laps, and world clocks for your station.",
+  "author": "StationNet Core",
+  "version": "1.0.0",
+  "category": "Apps",
+  "entrypoint": "main.js",
+  "platforms": ["desktop", "touch"]
+}

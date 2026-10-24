@@ -5,6 +5,14 @@ programs extend those components; they do not create a second transmission syste
 Existing `radio_playlists`, `/radio/manage/start`, audio URLs, permission groups,
 frequency assignments, and legacy `radio_automated_broadcasts` remain compatible.
 
+External broadcasts use `radio_external_broadcasts` and reserve the same arbiter
+frequencies as local broadcasts. They have no playlist clock, runtime limit, restart
+delay, or indefinite-loop setting. Receivers play resolved stream URLs directly;
+StationNet only fetches bounded playlists and ICY metadata. M3U and PLS resolve to
+their audio endpoint, while HLS requires native browser support. Browsers loading
+StationNet over HTTPS may block HTTP streams as mixed content. Stream URLs are visible
+to listeners and should not contain private credentials.
+
 ## Persisted model
 
 - `radio_broadcast_content` names reusable music, announcement, jingle, Morse, and

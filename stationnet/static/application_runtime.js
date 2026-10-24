@@ -453,6 +453,14 @@
       const opts = options(settings);
       return identified({ type: "input", name: String(name), label: String(label), placeholder: String(opts.placeholder || ""), value: String(opts.value || ""), maxLength: opts.maxLength, submitAction: action(opts.onSubmit) }, opts);
     },
+    dateInput(name, label, settings) {
+      const opts = options(settings);
+      return identified({ type: "date", name: String(name), label: String(label), value: String(opts.value || "") }, opts);
+    },
+    timeInput(name, label, settings) {
+      const opts = options(settings);
+      return identified({ type: "time", name: String(name), label: String(label), value: String(opts.value || "") }, opts);
+    },
     numberInput(name, label, settings) {
       const opts = options(settings);
       return identified({ type: "number", name: String(name), label: String(label), value: opts.value, min: opts.min, max: opts.max, step: opts.step, submitAction: action(opts.onSubmit) }, opts);
@@ -474,6 +482,18 @@
     },
     table(headers, rows, settings) {
       return identified({ type: "table", headers: (Array.isArray(headers) ? headers : []).map(String), rows: (Array.isArray(rows) ? rows : []).map((row) => (Array.isArray(row) ? row : []).map(String)) }, settings);
+    },
+    panel(label, components, settings) {
+      return identified({ type: "panel", label: String(label), components: Array.isArray(components) ? components : [] }, settings);
+    },
+    calendar(month, days, onSelect, settings) {
+      return identified({ type: "calendar", month: String(month), action: action(onSelect),
+        days: (Array.isArray(days) ? days : []).slice(0, 42).map((day) => ({
+          date: String(day.date || ""), number: Number(day.number) || 0,
+          outside: Boolean(day.outside), today: Boolean(day.today), selected: Boolean(day.selected),
+          events: (Array.isArray(day.events) ? day.events : []).slice(0, 2).map(String),
+          extra: Math.max(0, Number(day.extra) || 0)
+        })) }, settings);
     },
     preformatted(content, settings) { return identified({ type: "pre", text: String(content) }, settings); },
     grid(rows, settings) { return identified({ type: "grid", rows: (Array.isArray(rows) ? rows : []).map(String) }, settings); },

@@ -7,6 +7,41 @@
 </header>
 
 <section class="terminal-card broadcast-section">
+  <p class="eyebrow">NEW AUTOMATION / EXTERNAL SOURCE</p>
+  <h2>Create external broadcast</h2>
+  <p class="muted">Continuous internet radio. The listener's browser connects directly to the stream and receives its URL. Use a public stream URL. HTTPS streams work best when StationNet uses HTTPS; HLS requires browser support.</p>
+  <form method="post" action="{{ url_for('broadcast.create_external') }}" class="form-grid">
+    <input type="hidden" name="csrf_token" value="{{ session.csrf_token }}">
+    <label>Stream URL<input type="url" name="stream_url" maxlength="2048" required placeholder="https://radio.example/live.m3u"></label>
+    <label>Broadcast name override<input name="name" maxlength="80" placeholder="Use stream station name"></label>
+    <label>Listener message<textarea name="message" maxlength="240" rows="3" placeholder="Optional station information"></textarea></label>
+    <label>Frequency (MHz)<input name="frequency" inputmode="decimal" required placeholder="7.10"></label>
+    <button>CREATE EXTERNAL BROADCAST +</button>
+  </form>
+</section>
+
+{% for item in external_definitions %}
+{% set live = sessions.get('external:' ~ item.id) %}
+<section class="terminal-card broadcast-section" id="external-{{ item.id }}">
+  <div class="split-heading"><div><p class="eyebrow">{{ format_frequency(item.frequency_khz) }} MHz / EXTERNAL / {{ 'ON AIR' if live else 'STOPPED' }}</p><h2>{{ item.name or (live.station_name if live else 'External radio') }}</h2></div>
+    <form method="post" action="{{ url_for('broadcast.control_external',broadcast_id=item.id) }}"><input type="hidden" name="csrf_token" value="{{ session.csrf_token }}"><input type="hidden" name="action" value="{{ 'stop' if live else 'start' }}"><button class="{{ 'danger' if live else '' }}">{{ 'STOP BROADCAST' if live else 'START BROADCAST' }}</button></form>
+  </div>
+  {% if live %}<p><strong>NOW PLAYING</strong> / {{ live.track_title }}{% if live.track_artist %} / {{ live.track_artist }}{% endif %}</p>{% endif %}
+  <form method="post" action="{{ url_for('broadcast.update_external',broadcast_id=item.id) }}" class="form-grid">
+    <input type="hidden" name="csrf_token" value="{{ session.csrf_token }}">
+    <label>Stream URL<input type="url" name="stream_url" maxlength="2048" required value="{{ item.stream_url }}"></label>
+    <label>Broadcast name override<input name="name" maxlength="80" value="{{ item.name }}" placeholder="Use stream station name"></label>
+    <label>Listener message<textarea name="message" maxlength="240" rows="3">{{ item.message }}</textarea></label>
+    <label>Frequency (MHz)<input name="frequency" inputmode="decimal" required value="{{ format_frequency(item.frequency_khz) }}"></label>
+    <button class="secondary">SAVE CONFIGURATION</button>
+  </form>
+  <form method="post" action="{{ url_for('broadcast.delete_external',broadcast_id=item.id) }}" data-confirm="Delete external broadcast {{ item.name or item.stream_url }}?">
+    <input type="hidden" name="csrf_token" value="{{ session.csrf_token }}"><button class="danger">DELETE BROADCAST</button>
+  </form>
+</section>
+{% endfor %}
+
+<section class="terminal-card broadcast-section">
   <p class="eyebrow">NEW AUTOMATION / STATION IDENTITY</p>
   <h2>Create automated broadcast</h2>
   {% if playlists %}

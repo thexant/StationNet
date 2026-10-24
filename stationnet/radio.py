@@ -428,6 +428,9 @@ class RadioStore:
             result["track_title"] = transmission.get("track_title") or transmission.get("track_name")
             result["track_artist"] = transmission.get("track_artist") or ""
             result["audio_file_id"] = transmission.get("audio_file_id")
+            result["external"] = bool(transmission.get("external"))
+            result["external_url"] = transmission.get("external_url") if transmission.get("external") else None
+            result["external_hls"] = bool(transmission.get("external_hls"))
             result["track_offset"] = transmission.get("track_offset", 0)
             result["track_serial"] = transmission.get("track_serial", 0)
             result["action_type"] = transmission.get("action_type", "music")
@@ -625,6 +628,18 @@ def broadcast_identity(frequency):
     """Return the registered assignment label for a frequency, if one exists."""
     if frequency is None:
         return None
+    external = get_db().execute(
+        "SELECT id,name,message FROM radio_external_broadcasts WHERE frequency_khz=?",
+        (frequency,),
+    ).fetchone()
+    if external is not None:
+        live = current_app.extensions["hosted_broadcasts"].public(f"external:{external['id']}")
+        active = _store().current(frequency) if live else None
+        name = external["name"] or (active or {}).get("playlist_name") or "External radio"
+        return {"registered": True, "automated": True, "name": name,
+                "message": external["message"] or (live or {}).get("description", ""),
+                "callsign": "STATION AUTOMATION",
+                "username": None, "configured_name": external["name"]}
     automated = get_db().execute(
         "SELECT name,message FROM radio_automated_broadcasts WHERE frequency_khz=?",
         (frequency,),
@@ -666,8 +681,8 @@ def broadcast_status(identity, active):
     """Describe live content separately from a frequency's registered identity."""
     if active and active.get("hosted"):
         return {
-            "kind": "automated" if active.get("automated") else "hosted",
-            "label": "AUTOMATED BROADCAST" if active.get("automated") else "HOSTED PLAYBACK",
+            "kind": "external" if active.get("external") else ("automated" if active.get("automated") else "hosted"),
+            "label": "EXTERNAL BROADCAST" if active.get("external") else ("AUTOMATED BROADCAST" if active.get("automated") else "HOSTED PLAYBACK"),
             "active": True, "title": active.get("track_title") or active.get("track_name") or "Untitled track",
             "artist": active.get("track_artist") or "",
         }

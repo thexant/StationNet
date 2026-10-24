@@ -157,6 +157,14 @@ def terminal():
                     **session_info, "name": definition["name"], "username": None,
                     "message": definition["message"],
                 })
+        for definition in database.execute(
+                "SELECT id,name,message FROM radio_external_broadcasts"):
+            session_info = live_broadcasts.get(f"external:{definition['id']}")
+            if session_info and session_info["status"] == "playing":
+                broadcasts.append({**session_info,
+                                   "name": definition["name"] or session_info["station_name"],
+                                   "username": None,
+                                   "message": definition["message"] or session_info["description"]})
         program_rules = {f"rule:{row['id']}": row for row in database.execute(
             "SELECT id,name,message,frequency_khz FROM radio_automation_rules"
         )}
@@ -731,6 +739,9 @@ def save_broadcast_frequency(user_id):
     elif database.execute(
             "SELECT 1 FROM radio_automated_broadcasts WHERE frequency_khz=?", (frequency,)).fetchone():
         flash("That frequency is reserved for an automated broadcast.", "error")
+    elif database.execute(
+            "SELECT 1 FROM radio_external_broadcasts WHERE frequency_khz=?", (frequency,)).fetchone():
+        flash("That frequency is reserved for an external broadcast.", "error")
     elif database.execute(
             "SELECT 1 FROM radio_automation_rules WHERE frequency_khz=?", (frequency,)).fetchone():
         flash("That frequency is reserved for program automation.", "error")

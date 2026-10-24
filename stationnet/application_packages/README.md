@@ -144,9 +144,22 @@ StationNet.start((ui) => {
 ```
 
 Display methods include `render`, `append`, `update`, `remove`, `clear`, `title`,
-`heading`, `text`, `list`, `table`, `preformatted`, and `grid`. Input methods
+`heading`, `text`, `list`, `table`, `panel`, `calendar`, `preformatted`, and `grid`. Input methods
 include `button`, `menu`, `input`, `numberInput`, `textarea`, `select`,
-`checkbox`, `onKey`, and `animate`.
+`dateInput`, `timeInput`, `checkbox`, `onKey`, and `animate`.
+
+`ui.dateInput(name, label, options)` and `ui.timeInput(name, label, options)`
+use the browser's native date and time controls. Their values are collected as
+`YYYY-MM-DD` and 24-hour `HH:MM` strings in interaction `values`.
+
+`ui.panel(label, components, options)` groups existing components in a titled
+section. `ui.calendar(monthLabel, days, onSelect, options)` renders a responsive,
+clickable month grid. Supply up to 42 consecutive day objects with `date`
+(`YYYY-MM-DD`), `number`, `outside`, `today`, `selected`, up to two `events`
+(visible labels), and `extra` (the number of additional events). The selection
+callback receives the date as `value`. Calendar labels are rendered as plain
+text by the host; applications retain responsibility for event storage and
+recurrence rules. Both components accept the usual `id` option.
 
 ### Mouse capture and immersive presentation
 

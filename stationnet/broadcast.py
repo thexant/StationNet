@@ -16,6 +16,7 @@ from .db import get_db
 from .radio import (can_manage_broadcasts, effective_access, find_band,
                     format_frequency, parse_frequency, transmission_authorized)
 from .security import validate_csrf
+from .external_radio import inspect_stream, validate_stream_url
 
 bp = Blueprint("broadcast", __name__, url_prefix="/radio/manage")
 
@@ -41,6 +42,72 @@ class HostedBroadcastStore:
         self._sessions = {}
         self._paused = {}
         self._waiting = {}
+        self._external = {}
+
+    def start_external(self, key, definition, permission_user_id):
+        """A continuous arbiter reservation with no playlist clock or expiry timer."""
+        with self._lock:
+            if key in self._external:
+                raise RuntimeError("This external broadcast is already on air.")
+            # A failed origin can still be started; listeners retry independently.
+            try:
+                details = inspect_stream(definition["stream_url"], metadata=True)
+            except (OSError, ValueError):
+                details = {"url": definition["stream_url"], "station": "", "title": "", "artist": "",
+                           "description": "",
+                           "hls": definition["stream_url"].split("?")[0].lower().endswith(".m3u8")}
+            name = definition["name"] or details["station"] or "External radio"
+            transmission_id, _ = self.radio.start_hosted(
+                key, definition["frequency_khz"], name, public_user_id=None,
+                playlist_name=name, track_name=details["title"] or name,
+                track_title=details["title"] or name, track_artist=details["artist"],
+                audio_file_id=None, external_url=details["url"], external_hls=details["hls"], external=True,
+                automated=True, action_type="music")
+            self._external[key] = {"transmission_id": transmission_id,
+                                   "frequency": definition["frequency_khz"],
+                                   "permission_user_id": permission_user_id,
+                                   "stream_url": definition["stream_url"],
+                                   "name": definition["name"], "message": definition["message"],
+                                   "station": details["station"], "details": details}
+            self._schedule_external_metadata(key)
+            return self.public(key)
+
+    def _schedule_external_metadata(self, key):
+        timer = Timer(45, self._poll_external_metadata, args=(key,))
+        timer.daemon = True
+        self._external[key]["timer"] = timer
+        timer.start()
+
+    def _poll_external_metadata(self, key):
+        with self._lock:
+            item = self._external.get(key)
+            if not item:
+                return
+            url = item["stream_url"]
+        try:
+            details = inspect_stream(url, metadata=True)
+        except (OSError, ValueError):
+            details = None
+        with self._lock:
+            item = self._external.get(key)
+            if not item or item["stream_url"] != url:
+                return
+            if details:
+                item["details"] = details
+                item["station"] = details["station"] or item["station"]
+                name = item["name"] or item["station"] or "External radio"
+                self.radio.update_hosted(key, playlist_name=name, callsign=name,
+                                         track_name=details["title"] or name,
+                                         track_title=details["title"] or name,
+                                         track_artist=details["artist"], external_url=details["url"],
+                                         external_hls=details["hls"])
+            self._schedule_external_metadata(key)
+
+    def _refresh_external(self):
+        for key, item in list(self._external.items()):
+            if not transmission_authorized(item["permission_user_id"], item["frequency"],
+                                           "HOSTED_BROADCAST"):
+                self.stop(key, "permission_revoked")
 
     @staticmethod
     def _elapsed(item, now=None):
@@ -276,6 +343,8 @@ class HostedBroadcastStore:
         """Advance sessions and mirror current metadata into the radio arbiter."""
         from .radio import transmission_authorized
         with self._lock:
+            if user_id is None or user_id in self._external:
+                self._refresh_external()
             selected = list(self._sessions.items())
             for owner_id, item in selected:
                 if user_id is not None and owner_id != user_id:
@@ -338,7 +407,7 @@ class HostedBroadcastStore:
     def stop(self, user_id, reason="ended"):
         with self._lock:
             existed = (self._sessions.pop(user_id, None) or self._paused.pop(user_id, None)
-                       or self._waiting.pop(user_id, None))
+                       or self._waiting.pop(user_id, None) or self._external.pop(user_id, None))
             if existed and existed.get("timer"):
                 existed["timer"].cancel()
             self.radio.end_hosted(user_id, reason)
@@ -565,6 +634,15 @@ class HostedBroadcastStore:
 
     def public(self, user_id):
         self.refresh(user_id)
+        if user_id in self._external:
+            item = self._external[user_id]
+            details = item["details"]
+            return {"session_key": user_id, "transmission_id": item["transmission_id"],
+                    "status": "playing", "external": True, "automated": True,
+                    "station_name": item["name"] or item["station"] or "External radio",
+                    "description": item["message"] or details.get("description", ""),
+                    "track_title": details["title"] or item["name"] or item["station"] or "External radio",
+                    "track_artist": details["artist"], "frequency_khz": item["frequency"]}
         item = self._sessions.get(user_id)
         paused = False
         if not item:
@@ -606,7 +684,7 @@ class HostedBroadcastStore:
 
     def all_public(self):
         self.refresh()
-        user_ids = set(self._sessions) | set(self._paused) | set(self._waiting)
+        user_ids = set(self._sessions) | set(self._paused) | set(self._waiting) | set(self._external)
         return {user_id: self.public(user_id) for user_id in user_ids}
 
 
@@ -854,7 +932,10 @@ def _automated_values(database, broadcast_id=None):
     program_rule = database.execute(
         "SELECT 1 FROM radio_automation_rules WHERE frequency_khz=?", (frequency,),
     ).fetchone()
-    if assignment or duplicate or program_rule:
+    external = database.execute(
+        "SELECT 1 FROM radio_external_broadcasts WHERE frequency_khz=?", (frequency,),
+    ).fetchone()
+    if assignment or duplicate or program_rule or external:
         return None, "That frequency is already reserved for another broadcast."
     playlist = database.execute(
         "SELECT p.* FROM radio_playlists p JOIN users u ON u.id=p.owner_id "
@@ -885,10 +966,128 @@ def automated():
         "LEFT JOIN radio_playlist_tracks t ON t.playlist_id=p.id "
         "WHERE p.owner_id=? GROUP BY p.id ORDER BY p.name", (g.user["id"],),
     ).fetchall()
+    external_definitions = database.execute(
+        "SELECT * FROM radio_external_broadcasts ORDER BY frequency_khz,name COLLATE NOCASE"
+    ).fetchall()
     return render_template(
         "radio/automated.html", definitions=definitions, playlists=playlists,
+        external_definitions=external_definitions,
         sessions=_store().all_public(), format_frequency=format_frequency,
     )
+
+
+def _external_values(database, broadcast_id=None):
+    name = request.form.get("name", "").strip()
+    message = request.form.get("message", "").strip()
+    frequency = parse_frequency(request.form.get("frequency"))
+    if len(name) > BROADCAST_NAME_MAX_LENGTH or "\n" in name or "\r" in name:
+        return None, "Broadcast name must be a single line under 80 characters."
+    if len(message) > BROADCAST_MESSAGE_MAX_LENGTH or any(
+            ord(char) < 32 and char not in "\t\n\r" for char in name + message):
+        return None, "Broadcast information is too long or contains control characters."
+    if frequency is None or not (band := find_band(frequency)) or not band["supports_hosted_broadcasts"]:
+        return None, "Choose a frequency inside a band that supports hosted broadcasts."
+    if effective_access(g.user["id"], frequency) != "FULL":
+        return None, "Your radio groups must grant FULL access at that frequency."
+    for table in ("radio_broadcast_assignments", "radio_automated_broadcasts",
+                  "radio_automation_rules"):
+        if database.execute(f"SELECT 1 FROM {table} WHERE frequency_khz=?", (frequency,)).fetchone():
+            return None, "That frequency is already reserved for another broadcast."
+    if database.execute("SELECT 1 FROM radio_external_broadcasts WHERE frequency_khz=? AND id<>?",
+                        (frequency, broadcast_id or 0)).fetchone():
+        return None, "That frequency is already reserved for another broadcast."
+    try:
+        stream_url = validate_stream_url(request.form.get("stream_url", ""), resolve=False)
+    except ValueError as problem:
+        return None, str(problem)
+    return (name, message, frequency, stream_url), None
+
+
+@bp.post("/automated/external")
+@admin_required
+def create_external():
+    validate_csrf()
+    database = get_db()
+    values, error = _external_values(database)
+    if error:
+        flash(error, "error")
+    else:
+        try:
+            database.execute("INSERT INTO radio_external_broadcasts"
+                             "(created_by,name,message,frequency_khz,stream_url) VALUES(?,?,?,?,?)",
+                             (g.user["id"], *values))
+            database.commit()
+            flash("External broadcast created.", "success")
+        except sqlite3.IntegrityError:
+            database.rollback()
+            flash("That frequency is no longer available.", "error")
+    return _automated_redirect()
+
+
+@bp.post("/automated/external/<int:broadcast_id>")
+@admin_required
+def update_external(broadcast_id):
+    validate_csrf()
+    database = get_db()
+    if not database.execute("SELECT 1 FROM radio_external_broadcasts WHERE id=?",
+                            (broadcast_id,)).fetchone():
+        abort(404)
+    values, error = _external_values(database, broadcast_id)
+    if error:
+        flash(error, "error")
+    else:
+        _store().stop(f"external:{broadcast_id}", "configuration_changed")
+        try:
+            database.execute("UPDATE radio_external_broadcasts SET name=?,message=?,frequency_khz=?,"
+                             "stream_url=?,updated_at=CURRENT_TIMESTAMP WHERE id=?", (*values, broadcast_id))
+            database.commit()
+            flash("External broadcast updated. Start it to use the new settings.", "success")
+        except sqlite3.IntegrityError:
+            database.rollback()
+            flash("That frequency is no longer available.", "error")
+    return _automated_redirect()
+
+
+@bp.post("/automated/external/<int:broadcast_id>/delete")
+@admin_required
+def delete_external(broadcast_id):
+    validate_csrf()
+    database = get_db()
+    _store().stop(f"external:{broadcast_id}", "deleted")
+    changed = database.execute("DELETE FROM radio_external_broadcasts WHERE id=?", (broadcast_id,))
+    database.commit()
+    if not changed.rowcount:
+        abort(404)
+    flash("External broadcast deleted.", "success")
+    return _automated_redirect()
+
+
+@bp.post("/automated/external/<int:broadcast_id>/control")
+@admin_required
+def control_external(broadcast_id):
+    validate_csrf()
+    definition = get_db().execute("SELECT * FROM radio_external_broadcasts WHERE id=?",
+                                  (broadcast_id,)).fetchone()
+    if not definition:
+        abort(404)
+    key = f"external:{broadcast_id}"
+    action = request.form.get("action")
+    if action == "stop":
+        _store().stop(key, "sysop_stopped")
+        flash("External broadcast stopped.", "success")
+    elif action == "start":
+        if not transmission_authorized(g.user["id"], definition["frequency_khz"],
+                                       "HOSTED_BROADCAST"):
+            flash("Your radio groups do not authorize hosted broadcasts at that frequency.", "error")
+        else:
+            try:
+                _store().start_external(key, definition, g.user["id"])
+                flash("External broadcast started.", "success")
+            except RuntimeError as problem:
+                flash(str(problem), "error")
+    else:
+        abort(400)
+    return _automated_redirect()
 
 
 @bp.post("/automated")

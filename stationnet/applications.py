@@ -504,7 +504,9 @@ def display(slug):
         (g.user["id"], slug),
     )
     database.commit()
-    return render_template("applications/display.html", application=application)
+    response = make_response(render_template("applications/display.html", application=application))
+    response.headers["Cache-Control"] = "no-store"
+    return response
 
 
 @admin_bp.get("")
@@ -776,12 +778,17 @@ def runtime(slug):
         package_files = _package_files(application)
     except (OSError, PackageError):
         abort(404)
-    return render_template(
+    response = make_response(render_template(
         "applications/runtime.html", application=application,
         application_source=base64.b64encode(entrypoint.read_bytes()).decode("ascii"),
         worker_source=base64.b64encode(worker.read_bytes()).decode("ascii"),
         package_files=package_files,
-    )
+    ))
+    # The worker API and the app source must always come from the same live
+    # response. A cached sandbox page can otherwise run a new app against an
+    # older API after an update.
+    response.headers["Cache-Control"] = "no-store"
+    return response
 
 
 @bp.get("/<slug>/source.js")

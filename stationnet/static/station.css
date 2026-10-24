@@ -535,6 +535,29 @@ button:focus-visible, .button:focus-visible, a:focus-visible, summary:focus-visi
 .app-table-wrap table { width: 100%; border-collapse: collapse; color: var(--white); font-size: .7rem; }
 .app-table-wrap th, .app-table-wrap td { padding: .5rem; border: 1px dotted var(--green-dim); text-align: left; }
 .app-table-wrap th { color: var(--cyan); font-weight: 400; }
+.application-surface:has(> .app-calendar) { grid-template-columns: minmax(0, 1.8fr) minmax(17rem, 1fr); align-items: start; }
+.application-surface:has(> .app-calendar) > :not(.app-calendar):not(.app-panel) { grid-column: 1 / -1; }
+.app-calendar { min-width: 0; }
+.app-calendar-grid { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); border-top: 1px solid var(--green-dim); border-left: 1px solid var(--green-dim); }
+.app-calendar-weekday { padding: .45rem .25rem; color: var(--cyan); text-align: center; border-right: 1px solid var(--green-dim); border-bottom: 1px solid var(--green-dim); font-size: .72rem; }
+.app-calendar-day { display: flex; flex-direction: column; align-items: stretch; gap: .2rem; min-width: 0; min-height: 6.8rem; margin: 0; padding: .35rem; overflow: hidden; border: 0; border-right: 1px solid var(--green-dim); border-bottom: 1px solid var(--green-dim); border-radius: 0; background: #010701; color: var(--white); text-align: left; font: inherit; text-transform: none; box-shadow: none; }
+.app-calendar-day:hover, .app-calendar-day:focus-visible { position: relative; z-index: 1; outline: 2px solid var(--cyan); outline-offset: -2px; background: #092010; }
+.app-calendar-day.outside { opacity: .52; }
+.app-calendar-day.today .app-calendar-number { color: #000; background: var(--green-bright); }
+.app-calendar-day.selected { background: #10351c; box-shadow: inset 0 0 0 2px var(--cyan); }
+.app-calendar-number { align-self: flex-start; display: grid; place-items: center; min-width: 1.5rem; height: 1.5rem; padding: 0 .2rem; color: var(--green-bright); font-size: .8rem; }
+.app-calendar-event { display: block; width: 100%; padding: .13rem .25rem; overflow: hidden; border-left: 2px solid var(--cyan); background: #10241a; color: var(--white); font-size: .68rem; line-height: 1.2; text-overflow: ellipsis; white-space: nowrap; }
+.app-calendar-more { overflow: hidden; color: var(--cyan); font-size: .65rem; text-overflow: clip; white-space: nowrap; }
+.app-panel { display: grid; align-content: start; gap: .7rem; min-width: 0; padding: .8rem; border: 1px solid var(--green-dim); background: #010701; }
+.app-panel > * { min-width: 0; margin: 0; }
+.app-panel h3 { color: var(--cyan); font-size: 1rem; }
+.app-panel .app-menu { min-width: 0; }
+.app-panel .app-menu button { white-space: normal; text-align: left; }
+.application-surface input[type="date"], .application-surface input[type="time"] { color-scheme: dark; }
+.app-text:empty { display: none; }
+.app-panel:has(input[name="eventAllDay"]:checked) > label:has(input[name="eventStart"]), .app-panel:has(input[name="eventAllDay"]:checked) > label:has(input[name="eventEnd"]) { display: none; }
+@media (max-width: 800px) { .application-surface:has(> .app-calendar) { grid-template-columns: minmax(0, 1fr); } .application-surface:has(> .app-calendar) > * { grid-column: 1; } .app-calendar-day { min-height: 5.2rem; } }
+@media (max-width: 500px) { .app-calendar-day { min-height: 4.3rem; padding: .22rem; } .app-calendar-event { padding: .08rem .15rem; font-size: .59rem; } .app-calendar-number { min-width: 1.25rem; height: 1.25rem; font-size: .7rem; } .app-calendar-weekday { font-size: .62rem; } .app-calendar-more { font-size: .52rem; } }
 .application-placeholder { display: grid; justify-items: center; align-content: center; min-height: 21rem; padding: 2rem 1rem; text-align: center; }
 .application-placeholder > span { color: var(--cyan); font-size: 2rem; }
 .application-placeholder h2 { margin: .5rem 0; }
