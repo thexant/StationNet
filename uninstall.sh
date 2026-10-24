@@ -9,7 +9,7 @@ printf '\n============================================================\n'
 printf ' StationNet uninstaller\n'
 printf '============================================================\n'
 printf ' This resets StationNet to a clean extracted copy.\n\n'
-printf ' PRESERVED:\n  %s\n  Application source, scripts, and documentation\n\n' "$INSTALL_DIR"
+printf ' PRESERVED:\n  %s\n  Application source, scripts, and documentation\n  kiwix_data (offline WIKI archives)\n\n' "$INSTALL_DIR"
 printf ' REMOVED:\n  Python environment, station data, and generated caches\n\n'
 
 if [[ ! -f "$INSTALL_DIR/run.py" || ! -f "$INSTALL_DIR/requirements.txt" || ! -f "$INSTALL_DIR/stationnet/__init__.py" || ! -f "$INSTALL_DIR/uninstall.sh" ]]; then
@@ -18,12 +18,13 @@ if [[ ! -f "$INSTALL_DIR/run.py" || ! -f "$INSTALL_DIR/requirements.txt" || ! -f
     exit 1
 fi
 
+if [[ ! -t 0 ]]; then
+    printf 'ERROR: Run uninstall.sh interactively to confirm removal of station data.\n' >&2
+    exit 1
+fi
+
 if [[ -d "$INSTALL_DIR/data" ]]; then
-    if [[ -t 0 ]]; then
-        read -r -p 'Back up the station database and data first? [Y/n]: ' backup_data
-    else
-        backup_data="y"
-    fi
+    read -r -p 'Back up the station database and data first? [Y/n]: ' backup_data
     if [[ ! "$backup_data" =~ ^[Nn]$ ]]; then
         stamp="$(date +%Y%m%d-%H%M%S)"
         backup_dir="$PARENT_DIR/StationNet-data-backup-$stamp-$$"
@@ -38,12 +39,10 @@ else
     printf 'No station data directory was found; no backup is needed.\n'
 fi
 
-if [[ -t 0 ]]; then
-    read -r -p 'Remove installed/runtime files and reset this copy? [y/N]: ' confirm_reset
-    if [[ ! "$confirm_reset" =~ ^[Yy]$ ]]; then
-        printf 'Uninstall cancelled. Nothing was removed.\n'
-        exit 0
-    fi
+read -r -p 'Remove installed/runtime files and reset this copy? [y/N]: ' confirm_reset
+if [[ ! "$confirm_reset" =~ ^[Yy]$ ]]; then
+    printf 'Uninstall cancelled. Nothing was removed.\n'
+    exit 0
 fi
 
 printf '\nRemoving generated StationNet files...\n'

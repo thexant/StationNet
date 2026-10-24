@@ -21,6 +21,11 @@ and SHA-256 checksums. It serves the files directly from `dist/` by default.
 Set `STATIONNET_DISTRIBUTION_DIR` before both building and starting the station
 to use a different local download directory. You can limit a run with
 `-Platforms Source,Windows` or select Python with `-Python py`.
+For a release gate, pass `-RequireAll` with the platforms you intend to ship;
+the command then exits unsuccessfully if any selected platform is unavailable
+or fails. For example, `-Platforms Source,Windows -RequireAll` requires both
+archives to build. An Android build from this script is a debug APK; it is
+not a signed production release APK.
 
 Install Python 3.11+ and the application requirements first. Windows bundles
 also need `python -m pip install PyInstaller`. Linux builds need WSL with a
@@ -56,8 +61,11 @@ To make a locally downloadable source archive, run:
 python packaging/build.py source
 ```
 
-This creates `dist/StationNet-source.zip` without any station data. The page
-also exposes its local README and this guide. If a `LICENSE` file is added to
+This creates `dist/StationNet-source.zip` without any station data. The
+archive includes `install.bat`, `install.sh`, both uninstallers, and the run
+scripts, so it can be installed directly after extraction. The uninstallers
+preserve `kiwix_data/`; back up its ZIM files separately when moving stations.
+The downloads page also exposes its local README and this guide. If a `LICENSE` file is added to
 the StationNet checkout, it is exposed there and included in source archives.
 
 ## Windows

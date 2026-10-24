@@ -13,7 +13,8 @@ param(
     [string]$Python = 'python',
     [string]$LinuxDistro = '',
     [string]$PiDistro = '',
-    [string]$DistributionDir = ''
+    [string]$DistributionDir = '',
+    [switch]$RequireAll
 )
 
 $ErrorActionPreference = 'Stop'
@@ -177,3 +178,4 @@ try {
 Write-Host "`nBuild summary:"
 foreach ($platform in $Platforms) { Write-Host "  ${platform}: $($results[$platform])" }
 if (@($results.Values | Where-Object { $_ -like 'FAILED:*' }).Count) { exit 1 }
+if ($RequireAll -and @($results.Values | Where-Object { $_ -notlike 'SUCCESS:*' }).Count) { exit 1 }

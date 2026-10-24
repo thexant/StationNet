@@ -25,7 +25,7 @@ Windows (easy setup):
 2. Use the generated `run.bat` to start StationNet at any time.
 3. Open `http://127.0.0.1:8080` and complete first-run setup.
 
-To reset an installed copy, double-click `uninstall.bat`. It optionally backs up station data, then removes only the generated environment, data, `run.bat`, and cache files. The StationNet directory and all application source files remain intact, ready for `install.bat` to be run again.
+To reset an installed copy, double-click `uninstall.bat`. It optionally backs up station data, then removes only the generated environment, data, `run.bat`, and cache files. The StationNet directory, application source, and `kiwix_data/` archives remain intact, ready for `install.bat` to be run again.
 
 ### Linux, macOS, and Unix
 
@@ -37,7 +37,7 @@ chmod +x install.sh run.sh uninstall.sh
 ./run.sh
 ```
 
-`install.sh` requires Python 3.11 or newer and creates `.venv` in the StationNet folder. Run `./uninstall.sh` to optionally back up `data` and remove only generated runtime files, leaving the source copy intact. Android hosting uses the standalone APK described in the distribution guide.
+`install.sh` requires Python 3.11 or newer and creates `.venv` in the StationNet folder. Run `./uninstall.sh` to optionally back up `data` and remove only generated runtime files, leaving the source copy and `kiwix_data/` archives intact. Android hosting uses the standalone APK described in the distribution guide.
 
 Windows PowerShell (manual setup):
 

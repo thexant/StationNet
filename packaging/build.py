@@ -85,10 +85,17 @@ def build_source():
     with build_workspace() as temp:
         package = temp / "StationNet-source"
         copy_app(package)
-        for name in ("README.md", "DISTRIBUTION.md", "BROADCASTING.md", "LICENSE", "build-all.ps1"):
+        for name in (
+            "README.md", "DISTRIBUTION.md", "BROADCASTING.md",
+            "build-all.ps1", "install.bat", "uninstall.bat", "install.sh",
+            "uninstall.sh", "run.sh",
+        ):
             source = ROOT / name
-            if source.is_file():
-                shutil.copy2(source, package / name)
+            if not source.is_file():
+                raise FileNotFoundError(f"Source package requires {source}")
+            shutil.copy2(source, package / name)
+        if (ROOT / "LICENSE").is_file():
+            shutil.copy2(ROOT / "LICENSE", package / "LICENSE")
         shutil.copytree(ROOT / "packaging", package / "packaging",
                         ignore=shutil.ignore_patterns("__pycache__", "*.pyc"))
         shutil.copytree(ROOT / "android", package / "android", ignore=shutil.ignore_patterns(

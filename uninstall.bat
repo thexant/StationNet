@@ -17,6 +17,7 @@ echo.
 echo  PRESERVED:
 echo    %INSTALL_DIR%
 echo    Application source, scripts, and documentation
+echo    kiwix_data (offline WIKI archives)
 echo.
 echo  REMOVED:
 echo    Python environment, station data, run.bat, and generated caches
