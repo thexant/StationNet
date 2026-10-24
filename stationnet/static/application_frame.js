@@ -24,9 +24,34 @@
   const frameInterval = 1000 / 60;
   const animations = new Map();
   const pendingCanvasUpdates = new Map();
+  const pendingFrames = new Map();
+
+  const flushFrames = () => {
+    pendingFrames.forEach((message) => {
+      const transfer = [];
+      if (message.pixels instanceof Uint8Array) transfer.push(message.pixels.buffer);
+      if (message.palette instanceof Uint8Array) transfer.push(message.palette.buffer);
+      parent.postMessage(message, "*", transfer);
+    });
+    pendingFrames.clear();
+  };
 
   const flushCanvasUpdates = () => {
-    pendingCanvasUpdates.forEach((message) => parent.postMessage(message, "*"));
+    if (!pendingCanvasUpdates.size) { flushFrames(); return; }
+    let frames = Array.from(pendingFrames.values());
+    pendingCanvasUpdates.forEach((message) => {
+      if (frames.length) {
+        message.frames = frames;
+        const transfer = [];
+        frames.forEach((frame) => {
+          if (frame.pixels instanceof Uint8Array) transfer.push(frame.pixels.buffer);
+          if (frame.palette instanceof Uint8Array) transfer.push(frame.palette.buffer);
+        });
+        parent.postMessage(message, "*", transfer);
+        frames = [];
+      } else parent.postMessage(message, "*");
+    });
+    pendingFrames.clear();
     pendingCanvasUpdates.clear();
   };
 
@@ -35,7 +60,7 @@
     for (const state of animations.values()) {
       if (!state.pending) { runnable = true; break; }
     }
-    if (stopped || !visible || animationRequest || (!runnable && !pendingCanvasUpdates.size)) return;
+    if (stopped || !visible || animationRequest || (!runnable && !pendingCanvasUpdates.size && !pendingFrames.size)) return;
     animationRequest = requestAnimationFrame(runAnimations);
   };
 
@@ -82,6 +107,24 @@
       scheduleAnimations();
       return;
     }
+    if (event.data.type === "graphics-frame") {
+      const value = event.data;
+      const id = String(value.id || "");
+      if (!/^[A-Za-z0-9_.:-]{1,80}$/.test(id) ||
+          !Number.isInteger(value.width) || !Number.isInteger(value.height) ||
+          value.width < 1 || value.height < 1 || value.width > 640 || value.height > 400 ||
+          value.width * value.height > 256000 ||
+          (value.format !== "rgba" && value.format !== "indexed") ||
+          !(value.pixels === null || value.pixels instanceof Uint8Array &&
+            value.pixels.length === value.width * value.height * (value.format === "rgba" ? 4 : 1)) ||
+          !(value.palette === null || value.palette instanceof Uint8Array && value.palette.length === 1024) ||
+          (!pendingFrames.has(id) && pendingFrames.size >= 4)) return;
+      if (value.pixels === null && pendingFrames.has(id))
+        value.pixels = pendingFrames.get(id).pixels;
+      pendingFrames.set(id, value);
+      scheduleAnimations();
+      return;
+    }
     const canvas = event.data.type === "render" && event.data.mode === "update"
       && event.data.components?.length === 1 && event.data.components[0]?.type === "canvas";
     if (canvas) {
@@ -110,7 +153,7 @@
     if (stopped) return;
     stopped = true;
     if (animationRequest) cancelAnimationFrame(animationRequest);
-    animationRequest = 0; animations.clear(); pendingCanvasUpdates.clear();
+    animationRequest = 0; animations.clear(); pendingCanvasUpdates.clear(); pendingFrames.clear();
     worker.terminate();
     URL.revokeObjectURL(url);
   }

@@ -27,6 +27,8 @@
   delete self.__stationnetPackageFiles;
   const moduleCache = new Map();
   const registeredImages = new Set();
+  const framebuffers = new Map();
+  let framebufferPixels = 0;
   let nextAction = 1;
   let nextRequest = 1;
   let messagesSent = 0;
@@ -81,9 +83,59 @@
     return moduleCache.get(path);
   }
 
-  function send(type, payload = {}) {
+  function send(type, payload = {}, transfer) {
     if (stopped || ++messagesSent > 1000000) return;
-    postMessage({ protocol: PROTOCOL, type, ...payload });
+    postMessage({ protocol: PROTOCOL, type, ...payload }, transfer || []);
+  }
+
+  function framebuffer(id, width, height, settings) {
+    const opts = options(settings);
+    if (typeof id !== "string" || !/^[A-Za-z0-9_.:-]{1,80}$/.test(id) || framebuffers.has(id))
+      throw new Error("Framebuffer id must be unique and contain only letters, digits, _, ., :, or -");
+    if (!Number.isInteger(width) || !Number.isInteger(height) || width < 1 || height < 1 ||
+        width > 640 || height > 400 || width * height > 256000 ||
+        framebuffers.size >= 4 || framebufferPixels + width * height > 512000)
+      throw new RangeError("Framebuffer limit exceeded (4 buffers, 512000 total pixels, 640x400 maximum)");
+    const format = opts.format === "indexed" ? "indexed" : "rgba";
+    if (opts.format != null && opts.format !== format) throw new RangeError("Framebuffer format must be rgba or indexed");
+    const pixels = new Uint8Array(width * height * (format === "rgba" ? 4 : 1));
+    const palette = format === "indexed" ? new Uint8Array(256 * 4) : null;
+    if (palette) for (let i = 0; i < 256; i++) palette[i * 4 + 3] = 255;
+    const buffer = {
+      id, width, height, format, pixels, palette,
+      clear(value = 0) { pixels.fill(value); },
+      pixel(x, y, value) {
+        if (!Number.isInteger(x) || !Number.isInteger(y) || x < 0 || y < 0 || x >= width || y >= height) return;
+        if (format === "indexed") pixels[y * width + x] = value;
+        else {
+          const offset = (y * width + x) * 4;
+          pixels[offset] = value[0]; pixels[offset + 1] = value[1];
+          pixels[offset + 2] = value[2]; pixels[offset + 3] = value[3] ?? 255;
+        }
+      },
+      fillRect(x, y, w, h, value) {
+        const left = Math.max(0, Math.trunc(x)), top = Math.max(0, Math.trunc(y));
+        const right = Math.min(width, Math.trunc(x + w)), bottom = Math.min(height, Math.trunc(y + h));
+        if (![left, top, right, bottom].every(Number.isFinite) || right <= left || bottom <= top) return;
+        if (format === "indexed") {
+          for (let row = top; row < bottom; row++) pixels.fill(value, row * width + left, row * width + right);
+        } else {
+          const color = [value[0], value[1], value[2], value[3] ?? 255];
+          for (let row = top; row < bottom; row++) for (let col = left; col < right; col++) pixels.set(color, (row * width + col) * 4);
+        }
+      },
+      present(settings) {
+        const paletteOnly = Boolean(options(settings).paletteOnly);
+        if (paletteOnly && !palette) throw new Error("paletteOnly requires an indexed framebuffer");
+        const data = paletteOnly ? null : pixels.slice();
+        const colors = palette ? palette.slice() : null;
+        send("graphics-frame", { id, width, height, format, pixels: data, palette: colors },
+          data ? [data.buffer, ...(colors ? [colors.buffer] : [])] : [colors.buffer]);
+      }
+    };
+    framebufferPixels += width * height;
+    framebuffers.set(id, buffer);
+    return Object.freeze(buffer);
   }
 
   function fail(error) {
@@ -445,6 +497,12 @@
       }, opts);
     },
     graphics: Object.freeze({
+      framebuffer,
+      frame(id, x, y, width, height, settings) {
+        const opts = options(settings);
+        return { type: "framebuffer", buffer: id && typeof id === "object" ? id.id : id,
+          x, y, width, height, opacity: opts.opacity };
+      },
       image(source, x, y, settings) {
         const opts = options(settings);
         return { type: "image", image: source, x, y, sx: opts.sx, sy: opts.sy,

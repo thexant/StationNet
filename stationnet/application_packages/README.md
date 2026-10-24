@@ -330,6 +330,47 @@ own tests.
 
 ### Packaged images, sprites, and tile maps
 
+### Procedural framebuffers
+
+`ui.graphics.framebuffer(id, width, height, { format })` creates a persistent
+worker-side pixel buffer. `format` is `"rgba"` (default, four bytes per pixel)
+or `"indexed"` (one palette index per pixel). Both expose a row-major
+`Uint8Array` as `pixels`; indexed buffers also expose a 1,024-byte `palette`
+with 256 RGBA entries. The arrays are editable directly for raycasters,
+software rasterizers, voxel columns, texture mapping, and palette effects.
+`pixel(x, y, value)`, `fillRect(x, y, width, height, value)`, and `clear(value)`
+are convenience operations. For RGBA, `value` is `[r, g, b, a]`; alpha defaults
+to 255. For indexed color, `value` is a palette index. Direct array loops are
+usually faster for whole-frame rendering.
+
+Call `buffer.present()` after writing pixels, then draw it with
+`ui.graphics.frame(buffer, x, y, width, height, { opacity })` inside a canvas.
+The frame command can be reused. Present sends a snapshot, so the worker may
+edit its own array immediately. For indexed buffers, `present({ paletteOnly:
+true })` sends just the palette, reusing the last pixel indices on the host.
+This is useful for color cycling or fades. Palette alpha is respected. There
+is no readback from the host.
+
+```js
+const image = ui.graphics.framebuffer("view", 320, 200, { format: "indexed" });
+image.palette.set([255, 160, 32, 255], 4); // palette entry 1
+image.fillRect(20, 20, 80, 40, 1);
+image.present();
+ui.render(ui.canvas(320, 200, [ui.graphics.frame(image, 0, 0, 320, 200)],
+  { id: "screen" }));
+```
+
+Buffers are limited to four per app, 512,000 pixels combined, and at most
+640×400 pixels each. IDs cannot be reused with new dimensions. Each full
+`present` transfers 64 KiB/256 KiB for 320×200/640×400 indexed frames, or
+256 KiB/1 MiB for RGBA. The relay keeps only the latest frame per buffer for
+each display refresh. Indexed palette changes still recolor the cached frame
+on the host. Rendering remains Canvas 2D with nearest-neighbor scaling;
+there is no WebGL, shader, depth buffer, shared memory, or arbitrary canvas
+context. Applications implement depth and texture sampling in their worker.
+The built-in **Pixel Raycaster** package demonstrates this at 320×200 and
+shows its measured worker render time and delivered frames per second.
+
 `ui.graphics.image(image, x, y, options)` builds an `image` canvas command.
 Use `{ sx, sy, sw, sh }` to crop, `{ width, height }` to scale, and `flipX`,
 `flipY`, or `opacity` for transparency effects. PNG alpha and other image alpha
@@ -458,13 +499,23 @@ on capable foreground browsers it is designed to run smoothly in the 30–60 FPS
 range. Frame rate remains dependent on the browser, hardware, other page work,
 and the complexity of the application's command list.
 
-The remaining hot path is structured-cloning each frame's command data from the
-worker and replaying those commands through Canvas 2D. Images and tile arrays
-are registered once and cached by the host; each frame sends only sprite commands
-and tile viewport positions. Keep stable page controls outside the loop, update
-one canvas id, batch wireframes with `lines`, and avoid allocating more commands
-than the scene needs. Large text/geometry command lists can become CPU and
-message-copy bound.
+Command-heavy scenes still pay for cloning and replaying every command. Images,
+tile maps, and procedural framebuffers are cached by the host. The relay
+coalesces repeated canvas and framebuffer updates before each display refresh
+and attaches pixel data to the canvas update, keeping the normal animated path
+to one host message per frame. Keep stable page controls outside the loop,
+update one canvas id, and batch wireframes with `lines`. For dense procedural
+scenes, write directly into an indexed framebuffer instead of emitting many
+rectangles or columns as commands.
+
+`node tests/benchmark_application_framebuffer.js` is a reproducible CPU-only
+microbenchmark (Node, 300 timed iterations after warm-up). On the development
+machine it measured **0.14 ms** for a 320×200 textured-column fill plus
+snapshot and **0.18 ms** for palette expansion; at 640×400 the respective
+times were **0.51 ms** and **0.74 ms**. These numbers exclude browser message
+delivery, Canvas 2D upload, scaling, and display synchronization. The Pixel
+Raycaster app reports its own live worker timing and delivered frame rate so
+browser and device performance can be checked directly.
 
 ## Synthesized sound
 

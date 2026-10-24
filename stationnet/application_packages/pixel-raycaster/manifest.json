@@ -1,0 +1,10 @@
+{
+  "package_format": 1,
+  "slug": "pixel-raycaster",
+  "name": "Pixel Raycaster",
+  "description": "Procedural textured walls rendered into a 320x200 indexed framebuffer.",
+  "author": "StationNet Core",
+  "version": "1.0.0",
+  "category": "Games",
+  "entrypoint": "main.js"
+}

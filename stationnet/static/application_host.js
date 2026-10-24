@@ -37,6 +37,8 @@
   const activeTones = new Set();
   const images = new Map();
   const tileMaps = new Map();
+  const framebuffers = new Map();
+  let framebufferPixels = 0;
   const canvasScenes = new WeakMap();
   let imageBytes = 0;
   let imagePixels = 0;
@@ -265,6 +267,41 @@
     redrawScenes();
   }
 
+  function registerFrame(message) {
+    const id = text(message.id, 80);
+    const width = message.width, height = message.height, format = message.format;
+    if (!/^[A-Za-z0-9_.:-]{1,80}$/.test(id) || !Number.isInteger(width) || !Number.isInteger(height) ||
+        width < 1 || height < 1 || width > 640 || height > 400 || width * height > 256000 ||
+        (format !== "rgba" && format !== "indexed")) return;
+    let frame = framebuffers.get(id);
+    if (frame && (frame.width !== width || frame.height !== height || frame.format !== format)) return;
+    if (!frame && (framebuffers.size >= 4 || framebufferPixels + width * height > 512000)) return;
+    const length = width * height * (format === "rgba" ? 4 : 1);
+    const pixels = message.pixels;
+    const palette = message.palette;
+    if (!(palette === null || (palette instanceof Uint8Array && palette.length === 1024)) ||
+        (format === "indexed" && !(palette instanceof Uint8Array)) ||
+        !(pixels === null || (pixels instanceof Uint8Array && pixels.length === length)) ||
+        (!frame && pixels === null) || (format === "rgba" && pixels === null)) return;
+    if (!frame) {
+      const canvas = document.createElement("canvas"); canvas.width = width; canvas.height = height;
+      frame = { width, height, format, canvas, pixels: null, palette: null,
+        rgba: format === "indexed" ? new Uint8ClampedArray(width * height * 4) : null };
+      framebuffers.set(id, frame); framebufferPixels += width * height;
+    }
+    if (pixels) frame.pixels = pixels;
+    if (palette) frame.palette = palette;
+    const rgba = format === "rgba" ? new Uint8ClampedArray(frame.pixels.buffer) : frame.rgba;
+    if (format === "indexed") {
+      for (let i = 0; i < frame.pixels.length; i++) {
+        const color = frame.pixels[i] * 4, offset = i * 4;
+        rgba[offset] = frame.palette[color]; rgba[offset + 1] = frame.palette[color + 1];
+        rgba[offset + 2] = frame.palette[color + 2]; rgba[offset + 3] = frame.palette[color + 3];
+      }
+    }
+    frame.canvas.getContext("2d").putImageData(new ImageData(rgba, width, height), 0, 0);
+  }
+
   function drawImage(context, command, bitmap, x, y, sw, sh, sx, sy, dw, dh) {
     if (!bitmap || sw <= 0 || sh <= 0 || dw <= 0 || dh <= 0 || sx < 0 || sy < 0 ||
         sx + sw > bitmap.width || sy + sh > bitmap.height) return;
@@ -389,6 +426,14 @@
         drawImage(context, command, bitmap, x, y, sw, sh, sx, sy, dw, dh);
       } else if (command.type === "tilemap") {
         drawTileMap(context, command, width, height);
+      } else if (command.type === "framebuffer") {
+        const frame = framebuffers.get(command.buffer);
+        if (!frame) return;
+        const dw = number(command.width, frame.width, 0, width * 2);
+        const dh = number(command.height, frame.height, 0, height * 2);
+        context.save(); context.globalAlpha = number(command.opacity, 1, 0, 1);
+        context.imageSmoothingEnabled = false;
+        context.drawImage(frame.canvas, x, y, dw, dh); context.restore();
       }
     });
     context.restore();
@@ -571,6 +616,7 @@
   }
 
   function render(message) {
+    if (Array.isArray(message.frames)) message.frames.slice(0, 4).forEach(registerFrame);
     const components = Array.isArray(message.components) ? message.components.slice(0, LIMITS.components) : [];
     try {
       if (JSON.stringify(components).length > 250000) throw new Error("content limit exceeded");
@@ -887,6 +933,7 @@
     else if (message.type === "render") render(message);
     else if (message.type === "graphics-image") registerImage(message);
     else if (message.type === "graphics-map") registerMap(message);
+    else if (message.type === "graphics-frame") registerFrame(message);
     else if (message.type === "storage") storage(message);
     else if (message.type === "scores") scores(message);
     else if (message.type === "multiplayer") multiplayer(message);

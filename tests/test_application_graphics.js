@@ -51,11 +51,43 @@ test("tile arrays are registered once and viewports carry only camera data", () 
   assert.throws(() => ui.graphics.tileMap("bad", [1, 2, 3], { columns: 2 }), /rectangular/);
 });
 
+test("bounded framebuffers transfer snapshots and support palette-only updates", () => {
+  const { ui, sent } = runtime();
+  const fb = ui.graphics.framebuffer("scene", 320, 200, { format: "indexed" });
+  assert.equal(fb.pixels.length, 64000);
+  fb.fillRect(1, 1, 3, 2, 7);
+  assert.equal(fb.pixels[321], 7);
+  fb.palette.set([20, 30, 40, 255], 7 * 4);
+  fb.present();
+  const first = sent.find((item) => item.type === "graphics-frame");
+  fb.pixel(1, 1, 8);
+  assert.equal(first.pixels[321], 7);
+  fb.present({ paletteOnly: true });
+  assert.equal(sent.at(-1).pixels, null);
+  assert.equal(ui.graphics.frame(fb, 0, 0, 640, 400).buffer, "scene");
+  assert.throws(() => ui.graphics.framebuffer("large", 641, 400), /limit/);
+  assert.throws(() => ui.graphics.framebuffer("scene", 1, 1), /unique/);
+  ui.graphics.framebuffer("other", 640, 400);
+  assert.throws(() => ui.graphics.framebuffer("excess", 640, 400), /limit/);
+});
+
+test("RGBA framebuffer writes opaque pixels and preserves full-frame bytes", () => {
+  const { ui, sent } = runtime();
+  const fb = ui.graphics.framebuffer("rgba", 2, 2);
+  fb.pixel(0, 0, [3, 4, 5]);
+  fb.fillRect(1, 0, 1, 2, [10, 20, 30, 40]);
+  fb.present();
+  assert.deepEqual(Array.from(sent.at(-1).pixels), [3, 4, 5, 255, 10, 20, 30, 40,
+    0, 0, 0, 0, 10, 20, 30, 40]);
+  assert.throws(() => fb.present({ paletteOnly: true }), /indexed/);
+});
+
 test("host renderer decodes once and draws only visible tiles with nearest-neighbor sampling", async () => {
   const calls = [];
   const drawing = {
     clearRect() {}, fillRect() {}, save() {}, restore() {}, beginPath() {},
     rect() {}, clip() {}, translate() {}, scale() {},
+    putImageData(value) { calls.push({ imageData: value }); },
     drawImage(...args) { calls.push({ args, smooth: this.imageSmoothingEnabled }); }
   };
   const canvas = { width: 32, height: 32, dataset: {}, style: { setProperty() {} }, setAttribute() {}, getContext: () => drawing };
@@ -63,6 +95,7 @@ test("host renderer decodes once and draws only visible tiles with nearest-neigh
   const surface = { querySelectorAll: () => [], addEventListener() {} };
   const status = {};
   const document = {
+    createElement(name) { return name === "canvas" ? { width: 0, height: 0, getContext: () => drawing } : {}; },
     querySelector(selector) {
       if (selector === "[data-app-runtime]") return frame;
       if (selector === "[data-app-surface]") return surface;
@@ -74,12 +107,13 @@ test("host renderer decodes once and draws only visible tiles with nearest-neigh
   const context = {
     document, window: {}, navigator: { maxTouchPoints: 0, userAgent: "Desktop" },
     crypto: { randomUUID: () => "test" }, addEventListener() {},
-    setTimeout: () => 1, clearTimeout() {}, Blob, Uint8Array,
+    setTimeout: () => 1, clearTimeout() {}, Blob, Uint8Array, Uint8ClampedArray,
+    ImageData: class { constructor(data, width, height) { this.data = data; this.width = width; this.height = height; } },
     atob: (value) => Buffer.from(value, "base64").toString("binary"),
     createImageBitmap: async () => ({ width: 32, height: 32, close() {} })
   };
   const source = fs.readFileSync(path.join(__dirname, "../stationnet/static/application_host.js"), "utf8")
-    .replace(/\}\)\(\);\s*$/, "globalThis.__graphicsTest = { drawCanvas, registerImage, registerMap }; })();");
+    .replace(/\}\)\(\);\s*$/, "globalThis.__graphicsTest = { drawCanvas, registerImage, registerMap, registerFrame }; })();");
   vm.runInNewContext(source, context);
   const host = context.__graphicsTest;
   host.registerImage({ path: "assets/sheet.png", data: Buffer.from("image bytes").toString("base64") });
@@ -95,4 +129,16 @@ test("host renderer decodes once and draws only visible tiles with nearest-neigh
   assert.deepEqual(calls[0].args.slice(1), [0, 0, 16, 16, -8, 0, 16, 16]);
   assert.deepEqual(calls[1].args.slice(1), [16, 0, 16, 16, 8, 0, 16, 16]);
   assert.equal(calls[2].smooth, false);
+  const indices = new Uint8Array(4); indices[0] = 1;
+  const palette = new Uint8Array(1024); palette.set([10, 20, 30, 255], 4);
+  host.registerFrame({ id: "buffer", width: 2, height: 2, format: "indexed", pixels: indices, palette });
+  assert.deepEqual(Array.from(calls.at(-1).imageData.data.slice(0, 4)), [10, 20, 30, 255]);
+  host.registerFrame({ id: "buffer", width: 2, height: 2, format: "indexed", pixels: null,
+    palette: new Uint8Array(1024).fill(80) });
+  assert.equal(calls.at(-1).imageData.data[0], 80);
+  host.drawCanvas(canvas, { width: 32, height: 32, commands: [{ type: "framebuffer", buffer: "buffer", x: 0, y: 0, width: 32, height: 32 }] });
+  assert.equal(calls.at(-1).smooth, false);
+  const count = calls.length;
+  host.registerFrame({ id: "invalid", width: 641, height: 2, format: "rgba", pixels: new Uint8Array(641 * 2 * 4), palette: null });
+  assert.equal(calls.length, count);
 });
