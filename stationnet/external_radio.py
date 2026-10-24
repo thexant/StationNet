@@ -9,6 +9,13 @@ from urllib.request import (Request, HTTPRedirectHandler, HTTPHandler, HTTPSHand
 
 
 MAX_PLAYLIST_BYTES = 65536
+STREAM_CHUNK_BYTES = 16384
+
+
+def _opener():
+    # Disable ambient proxies: each DNS result and redirect must pass the public-IP check.
+    return build_opener(ProxyHandler({}), _SafeRedirect(), _PublicHTTPHandler(),
+                        _PublicHTTPSHandler())
 
 
 def validate_stream_url(url, resolve=True):
@@ -105,8 +112,7 @@ def _playlist_target(data, url, content_type):
 
 def inspect_stream(url, metadata=False):
     """Resolve M3U/PLS and sample headers/ICY title without proxying audio."""
-    opener = build_opener(ProxyHandler({}), _SafeRedirect(), _PublicHTTPHandler(),
-                          _PublicHTTPSHandler())
+    opener = _opener()
     current = validate_stream_url(url)
     station = title = artist = description = ""
     for _ in range(4):
@@ -156,3 +162,46 @@ def inspect_stream(url, metadata=False):
                     "title": title, "artist": artist,
                     "hls": False}
     raise ValueError("Radio playlist contains too many redirects.")
+
+
+def open_audio_stream(url):
+    """Open a validated continuous audio response for one tuned listener."""
+    details = inspect_stream(url)
+    if details["hls"]:
+        raise ValueError("HLS streams require native browser playback.")
+    response = _opener().open(Request(details["url"], headers={
+        "User-Agent": "StationNet/1.0", "Icy-MetaData": "0",
+        "Accept": "audio/mpeg,audio/aac,audio/aacp,*/*",
+    }), timeout=10)
+    try:
+        resolved = validate_stream_url(response.geturl())
+        content_type = response.headers.get_content_type().lower()
+        if content_type in {"text/html", "application/xhtml+xml", "application/json"}:
+            raise ValueError(f"Radio server returned {content_type} instead of audio.")
+        if content_type in {"audio/mpeg", "audio/mp3", "audio/x-mpeg", "audio/mpeg3"}:
+            mime = "audio/mpeg"
+        elif content_type in {"audio/aac", "audio/aacp", "audio/x-aac", "audio/x-aacp"}:
+            mime = "audio/aac"
+        else:
+            path = urlsplit(resolved).path.lower()
+            if path.endswith(('.mp3', '.mpga')):
+                mime = "audio/mpeg"
+            elif path.endswith(('.aac', '.aacp')):
+                mime = "audio/aac"
+            else:
+                # Some SHOUTcast servers label their audio as octet-stream. Sniff the
+                # first bytes without ever buffering an unbounded response.
+                prefix = response.read(4)
+                if prefix.startswith(b'ID3') or (len(prefix) >= 2 and prefix[0] == 0xff
+                                                 and prefix[1] & 0xe0 == 0xe0
+                                                 and prefix[1] & 0x06 != 0):
+                    mime = "audio/mpeg"
+                elif len(prefix) >= 2 and prefix[0] == 0xff and prefix[1] & 0xf6 == 0xf0:
+                    mime = "audio/aac"
+                else:
+                    raise ValueError(f"Unsupported radio audio type: {content_type}.")
+                return response, mime, prefix
+        return response, mime, b""
+    except Exception:
+        response.close()
+        raise

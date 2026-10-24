@@ -13,10 +13,11 @@ from datetime import datetime, timezone
 from threading import RLock
 from time import monotonic
 
-from flask import Blueprint, current_app, g, jsonify, render_template, request, session
+from flask import Blueprint, Response, current_app, g, jsonify, render_template, request, session
 
 from .auth import login_required
 from .db import get_db
+from .external_radio import STREAM_CHUNK_BYTES, open_audio_stream
 from .security import validate_csrf
 
 bp = Blueprint("radio", __name__, url_prefix="/radio")
@@ -790,6 +791,52 @@ def receive():
                    active=_with_username(active), access=access,
                    band=_band_payload(find_band(frequency), g.user["id"], frequency),
                    identity=identity, broadcast=broadcast_status(identity, active))
+
+
+@bp.get("/external/<int:transmission_id>/audio")
+@login_required
+def external_audio(transmission_id):
+    """Relay continuous external audio to an authorized, tuned receiver."""
+    source = current_app.extensions["hosted_broadcasts"].external_source(transmission_id)
+    if not source:
+        return jsonify(error="External broadcast is off air."), 404
+    frequency, url = source
+    if (_store().receiver_frequency(session["connection_id"]) != frequency or
+            effective_access(g.user["id"], frequency) == "DENIED"):
+        return jsonify(error="Tune to this broadcast to listen."), 403
+    try:
+        upstream, mime, prefix = open_audio_stream(url)
+    except Exception as problem:
+        current_app.logger.warning("External radio %s connection failed: %s", transmission_id, problem)
+        return jsonify(error=f"External stream unavailable: {problem}"), 502
+    logger = current_app.logger
+    broadcasts = current_app.extensions["hosted_broadcasts"]
+    receiver = session["connection_id"]
+    radio_store = _store()
+
+    def chunks():
+        try:
+            if prefix:
+                yield prefix
+            while True:
+                # Stop promptly when a sysop takes the broadcast off air. The
+                # upstream socket timeout bounds a stalled read.
+                if (broadcasts.external_source(transmission_id) != source or
+                        radio_store.receiver_frequency(receiver) != frequency):
+                    break
+                data = upstream.read(STREAM_CHUNK_BYTES)
+                if not data:
+                    break
+                yield data
+        except (OSError, ValueError) as problem:
+            logger.warning("External radio %s interrupted: %s", transmission_id, problem)
+        finally:
+            upstream.close()
+
+    return Response(chunks(), mimetype=mime, headers={
+        "Cache-Control": "no-store, no-transform", "X-Content-Type-Options": "nosniff",
+        "X-Accel-Buffering": "no", "Content-Disposition": "inline",
+    })
 
 
 @bp.post("/transmit/start")

@@ -7,11 +7,17 @@ frequency assignments, and legacy `radio_automated_broadcasts` remain compatible
 
 External broadcasts use `radio_external_broadcasts` and reserve the same arbiter
 frequencies as local broadcasts. They have no playlist clock, runtime limit, restart
-delay, or indefinite-loop setting. Receivers play resolved stream URLs directly;
-StationNet only fetches bounded playlists and ICY metadata. M3U and PLS resolve to
-their audio endpoint, while HLS requires native browser support. Browsers loading
-StationNet over HTTPS may block HTTP streams as mixed content. Stream URLs are visible
-to listeners and should not contain private credentials.
+delay, or indefinite-loop setting. Tuned listeners receive MP3 and AAC audio through
+`GET /radio/external/<transmission_id>/audio` on the StationNet origin. This avoids
+browser mixed-content and cross-origin playback problems. The route requires a logged-in
+receiver tuned to the active broadcast and closes its upstream connection when that
+listener disconnects, retunes, or the broadcast stops. Each listener has one upstream
+connection; the browser reconnects with bounded backoff after an interruption.
+StationNet resolves M3U and PLS files with a size limit, validates public addresses
+again after redirects and DNS resolution, and relays the continuous audio without
+buffering the whole stream. HLS remains a direct URL and requires native browser
+support. Sysop start warnings and server logs report connection errors. Stream URLs
+should not contain private credentials.
 
 ## Persisted model
 

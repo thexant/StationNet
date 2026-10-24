@@ -1,5 +1,6 @@
 """Private audio libraries and playlist preparation for broadcast hosts."""
 import secrets
+import logging
 import sqlite3
 import random
 import struct
@@ -55,9 +56,10 @@ class HostedBroadcastStore:
             # A failed origin can still be started; listeners retry independently.
             try:
                 details = inspect_stream(definition["stream_url"], metadata=True)
-            except (OSError, ValueError):
+            except (OSError, ValueError) as problem:
+                logging.getLogger(__name__).warning("External broadcast %s could not connect: %s", key, problem)
                 details = {"url": definition["stream_url"], "station": "", "title": "", "artist": "",
-                           "description": "",
+                           "description": "", "error": str(problem),
                            "hls": definition["stream_url"].split("?")[0].lower().endswith(".m3u8")}
             name = definition["name"] or details["station"] or "External radio"
             transmission_id, _ = self.radio.start_hosted(
@@ -81,6 +83,14 @@ class HostedBroadcastStore:
         self._external[key]["timer"] = timer
         timer.start()
 
+    def external_source(self, transmission_id):
+        """Return the configured origin only while this transmission is on air."""
+        with self._lock:
+            for item in self._external.values():
+                if item["transmission_id"] == transmission_id:
+                    return item["frequency"], item["stream_url"]
+        return None
+
     def _poll_external_metadata(self, key):
         with self._lock:
             item = self._external.get(key)
@@ -89,7 +99,8 @@ class HostedBroadcastStore:
             url = item["stream_url"]
         try:
             details = inspect_stream(url, metadata=True)
-        except (OSError, ValueError):
+        except (OSError, ValueError) as problem:
+            logging.getLogger(__name__).warning("External broadcast %s metadata check failed: %s", key, problem)
             details = None
         with self._lock:
             item = self._external.get(key)
@@ -646,7 +657,8 @@ class HostedBroadcastStore:
                     "station_name": item["name"] or item["station"] or "External radio",
                     "description": item["message"] or details.get("description", ""),
                     "track_title": details["title"] or item["name"] or item["station"] or "External radio",
-                    "track_artist": details["artist"], "frequency_khz": item["frequency"]}
+                    "track_artist": details["artist"], "frequency_khz": item["frequency"],
+                    "connection_error": details.get("error", "")}
         item = self._sessions.get(user_id)
         paused = False
         if not item:
@@ -1087,8 +1099,11 @@ def control_external(broadcast_id):
             flash("Your radio groups do not authorize hosted broadcasts at that frequency.", "error")
         else:
             try:
-                _store().start_external(key, definition, g.user["id"])
-                flash("External broadcast started.", "success")
+                result = _store().start_external(key, definition, g.user["id"])
+                if result.get("connection_error"):
+                    flash(f"External broadcast started, but the stream is unavailable: {result['connection_error']}", "warning")
+                else:
+                    flash("External broadcast started.", "success")
             except RuntimeError as problem:
                 flash(str(problem), "error")
     else:

@@ -1,9 +1,11 @@
 """Continuous external broadcasts share the radio arbiter, not playlist timers."""
+from io import BytesIO
+
 import pytest
 
 from stationnet import create_app
 from stationnet.db import get_db
-from stationnet.external_radio import _playlist_target, validate_stream_url
+from stationnet.external_radio import _playlist_target, open_audio_stream, validate_stream_url
 
 
 def test_playlist_resolution_and_private_origin_rejection():
@@ -20,6 +22,43 @@ def test_playlist_resolution_and_private_origin_rejection():
         validate_stream_url("http://127.0.0.1/private")
     with pytest.raises(ValueError):
         validate_stream_url("http://user:secret@example.com/live")
+
+
+def test_stream_mime_detection_and_rejected_pages(monkeypatch):
+    class Headers:
+        def __init__(self, kind):
+            self.kind = kind
+
+        def get_content_type(self):
+            return self.kind
+
+    class Upstream(BytesIO):
+        def __init__(self, kind, data):
+            super().__init__(data)
+            self.headers = Headers(kind)
+
+        def geturl(self):
+            return "https://example.com/live"
+
+    class Opener:
+        def __init__(self, upstream):
+            self.upstream = upstream
+
+        def open(self, *_args, **_kwargs):
+            return self.upstream
+
+    monkeypatch.setattr("stationnet.external_radio.inspect_stream", lambda url: {"url": url, "hls": False})
+    monkeypatch.setattr("stationnet.external_radio.validate_stream_url", lambda url: url)
+    upstream = Upstream("application/octet-stream", b"\xff\xf1\x50\x80aac-data")
+    monkeypatch.setattr("stationnet.external_radio._opener", lambda: Opener(upstream))
+    response, mime, prefix = open_audio_stream("https://example.com/live")
+    assert mime == "audio/aac" and prefix + response.read() == b"\xff\xf1\x50\x80aac-data"
+    response.close()
+    page = Upstream("text/html", b"<html>offline</html>")
+    monkeypatch.setattr("stationnet.external_radio._opener", lambda: Opener(page))
+    with pytest.raises(ValueError, match="instead of audio"):
+        open_audio_stream("https://example.com/live")
+    assert page.closed
 
 
 def test_external_broadcast_management_and_continuous_playback(tmp_path, monkeypatch):
@@ -51,6 +90,26 @@ def test_external_broadcast_management_and_continuous_playback(tmp_path, monkeyp
     assert client.post("/radio/manage/automated/external/1/control",
                        data={"csrf_token": "token", "action": "start"}).status_code == 302
     with app.app_context():
+        transmission_id = app.extensions["hosted_broadcasts"].public("external:1")["transmission_id"]
+    assert client.get(f"/radio/external/{transmission_id}/audio").status_code == 403
+    assert client.post("/radio/tune", data={"csrf_token": "token", "frequency": "7.10"}).status_code == 200
+    upstream = BytesIO(b"\xff\xfb" + b"radio" * 100)
+    monkeypatch.setattr("stationnet.radio.open_audio_stream", lambda url: (upstream, "audio/mpeg", b""))
+    relay = client.get(f"/radio/external/{transmission_id}/audio", buffered=False)
+    assert relay.status_code == 200 and relay.mimetype == "audio/mpeg"
+    assert "no-store" in relay.headers["Cache-Control"]
+    assert next(relay.response).startswith(b"\xff\xfb")
+    relay.close()
+    assert upstream.closed
+    assert app.test_client().get(f"/radio/external/{transmission_id}/audio").status_code == 302
+    upstream = BytesIO(b"\xff\xfb" + b"radio" * 100)
+    relay = client.get(f"/radio/external/{transmission_id}/audio", buffered=False)
+    assert next(relay.response).startswith(b"\xff\xfb")
+    assert client.post("/radio/tune", data={"csrf_token": "token", "frequency": "7.20"}).status_code == 200
+    assert list(relay.response) == []
+    relay.close()
+    assert upstream.closed
+    with app.app_context():
         store = app.extensions["hosted_broadcasts"]
         radio = app.extensions["radio"]
         assert store.public("external:1")["track_artist"] == "Current artist"
@@ -78,3 +137,4 @@ def test_external_broadcast_management_and_continuous_playback(tmp_path, monkeyp
                        data={"csrf_token": "token", "action": "stop"}).status_code == 302
     with app.app_context():
         assert app.extensions["radio"].current(7100) is None
+    assert client.get(f"/radio/external/{transmission_id}/audio").status_code == 404
