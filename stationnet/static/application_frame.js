@@ -135,6 +135,16 @@
         return;
       }
     }
+    if (event.data.type === "sample" && event.data.operation === "load") {
+      const value = event.data;
+      if (typeof value.path !== "string" || !/\.wav$/i.test(value.path) ||
+          !Object.prototype.hasOwnProperty.call(files, value.path) || files[value.path] !== value.data ||
+          typeof value.handle !== "string" || !/^sample-[1-9]\d{0,9}$/.test(value.handle)) {
+        worker.postMessage({ protocol, type: "sample-load-result", handle: value.handle,
+          ok: false, error: "Invalid bundled WAV request" });
+        return;
+      }
+    }
     const canvas = event.data.type === "render" && event.data.mode === "update"
       && event.data.components?.length === 1 && event.data.components[0]?.type === "canvas";
     if (canvas) {

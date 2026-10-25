@@ -28,6 +28,8 @@
   const moduleCache = new Map();
   const registeredImages = new Set();
   const decodedImages = new Map();
+  const sampleLoads = new Map();
+  const sampleHandles = new Set();
   const framebuffers = new Map();
   let framebufferPixels = 0;
   let nextAction = 1;
@@ -522,6 +524,23 @@
     });
   }
 
+  function sampleRate(value) {
+    if (!Number.isInteger(value) || value < 8000 || value > 48000)
+      throw new RangeError("Sample rate must be 8000-48000 Hz");
+    return value;
+  }
+
+  function sampleOptions(settings) {
+    const opts = options(settings);
+    const volume = opts.volume ?? 1, pan = opts.pan ?? 0, rate = opts.rate ?? 1;
+    if (typeof volume !== "number" || !Number.isFinite(volume) || volume < 0 || volume > 1 ||
+        typeof pan !== "number" || !Number.isFinite(pan) || pan < -1 || pan > 1 ||
+        typeof rate !== "number" || !Number.isFinite(rate) || rate < .25 || rate > 4 ||
+        (opts.loop != null && typeof opts.loop !== "boolean"))
+      throw new RangeError("Invalid sample volume, pan, loop, or rate");
+    return { volume, pan, loop: opts.loop ?? false, rate };
+  }
+
   function scheduled(handler, delay, repeat) {
     if (typeof handler !== "function") throw new TypeError("A timer callback is required");
     const wait = Math.max(0, Math.min(3600000, Number(delay) || 0));
@@ -803,7 +822,7 @@
     }),
     sound: Object.freeze({
       // Play one synthesized oscillator. Frequency is in hertz; duration and
-      // envelope values are milliseconds. No audio files are accepted.
+      // envelope values are milliseconds.
       playTone(frequency, duration = 120, settings) {
         if (duration && typeof duration === "object") { settings = duration; duration = 120; }
         const opts = options(settings);
@@ -826,7 +845,45 @@
         });
         sound(events, opts);
       },
-      stop() { send("sound", { operation: "stop" }); }
+      stop() { send("sound", { operation: "stop" }); },
+      load(path) {
+        if (typeof path !== "string" || !/\.wav$/i.test(path) ||
+            !Object.prototype.hasOwnProperty.call(packageFiles, path))
+          return Promise.reject(new Error("Sample must be a bundled WAV file"));
+        if (sampleHandles.size + sampleLoads.size >= 32)
+          return Promise.reject(new RangeError("Sample limit exceeded (32)"));
+        const handle = `sample-${nextRequest++}`;
+        return new Promise((resolve, reject) => {
+          sampleLoads.set(handle, { resolve, reject });
+          send("sample", { operation: "load", handle, path, data: packageFiles[path] });
+        });
+      },
+      createSample(samples, rate) {
+        if (!(samples instanceof Int8Array || samples instanceof Int16Array || samples instanceof Float32Array) ||
+            !samples.length || samples.length * 4 > 2 * 1024 * 1024)
+          throw new TypeError("Sample must be a nonempty Int8Array, Int16Array, or Float32Array within 2 MiB decoded");
+        sampleRate(rate);
+        if (sampleHandles.size + sampleLoads.size >= 32) throw new RangeError("Sample limit exceeded (32)");
+        const format = samples instanceof Int8Array ? "int8" : samples instanceof Int16Array ? "int16" : "float32";
+        const copy = samples.slice();
+        if (format === "float32" && copy.some(value => !Number.isFinite(value) || value < -1 || value > 1))
+          throw new RangeError("Float32 samples must be finite and between -1 and 1");
+        const handle = `sample-${nextRequest++}`;
+        sampleHandles.add(handle);
+        send("sample", { operation: "create", handle, format, sampleRate: rate, samples: copy });
+        return handle;
+      },
+      playSample(handle, settings) {
+        if (typeof handle !== "string" || !sampleHandles.has(handle)) throw new Error("Unknown sample handle");
+        const voiceId = `voice-${nextRequest++}`;
+        send("sample", { operation: "play", handle, voiceId, ...sampleOptions(settings) });
+        return voiceId;
+      },
+      stopSample(voiceId) {
+        if (typeof voiceId !== "string" || !/^voice-[1-9]\d{0,9}$/.test(voiceId))
+          throw new TypeError("Invalid sample voice id");
+        send("sample", { operation: "stop", voiceId });
+      }
     }),
     pointerLock: Object.freeze({
       request(settings) {
@@ -948,6 +1005,14 @@
       }
       return;
     }
+    if (message.type === "sample-load-result") {
+      const pending = sampleLoads.get(message.handle);
+      if (!pending) return;
+      sampleLoads.delete(message.handle);
+      if (message.ok) { sampleHandles.add(message.handle); pending.resolve(message.handle); }
+      else pending.reject(new Error(message.error || "Sample load failed"));
+      return;
+    }
     if (message.type === "scores-result") {
       const pending = scoreRequests.get(message.request);
       if (!pending) return;
@@ -1009,6 +1074,8 @@
     if (multiplayerSession) send("multiplayer", { operation: "disconnect", payload: { session_id: multiplayerSession } });
     storageRequests.forEach(({ reject }) => reject(new Error("Application terminated")));
     decodedImages.forEach(({ reject }) => reject(new Error("Application terminated")));
+    sampleLoads.forEach(({ reject }) => reject(new Error("Application terminated")));
+    sampleLoads.clear(); sampleHandles.clear();
     storageRequests.clear();
     scoreRequests.forEach(({ reject }) => reject(new Error("Application terminated")));
     scoreRequests.clear();

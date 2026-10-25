@@ -108,7 +108,24 @@
         "description": {"type": "string", "minLength": 1},
         "item_type": {"enum": ["misc", "equipment", "container", "consumable", "key"]},
         "equipment_slot": {"enum": ["head", "body", "hands", "legs", "feet", "main_hand", "off_hand", "accessory"]},
-        "properties": {"type": "object"}, "behaviors": {"type": "object"}
+        "properties": {
+          "type": "object",
+          "description": "Combat bonuses, consumable effects, and the item's full coin value. Unknown keys are retained for theme-specific data.",
+          "properties": {
+            "damage": {"type": "integer", "minimum": 0},
+            "attack": {"type": "integer", "minimum": 0},
+            "attack_bonus": {"type": "integer", "minimum": 0},
+            "armor": {"type": "integer", "minimum": 0},
+            "defense": {"type": "integer", "minimum": 0},
+            "defense_bonus": {"type": "integer", "minimum": 0},
+            "heal": {"type": "integer", "minimum": 1},
+            "value": {"type": "integer", "minimum": 1, "maximum": 100000},
+            "reveal_exit": {"type": "boolean"},
+            "use_message": {"type": "string"}
+          },
+          "additionalProperties": true
+        },
+        "behaviors": {"type": "object"}
       }
     },
     "conversation": {
@@ -141,7 +158,7 @@
         "attack": {"type": "integer", "minimum": 1, "maximum": 100000},
         "defense": {"type": "integer", "minimum": 0, "maximum": 100000},
         "experience_reward": {"type": "integer", "minimum": 0, "maximum": 100000},
-        "respawn_seconds": {"type": "integer", "minimum": 5, "maximum": 86400}
+        "respawn_seconds": {"type": "integer", "minimum": 5, "maximum": 86400, "description": "Respawn delay in the traditional world; defeated dungeon enemies remain defeated during a run."}
       }
     },
     "npcDefinition": {
@@ -149,7 +166,8 @@
       "properties": {
         "id": {"$ref": "#/$defs/id"}, "name": {"type": "string", "minLength": 1},
         "description": {"type": "string", "minLength": 1},
-        "properties": {"type": "object"}, "behaviors": {"type": "object"},
+        "properties": {"type": "object"},
+        "behaviors": {"type": "object", "description": "Combat-capable NPCs attack on entry by default. Set aggressive:false or friendly, neutral, or passive:true to prevent automatic attacks."},
         "conversation": {"$ref": "#/$defs/conversation"}, "combat": {"$ref": "#/$defs/combat"},
         "equipment": {"type": "array", "items": {"allOf": [{"$ref": "#/$defs/itemReference"}, {"type": "object", "required": ["slot"], "properties": {"slot": {"enum": ["head", "body", "hands", "legs", "feet", "main_hand", "off_hand", "accessory"]}}}]}},
         "loot": {"type": "array", "items": {"oneOf": [

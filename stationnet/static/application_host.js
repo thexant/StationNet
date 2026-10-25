@@ -235,6 +235,8 @@
   let realtimeSocket = null;
   let realtimeSession = null;
   const activeTones = new Set();
+  const samples = new Map();
+  const sampleVoices = new Map();
   const images = new Map();
   const builtinFontSheets = new Map();
   const decodedImages = new Map();
@@ -306,6 +308,115 @@
   function stopSounds() {
     activeTones.forEach((tone) => { try { tone.stop(); } catch (_) {} });
     activeTones.clear();
+    for (const voiceId of sampleVoices.keys()) stopSampleVoice(voiceId);
+  }
+
+  const sampleId = (id, kind) => typeof id === "string" && new RegExp(`^${kind}-[1-9]\\d{0,9}$`).test(id);
+  const SAMPLE_MAX_BYTES = 2 * 1024 * 1024;
+
+  function stopSampleVoice(voiceId) {
+    const voice = sampleVoices.get(voiceId);
+    if (!voice) return;
+    sampleVoices.delete(voiceId);
+    voice.source.onended = null;
+    try { voice.source.stop(); } catch (_) {}
+    voice.source.disconnect(); voice.gain.disconnect(); voice.panner?.disconnect();
+  }
+
+  function wavBuffer(bytes) {
+    if (bytes.length < 44 || bytes.length > 1024 * 1024) throw new Error("Invalid WAV size");
+    const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+    const label = (offset) => String.fromCharCode(...bytes.subarray(offset, offset + 4));
+    if (label(0) !== "RIFF" || label(8) !== "WAVE" || view.getUint32(4, true) !== bytes.length - 8)
+      throw new Error("Invalid RIFF/WAVE header");
+    let format = null, data = null;
+    for (let offset = 12; offset + 8 <= bytes.length;) {
+      const length = view.getUint32(offset + 4, true), start = offset + 8;
+      if (length > bytes.length - start) throw new Error("Invalid WAV chunk length");
+      if (label(offset) === "fmt " && !format) {
+        if (length < 16) throw new Error("Invalid WAV format");
+        format = { codec: view.getUint16(start, true), channels: view.getUint16(start + 2, true),
+          rate: view.getUint32(start + 4, true), byteRate: view.getUint32(start + 8, true),
+          alignment: view.getUint16(start + 12, true), bits: view.getUint16(start + 14, true) };
+      }
+      if (label(offset) === "data" && !data) data = { start, length };
+      offset = start + length + (length & 1);
+    }
+    if (!format || !data || format.codec !== 1 || ![1, 2].includes(format.channels) ||
+        ![8, 16].includes(format.bits) || !Number.isInteger(format.rate) ||
+        format.rate < 8000 || format.rate > 48000 ||
+        format.alignment !== format.channels * format.bits / 8 ||
+        format.byteRate !== format.rate * format.alignment ||
+        !data.length || data.length % format.alignment)
+      throw new Error("WAV must contain PCM 8/16-bit mono/stereo at 8000-48000 Hz");
+    const frames = data.length / format.alignment;
+    if (frames * format.channels * 4 > SAMPLE_MAX_BYTES) throw new Error("Decoded sample exceeds 2 MiB");
+    const context = audio();
+    if (!context) throw new Error("Audio is unavailable in this browser");
+    const buffer = context.createBuffer(format.channels, frames, format.rate);
+    for (let channel = 0; channel < format.channels; channel++) {
+      const output = buffer.getChannelData(channel);
+      for (let i = 0; i < frames; i++) {
+        const at = data.start + i * format.alignment + channel * format.bits / 8;
+        output[i] = format.bits === 8 ? (bytes[at] - 128) / 128 : view.getInt16(at, true) / 32768;
+      }
+    }
+    return buffer;
+  }
+
+  function sample(message) {
+    const operation = message.operation, handle = message.handle;
+    if (operation === "stop") { if (sampleId(message.voiceId, "voice")) stopSampleVoice(message.voiceId); return; }
+    if (operation === "play") {
+      if (!sampleId(handle, "sample") || !sampleId(message.voiceId, "voice") ||
+          !samples.has(handle) || sampleVoices.has(message.voiceId) ||
+          typeof message.volume !== "number" || !Number.isFinite(message.volume) || message.volume < 0 || message.volume > 1 ||
+          typeof message.pan !== "number" || !Number.isFinite(message.pan) || message.pan < -1 || message.pan > 1 ||
+          typeof message.rate !== "number" || !Number.isFinite(message.rate) || message.rate < .25 || message.rate > 4 ||
+          typeof message.loop !== "boolean") return;
+      const context = audio();
+      if (!context) return;
+      if (sampleVoices.size >= 8) stopSampleVoice(sampleVoices.keys().next().value);
+      const source = context.createBufferSource(), gain = context.createGain();
+      const panner = context.createStereoPanner?.();
+      source.buffer = samples.get(handle); source.loop = message.loop; source.playbackRate.value = message.rate;
+      gain.gain.value = message.volume;
+      if (panner) { panner.pan.value = message.pan; source.connect(gain).connect(panner).connect(context.destination); }
+      else source.connect(gain).connect(context.destination);
+      sampleVoices.set(message.voiceId, { source, gain, panner });
+      source.onended = () => { if (sampleVoices.get(message.voiceId)?.source === source) stopSampleVoice(message.voiceId); };
+      source.start();
+      return;
+    }
+    if (!sampleId(handle, "sample") || samples.has(handle)) return;
+    if (operation === "create") {
+      if (samples.size >= 32 || !Number.isInteger(message.sampleRate) || message.sampleRate < 8000 ||
+          message.sampleRate > 48000 || !["int8", "int16", "float32"].includes(message.format)) return;
+      const constructors = { int8: Int8Array, int16: Int16Array, float32: Float32Array };
+      const values = message.samples;
+      if (!(values instanceof constructors[message.format]) || !values.length || values.length * 4 > SAMPLE_MAX_BYTES) return;
+      const context = audio();
+      if (!context) return;
+      const buffer = context.createBuffer(1, values.length, message.sampleRate), output = buffer.getChannelData(0);
+      for (let i = 0; i < values.length; i++) {
+        const value = message.format === "int8" ? values[i] / 128 : message.format === "int16" ? values[i] / 32768 : values[i];
+        if (!Number.isFinite(value) || value < -1 || value > 1) return;
+        output[i] = value;
+      }
+      samples.set(handle, buffer);
+      return;
+    }
+    if (operation !== "load") return;
+    let error = null;
+    try {
+      if (samples.size >= 32 || typeof message.path !== "string" || !/\.wav$/i.test(message.path) ||
+          typeof message.data !== "string" || message.data.length > 1400000)
+        throw new Error("Invalid bundled WAV or sample limit exceeded");
+      const bytes = Uint8Array.from(atob(message.data), character => character.charCodeAt(0));
+      samples.set(handle, wavBuffer(bytes));
+    } catch (problem) { error = problem; }
+    if (frame.contentWindow && !closed) frame.contentWindow.postMessage({ protocol: PROTOCOL,
+      type: "sample-load-result", handle, ok: !error, error: error ? text(error.message, 200) : undefined }, "*");
   }
 
   async function composerMidi() {
@@ -1414,6 +1525,7 @@
     else if (message.type === "realtime") realtime(message);
     else if (message.type === "capability") capability(message);
     else if (message.type === "sound") sound(message);
+    else if (message.type === "sample") sample(message);
     else if (message.type === "keyboard") {
       const id = text(message.action, 80); message.enabled ? keyboardActions.add(id) : keyboardActions.delete(id);
       if (message.enabled) surface.tabIndex = 0;
@@ -1486,6 +1598,7 @@
     setImmersive(false);
     if (frame.contentWindow) frame.contentWindow.postMessage({ protocol: PROTOCOL, type: "terminate" }, "*");
     stopSounds();
+    samples.clear();
     midiEngine?.stop();
     images.forEach((bitmap) => bitmap?.close?.()); images.clear(); decodedImages.clear(); tileMaps.clear();
     frame.remove(); keyboardActions.clear(); lifecycleActions.clear(); pressedKeys.clear();

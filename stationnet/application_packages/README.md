@@ -89,7 +89,7 @@ JPEG, GIF, or WebP image for canvas drawing and returns its package-relative
 path. Call it once during setup. The trusted renderer decodes and caches the
 image asynchronously, and redraws the latest canvas scene when it is ready.
 GIFs use their first frame; use sprite sheets for game animation. No package
-file becomes a web URL. Audio files are not played.
+file becomes a web URL. Bundled PCM WAV files can be played with `ui.sound.load`.
 
 `await ui.assets.decodeImage(path)` decodes a bundled PNG on the trusted host
 and returns `{ width, height, pixels }`, with row-major RGBA bytes in a fresh
@@ -275,8 +275,8 @@ the page is hidden/shown or loses/gains focus. It receives an event object whose
 an animation while hidden and redraw when visible. `ui.onCleanup(handler)` adds
 a function called when the application is terminated (for example, when its page
 is left). Timer cancellations and registered cleanup handlers are run then, and
-active synthesized sounds are stopped. Call unsubscribe functions yourself when
-a listener is no longer wanted.
+active tones and sample voices are stopped. Call unsubscribe functions yourself
+when a listener is no longer wanted.
 
 `ui.timeout(handler, milliseconds)` and `ui.interval(handler, milliseconds)`
 return a cancellation function. Call it to cancel that one timeout or interval;
@@ -604,10 +604,10 @@ delivery, Canvas 2D upload, scaling, and display synchronization. The Pixel
 Raycaster app reports its own live worker timing and delivered frame rate so
 browser and device performance can be checked directly.
 
-## Synthesized sound
+## Sound
 
-Applications can generate sound with basic oscillators. Bundled audio bytes can
-be read as data, but StationNet does not play audio files.
+Applications can generate sound with basic oscillators and play bundled PCM WAV
+samples. Other bundled audio formats can be read as bytes but are not played.
 `ui.sound.playTone(frequency, duration, options)` plays a
 single tone, with frequency in Hz and timing in milliseconds:
 
@@ -632,10 +632,34 @@ ui.sound.play([{ frequency: 261.63, delay: 420 }, { frequency: 329.63, delay: 42
 });
 ```
 
-`ui.sound.stop()` stops the application's scheduled and active tones. All sound
-methods (`playTone`, `play`, `sequence`, and `stop`) return `undefined`; sound
-requests are fire-and-forget. Sound is locally generated in the player's
-browser and is never uploaded or transmitted. The host unlocks audio on the
+`await ui.sound.load(path)` decodes a bundled `.wav` file on the trusted host and
+returns a sample handle. WAV files must contain uncompressed PCM, 8 or 16 bit,
+mono or stereo, at 8,000–48,000 Hz. `ui.sound.createSample(samples, sampleRate)`
+returns a handle for a mono `Int8Array`, `Int16Array`, or `Float32Array`. Integer
+arrays are signed PCM; floats must be finite and between -1 and 1. The sample
+rate has the same range as WAV. Each app can hold 32 samples, each at most 2 MiB
+after decoding (four bytes per channel sample). Package files remain subject to
+the 1 MiB file limit.
+
+`ui.sound.playSample(handle, { volume, pan, loop, rate })` returns a voice ID.
+Volume is 0–1 (default 1), pan is -1 to 1 (default 0), loop is a boolean
+(default false), and rate is 0.25–4 (default 1). Up to eight samples can play at
+once; starting another steals the oldest voice. `ui.sound.stopSample(voiceId)`
+stops one voice. `ui.sound.stop()` stops all active tones and sample voices.
+
+```js
+const bell = await ui.sound.load("assets/bell.wav");
+const voice = ui.sound.playSample(bell, { volume: 0.6, pan: -0.3 });
+ui.sound.stopSample(voice);
+const wave = Int8Array.from([0, 64, 127, 64, 0, -64, -128, -64]);
+const custom = ui.sound.createSample(wave, 8000);
+ui.sound.playSample(custom, { loop: true, rate: 0.5 });
+```
+
+`playTone`, `play`, `sequence`, `stop`, and `stopSample` return `undefined`.
+`createSample`, `playSample`, and `stopSample` act synchronously; `load` returns a
+promise. Sound is locally generated in the player's browser and is never
+uploaded or transmitted. The host unlocks audio on the
 first player click, tap, or key press. Before that gesture, calls are scheduled
 in the browser's suspended audio context (StationNet has no separate queue) and
 start when it is unlocked; do not use a long pre-gesture delay for an important
@@ -657,8 +681,8 @@ and 2 MiB of shared storage, across at most 100 keys in each namespace.
 `ui.clipboard.writeText(text)`, `ui.download.text(filename, text)`, and
 `ui.download.cellImage(filename, rows, options)` each return a `Promise` that
 resolves to `true` after the browser accepts the request, or rejects on failure.
-`render`, `append`, `update`, `remove`, `clear`, and every `ui.sound.*` method
-return `undefined` rather than a promise.
+`render`, `append`, `update`, `remove`, and `clear` return `undefined` rather
+than a promise. Sound method return values are described above.
 
 ### Binary files and General MIDI playback
 
