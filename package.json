@@ -9,7 +9,7 @@
     "test:application-pixels": "node tests/test_application_pixels.mjs",
     "test:application-graphics": "node tests/test_application_sprite_batch.mjs",
     "test:application-samples": "node tests/test_application_samples.mjs",
-    "test:application-game-input": "node tests/test_application_game_input.mjs && node tests/test_application_game_input_host.mjs && node tests/test_application_game_input_relay.mjs"
+    "test:application-game-input": "node tests/test_application_game_input.mjs && node tests/test_application_game_input_host.mjs && node tests/test_application_game_input_relay.mjs && node tests/test_application_touch_gamepad.mjs"
   },
   "dependencies": {
     "@noble/ciphers": "^2.4.0",

@@ -551,6 +551,21 @@ button:focus-visible, .button:focus-visible, a:focus-visible, summary:focus-visi
 .app-canvas:focus { outline: 2px solid var(--cyan); outline-offset: 2px; }
 .app-canvas-controls { position: absolute; inset: 0; display: grid; place-items: center; pointer-events: none; background: rgba(0,0,0,.28); }
 .app-canvas-controls button { min-width: 8rem; padding: .8rem 1.2rem; pointer-events: auto; border-width: 2px; background: rgba(0,12,3,.94); font-size: .85rem; }
+.app-canvas-controls.app-canvas-gamepad { position: relative; inset: auto; display: flex; align-items: flex-end; justify-content: space-between; gap: .5rem; width: min(100%, calc(70vh * var(--app-canvas-ratio, 1))); margin-top: .45rem; background: none; touch-action: none; }
+.app-canvas-gamepad button { display: grid; place-items: center; width: clamp(2.2rem, 11vw, 3.3rem); height: clamp(2.2rem, 11vw, 3.3rem); min-width: 0; min-height: 0; margin: 0; padding: .15rem; overflow: hidden; font-size: clamp(.55rem, 2.3vw, .75rem); line-height: 1; touch-action: none; user-select: none; }
+.app-gamepad-dpad { display: grid; grid-template-columns: repeat(3, max-content); grid-template-rows: repeat(3, max-content); gap: .1rem; }
+.app-gamepad-up { grid-column: 2; grid-row: 1; }
+.app-gamepad-left { grid-column: 1; grid-row: 2; }
+.app-gamepad-down { grid-column: 2; grid-row: 3; }
+.app-gamepad-right { grid-column: 3; grid-row: 2; }
+.app-gamepad-actions { display: grid; grid-template-columns: repeat(2, max-content); grid-template-rows: repeat(3, max-content); gap: .2rem; }
+.app-gamepad-action-1 { grid-column: 1; grid-row: 1; }
+.app-gamepad-action-2 { grid-column: 2; grid-row: 1; }
+.app-gamepad-action-3 { grid-column: 1; grid-row: 2; }
+.app-gamepad-action-4 { grid-column: 2; grid-row: 2; }
+.app-gamepad-select { grid-column: 1; grid-row: 3; }
+.app-gamepad-start { grid-column: 2; grid-row: 3; }
+body.application-immersive .app-canvas-controls.app-canvas-gamepad { width: min(100%, calc((100dvh - 9rem) * var(--app-canvas-ratio, 1))); }
 .app-fg-0 { color: #000; } .app-fg-1 { color: #aa0000; } .app-fg-2 { color: #00aa00; } .app-fg-3 { color: #aa5500; }
 .app-fg-4 { color: #0000aa; } .app-fg-5 { color: #aa00aa; } .app-fg-6 { color: #00aaaa; } .app-fg-7 { color: #aaaaaa; }
 .app-fg-8 { color: #555555; } .app-fg-9 { color: #ff5555; } .app-fg-10 { color: #55ff55; } .app-fg-11 { color: #ffff55; }

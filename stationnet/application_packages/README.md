@@ -337,6 +337,8 @@ The click handler and press handlers may be combined. `ui.menu` accepts the same
 `onPress`/`onRelease` options and includes the selected item's string `value`.
 Each canvas `controls` entry likewise accepts `{ label, onClick, onPress,
 onRelease, variant }`. This allows held touch controls for fast-action games.
+With the canvas `touchLayout: "gamepad"` option, controls instead define up to
+four action buttons and may add a `code` field; see [Canvas](#canvas).
 
 `ui.menu(label, items, onSelect, options)` renders a labelled set of buttons.
 Each item may be a string (used for both label and value) or
@@ -558,7 +560,7 @@ ui.update("viewport", ui.canvas(200, 140, [
 ], { id: "viewport", label: "Wireframe viewport" }));
 ```
 
-Canvas options are `{ id, label, onPointer, hover, controls }`. `id` enables
+Canvas options are `{ id, label, onPointer, hover, controls, touchLayout }`. `id` enables
 `update`; `label` is the accessible name and defaults to `"Game playfield"`.
 `onPointer(event)` receives the scaled logical `{ x, y, phase, values, ... }`;
 `phase` is `"start"`, `"move"`, or `"end"`. `hover` defaults to `false`; when
@@ -567,8 +569,39 @@ reported either way). `controls` defaults to no controls and accepts up to four
 `{ label, onClick, onPress, onRelease, variant }` entries. `label` defaults to
 `"Action"`; `onClick`, `onPress`, and `onRelease` receive the normal interaction
 event (the latter two have `phase` `"start"`/`"end"`), and `variant` may be
-`"secondary"` (anything else is the default style). Controls are an accessible
-centered overlay covering the playfield; there are no placement options.
+`"secondary"` (anything else is the default style). By default, controls are
+an accessible centered overlay covering the playfield.
+
+Set `touchLayout: "gamepad"` to show touch controls below the canvas, with a
+d-pad at bottom-left and action buttons plus Select/Start at bottom-right. The
+center of the playfield stays clear. This layout appears only on touch devices;
+it does not add controls on desktop. The d-pad sends `ArrowUp`, `ArrowLeft`,
+`ArrowDown`, and `ArrowRight`; Select sends `ShiftRight`, and Start sends
+`Enter`. Up to 16 canvas gamepads can be displayed at once. Up to four
+`controls` entries per canvas provide action labels and key codes.
+Their default codes, in order, are `KeyZ`, `KeyX`, `KeyC`, and `KeyV`. To choose
+another code, use `code` with `ArrowUp`, `ArrowDown`, `ArrowLeft`, `ArrowRight`,
+`KeyA` through `KeyZ`, `Digit0` through `Digit9`, `Enter`, `Space`, `ShiftLeft`,
+or `ShiftRight`; invalid codes fall back to the default. Labels are limited to
+24 characters. In this layout, action callbacks and `variant` are ignored.
+Each button sends a normal `ui.onKey` down/up event and updates `ui.input` key
+state, including simultaneous d-pad and action presses. Presses are released
+on pointer cancellation, loss of focus, or control removal.
+
+```js
+ui.render(ui.canvas(320, 200, draw(), {
+  id: "game", touchLayout: "gamepad",
+  controls: [{ label: "Jump", code: "Space" }, { label: "Fire", code: "KeyZ" }]
+}));
+ui.onKey(({ code, phase }) => {
+  if (code === "Space" && phase === "down") jump();
+});
+// Animation code can also read ui.input.isDown("ArrowLeft") or "KeyZ".
+```
+
+Canvas updates that omit `controls` retain the existing touch buttons while
+the layout stays the same. Include `touchLayout: "gamepad"` when replacing
+their action labels or codes with `ui.update`.
 
 Here is a complete, short animated canvas example. It draws only the canvas each
 frame and uses browser arrow-key names. Visibility pausing is automatic:

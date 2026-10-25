@@ -100,6 +100,8 @@ Unread mail is shown in the MAIL navigation badge. Direct chat notifications app
 
 The Apps & Games program manager includes **MIDI Composer**, a multi-track piano roll with account-saved projects, touch controls, General MIDI instruments and drums, tempo changes, MIDI import, and `.mid` downloads for sharing or Radio uploads.
 
+Sandboxed canvas apps can opt into a touch-only gamepad layout with a d-pad, up to four action buttons, and Start/Select below the playfield. It sends standard key events for `ui.onKey` and `ui.input`; existing centered canvas controls remain the default. See the [application package guide](stationnet/application_packages/README.md#canvas) for options, key mappings, and limits.
+
 ## Station banner customization
 
 Under **SYSOP CONTROL → Station settings**, the ASCII banner editor lists every FIGlet font installed with pyfiglet, with a compact searchable browser. It can use the station name or a separate banner text, size, theme-default/preset/custom hexadecimal colour, and a live preview rendered by the same server-side FIGlet path used by the masthead. Changes are only applied after saving; **Cancel Changes** restores the form and **Restore Banner Default** resets the banner controls before saving. Existing stations retain their current banner configuration; a no-longer-installed saved font safely falls back to `small` until a valid style is saved.

@@ -727,9 +727,11 @@
       return identified({
         type: "canvas", width, height, commands: Array.isArray(commands) ? commands : [],
         action: action(opts.onPointer), hover: Boolean(opts.hover), label: String(opts.label || "Game playfield"),
+        touchLayout: opts.touchLayout === "gamepad" ? "gamepad" : undefined,
         controls: Array.isArray(opts.controls) ? opts.controls.slice(0, 4).map((control) => ({
           label: String(control && control.label || "Action"), action: action(control && control.onClick), pressAction: action(control && control.onPress), releaseAction: action(control && control.onRelease),
-          variant: control && control.variant === "secondary" ? "secondary" : undefined
+          variant: control && control.variant === "secondary" ? "secondary" : undefined,
+          code: typeof control?.code === "string" ? control.code.slice(0, 40) : undefined
         })) : undefined
       }, opts);
     },

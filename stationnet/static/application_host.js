@@ -215,7 +215,8 @@
     components: 100, text: 8000, items: 100, columns: 80, rows: 100,
     canvasCommands: 600, canvasSprites: 2000, canvasGlyphs: 2000,
     canvasSegments: 10000, canvasVertices: 20000,
-    canvasPolygons: 256, polygonVertices: 4096, capabilityText: 200000
+    canvasPolygons: 256, polygonVertices: 4096, capabilityText: 200000,
+    touchGamepads: 16
   };
   const SOUND_LIMITS = { tones: 32, active: 24, frequency: [20, 20000], duration: [10, 10000], delay: [0, 30000], volume: [.001, .25], envelope: [0, 1000] };
   const keyboardActions = new Set();
@@ -244,6 +245,8 @@
   const framebuffers = new Map();
   let framebufferPixels = 0;
   const canvasScenes = new WeakMap();
+  const gamepadOverlays = new Map();
+  const virtualKeys = new Map();
   let imageBytes = 0;
   let imagePixels = 0;
 
@@ -954,9 +957,77 @@
     context.restore();
   }
 
-  function drawCanvasControls(wrapper, controls) {
+  const gamepadCode = (code, fallback) =>
+    typeof code === "string" && /^(?:Arrow(?:Up|Down|Left|Right)|Key[A-Z]|Digit[0-9]|Enter|Space|Shift(?:Left|Right))$/.test(code)
+      ? code : fallback;
+  const gamepadKey = (code) => code.startsWith("Arrow") ? code :
+    code.startsWith("Key") ? code.slice(3).toLowerCase() :
+    code.startsWith("Digit") ? code.slice(5) :
+    code === "Space" ? " " : code.startsWith("Shift") ? "Shift" : code;
+  function emitGamepadKey(code, down) {
+    const count = virtualKeys.get(code) || 0;
+    if (down) virtualKeys.set(code, count + 1);
+    else if (count > 1) virtualKeys.set(code, count - 1);
+    else virtualKeys.delete(code);
+    if ((down && count) || (!down && count !== 1) || pressedKeys.has(code)) return;
+    sendInputKey(code, down);
+    const payload = { key: gamepadKey(code), code, phase: down ? "down" : "up", repeat: false,
+      ctrlKey: false, altKey: false, shiftKey: false, metaKey: false };
+    keyboardActions.forEach((action) => interact(action, payload));
+  }
+  function releaseGamepadOverlay(overlay) {
+    const release = gamepadOverlays.get(overlay);
+    if (release) { release(); gamepadOverlays.delete(overlay); }
+  }
+  function gamepadButton(parent, label, code, className) {
+    const button = document.createElement("button"); button.type = "button";
+    button.textContent = label; button.setAttribute("aria-label", label);
+    button.className = className;
+    const held = new Set();
+    const start = (identity) => { if (held.has(identity)) return; held.add(identity); emitGamepadKey(code, true); };
+    const end = (identity) => { if (!held.delete(identity)) return; emitGamepadKey(code, false); };
+    button.addEventListener("pointerdown", (event) => {
+      if (event.button !== 0) return;
+      event.preventDefault(); button.setPointerCapture?.(event.pointerId); start(event.pointerId);
+    });
+    for (const type of ["pointerup", "pointercancel", "lostpointercapture"])
+      button.addEventListener(type, (event) => end(event.pointerId));
+    button.addEventListener("keydown", (event) => {
+      if (event.key !== "Enter" && event.key !== " ") return;
+      event.preventDefault(); event.stopPropagation(); if (!event.repeat) start("keyboard");
+    });
+    button.addEventListener("keyup", (event) => {
+      if (event.key !== "Enter" && event.key !== " ") return;
+      event.preventDefault(); event.stopPropagation(); end("keyboard");
+    });
+    button.addEventListener("blur", () => end("keyboard"));
+    parent.append(button);
+    return () => { for (const identity of [...held]) end(identity); };
+  }
+  function drawCanvasControls(wrapper, controls, touchLayout) {
     const previous = wrapper.querySelector(".app-canvas-controls");
-    if (previous) previous.remove();
+    if (previous) { releaseGamepadOverlay(previous); previous.remove(); }
+    if (touchLayout === "gamepad") {
+      if (!(navigator.maxTouchPoints > 0 || "ontouchstart" in window) || gamepadOverlays.size >= LIMITS.touchGamepads) return;
+      const overlay = document.createElement("div"); overlay.className = "app-canvas-controls app-canvas-gamepad";
+      const dpad = document.createElement("div"); dpad.className = "app-gamepad-dpad";
+      const actions = document.createElement("div"); actions.className = "app-gamepad-actions";
+      const releases = [];
+      for (const [label, code, direction] of [["Up", "ArrowUp", "up"], ["Left", "ArrowLeft", "left"],
+        ["Down", "ArrowDown", "down"], ["Right", "ArrowRight", "right"]])
+        releases.push(gamepadButton(dpad, label, code, `app-gamepad-${direction}`));
+      const actionControls = Array.isArray(controls) ? controls.slice(0, 4) : [];
+      actionControls.forEach((control, index) => {
+        if (!control || typeof control !== "object") return;
+        releases.push(gamepadButton(actions, text(control.label, 24) || "Action",
+          gamepadCode(control.code, ["KeyZ", "KeyX", "KeyC", "KeyV"][index]), `app-gamepad-action app-gamepad-action-${index + 1}`));
+      });
+      releases.push(gamepadButton(actions, "Select", "ShiftRight", "app-gamepad-select"));
+      releases.push(gamepadButton(actions, "Start", "Enter", "app-gamepad-start"));
+      overlay.append(dpad, actions); wrapper.append(overlay);
+      gamepadOverlays.set(overlay, () => releases.forEach((release) => release()));
+      return;
+    }
     if (!Array.isArray(controls) || !controls.length) return;
     const overlay = document.createElement("div"); overlay.className = "app-canvas-controls";
     controls.slice(0, 4).forEach((control) => {
@@ -1156,7 +1227,8 @@
         canvas.addEventListener("pointerdown", (event) => { event.preventDefault(); canvas.setPointerCapture(event.pointerId); point(event, "start"); });
         canvas.addEventListener("pointermove", (event) => { if (event.buttons || event.pointerType === "touch" || canvas.dataset.canvasHover === "1") point(event, "move"); });
         canvas.addEventListener("pointerup", (event) => point(event, "end"));
-        drawCanvasControls(node, component.controls);
+        node.dataset.touchLayout = component.touchLayout === "gamepad" ? "gamepad" : "";
+        drawCanvasControls(node, component.controls, node.dataset.touchLayout);
         break;
       }
       default: return null;
@@ -1182,7 +1254,7 @@
       .find((node) => node.dataset.appComponent === targetId);
     if (message.mode === "remove") {
       const target = targetComponent();
-      if (target) target.remove();
+      if (target) { const overlay = target.querySelector(".app-canvas-controls"); if (overlay) releaseGamepadOverlay(overlay); target.remove(); }
       return;
     }
     if (message.mode === "update") {
@@ -1193,13 +1265,21 @@
         // contextual overlay in place. The runtime serializes omitted options as
         // undefined, so checking only for the property removed START as soon as
         // Breakout sent its first hover update.
-        if (components[0].controls !== undefined) drawCanvasControls(target, components[0].controls);
+        const oldTouchLayout = target.dataset.touchLayout;
+        if (components[0].touchLayout !== undefined) target.dataset.touchLayout = components[0].touchLayout === "gamepad" ? "gamepad" : "";
+        if (components[0].controls !== undefined || target.dataset.touchLayout !== oldTouchLayout)
+          drawCanvasControls(target, components[0].controls, target.dataset.touchLayout);
         return;
       }
       const replacement = renderComponent(components[0]);
-      if (target && replacement) target.replaceWith(replacement);
+      if (target && replacement) {
+        const overlay = target.querySelector(".app-canvas-controls"); if (overlay) releaseGamepadOverlay(overlay);
+        target.replaceWith(replacement);
+      }
       return;
     }
+    if (message.mode !== "append")
+      for (const overlay of [...gamepadOverlays.keys()]) releaseGamepadOverlay(overlay);
     const fragment = document.createDocumentFragment();
     components.forEach((component) => { const node = renderComponent(component); if (node) fragment.append(node); });
     if (message.mode !== "append") surface.replaceChildren();
@@ -1578,8 +1658,10 @@
     if ((event.ctrlKey || event.metaKey) && ["KeyS", "KeyZ", "KeyY", "KeyC", "KeyV", "KeyD", "KeyA"].includes(event.code)) event.preventDefault();
   };
   const releasePressedKeys = () => {
-    pressedKeys.forEach((event) => sendInputKey(event.code, false));
-    pressedKeys.forEach((event) => keyboardActions.forEach((action) => interact(action, { ...event, phase: "up", repeat: false })));
+    pressedKeys.forEach((event) => { if (!virtualKeys.has(event.code)) sendInputKey(event.code, false); });
+    pressedKeys.forEach((event) => {
+      if (!virtualKeys.has(event.code)) keyboardActions.forEach((action) => interact(action, { ...event, phase: "up", repeat: false }));
+    });
     pressedKeys.clear();
   };
   const sendInputKey = (code, down) => {
@@ -1596,23 +1678,24 @@
     preventGameKeyDefault(event);
     const payload = keyboardEvent(event, "down");
     if (!event.repeat) pressedKeys.set(payload.code || payload.key, payload);
-    if (!event.repeat) sendInputKey(payload.code, true);
-    keyboardActions.forEach((action) => interact(action, payload));
+    if (!event.repeat && !virtualKeys.has(payload.code)) sendInputKey(payload.code, true);
+    if (event.repeat || !virtualKeys.has(payload.code)) keyboardActions.forEach((action) => interact(action, payload));
   });
   addEventListener("keyup", (event) => {
     const identity = text(event.code, 40) || text(event.key, 40);
     if (!pressedKeys.has(identity)) return;
     preventGameKeyDefault(event);
     pressedKeys.delete(identity);
-    sendInputKey(identity, false);
+    if (!virtualKeys.has(identity)) sendInputKey(identity, false);
     const payload = keyboardEvent(event, "up");
-    keyboardActions.forEach((action) => interact(action, payload));
+    if (!virtualKeys.has(identity)) keyboardActions.forEach((action) => interact(action, payload));
   });
   addEventListener("pointerdown", unlockAudio, { capture: true });
 
   const reportVisibility = () => {
     const value = document.hidden || !document.hasFocus() ? "hidden" : "visible";
     if (value === "hidden") {
+      for (const overlay of gamepadOverlays.keys()) gamepadOverlays.get(overlay)();
       releasePressedKeys();
       if (document.pointerLockElement === surface) document.exitPointerLock();
     }
@@ -1626,6 +1709,7 @@
   function terminate() {
     if (realtimeSocket) { realtimeSocket.close(); realtimeSocket = null; realtimeSession = null; }
     if (closed) return; closed = true;
+    for (const overlay of [...gamepadOverlays.keys()]) releaseGamepadOverlay(overlay);
     clearTimeout(startupTimer);
     dismissPointerPrompt(new Error("Application terminated"));
     if (document.pointerLockElement === surface) document.exitPointerLock();
