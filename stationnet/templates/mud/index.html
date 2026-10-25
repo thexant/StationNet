@@ -67,13 +67,30 @@
           <input id="mud-command-input" name="command" data-command-input maxlength="1000" autocomplete="off" placeholder="Say something, or use /help" aria-describedby="mud-command-help" required>
           <button>SEND</button>
         </div>
-        <small id="mud-command-help">Plain text is speech; gameplay commands start with /. Use /combat or /attack &lt;enemy&gt; to fight.</small>
+        <small id="mud-command-help">Plain text is speech; commands start with /. Use /help for combat, shop, storage, and extraction commands.</small>
         <span class="mud-error" data-mud-error role="alert"></span>
       </form>
 
     </section>
 
     <aside class="mud-sidebar" aria-label="Character information">
+      <section class="mud-panel collapsible-panel" data-mud-hub-panel data-collapsible-panel data-panel-key="mud-hub" {% if not hub %}hidden{% endif %}>
+        <button type="button" class="collapsible-panel-toggle" data-panel-toggle aria-expanded="true" aria-controls="mud-hub-panel">
+          <span class="collapsible-panel-heading"><span class="eyebrow">PORTAL ROOM</span><span class="collapsible-panel-title">Trader &amp; Storage</span></span>
+          <span class="collapsible-panel-chevron" aria-hidden="true"></span>
+        </button>
+        <div id="mud-hub-panel" data-panel-content>
+          <div class="mud-hub-content">
+            <strong>COINS <span data-mud-coins>{{ hub.coins if hub else 0 }}</span></strong>
+            <strong>SUPPLIES</strong>
+            <div data-mud-shop-items>{% if hub %}{% for item in hub.shop %}<button type="button" class="secondary" data-mud-action="shop" data-mud-parameters='{{ {"operation":"buy","item_id":item.id}|tojson }}' title="{{ item.description }}">BUY {{ item.name }} · {{ item.price }}</button>{% endfor %}{% endif %}</div>
+            <strong>CARRIED · SELL OR STORE</strong>
+            <div data-mud-hub-inventory>{% if hub %}{% for item in inventory.inventory + inventory.equipment %}<div class="mud-hub-item"><span>{{ item.name }}</span><button type="button" class="secondary" data-mud-action="shop" data-mud-parameters='{{ {"operation":"sell","item_id":item.id}|tojson }}'>SELL</button><button type="button" class="secondary" data-mud-action="storage" data-mud-parameters='{{ {"operation":"deposit","item_id":item.id}|tojson }}'>STORE</button></div>{% else %}<span class="muted">nothing carried</span>{% endfor %}{% endif %}</div>
+            <strong>PERSONAL STORAGE</strong>
+            <div data-mud-stored>{% if hub %}{% for item in hub.storage %}<button type="button" class="secondary" data-mud-action="storage" data-mud-parameters='{{ {"operation":"withdraw","item_id":item.id}|tojson }}'>WITHDRAW {{ item.name }}</button>{% else %}<span class="muted">empty</span>{% endfor %}{% endif %}</div>
+          </div>
+        </div>
+      </section>
       <section class="mud-panel collapsible-panel" data-collapsible-panel data-panel-key="mud-character">
         <button type="button" class="collapsible-panel-toggle" data-panel-toggle aria-expanded="true" aria-controls="mud-character-panel">
           <span class="collapsible-panel-heading"><span class="eyebrow">PLAYER DATA</span><span class="collapsible-panel-title">Character</span></span>
@@ -114,9 +131,9 @@
           <div class="mud-inventory-list" data-mud-inventory>
             <small data-mud-inventory-scope>{{ 'Shared across modes' if inventory.sharing == 'shared' else (inventory.mode|title ~ ' only') }}</small>
             <strong>CARRIED</strong>
-            <div data-mud-carried>{% for item in inventory.inventory %}<button type="button" class="secondary" data-mud-action="look" data-mud-parameters='{{ {"target": item.id}|tojson }}'>{{ item.name }}</button>{% else %}<span class="muted">nothing carried</span>{% endfor %}</div>
+            <div data-mud-carried>{% for item in inventory.inventory %}<button type="button" class="secondary" data-mud-action="look" data-mud-parameters='{{ {"target": item.id}|tojson }}'>{{ item.name }}{% if item.acquired_run_id %} · RUN LOOT{% endif %}</button>{% else %}<span class="muted">nothing carried</span>{% endfor %}</div>
             <strong>EQUIPPED</strong>
-            <div data-mud-equipped>{% for item in inventory.equipment %}<button type="button" class="secondary" data-mud-action="look" data-mud-parameters='{{ {"target": item.id}|tojson }}'>{{ item.equipped_slot|replace('_',' ') }}: {{ item.name }}</button>{% else %}<span class="muted">nothing equipped</span>{% endfor %}</div>
+            <div data-mud-equipped>{% for item in inventory.equipment %}<button type="button" class="secondary" data-mud-action="look" data-mud-parameters='{{ {"target": item.id}|tojson }}'>{{ item.equipped_slot|replace('_',' ') }}: {{ item.name }}{% if item.acquired_run_id %} · RUN LOOT{% endif %}</button>{% else %}<span class="muted">nothing equipped</span>{% endfor %}</div>
             <small>Click an item to inspect it; its available actions appear in the contextual controls.</small>
           </div>
         </div>

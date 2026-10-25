@@ -665,9 +665,16 @@ def _assign_roles(template, adjacency, depths, rng):
                 candidates = dead_ends
         count = rule["count"]
         if len(candidates) < count:
-            raise GenerationError(
-                f"role {rule['role']!r} needs {count} rooms but only {len(candidates)} match"
+            # Small branching/hub layouts may not contain a room in every requested
+            # depth band. Keep the run playable by using the closest free rooms.
+            preferred = list(candidates)
+            midpoint = (low + high) / 2
+            candidates = preferred + sorted(
+                available - set(preferred),
+                key=lambda index: (abs(depths[index] / maximum_depth - midpoint), -depths[index], index),
             )
+            if len(candidates) < count:
+                raise GenerationError(f"role {rule['role']!r} needs {count} free rooms")
         rng.shuffle(candidates)
         for index in candidates[:count]:
             roles[index] = rule["role"]
@@ -798,6 +805,30 @@ def _select_content(template, context, rng, database):
     return result
 
 
+def _risk_loot(context, rng, database):
+    """Add a small station supply or treasure cache without requiring theme authors to place it."""
+    if database is None or context["role"] == "entrance":
+        return []
+    depth = context["depth_ratio"]
+    if context["role"] != "exit" and rng.random() > min(.8, .22 + depth * .38):
+        return []
+    tier = 1
+    if context["difficulty"] >= 4 and rng.random() < min(.8, .25 + depth * .4):
+        tier = 2
+    if context["difficulty"] >= 8 and rng.random() < min(.65, .15 + depth * .35):
+        tier = 3
+    choices = {
+        1: ("shop:tonic", "treasure:relic", "shop:blade", "shop:coat"),
+        2: ("shop:elixir", "treasure:gem", "shop:sabre", "shop:bulwark"),
+        3: ("treasure:idol", "shop:mail", "shop:elixir"),
+    }[tier]
+    definition_id = "stationnet:" + rng.choice(choices)
+    snapshot = _definition_snapshot(database, "item", definition_id)
+    return [{"type": "item", "pool_id": "stationnet-risk-loot",
+             "definition_id": definition_id, "quantity": 1,
+             "snapshot": snapshot, "config": {"rarity": tier}}]
+
+
 def generate_manifest(template, seed, size=None, layout=None, difficulty=None, database=None):
     """Generate a deterministic, connected dungeon without persisting it."""
     errors = validate_template(template, database)
@@ -856,12 +887,23 @@ def generate_manifest(template, seed, size=None, layout=None, difficulty=None, d
             environment_id = environment["id"]
             addition = _weighted(rng, environment["descriptions"])["text"]
             description = f"{description}\n\n{addition}"
+        content = _select_content(template, context, rng, database)
+        content.extend(_risk_loot(context, rng, database))
+        for entry in content:
+            if entry["type"] == "enemy":
+                scale = max(0, room_difficulty - 2)
+                snapshot = entry["snapshot"]
+                if snapshot.get("maximum_health") is not None:
+                    snapshot["maximum_health"] += scale * 8
+                    snapshot["attack"] += scale * 2
+                    snapshot["defense"] += scale // 2
+                    snapshot["experience_reward"] += scale * 5
         rooms.append({
             "key": f"room-{index:04d}", "ordinal": index, "x": position[0], "y": position[1],
             "role": roles[index], "depth": depths[index], "difficulty": room_difficulty,
             "name": name, "description": description,
             "room_template_id": room_template["id"], "environment_id": environment_id,
-            "content": _select_content(template, context, rng, database),
+            "content": content,
         })
     exits = []
     for first, second in sorted(edges):

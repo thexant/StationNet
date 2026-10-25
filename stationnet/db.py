@@ -1,4 +1,5 @@
 """SQLite persistence."""
+import json
 import secrets
 import sqlite3
 from flask import current_app, g
@@ -747,6 +748,7 @@ CREATE TABLE IF NOT EXISTS mud_item_instances (
  state_json TEXT NOT NULL DEFAULT '{}',
  possession_mode TEXT NOT NULL DEFAULT 'traditional'
  CHECK(possession_mode IN ('traditional','procedural')),
+ acquired_run_id TEXT REFERENCES mud_procedural_instances(id) ON DELETE RESTRICT,
  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
  CHECK((room_id IS NOT NULL) + (owner_character_id IS NOT NULL AND equipped_slot IS NULL) + (container_id IS NOT NULL) + (owner_character_id IS NOT NULL AND equipped_slot IS NOT NULL) = 1),
@@ -755,6 +757,14 @@ CREATE TABLE IF NOT EXISTS mud_item_instances (
 CREATE INDEX IF NOT EXISTS idx_mud_item_instances_room ON mud_item_instances(room_id,id);
 CREATE INDEX IF NOT EXISTS idx_mud_item_instances_owner ON mud_item_instances(owner_character_id,id);
 CREATE INDEX IF NOT EXISTS idx_mud_item_instances_container ON mud_item_instances(container_id,id);
+CREATE TABLE IF NOT EXISTS mud_character_wallets (
+ character_id TEXT PRIMARY KEY REFERENCES mud_characters(id) ON DELETE CASCADE,
+ coins INTEGER NOT NULL DEFAULT 30 CHECK(coins>=0));
+CREATE TABLE IF NOT EXISTS mud_character_storage (
+ item_instance_id TEXT PRIMARY KEY REFERENCES mud_item_instances(id) ON DELETE CASCADE,
+ character_id TEXT NOT NULL REFERENCES mud_characters(id) ON DELETE CASCADE,
+ stored_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);
+CREATE INDEX IF NOT EXISTS idx_mud_character_storage_owner ON mud_character_storage(character_id,item_instance_id);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_mud_equipment_slot
  ON mud_item_instances(owner_character_id,equipped_slot) WHERE equipped_slot IS NOT NULL;
 CREATE TABLE IF NOT EXISTS mud_character_equipment (
@@ -1018,6 +1028,7 @@ def init_db():
     _migrate_mud_dungeon_instances(database)
     _migrate_mud_expeditions(database)
     _migrate_mud_crossover(database)
+    _migrate_mud_roguelike(database)
     _migrate_application_permissions(database)
     _migrate_mud_character_creation(database)
     _initialize_mud_characters(database)
@@ -1056,6 +1067,54 @@ def init_db():
             "UPDATE radio_permission_groups SET host_broadcasts=1 WHERE name='OPERATORS'"
         )
     database.commit()
+
+
+def _migrate_mud_roguelike(database):
+    columns = {row["name"] for row in database.execute("PRAGMA table_info(mud_item_instances)")}
+    if "acquired_run_id" not in columns:
+        database.execute(
+            "ALTER TABLE mud_item_instances ADD COLUMN acquired_run_id TEXT "
+            "REFERENCES mud_procedural_instances(id) ON DELETE RESTRICT"
+        )
+    database.execute(
+        "CREATE INDEX IF NOT EXISTS idx_mud_item_instances_run "
+        "ON mud_item_instances(acquired_run_id,owner_character_id)"
+    )
+    database.execute(
+        "CREATE TABLE IF NOT EXISTS mud_character_wallets ("
+        "character_id TEXT PRIMARY KEY REFERENCES mud_characters(id) ON DELETE CASCADE,"
+        "coins INTEGER NOT NULL DEFAULT 30 CHECK(coins>=0))"
+    )
+    database.execute(
+        "CREATE TABLE IF NOT EXISTS mud_character_storage ("
+        "item_instance_id TEXT PRIMARY KEY REFERENCES mud_item_instances(id) ON DELETE CASCADE,"
+        "character_id TEXT NOT NULL REFERENCES mud_characters(id) ON DELETE CASCADE,"
+        "stored_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP)"
+    )
+    database.execute(
+        "CREATE INDEX IF NOT EXISTS idx_mud_character_storage_owner "
+        "ON mud_character_storage(character_id,item_instance_id)"
+    )
+    supplies = (
+        ("blade", "Traveler's Blade", "A dependable sword for the first descent.", "equipment", "main_hand", {"damage": 3, "value": 32}),
+        ("sabre", "Tempered Sabre", "A balanced blade with a keen edge.", "equipment", "main_hand", {"damage": 7, "value": 110}),
+        ("bulwark", "Iron Bulwark", "A sturdy shield that absorbs heavy blows.", "equipment", "off_hand", {"armor": 4, "value": 90}),
+        ("coat", "Padded Coat", "Light protection for an unprepared delver.", "equipment", "body", {"armor": 2, "value": 35}),
+        ("mail", "Reinforced Mail", "Linked armour for dangerous depths.", "equipment", "body", {"armor": 6, "value": 140}),
+        ("tonic", "Healing Tonic", "Restores 30 health when used.", "consumable", None, {"heal": 30, "value": 24}),
+        ("elixir", "Greater Healing Elixir", "Restores 65 health when used.", "consumable", None, {"heal": 65, "value": 58}),
+        ("chart", "Survey Chart", "Reveals the next route toward the dungeon exit.", "consumable", None, {"reveal_exit": True, "value": 18}),
+        ("relic", "Chipped Relic", "A fragment salvaged from the old ruins.", "misc", None, {"value": 30}),
+        ("gem", "Polished Gem", "A bright stone prized by the portal trader.", "misc", None, {"value": 85}),
+        ("idol", "Ancient Idol", "A rare object from the deepest passages.", "misc", None, {"value": 190}),
+    )
+    database.executemany(
+        "INSERT OR IGNORE INTO mud_item_definitions"
+        "(id,name,description,item_type,equipment_slot,properties_json) VALUES(?,?,?,?,?,?)",
+        ((f"stationnet:{'treasure' if key in {'relic', 'gem', 'idol'} else 'shop'}:{key}", name, description, kind, slot,
+          json.dumps(properties, separators=(",", ":")))
+         for key, name, description, kind, slot, properties in supplies),
+    )
 
 
 def _migrate_mud_dungeon_content_types(database):

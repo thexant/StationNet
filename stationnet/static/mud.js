@@ -28,6 +28,11 @@ for(const mud of document.querySelectorAll("[data-mud]")){
   const carried=mud.querySelector("[data-mud-carried]");
   const equipped=mud.querySelector("[data-mud-equipped]");
   const inventoryScope=mud.querySelector("[data-mud-inventory-scope]");
+  const hubPanel=mud.querySelector("[data-mud-hub-panel]");
+  const hubCoins=mud.querySelector("[data-mud-coins]");
+  const hubShop=mud.querySelector("[data-mud-shop-items]");
+  const hubInventory=mud.querySelector("[data-mud-hub-inventory]");
+  const hubStored=mud.querySelector("[data-mud-stored]");
   const quests=mud.querySelector("[data-mud-quests]");
   const questCount=mud.querySelector("[data-mud-quest-count]");
   let busy=false, pollBusy=false;
@@ -152,9 +157,42 @@ for(const mud of document.querySelectorAll("[data-mud]")){
     const fill=(node,items,slot)=>{
       node.replaceChildren();
       if(!items?.length){const empty=document.createElement("span");empty.className="muted";empty.textContent=slot?"nothing equipped":"nothing carried";node.append(empty);return}
-      for(const item of items){const button=document.createElement("button");button.type="button";button.className="secondary";button.dataset.mudAction="look";button.dataset.mudParameters=JSON.stringify({target:item.id});button.textContent=slot?`${(item.equipped_slot||"equipment").replaceAll("_"," ")}: ${item.name}`:item.name;node.append(button)}
+      for(const item of items){const button=document.createElement("button");button.type="button";button.className="secondary";button.dataset.mudAction="look";button.dataset.mudParameters=JSON.stringify({target:item.id});button.textContent=`${slot?`${(item.equipped_slot||"equipment").replaceAll("_"," ")}: `:""}${item.name}${item.acquired_run_id?" · RUN LOOT":""}`;node.append(button)}
     };
     fill(carried,inventory.inventory,false);fill(equipped,inventory.equipment,true);
+    if(hubInventory){
+      hubInventory.replaceChildren();
+      for(const item of [...inventory.inventory,...inventory.equipment]){
+        const row=document.createElement("div");row.className="mud-hub-item";
+        const label=document.createElement("span");label.textContent=item.name;row.append(label);
+        for(const [operation,action] of [["sell","shop"],["deposit","storage"]]){
+          const button=document.createElement("button");button.type="button";button.className="secondary";
+          button.dataset.mudAction=action;button.dataset.mudParameters=JSON.stringify({operation,item_id:item.id});
+          button.textContent=operation.toUpperCase();row.append(button);
+        }
+        hubInventory.append(row);
+      }
+      if(!hubInventory.childElementCount)hubInventory.textContent="nothing carried";
+    }
+  };
+  const renderHub=hub=>{
+    if(!hubPanel)return;
+    hubPanel.hidden=!hub;
+    if(!hub)return;
+    hubCoins.textContent=hub.coins;
+    hubShop.replaceChildren();
+    for(const item of hub.shop||[]){
+      const button=document.createElement("button");button.type="button";button.className="secondary";
+      button.dataset.mudAction="shop";button.dataset.mudParameters=JSON.stringify({operation:"buy",item_id:item.id});
+      button.title=item.description;button.textContent=`BUY ${item.name} · ${item.price}`;hubShop.append(button);
+    }
+    hubStored.replaceChildren();
+    for(const item of hub.storage||[]){
+      const button=document.createElement("button");button.type="button";button.className="secondary";
+      button.dataset.mudAction="storage";button.dataset.mudParameters=JSON.stringify({operation:"withdraw",item_id:item.id});
+      button.textContent=`WITHDRAW ${item.name}`;hubStored.append(button);
+    }
+    if(!hubStored.childElementCount)hubStored.textContent="empty";
   };
   const renderQuests=state=>{
     if(!quests||!state)return;
@@ -192,6 +230,7 @@ for(const mud of document.querySelectorAll("[data-mud]")){
       renderRoom(payload.room);
       renderCharacter(payload.character);
       renderInventory(payload.inventory);
+      renderHub(payload.hub);
       renderQuests(payload.quests);
       renderCombat(payload.combat);
       if(payload.actions)renderActions(payload.actions);
@@ -215,6 +254,7 @@ for(const mud of document.querySelectorAll("[data-mud]")){
       renderRoom(payload.room);
       renderCharacter(payload.character);
       renderInventory(payload.inventory);
+      renderHub(payload.hub);
       renderQuests(payload.quests);
       renderCombat(payload.combat);
       if(payload.actions)renderActions(payload.actions);
