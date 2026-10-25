@@ -90,12 +90,13 @@ StationNet.start(async (ui) => {
     arrive(); P = [0, 0, -1150]; F = [0,0,-1]; U = [0,1,0]; R = V.norm(V.cross(U, F)); spd = 120; shield = 100;
     mode = "fly"; keys = {}; cool = laserT = flash = jumpT = 0; cycle2();
     ui.render(ui.canvas(W, H, [], cockpitOptions),
-      ui.text("Mouse or arrows pitch/yaw | A/D yaw | Q/E roll | W/S throttle | Click or SPACE fire | C dock | N target | J jump | I invert | F immersive"),
+      ui.text("Mouse or arrows pitch/yaw | A/D yaw | Q/E roll | W/S throttle | Click cockpit/FIRE or SPACE fire | C dock | N target | J jump | I invert | F immersive"),
       ui.text("Capture mouse for relative steering. Escape releases it.", { id: "mouse-status" }),
       ui.button("Capture mouse", async () => {
-        try { await ui.pointerLock.request({ unadjustedMovement: true }); say("Mouse captured. Click to fire; Escape releases the mouse."); }
+        try { await ui.pointerLock.request(); say("Mouse captured. Click to fire; Escape releases the mouse."); }
         catch (error) { ui.update("mouse-status", ui.text(`Mouse capture unavailable: ${error.message}`, { id: "mouse-status", tone: "warning" })); }
       }),
+      ui.button("FIRE", triggerLaser, { onPress: () => { keys.MouseFire = true; triggerLaser(); }, onRelease: () => { keys.MouseFire = false; } }),
       ui.button("Release mouse", () => ui.pointerLock.release()));
     say("Launch complete. Station is behind you - fly safe, Commander.");
     anim.resume();
@@ -229,6 +230,7 @@ StationNet.start(async (ui) => {
     if (phase === "start") { keys.MouseFire = true; triggerLaser(); }
     else if (phase === "end") keys.MouseFire = false;
   } };
+  const cockpitFrameOptions = { id: "view", label: "Cockpit view" };
   function tryJump() {
     if (jumpT > 0) return;
     if (tgt === sys) return say("No target system in range (N).");
@@ -333,10 +335,21 @@ StationNet.start(async (ui) => {
       out.push({ type: "rect", x: W/2 + dx - 1.5, y: 362 + dy - 1.5, width: 3, height: 3, color: o.t === "pirate" ? "#ff5555" : o.t === "station" ? "#44ddff" : o.t === "can" ? "#ffdd33" : "#889" }); }
     out.push({ type: "rect", x: W/2 - 1, y: 361, width: 2, height: 2, color: "#fff" });
     if (flash > 0) out.push({ type: "rect", x: 0, y: 0, width: W, height: H, color: "#ff000033" });
-    ui.update("view", ui.canvas(W, H, out, cockpitOptions));
+    // The initial canvas owns click input; frame updates only send drawing data.
+    ui.update("view", ui.canvas(W, H, out, cockpitFrameOptions));
   }
 
-  const anim = ui.animate(({ delta }) => { if (mode !== "fly") return; step(Math.min(delta, .05)); if (mode === "fly") draw(); });
+  const anim = ui.animate(({ delta }) => {
+    if (mode !== "fly") return;
+    // Keep elapsed game time when rendering falls below 20 FPS, while retaining small collision steps.
+    let remaining = Math.min(Math.max(delta, 0), .25);
+    if (remaining === 0) step(0);
+    while (remaining > 0 && mode === "fly") {
+      const dt = Math.min(remaining, .05);
+      step(dt); remaining -= dt;
+    }
+    if (mode === "fly") draw();
+  });
   anim.pause();
   ui.pointerLock.onMove(({ x, y }) => {
     if (mode === "fly") { mouseX += x; mouseY += y; }

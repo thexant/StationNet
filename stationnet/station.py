@@ -1,10 +1,14 @@
 """Welcome, workspace, and SYSOP settings."""
 import json
+import os
 import re
 import secrets
 import sqlite3
+from io import BytesIO
+from pathlib import Path
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
-from flask import Blueprint, Response, current_app, flash, g, jsonify, redirect, render_template, request, url_for
+from flask import Blueprint, Response, abort, current_app, flash, g, jsonify, redirect, render_template, request, send_file, url_for
+from PIL import Image, ImageOps, UnidentifiedImageError
 from .auth import admin_required, invitation_digest
 from .ansi import available_header_fonts, is_available_header_font, station_banner
 from .db import get_db
@@ -17,6 +21,86 @@ from .security import validate_csrf
 bp = Blueprint("station", __name__)
 
 HEX_COLOR_RE = re.compile(r"^#[0-9a-fA-F]{6}$")
+STATION_ICON_MAX_BYTES = 10 * 1024 * 1024
+STATION_ICON_MAX_PIXELS = 20_000_000
+STATION_ICON_SIZE = (128, 128)
+
+
+def _station_icon_path():
+    return Path(current_app.config["DATA_DIR"]) / "station_icon.png"
+
+
+@bp.get("/station-icon.png")
+def station_icon():
+    path = _station_icon_path()
+    if not path.is_file():
+        abort(404)
+    response = send_file(path, mimetype="image/png")
+    response.headers["Cache-Control"] = "no-store"
+    return response
+
+
+@bp.post("/sysop/settings/icon")
+@admin_required
+def upload_station_icon():
+    validate_csrf()
+    uploaded = request.files.get("station_icon")
+    display_station_icon = request.form.get("display_station_icon") == "on"
+    use_station_icon_for_web_app = request.form.get("use_station_icon_for_web_app") == "on"
+    has_upload = uploaded is not None and bool(uploaded.filename)
+    if not has_upload:
+        database = get_db()
+        database.execute(
+            "UPDATE station SET display_station_icon=?,use_station_icon_for_web_app=? WHERE id=1",
+            (display_station_icon, use_station_icon_for_web_app),
+        )
+        database.commit()
+        if display_station_icon and not _station_icon_path().is_file():
+            flash("Station icon display enabled. Upload an icon to show it in the masthead.", "success")
+        else:
+            flash("Station icon settings saved.", "success")
+        return redirect(url_for("station.settings") + "#station-parameters")
+    payload = uploaded.read(STATION_ICON_MAX_BYTES + 1)
+    if not payload or len(payload) > STATION_ICON_MAX_BYTES:
+        flash("Station icon must be between 1 byte and 10 MB.", "error")
+        return redirect(url_for("station.settings") + "#station-parameters")
+    try:
+        with Image.open(BytesIO(payload)) as source:
+            if source.format not in {"PNG", "JPEG", "GIF", "WEBP"}:
+                raise ValueError("Select a PNG, JPEG, GIF, or WebP image.")
+            width, height = source.size
+            if width < 1 or height < 1 or width * height > STATION_ICON_MAX_PIXELS:
+                raise ValueError("Station icon dimensions are too large.")
+            source.seek(0)
+            image = ImageOps.exif_transpose(source)
+            has_alpha = image.mode in {"RGBA", "LA"} or (
+                image.mode == "P" and "transparency" in image.info
+            )
+            image = image.convert("RGBA" if has_alpha else "RGB")
+            image = ImageOps.fit(image, STATION_ICON_SIZE, method=Image.Resampling.LANCZOS)
+            clean = Image.new(image.mode, STATION_ICON_SIZE)
+            clean.paste(image)
+    except ValueError as error:
+        flash(str(error), "error")
+        return redirect(url_for("station.settings") + "#station-parameters")
+    except (Image.DecompressionBombError, UnidentifiedImageError, OSError):
+        flash("Select a valid PNG, JPEG, GIF, or WebP image.", "error")
+        return redirect(url_for("station.settings") + "#station-parameters")
+    path = _station_icon_path()
+    temporary = path.with_name(f"station_icon_{secrets.token_hex(8)}.png")
+    try:
+        clean.save(temporary, format="PNG", optimize=True)
+        os.replace(temporary, path)
+    finally:
+        temporary.unlink(missing_ok=True)
+    database = get_db()
+    database.execute(
+        "UPDATE station SET display_station_icon=?,use_station_icon_for_web_app=? WHERE id=1",
+        (display_station_icon, use_station_icon_for_web_app),
+    )
+    database.commit()
+    flash("Station icon and web-app settings saved.", "success")
+    return redirect(url_for("station.settings") + "#station-parameters")
 
 
 def _header_color(value):
@@ -685,6 +769,7 @@ def settings():
     ).fetchall()
     event_creation_groups = {row["group_id"] for row in database.execute("SELECT group_id FROM event_creation_groups")}
     return render_template("settings.html", header_fonts=header_fonts, themes=themes.THEMES,
+                           station_icon_exists=_station_icon_path().is_file(),
                            event_creation_groups=event_creation_groups,
                            bands=bands, groups=groups, users=users,
                            memberships=memberships, effective=effective,

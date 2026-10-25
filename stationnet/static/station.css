@@ -50,6 +50,8 @@ a:hover { color: var(--magenta); }
 .system-line { display: flex; justify-content: space-between; gap: 1rem; color: var(--grey); font-family: "Courier New", monospace; font-size: .72rem; }
 .station-brand { display: grid; justify-items: center; margin: 1.5rem 0 1.2rem; color: var(--cyan); text-decoration: none; }
 .station-brand:hover { color: var(--cyan); }
+.masthead-row { display: grid; grid-template-columns: auto minmax(0,1fr) auto; align-items: center; gap: clamp(.4rem,2vw,1.25rem); width: 100%; }
+.masthead-icon { display: block; width: clamp(2.5rem,10vw,8rem); height: clamp(2.5rem,10vw,8rem); object-fit: cover; }
 .ansi-logo { max-width: 100%; margin: 0; overflow-x: auto; color: var(--masthead-color); font-family: var(--mono); font-size: clamp(.4rem, 1.55vw, .88rem); font-weight: 700; line-height: 1.08; letter-spacing: .02em; text-shadow: .13em .1em 0 var(--masthead-shadow); white-space: pre; }
 .banner-color-controls { display: flex; gap: .5rem; align-items: center; }
 .banner-color-controls select { flex: 1; }
@@ -279,6 +281,8 @@ legend { color: var(--cyan); font-size: var(--text-xs); }
 .radio, .switch { display: flex; align-items: center; gap: .6rem; margin: .45rem 0; text-transform: none; }
 .radio input, .switch input { width: auto; accent-color: var(--green); }
 .divider { margin-top: .5rem; padding: .55rem 0; color: var(--red); border-bottom: 1px solid var(--red-dim); font-size: .68rem; letter-spacing: .08em; }
+.icon-settings-heading { display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: .4rem 1rem; }
+.icon-settings-heading .switch { margin: 0; color: var(--green); letter-spacing: 0; }
 
 button, .button { display: inline-flex; justify-content: space-between; align-items: center; gap: .8rem; min-height: 2.5rem; padding: .65rem .9rem; border: 1px solid var(--green); border-radius: 0; color: var(--green-bright); background: var(--surface-button); font: inherit; font-size: .7rem; font-weight: 700; letter-spacing: .06em; text-decoration: none; cursor: pointer; }
 button:hover, .button:hover { color: #000; background: var(--green); }

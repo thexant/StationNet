@@ -39,6 +39,7 @@ def copy_app(destination):
             raise FileNotFoundError(f"MIDI distribution asset is missing: {asset}")
     destination.mkdir(parents=True, exist_ok=True)
     shutil.copy2(ROOT / "run.py", destination / "run.py")
+    shutil.copy2(ROOT / "icon.png", destination / "icon.png")
     shutil.copy2(ROOT / "requirements.txt", destination / "requirements.txt")
     shutil.copytree(ROOT / "stationnet", destination / "stationnet",
                     ignore=shutil.ignore_patterns("__pycache__", "*.pyc"))
@@ -77,6 +78,7 @@ def build_windows():
     with build_workspace() as workspace:
         subprocess.run([sys.executable, "-m", "PyInstaller", "--noconfirm", "--clean",
                         "--onedir", "--name", "StationNet", "--collect-all", "stationnet",
+                        "--add-data", f"{ROOT / 'icon.png'}{';' if sys.platform == 'win32' else ':'}.",
                         "--collect-all", "pyfiglet",
                         "--distpath", str(workspace / "frozen"), "--workpath", str(workspace / "build"),
                         "--specpath", str(workspace), str(ROOT / "run.py")], cwd=ROOT, check=True)

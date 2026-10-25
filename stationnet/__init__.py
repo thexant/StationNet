@@ -4,7 +4,7 @@ import secrets
 from datetime import timedelta
 from pathlib import Path
 from flask import Flask, g, jsonify, redirect, render_template, request, url_for
-from . import announcements, applications, archive, auth, board, broadcast, chat, db, downloads, dungeons, events, feeds, imageboard, kiwix, mail, moderation, mud, programs, radio, station, themes, users, videos
+from . import announcements, applications, archive, auth, board, broadcast, chat, db, downloads, dungeons, events, feeds, imageboard, kiwix, mail, moderation, mud, programs, pwa, radio, station, themes, users, videos
 from .ansi import station_banner
 from .realtime import DirectChatStore
 from .radio import RadioStore
@@ -45,6 +45,7 @@ def create_app(test_config=None):
     )
     app.register_blueprint(auth.bp)
     app.register_blueprint(station.bp)
+    app.register_blueprint(pwa.bp)
     app.register_blueprint(downloads.bp)
     app.register_blueprint(board.bp)
     app.register_blueprint(imageboard.bp)
@@ -76,6 +77,7 @@ def create_app(test_config=None):
     def context():
         auth.load_logged_in_user()
         g.station = db.get_station()
+        g.station_icon_exists = (data_dir / "station_icon.png").is_file()
         g.site_theme, g.masthead_theme = themes.effective(g.station, g.user)
         g.theme_background = themes.palette(g.site_theme)["black"]
         if g.station is not None and g.station["mud_procedural_enabled"]:
@@ -118,7 +120,7 @@ def create_app(test_config=None):
                 return render_template("moderation/restricted.html", message=message), 403
         if g.user is not None:
             auth.touch_presence()
-        if (g.station is None and endpoint not in {"auth.setup", "static", "downloads.index",
+        if (g.station is None and endpoint not in {"auth.setup", "static", "pwa.manifest", "pwa.icon", "pwa.service_worker", "downloads.index",
                                                    "downloads.download", "downloads.info"}
                 and not endpoint.startswith("static")):
             return redirect(url_for("auth.setup"))

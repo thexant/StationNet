@@ -14,6 +14,8 @@ CREATE TABLE IF NOT EXISTS station (
  landing_message_enabled INTEGER NOT NULL DEFAULT 1
  CHECK(landing_message_enabled IN (0,1)),
  brand_tagline TEXT NOT NULL DEFAULT 'H7/dS! // YOUR INDEPENDENT COMMUNITY STATION //',
+ display_station_icon INTEGER NOT NULL DEFAULT 0 CHECK(display_station_icon IN (0,1)),
+ use_station_icon_for_web_app INTEGER NOT NULL DEFAULT 0 CHECK(use_station_icon_for_web_app IN (0,1)),
  header_font TEXT NOT NULL DEFAULT 'small',
  header_font_size INTEGER NOT NULL DEFAULT 100,
  header_text TEXT NOT NULL DEFAULT '',
@@ -1404,6 +1406,16 @@ def _migrate_station_customization(database):
         database.execute(
             "ALTER TABLE station ADD COLUMN brand_tagline TEXT NOT NULL "
             "DEFAULT 'H7/dS! // YOUR INDEPENDENT COMMUNITY STATION //'"
+        )
+    if "display_station_icon" not in columns:
+        database.execute(
+            "ALTER TABLE station ADD COLUMN display_station_icon INTEGER NOT NULL "
+            "DEFAULT 0 CHECK(display_station_icon IN (0,1))"
+        )
+    if "use_station_icon_for_web_app" not in columns:
+        database.execute(
+            "ALTER TABLE station ADD COLUMN use_station_icon_for_web_app INTEGER NOT NULL "
+            "DEFAULT 0 CHECK(use_station_icon_for_web_app IN (0,1))"
         )
     if "header_font" not in columns:
         database.execute(

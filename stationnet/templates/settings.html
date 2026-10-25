@@ -9,6 +9,17 @@
   </button>
   <div id="station-parameters-content" data-panel-content>
   <p>Station identity: <strong>{{ g.station.name }} - [{{ g.station.callsign }}]</strong></p>
+  <form method="post" action="{{ url_for('station.upload_station_icon') }}" enctype="multipart/form-data" class="form-grid">
+    <input type="hidden" name="csrf_token" value="{{ session.csrf_token }}">
+    <div class="divider icon-settings-heading"><span>STATION ICON</span><label class="switch"><input type="checkbox" name="display_station_icon" {% if g.station.display_station_icon %}checked{% endif %}> Display station icon</label></div>
+    <label class="switch"><input type="checkbox" name="use_station_icon_for_web_app" {% if g.station.use_station_icon_for_web_app %}checked{% endif %}> Use Station icon for web-app</label>
+    {% if station_icon_exists %}<img class="profile-photo profile-photo-preview" src="{{ url_for('station.station_icon') }}" alt="Current station icon" width="128" height="128">{% endif %}
+    <label>Station icon
+      <input type="file" name="station_icon" accept="image/png,image/jpeg,image/gif,image/webp">
+      <small>PNG, JPEG, GIF, or WebP, up to 10 MB. The image is cropped and saved as a 128 × 128 PNG. Uploading another icon replaces the current one.</small>
+    </label>
+    <div class="button-row"><button>SAVE ICON SETTINGS</button></div>
+  </form>
   <form method="post" action="{{ url_for('station.settings') }}" class="form-grid" data-banner-editor data-preview-url="{{ url_for('station.banner_preview') }}">
     <input type="hidden" name="csrf_token" value="{{ session.csrf_token }}">
     <label>Station name

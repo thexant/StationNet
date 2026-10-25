@@ -4,10 +4,14 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <meta name="theme-color" content="{{ g.theme_background }}">
+  <link rel="manifest" href="{{ url_for('pwa.manifest') }}">
+  <link rel="icon" type="image/png" href="{{ url_for('pwa.icon', size=192) }}">
+  <link rel="apple-touch-icon" href="{{ url_for('pwa.icon', size=192) }}">
   <title>{% block title %}StationNet{% endblock %}{% if g.station %} :: {{ g.station.name }}{% endif %}</title>
-  <link rel="stylesheet" href="{{ url_for('static',filename='station.css',v='themes-2') }}">
+  <link rel="stylesheet" href="{{ url_for('static',filename='station.css',v='station-icons-1') }}">
   <link rel="stylesheet" href="{{ url_for('station.masthead_css') }}">
   <script src="{{ url_for('static',filename='station.js',v='themes-2') }}" defer></script>
+  <script src="{{ url_for('static',filename='pwa.js',v='1') }}" defer></script>
   <script src="{{ url_for('static',filename='feeds.js',v='1') }}" defer></script>
   <script src="{{ url_for('static',filename='radio.js',v='external-relay-1') }}" defer></script>
 </head>
@@ -16,7 +20,15 @@
   <div class="station-shell">
     <header class="station-header">
       <a class="station-brand" href="{{ url_for('station.index') if g.station else url_for('auth.setup') }}" aria-label="{{ g.station.name if g.station else 'StationNet' }} home">
+        {% if g.station and g.station.display_station_icon and g.station_icon_exists %}
+        <div class="masthead-row">
+          <img class="masthead-icon" src="{{ url_for('station.station_icon') }}" alt="" aria-hidden="true" width="128" height="128">
+          <pre class="ansi-logo" aria-hidden="true">{{ g.station_banner }}</pre>
+          <img class="masthead-icon" src="{{ url_for('station.station_icon') }}" alt="" aria-hidden="true" width="128" height="128">
+        </div>
+        {% else %}
         <pre class="ansi-logo" aria-hidden="true">{{ g.station_banner }}</pre>
+        {% endif %}
         <span class="brand-tag">{{ g.station.brand_tagline if g.station else '// YOUR COMMUNITY STATION //' }}</span>
       </a>
 
