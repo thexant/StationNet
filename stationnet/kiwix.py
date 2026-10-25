@@ -10,13 +10,14 @@ import time
 from pathlib import Path
 from xml.etree import ElementTree
 from urllib.error import HTTPError, URLError
-from urllib.parse import quote, unquote, urlencode, urljoin, urlsplit
+from urllib.parse import parse_qsl, quote, unquote, urlencode, urljoin, urlsplit
 from urllib.request import HTTPRedirectHandler, Request, build_opener
 
 from flask import Blueprint, Response, abort, current_app, g, render_template, request, url_for
 
 bp = Blueprint("kiwix", __name__, url_prefix="/wiki")
 ROOT = "/wiki/content"
+INTERACTIVE_QUERY = "stationnet-interactive"
 
 
 def find_executable(override=None):
@@ -295,6 +296,12 @@ def _proxy(path, query):
         return render_template("wiki.html", ready=False, error=error,
                                diagnostic=server.diagnostic,
                                kiwix_dir=current_app.config["KIWIX_DATA_DIR"]), 503
+    # This StationNet-only flag selects the sandboxed runtime response. Never
+    # pass it through to kiwix-serve, where it could alter an archive route or
+    # create a duplicate upstream cache entry.
+    if INTERACTIVE_QUERY in request.args:
+        query = urlencode([(key, value) for key, value in parse_qsl(query, keep_blank_values=True)
+                           if key != INTERACTIVE_QUERY])
     url = f"http://127.0.0.1:{server.port}{ROOT}/" + quote(path, safe="/@:+")
     if query:
         url += "?" + query

@@ -102,6 +102,33 @@
     });
   }
 
+  function needsInteractiveRuntime(doc) {
+    if (!doc.querySelector('script')) return false;
+    const text = `${doc.title || ''} ${doc.body?.textContent || ''}`;
+    if (/\b(?:webgl|maplibre|mapbox|openlayers|leaflet)\b/i.test(text) ||
+        /requires?\s+(?:javascript|webgl)|(?:javascript|webgl)\s+(?:is\s+)?required/i.test(text)) return true;
+    return [...doc.scripts].some(script =>
+      /(?:maplibre|mapbox|openlayers|leaflet|ol(?:\.min)?\.js)(?:[/?#.]|$)/i.test(script.src || ''));
+  }
+
+  function openInteractive(doc, sourceUrl) {
+    const source = new URL(sourceUrl);
+    source.searchParams.set('stationnet-interactive', '1');
+    const theme = document.createElement('link');
+    theme.rel = 'stylesheet';
+    theme.href = mount.dataset.themeCss;
+    shadow.append(theme);
+    const frame = document.createElement('iframe');
+    frame.className = 'wiki-interactive-frame';
+    frame.title = doc.title || 'Interactive offline map';
+    frame.setAttribute('sandbox', 'allow-scripts allow-forms allow-pointer-lock allow-downloads');
+    frame.setAttribute('referrerpolicy', 'same-origin');
+    frame.src = source.href;
+    frame.addEventListener('load', () => status.remove(), {once: true});
+    status.textContent = 'STARTING INTERACTIVE MAP…';
+    shadow.append(frame);
+  }
+
   function showHash() {
     let id;
     try { id = decodeURIComponent(location.hash.slice(1)); }
@@ -151,6 +178,11 @@
         return;
       }
       const doc = new DOMParser().parseFromString(await response.text(), 'text/html');
+      if (needsInteractiveRuntime(doc)) {
+        openInteractive(doc, response.url);
+        document.title = `${doc.title || 'Interactive Map'} :: StationNet`;
+        return;
+      }
       let base = response.url;
       const baseTag = doc.querySelector('base[href]');
       if (baseTag) {

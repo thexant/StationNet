@@ -149,11 +149,34 @@ def create_app(test_config=None):
                 "form-action 'none'; frame-ancestors 'self'"
             )
         if request.endpoint in {"kiwix.content", "kiwix.search_source"}:
-            response.headers["Content-Security-Policy"] = (
-                "default-src 'none'; script-src 'none'; style-src 'self' 'unsafe-inline'; "
-                "img-src 'self' data: blob:; media-src 'self'; font-src 'self' data:; "
-                "object-src 'none'; base-uri 'none'; frame-ancestors 'none'"
-            )
+            if request.args.get("stationnet-interactive") == "1":
+                # JavaScript-first ZIMs (notably maps) run in an opaque-origin
+                # sandbox. This retains WebGL, workers, pointer interaction and
+                # bundled assets without granting archive code access to
+                # StationNet's DOM, cookies, storage, or authenticated APIs.
+                response.headers["X-Frame-Options"] = "SAMEORIGIN"
+                response.headers["Content-Security-Policy"] = (
+                    "sandbox allow-scripts allow-forms allow-pointer-lock allow-downloads; "
+                    "default-src 'self' data: blob:; "
+                    "script-src 'self' 'unsafe-inline' 'unsafe-eval' 'wasm-unsafe-eval' blob:; "
+                    "style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; "
+                    "media-src 'self' data: blob:; font-src 'self' data:; "
+                    "connect-src 'self' data: blob:; worker-src 'self' blob:; "
+                    "child-src 'self' blob:; object-src 'none'; base-uri 'self'; "
+                    "form-action 'self'; frame-ancestors 'self'"
+                )
+            else:
+                response.headers["Content-Security-Policy"] = (
+                    "default-src 'none'; script-src 'none'; style-src 'self' 'unsafe-inline'; "
+                    "img-src 'self' data: blob:; media-src 'self'; font-src 'self' data:; "
+                    "object-src 'none'; base-uri 'none'; frame-ancestors 'none'"
+                )
+            # A sandboxed interactive document has an opaque `null` origin.
+            # Bundled map tiles and data still come only through this read-only
+            # proxy, but WebGL/fetch need CORS permission to read them.
+            if request.headers.get("Origin") == "null":
+                response.headers["Access-Control-Allow-Origin"] = "null"
+                response.headers["Vary"] = "Origin"
         if g.get("user") is not None and request.endpoint != "static":
             response.headers["Cache-Control"] = "no-store"
         return response
