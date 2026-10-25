@@ -193,3 +193,60 @@ def test_sheets_are_owner_scoped_and_share_office_vault(tmp_path):
     with app.app_context():
         row = get_db().execute("SELECT envelope FROM office_sheets WHERE id=?", (sheet_id,)).fetchone()
         assert "encrypted sheet payload tag" not in row["envelope"]
+
+
+def test_presentations_are_owner_scoped_encrypted_and_revision_checked(tmp_path):
+    app, sysop_id = _configured_app(tmp_path)
+    with app.app_context():
+        database = get_db()
+        database.execute("UPDATE station SET office_enabled=1 WHERE id=1")
+        owner_id = database.execute(
+            "INSERT INTO users(username,callsign,password_hash) VALUES(?,?,?)",
+            ("presenter", "PRS-1", "unused"),
+        ).lastrowid
+        database.commit()
+    owner, sysop = app.test_client(), app.test_client()
+    _sign_in(owner, owner_id)
+    _sign_in(sysop, sysop_id)
+    assert b"PRESENTATIONS" in owner.get("/office").data
+    assert owner.get("/office/presentations").status_code == 200
+    envelope = {
+        "v": 1,
+        "iv": base64.b64encode(b"twelve-bytes").decode(),
+        "data": base64.b64encode(b"opaque encrypted slide payload tag").decode(),
+    }
+    assert owner.post("/office/presentations/api", json={"envelope": envelope}).status_code == 400
+    created = owner.post(
+        "/office/presentations/api", json={"envelope": envelope},
+        headers={"X-CSRF-Token": "test-token"},
+    )
+    assert created.status_code == 201
+    presentation_id = created.json["id"]
+    assert owner.get("/office/presentations/api").json["presentations"][0]["envelope"] == envelope
+    assert sysop.get("/office/presentations/api").json["presentations"] == []
+    assert sysop.get(f"/office/presentations/api/{presentation_id}").status_code == 404
+    assert sysop.put(
+        f"/office/presentations/api/{presentation_id}",
+        json={"envelope": envelope, "revision": 1},
+        headers={"X-CSRF-Token": "test-token"},
+    ).status_code == 404
+    updated = owner.put(
+        f"/office/presentations/api/{presentation_id}",
+        json={"envelope": envelope, "revision": 1},
+        headers={"X-CSRF-Token": "test-token"},
+    )
+    assert updated.json["revision"] == 2
+    assert owner.put(
+        f"/office/presentations/api/{presentation_id}",
+        json={"envelope": envelope, "revision": 1},
+        headers={"X-CSRF-Token": "test-token"},
+    ).status_code == 409
+    assert sysop.delete(
+        f"/office/presentations/api/{presentation_id}",
+        headers={"X-CSRF-Token": "test-token"},
+    ).status_code == 404
+    with app.app_context():
+        row = get_db().execute(
+            "SELECT envelope FROM office_presentations WHERE id=?", (presentation_id,)
+        ).fetchone()
+        assert "opaque encrypted slide payload tag" not in row["envelope"]

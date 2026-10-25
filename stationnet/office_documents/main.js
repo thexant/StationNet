@@ -6,6 +6,7 @@ import TextAlign from '@tiptap/extension-text-align';
 import { pbkdf2Async } from '@noble/hashes/pbkdf2.js';
 import { sha256 } from '@noble/hashes/sha2.js';
 import { gcm } from '@noble/ciphers/aes.js';
+import { rememberOfficeKey, readOfficeKey, forgetOfficeKey } from '../office_vault.js';
 import { cleanHtml, importFile, exportFile } from './formats.js';
 
 const app = document.querySelector('.documents-app');
@@ -266,7 +267,8 @@ function initialize() {
       const vault = await requestJson(app.dataset.vault, { method: 'POST', body: '{}' });
       const result = await requestJson(api);
       const sheets = await requestJson(app.dataset.sheetsApi);
-      if (!result.documents.length && !sheets.sheets.length) {
+      const presentations = await requestJson(app.dataset.presentationsApi);
+      if (!result.documents.length && !sheets.sheets.length && !presentations.presentations.length) {
         const confirmRow = $('#document-confirm-row');
         if (confirmRow.hidden) {
           confirmRow.hidden = false;
@@ -280,6 +282,8 @@ function initialize() {
       key = await pbkdf2Async(sha256, textEncoder.encode(passphrase), unb64(vault.salt), { c: 210000, dkLen: 32, asyncTick: 20 });
       if (result.documents.length) decrypt(result.documents[0].envelope);
       else if (sheets.sheets.length) decrypt(sheets.sheets[0].envelope);
+      else if (presentations.presentations.length) decrypt(presentations.presentations[0].envelope);
+      rememberOfficeKey(key, csrf);
       $('#document-passphrase').value = '';
       $('#document-passphrase-confirm').value = '';
       $('#document-confirm-row').hidden = true;
@@ -299,6 +303,7 @@ function initialize() {
 
   function lock() {
     if (dirty || saving) { save(); message('Wait for the SAVED indicator before locking.'); return; }
+    forgetOfficeKey();
     key?.fill(0); key = null; documents = []; currentId = null; revision = null;
     editor.commands.setContent('<p></p>', { emitUpdate: false });
     $('#document-title').value = '';
@@ -389,4 +394,19 @@ function initialize() {
     if (keyName === 'k') { event.preventDefault(); command('link'); }
   });
   window.addEventListener('beforeunload', event => { if (dirty || saving || conflict) { event.preventDefault(); event.returnValue = ''; } });
+  (async () => {
+    key = readOfficeKey(csrf);
+    if (!key) return;
+    let badKey = false;
+    try {
+      const result = await requestJson(api);
+      if (result.documents.length) { try { decrypt(result.documents[0].envelope); } catch (error) { badKey = true; throw error; } }
+      $('#document-unlock').hidden = true; $('#document-workspace').hidden = false; $('#document-lock').hidden = false;
+      await refreshList();
+      if (documents.length) await load(documents[0].id); else await newDocument();
+    } catch {
+      key?.fill(0); key = null; if (badKey) forgetOfficeKey(); status('LOCKED');
+      $('#document-workspace').hidden = true; $('#document-unlock').hidden = false;
+    }
+  })();
 }

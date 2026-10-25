@@ -1,6 +1,7 @@
 import { pbkdf2Async } from '@noble/hashes/pbkdf2.js';
 import { sha256 } from '@noble/hashes/sha2.js';
 import { gcm } from '@noble/ciphers/aes.js';
+import { rememberOfficeKey, readOfficeKey, forgetOfficeKey } from '../office_vault.js';
 import { WorkbookModel, blankWorkbook, ROWS, COLS, cellName, columnName, keyOf, parseKey, rangeBounds } from './model.js';
 import { importWorkbook, exportWorkbook, parseDelimited } from './formats.js';
 
@@ -363,14 +364,16 @@ function initialize() {
     try {
       if (!crypto?.getRandomValues) throw new Error('Secure browser cryptography is unavailable.');
       const vault = await request(app.dataset.vault, { method: 'POST', body: '{}' });
-      const [sheets, documents] = await Promise.all([request(api), request(app.dataset.documentsApi)]);
-      if (!sheets.sheets.length && !documents.documents.length) {
+      const [sheets, documents, presentations] = await Promise.all([request(api), request(app.dataset.documentsApi), request(app.dataset.presentationsApi)]);
+      if (!sheets.sheets.length && !documents.documents.length && !presentations.presentations.length) {
         if ($('#sheets-confirm-row').hidden) { $('#sheets-confirm-row').hidden = false; $('#sheets-confirm').required = true; status('CONFIRM NEW PASSWORD', 'pending'); $('#sheets-confirm').focus(); return; }
         if ($('#sheets-confirm').value !== password) throw new Error('The new passwords do not match.');
       }
       key = await pbkdf2Async(sha256, encoder.encode(password), unb64(vault.salt), { c: 210000, dkLen: 32, asyncTick: 20 });
       if (sheets.sheets.length) decrypt(sheets.sheets[0].envelope);
       else if (documents.documents.length) decrypt(documents.documents[0].envelope);
+      else if (presentations.presentations.length) decrypt(presentations.presentations[0].envelope);
+      rememberOfficeKey(key, csrf);
       $('#sheets-password').value = ''; $('#sheets-confirm').value = ''; $('#sheets-confirm-row').hidden = true;
       $('#sheets-unlock').hidden = true; $('#sheets-workspace').hidden = false; $('#sheets-lock').hidden = false;
       await refreshList(); if (records.length) await load(records[0].id); else await newWorkbook();
@@ -378,6 +381,7 @@ function initialize() {
   }
   function lock() {
     if (dirty || saving) { save(); message('Wait for the SAVED indicator before locking.'); return; }
+    forgetOfficeKey();
     key?.fill(0); key = null; records = []; id = null; revision = null; model.load(blankWorkbook());
     $('#sheets-workspace').hidden = true; $('#sheets-unlock').hidden = false; $('#sheets-lock').hidden = true; status('LOCKED');
   }
@@ -458,4 +462,18 @@ function initialize() {
   grid.oncopy = event => { event.preventDefault(); const text = clipboardText(); lastCopy = { text, sheet: active, bounds: bounds() }; event.clipboardData.setData('text/plain', text); };
   grid.onpaste = event => { event.preventDefault(); paste(event.clipboardData.getData('text/plain')); };
   window.addEventListener('beforeunload', event => { if (dirty || saving || conflict) { event.preventDefault(); event.returnValue = ''; } });
+  (async () => {
+    key = readOfficeKey(csrf);
+    if (!key) return;
+    let badKey = false;
+    try {
+      const result = await request(api);
+      if (result.sheets.length) { try { decrypt(result.sheets[0].envelope); } catch (error) { badKey = true; throw error; } }
+      $('#sheets-unlock').hidden = true; $('#sheets-workspace').hidden = false; $('#sheets-lock').hidden = false;
+      await refreshList(); if (records.length) await load(records[0].id); else await newWorkbook();
+    } catch {
+      key?.fill(0); key = null; if (badKey) forgetOfficeKey(); status('LOCKED');
+      $('#sheets-workspace').hidden = true; $('#sheets-unlock').hidden = false;
+    }
+  })();
 }
