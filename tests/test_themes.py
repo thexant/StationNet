@@ -1,6 +1,8 @@
 import json
 from io import BytesIO
 
+import pytest
+
 from stationnet import create_app, themes
 from stationnet.db import get_db
 
@@ -91,6 +93,22 @@ def test_partial_themes_and_invalid_uploads(tmp_path):
     assert b"six-digit hex" in _import(client, json.dumps(invalid).encode()).data
     assert not (tmp_path / "themes" / "bad-css.json").exists()
     assert b"already installed" in _import(client, json.dumps(site).encode()).data
+
+
+def test_annotated_template_can_be_imported(tmp_path):
+    _, client, _, _ = _client(tmp_path)
+    template = tmp_path / "themes" / "template-theme.json"
+    document = json.loads(template.read_text(encoding="utf-8"))
+    document.update(id="annotated-theme", name="Annotated Theme", author="Theme Maker")
+    response = _import(client, json.dumps(document).encode("utf-8"))
+    assert b"Imported theme Annotated Theme" in response.data
+    saved = json.loads((tmp_path / "themes" / "annotated-theme.json").read_text(encoding="utf-8"))
+    assert set(saved["site"]) == set(themes.SITE_KEYS)
+    assert set(saved["masthead"]) == set(themes.MASTHEAD_KEYS)
+
+    document["site"]["unexpected"] = "#123456"
+    with pytest.raises(themes.ThemeError):
+        themes.parse(json.dumps(document))
 
 
 def test_remove_custom_theme_requires_confirmation_and_resets_selections(tmp_path):

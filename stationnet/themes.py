@@ -55,6 +55,14 @@ def parse(data):
         document = json.loads(data)
     except (ValueError, TypeError) as error:
         raise ThemeError("Theme must be valid UTF-8 JSON.") from error
+    # The starter file uses JSON comment fields so it can still be imported as-is.
+    # Strip only documented comment keys; other unexpected fields remain invalid.
+    if isinstance(document, dict):
+        for section, keys in (("site", SITE_KEYS), ("masthead", MASTHEAD_KEYS)):
+            values = document.get(section)
+            if isinstance(values, dict):
+                for key in keys:
+                    values.pop(f"_comment_{key}", None)
     if not isinstance(document, dict) or set(document) - {"id", "name", "author", "site", "masthead"}:
         raise ThemeError("Theme must contain only id, name, author, site, and masthead fields.")
     theme_id = document.get("id")
