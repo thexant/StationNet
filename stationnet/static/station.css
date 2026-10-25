@@ -576,7 +576,13 @@ button:focus-visible, .button:focus-visible, a:focus-visible, summary:focus-visi
 .app-canvas:focus { outline: 2px solid var(--cyan); outline-offset: 2px; }
 .app-canvas-controls { position: absolute; inset: 0; display: grid; place-items: center; pointer-events: none; background: rgba(0,0,0,.28); }
 .app-canvas-controls button { min-width: 8rem; padding: .8rem 1.2rem; pointer-events: auto; border-width: 2px; background: rgba(0,12,3,.94); font-size: .85rem; }
-.app-canvas-controls.app-canvas-gamepad { position: relative; inset: auto; display: flex; align-items: flex-end; justify-content: space-between; gap: .5rem; width: min(100%, calc(70vh * var(--app-canvas-ratio, 1))); margin-top: .45rem; background: none; touch-action: none; }
+.app-canvas-controls.app-canvas-gamepad { position: relative; inset: auto; display: flex; align-items: flex-end; justify-content: space-between; gap: .5rem; width: min(100%, calc(70vh * var(--app-canvas-ratio, 1))); min-height: 10rem; margin-top: .45rem; padding: .35rem max(.35rem, env(safe-area-inset-right)) max(.35rem, env(safe-area-inset-bottom)) max(.35rem, env(safe-area-inset-left)); box-sizing: border-box; background: none; touch-action: none; user-select: none; }
+.app-canvas-gamepad .app-touch-positioned { position: absolute; transform: translate(-50%, -50%); z-index: 1; pointer-events: auto; }
+.app-gamepad-joystick, .app-gamepad-steering { box-sizing: border-box; border: 2px solid var(--green-dim); border-radius: 50%; background: rgba(0,12,3,.78); touch-action: none; pointer-events: auto; }
+.app-gamepad-steering { border-radius: 2rem; }
+.app-gamepad-knob { position: absolute; left: 30%; top: 30%; width: 40%; height: 40%; border-radius: 50%; background: var(--green-dim); pointer-events: none; }
+@media (orientation: portrait) and (max-width: 600px) { .app-canvas-controls.app-canvas-gamepad { min-height: 12rem; } .app-canvas-gamepad button { width: clamp(2rem, 10vw, 3rem); height: clamp(2rem, 10vw, 3rem); } }
+@media (orientation: landscape) and (max-height: 520px) { .app-canvas-controls.app-canvas-gamepad { min-height: 6.5rem; } .app-canvas-gamepad button { width: clamp(1.8rem, 8vh, 2.8rem); height: clamp(1.8rem, 8vh, 2.8rem); } }
 .app-canvas-gamepad button { display: grid; place-items: center; width: clamp(2.2rem, 11vw, 3.3rem); height: clamp(2.2rem, 11vw, 3.3rem); min-width: 0; min-height: 0; margin: 0; padding: .15rem; overflow: hidden; font-size: clamp(.55rem, 2.3vw, .75rem); line-height: 1; touch-action: none; user-select: none; }
 .app-gamepad-dpad { display: grid; grid-template-columns: repeat(3, max-content); grid-template-rows: repeat(3, max-content); gap: .1rem; }
 .app-gamepad-up { grid-column: 2; grid-row: 1; }
@@ -636,6 +642,23 @@ body.application-immersive .app-canvas-controls.app-canvas-gamepad { width: 100%
 .application-return { margin: 0 1rem 1rem; }
 .application-immersive-exit { position: fixed; top: .65rem; right: .65rem; z-index: 40; color: #000; border-color: var(--amber); background: var(--amber); }
 .application-immersive-exit[hidden] { display: none; }
+.application-fullscreen-exit { position: fixed; top: max(.65rem, env(safe-area-inset-top)); right: max(.65rem, env(safe-area-inset-right)); z-index: 50; color: #000; border-color: var(--amber); background: var(--amber); }
+.application-fullscreen-exit[hidden] { display: none; }
+.application-display:fullscreen { display: flex; flex-direction: column; width: 100vw; height: 100dvh; min-height: 0; border: 0; overflow: hidden; background: var(--black); }
+.application-display:fullscreen .application-display-header,
+.application-display:fullscreen .application-compatibility,
+.application-display:fullscreen .application-status,
+.application-display:fullscreen .application-return { display: none; }
+.application-display:fullscreen .application-viewport { display: flex; flex: 1 1 auto; flex-direction: column; min-height: 0; margin: 0; border: 0; }
+.application-display:fullscreen .application-surface { display: grid; flex: 1 1 auto; align-content: center; justify-items: center; width: 100%; min-height: 0; overflow: auto; box-sizing: border-box; padding: max(.65rem, env(safe-area-inset-top)) max(.65rem, env(safe-area-inset-right)) max(.65rem, env(safe-area-inset-bottom)) max(.65rem, env(safe-area-inset-left)); }
+.application-display:fullscreen .app-canvas-wrap { --app-fullscreen-reserve: 3.5rem; width: min(100%, calc(max(6rem, calc(100dvh - var(--app-fullscreen-reserve))) * var(--app-canvas-ratio, 1))); max-width: none; justify-self: center; }
+.application-display:fullscreen .app-canvas-wrap:has(> .app-canvas-gamepad) { --app-fullscreen-reserve: clamp(10rem, 27dvh, 16rem); }
+.application-display:fullscreen .app-canvas { width: 100%; max-height: none; box-sizing: border-box; }
+.application-display:fullscreen .app-canvas-controls.app-canvas-gamepad { width: 100%; }
+body.application-immersive .application-display:fullscreen .application-surface { width: 100%; }
+body.application-immersive .application-display:fullscreen .app-canvas-wrap { --app-canvas-height: auto; width: min(100%, calc(max(6rem, calc(100dvh - var(--app-fullscreen-reserve))) * var(--app-canvas-ratio, 1))); }
+body.application-immersive .application-display:fullscreen .app-canvas { max-height: none; }
+body.application-immersive:has(.application-display:fullscreen) .application-immersive-exit { display: none; }
 
 body.application-immersive { overflow: hidden; }
 body.application-immersive .station-shell { width: 100%; height: 100dvh; padding: 0; grid-template-rows: 1fr; }

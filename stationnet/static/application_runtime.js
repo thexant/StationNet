@@ -10,6 +10,7 @@
   const framePressedKeys = new Set(), frameReleasedKeys = new Set();
   let inAnimationFrame = false;
   let gamepads = [];
+  const touchAxes = new Map();
   let randomState = 0x6d2b79f5;
   const cleanups = [];
   const storageRequests = new Map();
@@ -28,6 +29,7 @@
   const presentationHandlers = new Set();
   let pointerLockActive = false;
   let presentationMode = "standard";
+  let presentationFullscreen = false;
   const packageFiles = self.__stationnetPackageFiles;
   delete self.__stationnetPackageFiles;
   const moduleCache = new Map();
@@ -638,9 +640,19 @@
     if (typeof code !== "string" || !/^[A-Za-z0-9]{1,40}$/.test(code)) throw new TypeError("Invalid keyboard code");
     return code;
   }
+  function serializeTouchAxis(value, defaultName) {
+    if (!value) return undefined;
+    const config = value === true ? {} : value;
+    if (!config || typeof config !== "object") return undefined;
+    const numeric = value => typeof value === "number" && Number.isFinite(value) ? value : undefined;
+    return { name: typeof config.name === "string" ? config.name.slice(0, 32) : defaultName,
+      x: numeric(config.x), y: numeric(config.y), size: numeric(config.size), deadzone: numeric(config.deadzone),
+      onMove: action(config.onMove) };
+  }
   inputComponent.isDown = (code) => downKeys.has(validCode(code));
   inputComponent.wasPressed = (code) => (inAnimationFrame ? framePressedKeys : pressedKeys).has(validCode(code));
   inputComponent.wasReleased = (code) => (inAnimationFrame ? frameReleasedKeys : releasedKeys).has(validCode(code));
+  inputComponent.axis = (name = "move") => Object.freeze({ ...(touchAxes.get(String(name)) || { x: 0, y: 0 }) });
   inputComponent.gamepad = (index = 0, settings) => {
     const deadzone = options(settings).deadzone ?? 0;
     if (!Number.isInteger(index) || index < 0 || index > 3 ||
@@ -801,11 +813,19 @@
       return identified({
         type: "canvas", width, height, commands: Array.isArray(commands) ? commands : [],
         action: action(opts.onPointer), hover: Boolean(opts.hover), label: String(opts.label || "Game playfield"),
-        touchLayout: opts.touchLayout === "gamepad" ? "gamepad" : undefined,
+        touchLayout: opts.touchLayout === "gamepad" ? "gamepad" :
+          opts.touchLayout && typeof opts.touchLayout === "object" && opts.touchLayout.type === "gamepad" ? {
+            type: "gamepad", dpad: opts.touchLayout.dpad !== false,
+            joystick: serializeTouchAxis(opts.touchLayout.joystick, "move"),
+            steering: serializeTouchAxis(opts.touchLayout.steering, "steer")
+          } : undefined,
         controls: Array.isArray(opts.controls) ? opts.controls.slice(0, 4).map((control) => ({
           label: String(control && control.label || "Action"), action: action(control && control.onClick), pressAction: action(control && control.onPress), releaseAction: action(control && control.onRelease),
           variant: control && control.variant === "secondary" ? "secondary" : undefined,
-          code: typeof control?.code === "string" ? control.code.slice(0, 40) : undefined
+          code: typeof control?.code === "string" ? control.code.slice(0, 40) : undefined,
+          x: typeof control?.x === "number" && Number.isFinite(control.x) ? control.x : undefined,
+          y: typeof control?.y === "number" && Number.isFinite(control.y) ? control.y : undefined,
+          size: typeof control?.size === "number" && Number.isFinite(control.size) ? control.size : undefined
         })) : undefined
       }, opts);
     },
@@ -1058,7 +1078,10 @@
     presentation: Object.freeze({
       enterImmersive() { return capability("presentation-enter-immersive", {}); },
       exitImmersive() { return capability("presentation-exit-immersive", {}); },
+      requestFullscreen() { return capability("presentation-request-fullscreen", {}); },
+      exitFullscreen() { return capability("presentation-exit-fullscreen", {}); },
       get mode() { return presentationMode; },
+      get fullscreen() { return presentationFullscreen; },
       onChange(handler) {
         if (typeof handler !== "function") throw new TypeError("A presentation change handler is required");
         presentationHandlers.add(handler);
@@ -1116,7 +1139,13 @@
     }
     if (message.type === "presentation-event") {
       presentationMode = message.mode === "immersive" ? "immersive" : "standard";
-      presentationHandlers.forEach((handler) => Promise.resolve().then(() => handler(presentationMode)).catch(fail));
+      presentationFullscreen = Boolean(message.fullscreen);
+      const viewport = message.viewport && typeof message.viewport === "object" ? Object.freeze({
+        width: Number(message.viewport.width) || 0, height: Number(message.viewport.height) || 0,
+        orientation: message.viewport.orientation === "landscape" ? "landscape" : "portrait",
+        mode: presentationMode, fullscreen: presentationFullscreen
+      }) : undefined;
+      presentationHandlers.forEach((handler) => Promise.resolve().then(() => handler(presentationMode, viewport)).catch(fail));
       return;
     }
     if (message.type === "input-key") {
@@ -1127,6 +1156,12 @@
       } else {
         if (downKeys.delete(message.code)) releasedKeys.add(message.code);
       }
+      return;
+    }
+    if (message.type === "input-axis") {
+      if (typeof message.name !== "string" || !/^[A-Za-z0-9_-]{1,32}$/.test(message.name)) return;
+      const clamp = value => typeof value === "number" && Number.isFinite(value) ? Math.max(-1, Math.min(1, value)) : 0;
+      touchAxes.set(message.name, { x: clamp(message.x), y: clamp(message.y) });
       return;
     }
     if (message.type === "animation-frame") {
@@ -1264,8 +1299,8 @@
     capabilityRequests.forEach(({ reject }) => reject(new Error("Application terminated")));
     capabilityRequests.clear();
     pointerLockChangeHandlers.clear(); pointerLockMoveHandlers.clear(); presentationHandlers.clear();
-    pointerLockActive = false; presentationMode = "standard";
-    downKeys.clear(); pressedKeys.clear(); releasedKeys.clear();
+    pointerLockActive = false; presentationMode = "standard"; presentationFullscreen = false;
+    downKeys.clear(); pressedKeys.clear(); releasedKeys.clear(); touchAxes.clear();
     framePressedKeys.clear(); frameReleasedKeys.clear(); inAnimationFrame = false; gamepads = [];
     animations.clear();
     actions.clear();

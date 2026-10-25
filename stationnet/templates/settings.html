@@ -1,7 +1,7 @@
 {% extends 'base.html' %}
 {% block title %}SYSOP Settings{% endblock %}
 {% block content %}
-<nav class="subnav settings-jump-nav" aria-label="Settings sections"><a href="#station-parameters">STATION</a><a href="#access-policy">ACCESS</a><a href="#events-service">EVENTS</a><a href="#user-feeds">USER FEEDS</a><a href="#office-suite">OFFICE</a><a href="#videos-service">VIDEOS</a><a href="#imageboard-service">IMAGEBOARD</a><a href="#kiwix-service">WIKI</a><a href="#mud-service">MUD</a><a href="#mud-daily">DAILY MUD</a><a href="#radio-storage">RADIO STORAGE</a><a href="#radio-spectrum">SPECTRUM</a><a href="#broadcast-frequencies">FREQUENCIES</a><a href="#radio-permissions">PERMISSIONS</a><a href="#radio-users">USERS</a><a href="{{ url_for('moderation.dashboard') }}">MODERATION</a><a href="{{ url_for('application_admin.manage') }}">GAMES + APPS</a></nav>
+<nav class="subnav settings-jump-nav" aria-label="Settings sections"><a href="#station-parameters">STATION</a><a href="#access-policy">ACCESS</a><a href="#events-service">EVENTS</a><a href="#user-feeds">USER FEEDS</a><a href="#office-suite">OFFICE</a><a href="#videos-service">VIDEOS</a><a href="#imageboard-service">IMAGEBOARD</a><a href="#kiwix-service">WIKI</a><a href="#mud-service">MUD</a><a href="#dungeon-themes">DUNGEON THEMES</a><a href="#mud-daily">DAILY MUD</a><a href="#radio-storage">RADIO STORAGE</a><a href="#radio-spectrum">SPECTRUM</a><a href="#broadcast-frequencies">FREQUENCIES</a><a href="#radio-permissions">PERMISSIONS</a><a href="#radio-users">USERS</a><a href="{{ url_for('moderation.dashboard') }}">MODERATION</a><a href="{{ url_for('application_admin.manage') }}">GAMES + APPS</a></nav>
 <section class="narrow terminal-card collapsible-panel" id="station-parameters" data-collapsible-panel data-panel-key="sysop-station-parameters">
   <button type="button" class="collapsible-panel-toggle" data-panel-toggle aria-expanded="true" aria-controls="station-parameters-content">
     <span class="collapsible-panel-heading"><span class="eyebrow">SYSOP CONTROL / STATION PARAMETERS</span><span class="collapsible-panel-title page-title" role="heading" aria-level="1">Station settings</span></span>
@@ -46,14 +46,14 @@
     <div class="divider">STATION THEMES</div>
     <label>Site-wide theme
       <select name="site_theme" data-theme-selector="site">
-        {% for id, theme in themes.items() %}<option value="{{ id }}" {% if g.station.site_theme==id %}selected{% endif %}>{{ theme[0] }}</option>{% endfor %}
+        {% for id, theme in site_themes.items() %}<option value="{{ id }}" {% if g.station.site_theme==id %}selected{% endif %}>{{ '[CUSTOM] ' if theme.custom else '' }}{{ theme.name }}{% if theme.custom %} — {{ theme.author }}{% endif %}</option>{% endfor %}
       </select>
       <small>Sets the station palette for pages, navigation, panels, controls, and interactive states. Members can override it.</small>
     </label>
     <div class="theme-preview theme-swatch--{{ g.station.site_theme }}" data-theme-preview="site" aria-hidden="true"><span>STATION</span><strong>PREVIEW PANEL</strong><em>ACTIVE LINK</em><b>BUTTON</b></div>
     <label>Masthead theme
       <select name="masthead_theme" data-theme-selector="masthead">
-        {% for id, theme in themes.items() %}<option value="{{ id }}" {% if g.station.masthead_theme==id %}selected{% endif %}>{{ theme[0] }}</option>{% endfor %}
+        {% for id, theme in masthead_themes.items() %}<option value="{{ id }}" {% if g.station.masthead_theme==id %}selected{% endif %}>{{ '[CUSTOM] ' if theme.custom else '' }}{{ theme.name }}{% if theme.custom %} — {{ theme.author }}{% endif %}</option>{% endfor %}
       </select>
       <small>Sets the ASCII masthead colour and shadow independently of the site palette.</small>
     </label>
@@ -102,6 +102,15 @@
     <p><a href="{{ url_for('announcements.index') }}">MANAGE STATION ANNOUNCEMENTS</a></p>
     <p><a href="{{ url_for('application_admin.manage') }}">MANAGE GAMES AND APPS</a></p>
     <div class="button-row"><button>SAVE PARAMETERS</button><button type="reset" class="secondary">CANCEL CHANGES</button><button type="button" class="secondary" data-banner-restore>RESTORE BANNER DEFAULT</button></div>
+  </form>
+  <form method="post" action="{{ url_for('station.import_theme') }}" enctype="multipart/form-data" class="form-grid">
+    <input type="hidden" name="csrf_token" value="{{ session.csrf_token }}">
+    <div class="divider">IMPORT COLOUR THEME</div>
+    <label>Theme JSON file
+      <input type="file" name="theme_file" accept=".json,application/json" required>
+      <small>Up to 16 KB. Start with data/themes/template-theme.json; copy it, set a unique ID, name, and author, then edit the site colours, masthead colours, or both.</small>
+    </label>
+    <div class="button-row"><button>IMPORT THEME</button></div>
   </form>
   </div>
 </section>
@@ -302,6 +311,17 @@
     <label>Portal room description<textarea name="mud_portal_description" maxlength="2000" required>{{ mud_portal.description }}</textarea><small>The gameplay explanation and gateway controls are system-managed and cannot be edited here or in the world builder.</small></label>
     <button>SAVE MUD MODES</button>
   </form>
+  <section id="dungeon-themes" aria-labelledby="dungeon-themes-heading">
+    <h3 id="dungeon-themes-heading">Dungeon Themes</h3>
+    <p class="muted">Copy the template in <code>data/dungeons/</code>, set a unique ID, name, and author, then import the JSON file. New runs can use it immediately.</p>
+    <p><a href="{{ url_for('station.download_dungeon_template') }}">DOWNLOAD DUNGEON TEMPLATE</a></p>
+    <form method="post" action="{{ url_for('station.import_dungeon') }}" enctype="multipart/form-data" class="form-grid">
+      <input type="hidden" name="csrf_token" value="{{ session.csrf_token }}">
+      <label>Dungeon theme file<input type="file" name="dungeon_file" accept=".json,application/json" required></label>
+      <button>IMPORT DUNGEON</button>
+    </form>
+    <p class="muted">Available themes: {% for theme in mud_daily_themes %}{{ theme.name }} ({{ theme.id }}@{{ theme.version }}){% if theme.author %} by {{ theme.author }}{% endif %}{{ ', ' if not loop.last }}{% else %}none{% endfor %}</p>
+  </section>
   </div>
 </section>
 

@@ -37,6 +37,7 @@ def create_app(test_config=None):
         app.config.update(test_config)
     kiwix.init_app(app)
     db.init_app(app)
+    themes.init_app(app)
     dungeons.init_app(app)
     app.extensions["direct_chat"] = DirectChatStore()
     app.extensions["radio"] = RadioStore()

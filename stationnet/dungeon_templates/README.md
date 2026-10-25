@@ -1,7 +1,10 @@
 # StationNet dungeon theme authoring
 
-Dungeon themes are portable UTF-8 JSON packages. Copy `starter-theme.json`,
-replace its bracketed placeholders, and keep authored text and data in the file.
+Dungeon themes are portable UTF-8 JSON packages. The station creates
+`<STATIONNET_DATA>/dungeons/` with `_template.json` and `README.md`.
+Copy `_template.json` to a new filename, replace its bracketed placeholders,
+and keep authored text and data in the file. Set a unique `id`, a `name`, and
+an `author` before importing.
 StationNet does not invent content or execute theme scripts.
 
 The bundled `generic-fantasy-dungeon.json` is the conventional default starter
@@ -107,8 +110,10 @@ traditional world.
    Embedded-only themes pass this check on a station with no custom world
    definitions. The option additionally verifies any shared `definition_id` or
    `item_definition_id` references.
-3. Copy the JSON file to `<STATIONNET_DATA>/dungeon_themes/` (normally
-   `data/dungeon_themes/`). Theme discovery is live.
+3. Import the JSON file in SYSOP Settings → MUD service → Dungeon Themes, or
+   copy it to `<STATIONNET_DATA>/dungeons/` (normally `data/dungeons/`).
+   Theme discovery is live, so new runs need no server restart. The
+   `_template.json` file itself is ignored until copied under a new name.
 4. Inspect and preview it:
 
    `flask --app stationnet:create_app dungeon themes`

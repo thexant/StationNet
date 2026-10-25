@@ -12,6 +12,7 @@
     </div>
     <div class="application-display-actions">
       {% if application.runnable %}<button type="button" class="secondary" data-app-immersive aria-pressed="false">IMMERSIVE MODE</button>{% endif %}
+      {% if application.runnable %}<button type="button" class="secondary" data-app-fullscreen aria-pressed="false">FULLSCREEN</button>{% endif %}
       <a class="button secondary" href="{{ url_for('applications.index') }}">&lt; PROGRAM MANAGER</a>
     </div>
   </header>
@@ -41,7 +42,7 @@
       title="{{ application.name }} isolated runtime"
       aria-hidden="true" tabindex="-1"
       sandbox="allow-scripts"
-      data-runtime-src="{{ url_for('applications.runtime', slug=application.slug, v='graphics-1') }}"
+      data-runtime-src="{{ url_for('applications.runtime', slug=application.slug, v='fullscreen-1') }}"
       src="about:blank"></iframe>
     {% else %}
     <div class="application-status">PROGRAM STATUS / PLACEHOLDER</div>
@@ -59,8 +60,10 @@
     {% endif %}
   </div>
 
+  {% if application.runnable %}<button type="button" class="application-fullscreen-exit" data-app-fullscreen-exit hidden aria-label="Exit browser fullscreen">EXIT FULLSCREEN</button>{% endif %}
+
   <a class="button application-return" href="{{ url_for('applications.index') }}">&lt; RETURN TO PROGRAM MANAGER</a>
 </section>
 {% if application.runnable %}<button type="button" class="application-immersive-exit" data-app-immersive-exit hidden aria-label="Exit immersive application mode">EXIT IMMERSIVE</button>{% endif %}
-{% if application.runnable %}<script src="{{ url_for('static', filename='application_host.js', v='graphics-1') }}" defer></script>{% endif %}
+{% if application.runnable %}<script src="{{ url_for('static', filename='application_host.js', v='fullscreen-1') }}" defer></script>{% endif %}
 {% endblock %}

@@ -1,0 +1,24 @@
+{
+  "id": "your-theme-id",
+  "name": "Your Theme Name",
+  "author": "Your Name",
+  "site": {
+    "green": "#00ed45",
+    "green-bright": "#71ff8a",
+    "green-dim": "#008d31",
+    "cyan": "#00d8cf",
+    "magenta": "#d829be",
+    "amber": "#e6a431",
+    "red": "#ff3237",
+    "red-dim": "#7b1118",
+    "grey": "#8b8b86",
+    "white": "#d8d8cf",
+    "black": "#000000",
+    "field": "#030703",
+    "button": "#001b08"
+  },
+  "masthead": {
+    "masthead": "#00d8cf",
+    "masthead-shadow": "#d829be"
+  }
+}

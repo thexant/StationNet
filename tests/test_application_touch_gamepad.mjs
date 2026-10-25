@@ -6,9 +6,9 @@ const protocol = "stationnet-app-v1";
 const runtimeSource = readFileSync(new URL("../stationnet/static/application_runtime.js", import.meta.url), "utf8");
 const hostSource = readFileSync(new URL("../stationnet/static/application_host.js", import.meta.url), "utf8");
 
-const runtimeMessages = [];
+const runtimeMessages = [], workerListeners = new Map();
 const worker = { __stationnetPackageFiles: {}, postMessage(message) { runtimeMessages.push(message); },
-  addEventListener() {}, atob, TextDecoder, Uint8Array, setTimeout, clearTimeout };
+  addEventListener(type, callback) { workerListeners.set(type, callback); }, atob, TextDecoder, Uint8Array, setTimeout, clearTimeout };
 worker.self = worker;
 vm.runInNewContext(runtimeSource, worker);
 const canvas = worker.StationNet.canvas(320, 200, [], { touchLayout: "gamepad",
@@ -22,7 +22,7 @@ assert.equal(worker.StationNet.canvas(320, 200, [], { touchLayout: "unknown" }).
 class Element {
   constructor(tag) {
     this.tagName = tag.toUpperCase(); this.children = []; this.dataset = {}; this.listeners = new Map();
-    this.className = ""; this.style = { setProperty() {} };
+    this.className = ""; this.style = { setProperty() {}, getPropertyValue() { return "1.6"; } };
     this.classList = { contains: name => this.className.split(" ").includes(name),
       add: name => { this.className += ` ${name}`; } };
   }
@@ -54,22 +54,28 @@ class Element {
   }
   setAttribute() {}
   setPointerCapture() {}
+  getBoundingClientRect() { return { left: 0, top: 0, width: 320, height: 200 }; }
+  contains(node) { return this === node || this.children.some(child => child.contains(node)); }
   getContext() { return { clearRect() {}, fillRect() {}, save() {}, beginPath() {}, rect() {}, clip() {}, restore() {} }; }
 }
 
 function makeHost(touch) {
-  const listeners = new Map(), sent = [];
+  const listeners = new Map(), sent = [], timers = new Map(); let nextTimer = 1;
   const frame = { dataset: {}, contentWindow: { postMessage(message) { sent.push(message); } }, remove() {} };
   const surface = new Element("div"), status = {};
   const document = { hidden: false, hasFocus: () => true, addEventListener() {},
     createElement: tag => new Element(tag), createDocumentFragment: () => new Element("fragment"),
     querySelector(selector) { return selector === "[data-app-runtime]" ? frame :
       selector === "[data-app-surface]" ? surface : selector === "[data-app-status]" ? status : null; } };
-  const host = { document, window: {}, navigator: { maxTouchPoints: touch ? 5 : 0, userAgent: "test" },
+  const viewportWindow = { innerWidth: 390, innerHeight: 844 };
+  surface.clientWidth = 390;
+  const host = { document, window: viewportWindow, navigator: { maxTouchPoints: touch ? 5 : 0, userAgent: "test" },
     crypto: { randomUUID: () => "test-id" }, atob, Uint8Array,
-    setTimeout: () => 1, clearTimeout() {}, addEventListener(type, callback) { listeners.set(type, callback); } };
+    setTimeout(callback, delay) { const id = nextTimer++; timers.set(id, { callback, delay }); return id; },
+    clearTimeout(id) { timers.delete(id); }, addEventListener(type, callback) { listeners.set(type, callback); } };
   vm.runInNewContext(hostSource, host);
-  return { surface, sent, listeners, document,
+  return { surface, sent, listeners, document, viewportWindow,
+    advance(delay) { for (const [id, timer] of [...timers]) if (timer.delay <= delay) { timers.delete(id); timer.callback(); } },
     send(data) { listeners.get("message")({ source: frame.contentWindow, data: { protocol, ...data } }); } };
 }
 
@@ -129,6 +135,14 @@ desktop.send({ type: "render", mode: "replace", components: [{ type: "canvas", w
   commands: [], controls: [{ label: "Play", action: "play" }] }] });
 assert.equal(desktop.surface.querySelector(".app-canvas-controls").className, "app-canvas-controls");
 assert.equal(desktop.surface.querySelectorAll("button").length, 1);
+desktop.send({ type: "render", mode: "replace", components: [{ type: "canvas", width: 320,
+  height: 200, commands: [], action: "mouse", hover: true }] });
+const mouse = desktop.surface.querySelector("canvas");
+mouse.fire("pointermove", { pointerId: 9, pointerType: "mouse", clientX: 12, clientY: 16, buttons: 0 });
+mouse.fire("pointerdown", { pointerId: 9, pointerType: "mouse", clientX: 12, clientY: 16 });
+mouse.fire("pointerup", { pointerId: 9, pointerType: "mouse", clientX: 12, clientY: 16 });
+assert.deepEqual(desktop.sent.filter(item => item.action === "mouse").map(item => item.phase),
+  ["move", "start", "end", "gesture"]);
 
 const capped = makeHost(true);
 capped.send({ type: "render", mode: "replace", components: Array.from({ length: 17 }, () =>
@@ -148,5 +162,65 @@ mixedButton.fire("pointerup", { pointerId: 11 });
 assert.deepEqual(mixed.sent.filter(item => item.type === "input-key").map(({ down }) => down), [true]);
 physical("keyup");
 assert.deepEqual(mixed.sent.filter(item => item.type === "input-key").map(({ down }) => down), [true, false]);
+
+const gestures = makeHost(true);
+gestures.send({ type: "render", mode: "replace", components: [{ type: "canvas", id: "field",
+  width: 320, height: 200, commands: [], action: "pointer-action" }] });
+const field = gestures.surface.querySelector("canvas");
+const pointer = (type, pointerId, x, y) => field.fire(type, { pointerId, pointerType: "touch", clientX: x, clientY: y });
+pointer("pointerdown", 21, 10, 10);
+pointer("pointerdown", 22, 30, 10);
+pointer("pointermove", 22, 50, 10);
+pointer("pointerup", 21, 10, 10);
+pointer("pointercancel", 22, 50, 10);
+const events = gestures.sent.filter(item => item.action === "pointer-action");
+assert.equal(events.find(item => item.phase === "start").pointerId, 21);
+assert.equal(events.find(item => item.gesture === "pinch" && item.scale > 1).scale, 2);
+assert.ok(events.some(item => item.phase === "cancel" && item.pointerId === 22));
+pointer("pointerdown", 23, 5, 5); pointer("pointerup", 23, 5, 5);
+assert.ok(gestures.sent.some(item => item.gesture === "tap"));
+pointer("pointerdown", 24, 5, 5); gestures.advance(500); pointer("pointerup", 24, 5, 5);
+assert.ok(gestures.sent.some(item => item.gesture === "longpress"));
+pointer("pointerdown", 25, 5, 5); pointer("pointermove", 25, 100, 5); pointer("pointerup", 25, 100, 5);
+assert.ok(gestures.sent.some(item => item.gesture === "drag" && item.pointerId === 25));
+assert.ok(gestures.sent.some(item => item.gesture === "swipe" && item.direction === "right"));
+pointer("pointerdown", 26, 5, 5); gestures.document.hidden = true; gestures.listeners.get("blur")();
+assert.ok(gestures.sent.some(item => item.phase === "cancel" && item.pointerId === 26));
+
+const analogConfig = worker.StationNet.canvas(320, 200, [], { id: "game", touchLayout: {
+  type: "gamepad", dpad: false, joystick: { name: "move", size: 96, x: 20, y: 50 },
+  steering: { name: "steer", size: 90 }
+}, controls: [{ label: "Fire", code: "KeyZ", x: 80, y: 35, size: 60 }] });
+assert.equal(analogConfig.touchLayout.joystick.size, 96);
+assert.equal(analogConfig.controls[0].x, 80);
+const analog = makeHost(true);
+analog.send({ type: "render", mode: "replace", components: [analogConfig] });
+const stick = analog.surface.querySelector(".app-gamepad-joystick");
+const steering = analog.surface.querySelector(".app-gamepad-steering");
+assert.ok(stick && steering);
+stick.fire("pointerdown", { pointerId: 41, clientX: 250, clientY: 100 });
+steering.fire("pointerdown", { pointerId: 42, clientX: 0, clientY: 100 });
+analog.send({ type: "render", mode: "update", target: "game", components: [
+  { type: "canvas", width: 320, height: 200, commands: [] }] });
+assert.equal(analog.surface.querySelector(".app-gamepad-joystick"), stick);
+assert.ok(analog.sent.some(item => item.type === "input-axis" && item.name === "move" && item.x > 0));
+assert.ok(analog.sent.some(item => item.type === "input-axis" && item.name === "steer" && item.x < 0));
+assert.ok(analog.sent.some(item => item.type === "input-key" && item.code === "ArrowRight" && item.down));
+assert.ok(analog.sent.some(item => item.type === "input-key" && item.code === "ArrowLeft" && item.down));
+analog.document.hidden = true; analog.listeners.get("blur")();
+assert.equal(analog.sent.filter(item => item.type === "input-axis" && item.name === "move").at(-1).x, 0);
+assert.equal(analog.sent.filter(item => item.type === "input-key" && item.down === false).length, 2);
+analog.send({ type: "capability", operation: "viewport", request: "portrait" });
+assert.equal(analog.sent.at(-1).value.orientation, "portrait");
+analog.viewportWindow.innerWidth = 844; analog.viewportWindow.innerHeight = 390;
+analog.surface.clientWidth = 844;
+analog.send({ type: "capability", operation: "viewport", request: "landscape" });
+assert.equal(analog.sent.at(-1).value.orientation, "landscape");
+assert.equal(analog.sent.at(-1).value.width, 812);
+
+workerListeners.get("message")({ data: { protocol, type: "input-axis", name: "move", x: 0.7, y: -0.3 } });
+assert.equal(worker.StationNet.input.axis("move").x, 0.7);
+workerListeners.get("message")({ data: { protocol, type: "input-key", code: "ArrowRight", down: true } });
+assert.equal(worker.StationNet.input.isDown("ArrowRight"), true);
 
 console.log("application touch gamepad checks passed");

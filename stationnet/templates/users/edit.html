@@ -28,18 +28,18 @@
     <input type="hidden" name="csrf_token" value="{{ session.csrf_token }}">
     <label>Site-wide theme
       <select name="site_theme" data-theme-selector="site">
-        <option value="" {% if not g.user.site_theme %}selected{% endif %}>Station default ({{ themes[g.station.site_theme][0] }})</option>
-        {% for id, theme in themes.items() %}<option value="{{ id }}" {% if g.user.site_theme==id %}selected{% endif %}>{{ theme[0] }}</option>{% endfor %}
+        <option value="" {% if not g.user.site_theme %}selected{% endif %}>Station default ({{ site_themes[station_theme_defaults[0]].name }}{% if site_themes[station_theme_defaults[0]].custom %} [CUSTOM]{% endif %})</option>
+        {% for id, theme in site_themes.items() %}<option value="{{ id }}" {% if g.user.site_theme==id %}selected{% endif %}>{{ '[CUSTOM] ' if theme.custom else '' }}{{ theme.name }}{% if theme.custom %} — {{ theme.author }}{% endif %}</option>{% endfor %}
       </select>
     </label>
-    <div class="theme-preview theme-swatch--{{ g.user.site_theme or g.station.site_theme }}" data-theme-preview="site" data-inherit-theme="{{ g.station.site_theme }}" aria-hidden="true"><span>STATION</span><strong>PREVIEW PANEL</strong><em>ACTIVE LINK</em><b>BUTTON</b></div>
+    <div class="theme-preview theme-swatch--{{ g.site_theme }}" data-theme-preview="site" data-inherit-theme="{{ station_theme_defaults[0] }}" aria-hidden="true"><span>STATION</span><strong>PREVIEW PANEL</strong><em>ACTIVE LINK</em><b>BUTTON</b></div>
     <label>Masthead theme
       <select name="masthead_theme" data-theme-selector="masthead">
-        <option value="" {% if not g.user.masthead_theme %}selected{% endif %}>Station default ({{ themes[g.station.masthead_theme][0] }})</option>
-        {% for id, theme in themes.items() %}<option value="{{ id }}" {% if g.user.masthead_theme==id %}selected{% endif %}>{{ theme[0] }}</option>{% endfor %}
+        <option value="" {% if not g.user.masthead_theme %}selected{% endif %}>Station default ({{ masthead_themes[station_theme_defaults[1]].name }}{% if masthead_themes[station_theme_defaults[1]].custom %} [CUSTOM]{% endif %})</option>
+        {% for id, theme in masthead_themes.items() %}<option value="{{ id }}" {% if g.user.masthead_theme==id %}selected{% endif %}>{{ '[CUSTOM] ' if theme.custom else '' }}{{ theme.name }}{% if theme.custom %} — {{ theme.author }}{% endif %}</option>{% endfor %}
       </select>
     </label>
-    <div class="theme-preview theme-preview-masthead theme-swatch--{{ g.user.masthead_theme or g.station.masthead_theme }}" data-theme-preview="masthead" data-inherit-theme="{{ g.station.masthead_theme }}" aria-hidden="true"><strong>STATIONNET</strong><span>// MASTHEAD SIGNAL //</span></div>
+    <div class="theme-preview theme-preview-masthead theme-swatch--{{ g.masthead_theme }}" data-theme-preview="masthead" data-inherit-theme="{{ station_theme_defaults[1] }}" aria-hidden="true"><strong>STATIONNET</strong><span>// MASTHEAD SIGNAL //</span></div>
     <div class="button-row"><button>SAVE THEME PREFERENCES</button></div>
   </form>
 </section>

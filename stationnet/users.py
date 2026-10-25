@@ -262,7 +262,9 @@ def edit_profile(user_id):
                 _cleanup_orphaned_profile_photos(database)
             flash("Profile updated.", "success")
             return redirect(url_for("users.profile", user_id=user_id))
-    return render_template("users/edit.html", profile=profile_user, themes=themes.THEMES)
+    return render_template("users/edit.html", profile=profile_user,
+                           site_themes=themes.options("site"), masthead_themes=themes.options("masthead"),
+                           station_theme_defaults=themes.effective(g.station, None))
 
 
 @bp.post("/<int:user_id>/themes")
@@ -273,8 +275,8 @@ def save_themes(user_id):
     validate_csrf()
     site_theme = request.form.get("site_theme", "")
     masthead_theme = request.form.get("masthead_theme", "")
-    if ((site_theme and not themes.valid(site_theme)) or
-            (masthead_theme and not themes.valid(masthead_theme))):
+    if ((site_theme and not themes.valid(site_theme, "site")) or
+            (masthead_theme and not themes.valid(masthead_theme, "masthead"))):
         flash("Select valid theme preferences.", "error")
     else:
         database = get_db()

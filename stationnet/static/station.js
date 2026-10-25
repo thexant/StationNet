@@ -164,7 +164,7 @@ for(const selector of document.querySelectorAll("[data-theme-selector]")){
   if(!preview)continue;
   const update=()=>{
     const id=selector.value||preview.dataset.inheritTheme||"cyan";
-    preview.className=preview.className.replace(/theme-swatch--[a-z-]+/g,"").trim()+` theme-swatch--${id}`;
+    preview.className=preview.className.replace(/theme-swatch--[a-z0-9-]+/g,"").trim()+` theme-swatch--${id}`;
   };
   selector.addEventListener("change",update);
   selector.form?.addEventListener("reset",()=>setTimeout(update));

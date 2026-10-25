@@ -103,6 +103,38 @@ def upload_station_icon():
     return redirect(url_for("station.settings") + "#station-parameters")
 
 
+@bp.post("/sysop/settings/theme")
+@admin_required
+def import_theme():
+    validate_csrf()
+    uploaded = request.files.get("theme_file")
+    if uploaded is None or not uploaded.filename:
+        flash("Choose a JSON theme file to import.", "error")
+        return redirect(url_for("station.settings") + "#station-parameters")
+    payload = uploaded.read(themes.MAX_THEME_BYTES + 1)
+    if not payload or len(payload) > themes.MAX_THEME_BYTES:
+        flash("Theme file must be between 1 byte and 16 KB.", "error")
+        return redirect(url_for("station.settings") + "#station-parameters")
+    try:
+        document = themes.parse(payload.decode("utf-8"))
+    except (UnicodeError, themes.ThemeError) as error:
+        flash(str(error) if isinstance(error, themes.ThemeError) else "Theme must be valid UTF-8 JSON.", "error")
+        return redirect(url_for("station.settings") + "#station-parameters")
+    if document["id"] in themes.custom_themes():
+        flash("A custom theme with that ID is already installed.", "error")
+        return redirect(url_for("station.settings") + "#station-parameters")
+    path = themes.directory() / f"{document['id']}.json"
+    try:
+        with path.open("x", encoding="utf-8") as target:
+            json.dump(document, target, indent=2)
+            target.write("\n")
+    except FileExistsError:
+        flash("A theme file with that ID already exists.", "error")
+        return redirect(url_for("station.settings") + "#station-parameters")
+    flash(f"Imported theme {document['name']} by {document['author']}.", "success")
+    return redirect(url_for("station.settings") + "#station-parameters")
+
+
 def _header_color(value):
     """Return a safe configured CSS color, or the theme's normal cyan."""
     return value if isinstance(value, str) and HEX_COLOR_RE.fullmatch(value) else ""
@@ -408,6 +440,61 @@ def mud_settings():
     return redirect(url_for("station.settings") + "#mud-service")
 
 
+@bp.post("/sysop/settings/dungeons/import")
+@admin_required
+def import_dungeon():
+    """Validate and install a playable theme for subsequent dungeon runs."""
+    validate_csrf()
+    destination = url_for("station.settings") + "#dungeon-themes"
+    uploaded = request.files.get("dungeon_file")
+    if uploaded is None or not uploaded.filename or not uploaded.filename.lower().endswith(".json"):
+        flash("Choose a JSON dungeon theme file to import.", "error")
+        return redirect(destination)
+    payload = uploaded.read(dungeons.MAX_THEME_BYTES + 1)
+    if not payload or len(payload) > dungeons.MAX_THEME_BYTES:
+        flash("Dungeon theme must be between 1 byte and 1 MB.", "error")
+        return redirect(destination)
+    try:
+        document = json.loads(payload.decode("utf-8"))
+    except (UnicodeError, json.JSONDecodeError):
+        flash("Dungeon theme must be valid UTF-8 JSON.", "error")
+        return redirect(destination)
+    errors = dungeons.validate_template(document, get_db())
+    if isinstance(document, dict) and not document.get("author"):
+        errors.append("$.author: must be a non-empty string")
+    if errors:
+        flash("Dungeon theme is invalid: " + "; ".join(dict.fromkeys(errors)), "error")
+        return redirect(destination)
+    try:
+        installed = dungeons.discover_templates()
+    except dungeons.TemplateError as problem:
+        flash(f"Installed dungeon themes need attention: {problem}", "error")
+        return redirect(destination)
+    if document["id"] in installed:
+        flash("A dungeon theme with that ID is already installed.", "error")
+        return redirect(destination)
+    path = dungeons.custom_themes_directory() / f"{document['id']}.json"
+    try:
+        with path.open("x", encoding="utf-8") as target:
+            json.dump(document, target, ensure_ascii=False, indent=2)
+            target.write("\n")
+    except FileExistsError:
+        flash("A dungeon theme file with that ID already exists.", "error")
+        return redirect(destination)
+    flash(f"Imported dungeon theme {document['name']} by {document['author']}.", "success")
+    return redirect(destination)
+
+
+@bp.get("/sysop/settings/dungeons/template")
+@admin_required
+def download_dungeon_template():
+    return send_file(
+        Path(__file__).with_name("dungeon_templates") / "starter-theme.json",
+        as_attachment=True, download_name="dungeon-theme-template.json",
+        mimetype="application/json",
+    )
+
+
 @bp.post("/sysop/settings/mud-daily")
 @admin_required
 def mud_daily_settings():
@@ -661,7 +748,7 @@ def settings():
         elif len(header_text) > 80: flash("Banner text must be 80 characters or fewer.", "error")
         elif not is_available_header_font(header_font): flash("Select a valid FIGlet header style.", "error")
         elif header_color and not HEX_COLOR_RE.fullmatch(header_color): flash("Banner color must be a six-digit hexadecimal color.", "error")
-        elif not themes.valid(site_theme) or not themes.valid(masthead_theme): flash("Select valid station themes.", "error")
+        elif not themes.valid(site_theme, "site") or not themes.valid(masthead_theme, "masthead"): flash("Select valid station themes.", "error")
         elif header_font_size is None or not 5 <= header_font_size <= 200: flash("Header size must be between 5% and 200%.", "error")
         elif upload_permission not in {"members", "admins", "disabled"}: flash("Select a valid upload permission.", "error")
         elif storage_limit is None or not 1 <= storage_limit <= 10240: flash("Archive storage must be between 1 and 10240 MB.", "error")
@@ -752,7 +839,8 @@ def settings():
     ).fetchone()
     try:
         mud_daily_themes = [template for _key, template in (
-            (key, {"id": key, "name": value[1]["name"], "version": value[1]["version"]})
+            (key, {"id": key, "name": value[1]["name"], "version": value[1]["version"],
+                   "author": value[1].get("author")})
             for key, value in dungeons.discover_templates().items()
         )]
     except dungeons.TemplateError:
@@ -775,7 +863,8 @@ def settings():
         "FROM mud_dungeon_generation_log WHERE status='failure' ORDER BY id DESC LIMIT 10"
     ).fetchall()
     event_creation_groups = {row["group_id"] for row in database.execute("SELECT group_id FROM event_creation_groups")}
-    return render_template("settings.html", header_fonts=header_fonts, themes=themes.THEMES,
+    return render_template("settings.html", header_fonts=header_fonts,
+                           site_themes=themes.options("site"), masthead_themes=themes.options("masthead"),
                            station_icon_exists=_station_icon_path().is_file(),
                            event_creation_groups=event_creation_groups,
                            bands=bands, groups=groups, users=users,

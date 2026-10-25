@@ -22,6 +22,7 @@ from .db import get_db
 
 GENERATOR_VERSION = "stationnet-dungeon-1"
 SCHEMA_VERSION = 1
+MAX_THEME_BYTES = 1024 * 1024
 SUPPORTED_LAYOUTS = frozenset({"linear", "branching", "maze", "hub"})
 EQUIPMENT_SLOTS = frozenset({
     "head", "body", "hands", "legs", "feet", "main_hand", "off_hand", "accessory",
@@ -55,11 +56,15 @@ def themes_directory():
     return Path(current_app.config["DUNGEON_THEMES_DIR"])
 
 
+def custom_themes_directory():
+    return Path(current_app.config["DUNGEONS_DIR"])
+
+
 def read_template(path):
     path = Path(path)
     try:
         raw = path.read_text(encoding="utf-8")
-    except OSError as problem:
+    except (OSError, UnicodeError) as problem:
         raise TemplateError([f"{path}: cannot read template: {problem}"]) from problem
     try:
         value = json.loads(raw)
@@ -74,21 +79,27 @@ def read_template(path):
 
 def discover_templates(directory=None):
     """Return installed themes keyed by ID, rejecting duplicates explicitly."""
-    directory = Path(directory) if directory else themes_directory()
     discovered = {}
-    if not directory.exists():
-        return discovered
-    for path in sorted(directory.glob("*.json"), key=lambda item: item.name.casefold()):
-        template = read_template(path)
-        errors = validate_template(template)
-        if errors:
-            raise TemplateError([f"{path.name}: {error}" for error in errors])
-        theme_id = template["id"]
-        if theme_id in discovered:
-            raise TemplateError([
-                f"duplicate theme id {theme_id!r}: {discovered[theme_id][0].name} and {path.name}"
-            ])
-        discovered[theme_id] = (path, template)
+    custom_directory = custom_themes_directory() if directory is None else None
+    directories = [Path(directory)] if directory is not None else [themes_directory(), custom_directory]
+    for source in directories:
+        if not source.exists():
+            continue
+        for path in sorted(source.glob("*.json"), key=lambda item: item.name.casefold()):
+            if source == custom_directory and path.name in {"_template.json", "theme-schema.json"}:
+                continue
+            template = read_template(path)
+            errors = validate_template(template)
+            if source == custom_directory and isinstance(template, dict) and "author" not in template:
+                errors.append("$.author: must be a non-empty string")
+            if errors:
+                raise TemplateError([f"{path.name}: {error}" for error in errors])
+            theme_id = template["id"]
+            if theme_id in discovered:
+                raise TemplateError([
+                    f"duplicate theme id {theme_id!r}: {discovered[theme_id][0]} and {path}"
+                ])
+            discovered[theme_id] = (path, template)
     return discovered
 
 
@@ -350,6 +361,8 @@ def validate_template(template, database=None):
             errors.append(f"$.{key}: must match {ID_RE.pattern}")
     if not isinstance(template.get("name"), str) or not template.get("name", "").strip():
         errors.append("$.name: must be a non-empty string")
+    if "author" in template and (not isinstance(template["author"], str) or not template["author"].strip()):
+        errors.append("$.author: must be a non-empty string")
     embedded_ids = _validate_embedded_definitions(errors, template, database)
 
     generation = template.get("generation")
@@ -1248,7 +1261,8 @@ def list_themes_command():
     if not themes:
         click.echo(f"No themes installed in {themes_directory()}")
     for theme_id, (path, template) in themes.items():
-        click.echo(f"{theme_id}@{template['version']}  {template['name']}  ({path.name})")
+        author = f" by {template['author']}" if template.get("author") else ""
+        click.echo(f"{theme_id}@{template['version']}  {template['name']}{author}  ({path.name})")
 
 
 @dungeon_cli.command("definitions")
@@ -1359,8 +1373,11 @@ def failures_command(limit):
 
 def init_app(app):
     app.config.setdefault("DUNGEON_THEMES_DIR", str(Path(app.config["DATA_DIR"]) / "dungeon_themes"))
+    app.config.setdefault("DUNGEONS_DIR", str(Path(app.config["DATA_DIR"]) / "dungeons"))
     themes_path = Path(app.config["DUNGEON_THEMES_DIR"])
     themes_path.mkdir(parents=True, exist_ok=True)
+    custom_path = Path(app.config["DUNGEONS_DIR"])
+    custom_path.mkdir(parents=True, exist_ok=True)
     # Bundled playable themes are available on existing and new stations.
     # Files already installed by a user remain authoritative.
     bundled_dir = Path(__file__).with_name("dungeon_templates")
@@ -1369,4 +1386,10 @@ def init_app(app):
         installed_theme = themes_path / name
         if bundled_theme.is_file() and not installed_theme.exists():
             shutil.copyfile(bundled_theme, installed_theme)
+    for source_name, installed_name in (("starter-theme.json", "_template.json"),
+                                        ("TEMPLATEREADME.md", "README.md"),
+                                        ("theme-schema.json", "theme-schema.json")):
+        installed = custom_path / installed_name
+        if not installed.exists():
+            shutil.copyfile(bundled_dir / source_name, installed)
     app.cli.add_command(dungeon_cli)

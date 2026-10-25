@@ -1,6 +1,12 @@
 """Shared, validated colour palettes for the station and its masthead."""
 
 from collections import OrderedDict
+import json
+import re
+import shutil
+from pathlib import Path
+
+from flask import current_app
 
 # The default palette matches the original StationNet colours exactly. Values
 # are CSS hex colours only; theme IDs never become arbitrary CSS input.
@@ -20,27 +26,112 @@ THEMES = OrderedDict([
 ])
 
 KEYS = ("name", "green", "green-bright", "green-dim", "cyan", "magenta", "amber", "red", "red-dim", "grey", "white", "black", "field", "button", "masthead", "masthead-shadow")
+SITE_KEYS = KEYS[1:14]
+MASTHEAD_KEYS = KEYS[14:]
+ID_RE = re.compile(r"[a-z0-9]+(?:-[a-z0-9]+)*\Z")
+COLOR_RE = re.compile(r"#[0-9a-fA-F]{6}\Z")
+MAX_THEME_BYTES = 16 * 1024
 
 
-def palette(theme_id):
-    return dict(zip(KEYS, THEMES.get(theme_id, THEMES["cyan"])))
+class ThemeError(ValueError):
+    """A colour theme file is invalid."""
 
 
-def valid(theme_id):
-    return theme_id in THEMES
+def init_app(app):
+    directory = Path(app.config["DATA_DIR"]) / "themes"
+    directory.mkdir(parents=True, exist_ok=True)
+    template = directory / "template-theme.json"
+    if not template.exists():
+        shutil.copyfile(Path(__file__).parent / "theme_templates" / "template-theme.json", template)
+
+
+def directory():
+    return Path(current_app.config["DATA_DIR"]) / "themes"
+
+
+def parse(data):
+    """Validate a portable JSON colour theme without permitting CSS input."""
+    try:
+        document = json.loads(data)
+    except (ValueError, TypeError) as error:
+        raise ThemeError("Theme must be valid UTF-8 JSON.") from error
+    if not isinstance(document, dict) or set(document) - {"id", "name", "author", "site", "masthead"}:
+        raise ThemeError("Theme must contain only id, name, author, site, and masthead fields.")
+    theme_id = document.get("id")
+    if not isinstance(theme_id, str) or len(theme_id) > 64 or not ID_RE.fullmatch(theme_id):
+        raise ThemeError("Theme id must use lowercase letters, numbers, and hyphens (up to 64 characters).")
+    for field in ("name", "author"):
+        value = document.get(field)
+        if not isinstance(value, str) or not value.strip() or len(value) > 80:
+            raise ThemeError(f"Theme {field} must be 1 to 80 characters.")
+        document[field] = value.strip()
+    if "site" not in document and "masthead" not in document:
+        raise ThemeError("Theme must define site colours, masthead colours, or both.")
+    for section, keys in (("site", SITE_KEYS), ("masthead", MASTHEAD_KEYS)):
+        if section not in document:
+            continue
+        values = document[section]
+        if not isinstance(values, dict) or set(values) != set(keys):
+            raise ThemeError(f"Theme {section} must define exactly: {', '.join(keys)}.")
+        if any(not isinstance(value, str) or not COLOR_RE.fullmatch(value) for value in values.values()):
+            raise ThemeError(f"Theme {section} colours must be six-digit hex values such as #00d8cf.")
+    return document
+
+
+def custom_themes():
+    found = OrderedDict()
+    for path in sorted(directory().glob("*.json")):
+        if path.name == "template-theme.json" or path.is_symlink():
+            continue
+        try:
+            if path.stat().st_size > MAX_THEME_BYTES:
+                continue
+            document = parse(path.read_text(encoding="utf-8"))
+        except (OSError, UnicodeError, ThemeError):
+            continue
+        if path.stem != document["id"] or document["id"] in found:
+            continue
+        found[document["id"]] = document
+    return found
+
+
+def options(kind):
+    result = OrderedDict((key, {"name": value[0], "author": "", "custom": False}) for key, value in THEMES.items())
+    for key, item in custom_themes().items():
+        if kind in item:
+            result[f"custom-{key}"] = {"name": item["name"], "author": item["author"], "custom": True}
+    return result
+
+
+def palette(theme_id, kind="site"):
+    if theme_id in THEMES:
+        return dict(zip(KEYS, THEMES[theme_id]))
+    custom = custom_themes().get(theme_id.removeprefix("custom-")) if theme_id.startswith("custom-") else None
+    if custom and kind in custom:
+        result = dict(zip(KEYS, THEMES["cyan"]))
+        result.update(custom[kind])
+        return result
+    return dict(zip(KEYS, THEMES["cyan"]))
+
+
+def valid(theme_id, kind="site"):
+    return theme_id in options(kind)
 
 
 def effective(station, user):
     """Resolve each independent user preference against its station default."""
     def selected(column):
-        choice = user[column] if user and user[column] else station[column] if station else "cyan"
-        return choice if valid(choice) else "cyan"
+        kind = "site" if column == "site_theme" else "masthead"
+        station_choice = station[column] if station else "cyan"
+        default = station_choice if valid(station_choice, kind) else "cyan"
+        user_choice = user[column] if user else None
+        return user_choice if user_choice and valid(user_choice, kind) else default
     return selected("site_theme"), selected("masthead_theme")
 
 
 def css(site_id, masthead_id, legacy_color=""):
-    site = palette(site_id)
-    masthead = palette(masthead_id)
+    site = palette(site_id, "site")
+    masthead = palette(masthead_id, "masthead")
     variables = {f"--{key}": site[key] for key in KEYS[1:12]}
     variables.update({"--surface-field": site["field"], "--surface-button": site["button"],
                       "--theme-rgb": ",".join(str(int(site["green"][i:i+2], 16)) for i in (1, 3, 5)),
@@ -48,7 +139,8 @@ def css(site_id, masthead_id, legacy_color=""):
                       "--masthead-color": legacy_color or masthead["masthead"],
                       "--masthead-shadow": masthead["masthead-shadow"]})
     rules = [":root {" + "".join(f"{key}:{value};" for key, value in variables.items()) + "}"]
-    for theme_id in THEMES:
-        entry = palette(theme_id)
-        rules.append(f".theme-swatch--{theme_id} {{ --swatch-bg:{entry['black']}; --swatch-fg:{entry['green']}; --swatch-accent:{entry['cyan']}; --swatch-masthead:{entry['masthead']}; --swatch-shadow:{entry['masthead-shadow']}; }}")
+    for theme_id in dict.fromkeys((*THEMES, *(f"custom-{key}" for key in custom_themes()))):
+        entry = palette(theme_id, "site")
+        masthead_entry = palette(theme_id, "masthead")
+        rules.append(f".theme-swatch--{theme_id} {{ --swatch-bg:{entry['black']}; --swatch-fg:{entry['green']}; --swatch-accent:{entry['cyan']}; --swatch-masthead:{masthead_entry['masthead']}; --swatch-shadow:{masthead_entry['masthead-shadow']}; }}")
     return "\n".join(rules)

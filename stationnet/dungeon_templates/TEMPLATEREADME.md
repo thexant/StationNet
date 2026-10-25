@@ -25,8 +25,8 @@ everything players see comes from the file you write.
 
 ## Quick start
 
-1. Copy `starter-theme.json` to a new file, for example `my-theme.json`.
-2. Set a unique lowercase `id` and a `version`.
+1. Copy `data/dungeons/_template.json` to a new file, for example `my-theme.json`.
+2. Set a unique lowercase `id`, a `version`, a `name`, and an `author`.
 3. Replace every bracketed placeholder (`[Theme name]`, `[Entrance room name]`,
    and so on) with your own text. Rename the `*-placeholder` local IDs.
 4. Validate it:
@@ -35,8 +35,9 @@ everything players see comes from the file you write.
    flask --app stationnet:create_app dungeon validate my-theme.json --check-definitions
    ```
 
-5. Copy it to `<STATIONNET_DATA>/dungeon_themes/` (normally
-   `data/dungeon_themes/`). Discovery is live, so no restart is needed.
+5. Import it through SYSOP Settings → MUD service → Dungeon Themes, or copy it
+   to `<STATIONNET_DATA>/dungeons/` (normally `data/dungeons/`). Discovery is
+   live, so no restart is needed. `_template.json` is ignored as a starter.
 6. Preview it:
 
    ```sh
@@ -316,7 +317,8 @@ Conditions can appear on pools and on individual content choices.
 - Embedded-only themes pass `--check-definitions` on a station with no custom
   world definitions. The flag additionally verifies any shared `definition_id`
   or `item_definition_id` references.
-- Install by copying the JSON into `<STATIONNET_DATA>/dungeon_themes/`.
+- Install by importing the JSON in SYSOP Settings or copying it into
+  `<STATIONNET_DATA>/dungeons/`.
   Playable themes then appear in Dungeon Portals.
 - Launch a run with `/expedition <theme-id> [difficulty] [size]`.
 

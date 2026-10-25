@@ -11,6 +11,8 @@
   const launchWarning = document.querySelector("[data-app-launch-warning]");
   const immersiveButton = document.querySelector("[data-app-immersive]");
   const immersiveExit = document.querySelector("[data-app-immersive-exit]");
+  const fullscreenButton = document.querySelector("[data-app-fullscreen]");
+  const fullscreenExit = document.querySelector("[data-app-fullscreen-exit]");
   if (!frame || !surface || !status) return;
 
   const PROTOCOL = "stationnet-app-v1";
@@ -231,6 +233,10 @@
   let immersive = false;
   let immersiveFocus = null;
   let immersiveScroll = [0, 0];
+  let fullscreenPreviousImmersive = null;
+  let fullscreenRequest = null;
+  let fullscreenExitTime = 0;
+  let presentationResizeTimer = null;
   let pointerLockRequest = null;
   const multiplayerConnection = (crypto.randomUUID ? crypto.randomUUID() : `${Date.now()}-${Math.random()}`);
   let realtimeSocket = null;
@@ -246,6 +252,7 @@
   let framebufferPixels = 0;
   const canvasScenes = new WeakMap();
   const gamepadOverlays = new Map();
+  const canvasPointers = new Map();
   const virtualKeys = new Map();
   let imageBytes = 0;
   let imagePixels = 0;
@@ -982,6 +989,61 @@
     const release = gamepadOverlays.get(overlay);
     if (release) { release(); gamepadOverlays.delete(overlay); }
   }
+  function releaseCanvasPointers(root, remove = false) {
+    for (const [canvas, release] of [...canvasPointers]) {
+      if (!root || canvas === root || root.contains?.(canvas)) { release(); if (remove) canvasPointers.delete(canvas); }
+    }
+  }
+  const touchPercent = (value, fallback) => Number.isFinite(Number(value)) ?
+    Math.max(0, Math.min(100, Number(value))) : fallback;
+  const touchSize = (value, fallback) => Number.isFinite(Number(value)) ?
+    Math.max(32, Math.min(160, Number(value))) : fallback;
+  function positionTouchControl(node, config, x, y, size) {
+    const pixels = touchSize(config?.size, size);
+    node.style.left = `clamp(calc(env(safe-area-inset-left) + ${pixels / 2}px), ${touchPercent(config?.x, x)}%, calc(100% - env(safe-area-inset-right) - ${pixels / 2}px))`;
+    node.style.top = `clamp(${pixels / 2}px, ${touchPercent(config?.y, y)}%, calc(100% - env(safe-area-inset-bottom) - ${pixels / 2}px))`;
+    node.style.width = `${pixels}px`;
+    node.style.height = `${pixels}px`;
+    node.classList.add("app-touch-positioned");
+  }
+  function gamepadAxis(parent, kind, config) {
+    const name = /^[A-Za-z0-9_-]{1,32}$/.test(config.name || "") ? config.name : kind === "steering" ? "steer" : "move";
+    const axis = document.createElement("div"); axis.className = `app-gamepad-${kind}`;
+    axis.setAttribute("role", "slider"); axis.setAttribute("aria-label", kind === "steering" ? "Steering" : "Joystick");
+    axis.tabIndex = 0;
+    positionTouchControl(axis, config, kind === "steering" ? 50 : 17, 50, kind === "steering" ? 110 : 120);
+    const knob = document.createElement("div"); knob.className = "app-gamepad-knob"; axis.append(knob);
+    const held = new Set(); let current = { x: 0, y: 0 };
+    const codes = kind === "steering" ? ["ArrowLeft", "ArrowRight"] : ["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown"];
+    let down = new Set();
+    const send = (x, y) => {
+      current = { x, y }; knob.style.transform = `translate(${x * 75}%, ${y * 75}%)`;
+      if (frame.contentWindow) frame.contentWindow.postMessage({ protocol: PROTOCOL, type: "input-axis", name, x, y }, "*");
+      if (config.onMove) interact(config.onMove, { name, x, y });
+      const next = new Set();
+      if (x < -0.4) next.add("ArrowLeft"); if (x > 0.4) next.add("ArrowRight");
+      if (kind !== "steering") { if (y < -0.4) next.add("ArrowUp"); if (y > 0.4) next.add("ArrowDown"); }
+      for (const code of codes) { if (next.has(code) && !down.has(code)) emitGamepadKey(code, true);
+        else if (!next.has(code) && down.has(code)) emitGamepadKey(code, false); }
+      down = next;
+    };
+    const move = event => {
+      const rect = axis.getBoundingClientRect();
+      const radius = Math.max(1, Math.min(rect.width, rect.height) / 2);
+      let x = Math.max(-1, Math.min(1, (event.clientX - rect.left - rect.width / 2) / radius));
+      let y = kind === "steering" ? 0 : Math.max(-1, Math.min(1, (event.clientY - rect.top - rect.height / 2) / radius));
+      const deadzone = Math.max(0, Math.min(0.9, Number(config.deadzone ?? 0.15) || 0));
+      if (Math.hypot(x, y) < deadzone) { x = 0; y = 0; }
+      send(x, y);
+    };
+    axis.addEventListener("pointerdown", event => { if (event.button !== 0 || held.size) return;
+      event.preventDefault(); held.add(event.pointerId); axis.setPointerCapture?.(event.pointerId); move(event); });
+    axis.addEventListener("pointermove", event => { if (held.has(event.pointerId)) { event.preventDefault(); move(event); } });
+    for (const type of ["pointerup", "pointercancel", "lostpointercapture"])
+      axis.addEventListener(type, event => { if (held.delete(event.pointerId)) send(0, 0); });
+    parent.append(axis);
+    return () => { if (held.size || down.size || current.x || current.y) { held.clear(); send(0, 0); } };
+  }
   function gamepadButton(parent, label, code, className) {
     const button = document.createElement("button"); button.type = "button";
     button.textContent = label; button.setAttribute("aria-label", label);
@@ -1010,24 +1072,30 @@
   function drawCanvasControls(wrapper, controls, touchLayout) {
     const previous = wrapper.querySelector(".app-canvas-controls");
     if (previous) { releaseGamepadOverlay(previous); previous.remove(); }
-    if (touchLayout === "gamepad") {
+    if (touchLayout === "gamepad" || touchLayout?.type === "gamepad") {
       if (!(navigator.maxTouchPoints > 0 || "ontouchstart" in window) || gamepadOverlays.size >= LIMITS.touchGamepads) return;
+      const layout = touchLayout === "gamepad" ? {} : touchLayout;
       const overlay = document.createElement("div"); overlay.className = "app-canvas-controls app-canvas-gamepad";
       const dpad = document.createElement("div"); dpad.className = "app-gamepad-dpad";
       const actions = document.createElement("div"); actions.className = "app-gamepad-actions";
       const releases = [];
-      for (const [label, code, direction] of [["Up", "ArrowUp", "up"], ["Left", "ArrowLeft", "left"],
+      if (layout.dpad !== false) for (const [label, code, direction] of [["Up", "ArrowUp", "up"], ["Left", "ArrowLeft", "left"],
         ["Down", "ArrowDown", "down"], ["Right", "ArrowRight", "right"]])
         releases.push(gamepadButton(dpad, label, code, `app-gamepad-${direction}`));
       const actionControls = Array.isArray(controls) ? controls.slice(0, 4) : [];
       actionControls.forEach((control, index) => {
         if (!control || typeof control !== "object") return;
-        releases.push(gamepadButton(actions, text(control.label, 24) || "Action",
-          gamepadCode(control.code, ["KeyZ", "KeyX", "KeyC", "KeyV"][index]), `app-gamepad-action app-gamepad-action-${index + 1}`));
+        const release = gamepadButton(actions, text(control.label, 24) || "Action",
+          gamepadCode(control.code, ["KeyZ", "KeyX", "KeyC", "KeyV"][index]), `app-gamepad-action app-gamepad-action-${index + 1}`);
+        releases.push(release);
+        if (control.x != null || control.y != null || control.size != null)
+          positionTouchControl(actions.children[actions.children.length - 1], control, 75 + index % 2 * 15, 25 + Math.floor(index / 2) * 30, 52);
       });
       releases.push(gamepadButton(actions, "Select", "ShiftRight", "app-gamepad-select"));
       releases.push(gamepadButton(actions, "Start", "Enter", "app-gamepad-start"));
       overlay.append(dpad, actions); wrapper.append(overlay);
+      if (layout.joystick) releases.push(gamepadAxis(overlay, "joystick", layout.joystick));
+      if (layout.steering) releases.push(gamepadAxis(overlay, "steering", layout.steering));
       gamepadOverlays.set(overlay, () => releases.forEach((release) => release()));
       return;
     }
@@ -1320,17 +1388,71 @@
         const canvas = document.createElement("canvas"); canvas.className = "app-canvas"; canvas.tabIndex = 0;
         canvas.setAttribute("role", "img"); drawCanvas(canvas, component); node.append(canvas);
         node.style.setProperty("--app-canvas-ratio", canvas.style.getPropertyValue("--app-canvas-ratio"));
-        const point = (event, phase) => {
+        const active = new Map();
+        let pinch = null;
+        const point = (event, phase, extra = {}) => {
           const bounds = canvas.getBoundingClientRect();
           const x = (event.clientX - bounds.left) * Number(canvas.dataset.logicalWidth) / Math.max(1, bounds.width);
           const y = (event.clientY - bounds.top) * Number(canvas.dataset.logicalHeight) / Math.max(1, bounds.height);
-          interact(canvas.dataset.canvasAction, { x, y, phase, shiftKey: event.shiftKey, ctrlKey: event.ctrlKey, metaKey: event.metaKey });
+          interact(canvas.dataset.canvasAction, { x, y, phase, pointerId: event.pointerId,
+            pointerType: event.pointerType || "mouse", pointers: active.size,
+            shiftKey: Boolean(event.shiftKey), ctrlKey: Boolean(event.ctrlKey), metaKey: Boolean(event.metaKey), ...extra });
         };
-        canvas.addEventListener("pointerdown", (event) => { event.preventDefault(); canvas.setPointerCapture(event.pointerId); point(event, "start"); });
-        canvas.addEventListener("pointermove", (event) => { if (event.buttons || event.pointerType === "touch" || canvas.dataset.canvasHover === "1") point(event, "move"); });
-        canvas.addEventListener("pointerup", (event) => point(event, "end"));
-        node.dataset.touchLayout = component.touchLayout === "gamepad" ? "gamepad" : "";
-        drawCanvasControls(node, component.controls, node.dataset.touchLayout);
+        const gesture = (event, kind, extra = {}) => point(event, "gesture", { gesture: kind, ...extra });
+        const updatePinch = event => {
+          if (active.size < 2) { pinch = null; return; }
+          const pair = [...active.values()].slice(0, 2);
+          const distance = Math.hypot((pair[0].xLast ?? pair[0].x) - (pair[1].xLast ?? pair[1].x),
+            (pair[0].yLast ?? pair[0].y) - (pair[1].yLast ?? pair[1].y));
+          if (!pinch) pinch = { distance: Math.max(1, distance) };
+          gesture(event, "pinch", { scale: distance / pinch.distance, distance });
+        };
+        const finish = (event, phase) => {
+          const state = active.get(event.pointerId); if (!state) return;
+          clearTimeout(state.timer); active.delete(event.pointerId);
+          const dx = event.clientX - state.x, dy = event.clientY - state.y;
+          point(event, phase, { dx, dy });
+          if (phase === "end" && !state.long && !state.multi) {
+            const distance = Math.hypot(dx, dy), duration = Date.now() - state.time;
+            if (distance < 10 && duration < 350) gesture(event, "tap");
+            else if (distance >= 40 && duration < 700) gesture(event, "swipe", { dx, dy,
+              direction: Math.abs(dx) > Math.abs(dy) ? dx > 0 ? "right" : "left" : dy > 0 ? "down" : "up" });
+          }
+          if (active.size < 2) pinch = null;
+        };
+        canvas.addEventListener("pointerdown", event => {
+          if (event.button !== 0 || active.has(event.pointerId)) return;
+          event.preventDefault(); canvas.setPointerCapture?.(event.pointerId);
+          const state = { x: event.clientX, y: event.clientY, time: Date.now(), dragging: false, long: false, timer: null };
+          active.set(event.pointerId, state);
+          if (active.size >= 2) for (const pointer of active.values()) {
+            pointer.multi = true; clearTimeout(pointer.timer);
+          }
+          if (active.size === 1) state.timer = setTimeout(() => { if (active.has(event.pointerId) && !state.dragging && active.size === 1) {
+            state.long = true; gesture(event, "longpress"); } }, 500);
+          point(event, "start"); updatePinch(event);
+        });
+        canvas.addEventListener("pointermove", event => {
+          const state = active.get(event.pointerId);
+          if (state) {
+            const dx = event.clientX - state.x, dy = event.clientY - state.y;
+            if (Math.hypot(dx, dy) >= 8) { state.dragging = true; clearTimeout(state.timer); }
+            point(event, "move", { dx, dy });
+            if (state.dragging && !state.multi) gesture(event, "drag", { dx, dy });
+            state.xLast = event.clientX; state.yLast = event.clientY;
+            updatePinch(event);
+          } else if (event.buttons || canvas.dataset.canvasHover === "1") point(event, "move");
+        });
+        canvas.addEventListener("pointerup", event => finish(event, "end"));
+        canvas.addEventListener("pointercancel", event => finish(event, "cancel"));
+        canvas.addEventListener("lostpointercapture", event => finish(event, "cancel"));
+        canvasPointers.set(canvas, () => { for (const [pointerId, state] of active) {
+          finish({ pointerId, pointerType: "touch", clientX: state.xLast ?? state.x, clientY: state.yLast ?? state.y }, "cancel"); } });
+        node.dataset.touchLayout = component.touchLayout?.type === "gamepad" || component.touchLayout === "gamepad" ? "gamepad" : "";
+        node.touchLayout = component.touchLayout;
+        node.touchControls = component.controls;
+        node.touchLayoutSignature = JSON.stringify(component.touchLayout);
+        drawCanvasControls(node, node.touchControls, node.touchLayout);
         break;
       }
       default: return null;
@@ -1365,7 +1487,7 @@
     };
     if (message.mode === "remove") {
       const target = targetComponent();
-      if (target) { closeDialogs(target); const overlay = target.querySelector(".app-canvas-controls"); if (overlay) releaseGamepadOverlay(overlay); target.remove(); }
+      if (target) { closeDialogs(target); releaseCanvasPointers(target, true); const overlay = target.querySelector(".app-canvas-controls"); if (overlay) releaseGamepadOverlay(overlay); target.remove(); }
       return;
     }
     if (message.mode === "update") {
@@ -1376,23 +1498,31 @@
         // contextual overlay in place. The runtime serializes omitted options as
         // undefined, so checking only for the property removed START as soon as
         // Breakout sent its first hover update.
-        const oldTouchLayout = target.dataset.touchLayout;
-        if (components[0].touchLayout !== undefined) target.dataset.touchLayout = components[0].touchLayout === "gamepad" ? "gamepad" : "";
-        if (components[0].controls !== undefined || target.dataset.touchLayout !== oldTouchLayout)
-          drawCanvasControls(target, components[0].controls, target.dataset.touchLayout);
+        const oldTouchLayout = target.touchLayoutSignature;
+        if (components[0].touchLayout !== undefined) {
+          target.touchLayout = components[0].touchLayout;
+          target.touchLayoutSignature = JSON.stringify(target.touchLayout);
+          target.dataset.touchLayout = components[0].touchLayout === "gamepad" || components[0].touchLayout?.type === "gamepad" ? "gamepad" : "";
+        }
+        if (components[0].controls !== undefined) target.touchControls = components[0].controls;
+        if (components[0].controls !== undefined || target.touchLayoutSignature !== oldTouchLayout)
+          drawCanvasControls(target, target.touchControls, target.touchLayout);
         return;
       }
       const replacement = renderComponent(components[0]);
       if (target && replacement) {
         closeDialogs(target);
+        releaseCanvasPointers(target, true);
         const overlay = target.querySelector(".app-canvas-controls"); if (overlay) releaseGamepadOverlay(overlay);
         target.replaceWith(replacement);
         activateDialogs();
       }
       return;
     }
-    if (message.mode !== "append")
+    if (message.mode !== "append") {
+      releaseCanvasPointers(null, true);
       for (const overlay of [...gamepadOverlays.keys()]) releaseGamepadOverlay(overlay);
+    }
     const fragment = document.createDocumentFragment();
     const budget = { remaining: LIMITS.components };
     components.forEach((component) => { const node = renderComponent(component, 0, budget); if (node) fragment.append(node); });
@@ -1528,7 +1658,31 @@
     if (frame.contentWindow) frame.contentWindow.postMessage({ protocol: PROTOCOL, type, ...payload }, "*");
   };
 
-  function setImmersive(value) {
+  function presentationViewport() {
+    const style = typeof getComputedStyle === "function" ? getComputedStyle(surface) : null;
+    const horizontalPadding = style ? (parseFloat(style.paddingLeft) || 0) + (parseFloat(style.paddingRight) || 0) : 32;
+    const verticalPadding = (parseFloat(style?.paddingTop) || 0) + (parseFloat(style?.paddingBottom) || 0);
+    const fullscreen = document.fullscreenElement === display;
+    const screenWidth = window.visualViewport?.width || window.innerWidth;
+    const screenHeight = window.visualViewport?.height || window.innerHeight;
+    return {
+      width: Math.max(1, Math.floor((surface.clientWidth || screenWidth) - horizontalPadding)),
+      height: Math.max(1, Math.floor((fullscreen ? surface.clientHeight : screenHeight) - (fullscreen ? verticalPadding : 0))),
+      orientation: screenWidth > screenHeight ? "landscape" : "portrait",
+      mode: immersive ? "immersive" : "standard", fullscreen
+    };
+  }
+  function reportPresentation() {
+    if (!closed) sendHostEvent("presentation-event", {
+      mode: immersive ? "immersive" : "standard", fullscreen: document.fullscreenElement === display,
+      viewport: presentationViewport()
+    });
+  }
+  function schedulePresentationReport() {
+    clearTimeout(presentationResizeTimer);
+    presentationResizeTimer = setTimeout(reportPresentation, 0);
+  }
+  function setImmersive(value, notify = true) {
     const next = Boolean(value);
     if (immersive === next) return;
     if (next) {
@@ -1545,8 +1699,92 @@
       scrollTo(...immersiveScroll);
       if (immersiveFocus instanceof HTMLElement && immersiveFocus.isConnected) immersiveFocus.focus({ preventScroll: true });
     }
-    sendHostEvent("presentation-event", { mode: immersive ? "immersive" : "standard" });
+    if (notify) reportPresentation();
   }
+
+  function dismissFullscreenPrompt(error) {
+    document.querySelector("[data-app-fullscreen-prompt]")?.remove();
+    if (error && fullscreenRequest) capabilityResult(fullscreenRequest, false, false, error);
+    if (error) fullscreenRequest = null;
+  }
+  function fullscreenSupported() {
+    return Boolean(document.fullscreenEnabled && typeof display?.requestFullscreen === "function");
+  }
+  async function enterFullscreen(request = null) {
+    if (closed) throw new Error("Application terminated");
+    if (!fullscreenSupported()) throw new Error("Browser fullscreen is unavailable on this device");
+    if (document.fullscreenElement === display) {
+      if (request) capabilityResult(request, true, true);
+      return;
+    }
+    if (document.fullscreenElement) throw new Error("Another element is already fullscreen");
+    if (fullscreenRequest && fullscreenRequest !== request) throw new Error("A fullscreen request is already pending");
+    fullscreenRequest = request;
+    fullscreenPreviousImmersive = immersive;
+    try {
+      await display.requestFullscreen();
+      if (document.fullscreenElement !== display) throw new Error("The browser did not enter fullscreen");
+      if (fullscreenRequest) capabilityResult(fullscreenRequest, true, true);
+      fullscreenRequest = null;
+    } catch (error) {
+      fullscreenPreviousImmersive = null;
+      dismissFullscreenPrompt(error);
+      throw error;
+    }
+  }
+  async function leaveFullscreen() {
+    if (document.fullscreenElement === display) await document.exitFullscreen();
+  }
+  function requestFullscreen(message) {
+    if (!fullscreenSupported()) {
+      capabilityResult(message.request, false, false, new Error("Browser fullscreen is unavailable on this device"));
+      return;
+    }
+    if (document.fullscreenElement === display) {
+      capabilityResult(message.request, true, true); return;
+    }
+    dismissFullscreenPrompt(new Error("A newer fullscreen request replaced this one"));
+    fullscreenRequest = message.request;
+    const prompt = document.createElement("div");
+    prompt.className = "application-pointer-prompt"; prompt.dataset.appFullscreenPrompt = "";
+    const copy = document.createElement("p");
+    copy.textContent = "This application wants to use the whole screen. Press Escape or Exit Fullscreen to return.";
+    const accept = document.createElement("button"); accept.type = "button"; accept.textContent = "ENTER FULLSCREEN";
+    const cancel = document.createElement("button"); cancel.type = "button"; cancel.className = "secondary"; cancel.textContent = "CANCEL";
+    accept.addEventListener("click", () => { prompt.remove(); enterFullscreen(message.request).catch(() => {}); });
+    cancel.addEventListener("click", () => dismissFullscreenPrompt(new Error("Fullscreen request was cancelled")));
+    prompt.append(copy, accept, cancel);
+    display.insertBefore(prompt, display.querySelector(".application-viewport"));
+    accept.focus();
+  }
+  document.addEventListener("fullscreenchange", () => {
+    const active = document.fullscreenElement === display;
+    if (fullscreenButton) {
+      fullscreenButton.setAttribute("aria-pressed", String(active));
+      fullscreenButton.textContent = active ? "EXIT FULLSCREEN" : "FULLSCREEN";
+    }
+    if (fullscreenExit) fullscreenExit.hidden = !active;
+    if (active) {
+      if (fullscreenPreviousImmersive === null) fullscreenPreviousImmersive = immersive;
+      setImmersive(true, false);
+      if (fullscreenRequest) capabilityResult(fullscreenRequest, true, true);
+      fullscreenRequest = null;
+      dismissFullscreenPrompt();
+      surface.focus({ preventScroll: true });
+    } else if (fullscreenPreviousImmersive !== null) {
+      fullscreenExitTime = Date.now();
+      setImmersive(fullscreenPreviousImmersive, false);
+      fullscreenPreviousImmersive = null;
+    }
+    reportPresentation();
+    schedulePresentationReport();
+  });
+  document.addEventListener("fullscreenerror", () =>
+    dismissFullscreenPrompt(new Error("The browser denied fullscreen")));
+  addEventListener("resize", schedulePresentationReport);
+  addEventListener("orientationchange", schedulePresentationReport);
+  window.visualViewport?.addEventListener?.("resize", schedulePresentationReport);
+  if (typeof ResizeObserver === "function") new ResizeObserver(schedulePresentationReport).observe(surface);
 
   function dismissPointerPrompt(error) {
     const prompt = document.querySelector("[data-app-pointer-prompt]");
@@ -1605,7 +1843,7 @@
     const request = message.request;
     const value = text(message.text, LIMITS.capabilityText);
     try {
-      if (message.operation === "viewport") { capabilityResult(request, true, { width: Math.max(80, Math.floor(surface.clientWidth - 32)), height: window.innerHeight }); return; }
+      if (message.operation === "viewport") { capabilityResult(request, true, presentationViewport()); return; }
       if (message.operation === "open-binary") {
         const input = document.createElement("input");
         input.type = "file";
@@ -1671,6 +1909,13 @@
       }
       if (message.operation === "presentation-exit-immersive") {
         setImmersive(false); capabilityResult(request, true, "standard"); return;
+      }
+      if (message.operation === "presentation-request-fullscreen") {
+        requestFullscreen(message); return;
+      }
+      if (message.operation === "presentation-exit-fullscreen") {
+        dismissFullscreenPrompt(new Error("Fullscreen request was cancelled"));
+        await leaveFullscreen(); capabilityResult(request, true, true); return;
       }
       if (message.operation === "copy-text") {
         if (navigator.clipboard && navigator.clipboard.writeText) await navigator.clipboard.writeText(value);
@@ -1756,7 +2001,10 @@
     } else if (message.type === "error") {
       status.textContent = "PROGRAM STATUS / ERROR";
       const error = document.createElement("p"); error.className = "app-error"; error.textContent = `PROGRAM ERROR: ${text(message.message, 500)}`; surface.replaceChildren(error);
-    } else if (message.type === "terminated") status.textContent = "PROGRAM STATUS / TERMINATED";
+    } else if (message.type === "terminated") {
+      status.textContent = "PROGRAM STATUS / TERMINATED";
+      terminate();
+    }
   });
 
   // Contextual controls are replaced after activation, which can move focus
@@ -1784,7 +2032,11 @@
   };
   addEventListener("keydown", (event) => {
     unlockAudio();
-    if (event.key === "Escape" && immersive && document.pointerLockElement !== surface) {
+    if (event.key === "Escape" && document.fullscreenElement === display && document.pointerLockElement !== surface) {
+      event.preventDefault(); leaveFullscreen().catch(() => {}); return;
+    }
+    if (event.key === "Escape" && Date.now() - fullscreenExitTime < 500) return;
+    if (event.key === "Escape" && immersive && document.fullscreenElement !== display && document.pointerLockElement !== surface) {
       event.preventDefault(); setImmersive(false); return;
     }
     if (["INPUT", "TEXTAREA", "SELECT"].includes(event.target.tagName)) return;
@@ -1810,6 +2062,7 @@
     const value = document.hidden || !document.hasFocus() ? "hidden" : "visible";
     if (value === "hidden") {
       for (const overlay of gamepadOverlays.keys()) gamepadOverlays.get(overlay)();
+      releaseCanvasPointers();
       releasePressedKeys();
       if (document.pointerLockElement === surface) document.exitPointerLock();
     }
@@ -1824,9 +2077,14 @@
     if (realtimeSocket) { realtimeSocket.close(); realtimeSocket = null; realtimeSession = null; }
     if (closed) return; closed = true;
     for (const overlay of [...gamepadOverlays.keys()]) releaseGamepadOverlay(overlay);
+    releaseCanvasPointers(null, true);
     clearTimeout(startupTimer);
     dismissPointerPrompt(new Error("Application terminated"));
+    dismissFullscreenPrompt(new Error("Application terminated"));
     if (document.pointerLockElement === surface) document.exitPointerLock();
+    if (document.fullscreenElement === display) leaveFullscreen().catch(() => {});
+    fullscreenPreviousImmersive = null;
+    clearTimeout(presentationResizeTimer);
     setImmersive(false);
     if (frame.contentWindow) frame.contentWindow.postMessage({ protocol: PROTOCOL, type: "terminate" }, "*");
     stopSounds();
@@ -1837,6 +2095,14 @@
   }
   if (immersiveButton) immersiveButton.addEventListener("click", () => setImmersive(!immersive));
   if (immersiveExit) immersiveExit.addEventListener("click", () => setImmersive(false));
+  if (fullscreenButton) {
+    if (!fullscreenSupported()) { fullscreenButton.disabled = true; fullscreenButton.title = "Browser fullscreen is unavailable on this device"; }
+    fullscreenButton.addEventListener("click", () => {
+      if (document.fullscreenElement === display) leaveFullscreen().catch(() => {});
+      else enterFullscreen().catch((error) => { fullscreenButton.title = String(error.message || error); });
+    });
+  }
+  if (fullscreenExit) fullscreenExit.addEventListener("click", () => leaveFullscreen().catch(() => {}));
 
   const compatibilityResult = environmentCompatibility();
   if (compatibility) {

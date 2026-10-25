@@ -4,6 +4,7 @@
   "id": "replace-with-theme-id",
   "version": "1.0.0",
   "name": "[Theme name]",
+  "author": "[Your name]",
   "description": "[Author-facing notes.]",
   "definitions": {
     "items": [

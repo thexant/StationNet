@@ -223,7 +223,7 @@ callback receives the date as `value`. Calendar labels are rendered as plain
 text by the host; applications retain responsibility for event storage and
 recurrence rules. Both components accept the usual `id` option.
 
-### Mouse capture and immersive presentation
+### Mouse capture, immersive layout, and browser fullscreen
 
 `await ui.pointerLock.request()` asks StationNet to show a trusted **Capture
 mouse** control. The browser request occurs only when the user activates that
@@ -240,6 +240,47 @@ it.
 StationNet application layout. `ui.presentation.mode` reports `standard` or
 `immersive`, and `onChange(handler)` observes changes made by either the app or
 the user-facing controls.
+
+The toolbar's **Fullscreen** button enters browser fullscreen. Applications can
+also call `await ui.presentation.requestFullscreen()`: StationNet shows a trusted
+**Enter Fullscreen** prompt, and the browser request runs only when the user
+presses that button. The promise resolves after entry and rejects on cancellation,
+denial, or unsupported devices. `await ui.presentation.exitFullscreen()` leaves
+fullscreen; `ui.presentation.fullscreen` reports whether this application owns
+browser fullscreen. The persistent **Exit Fullscreen** button and Escape also
+exit. The previous standard or immersive layout returns when fullscreen ends,
+and the running application keeps its state. `enterImmersive()` and
+`exitImmersive()` remain available independently.
+
+`ui.presentation.onChange((mode, viewport) => { ... })` still passes the mode
+as its first argument. Its second argument has `width`, `height`, `orientation`,
+`mode`, and `fullscreen`, matching `await ui.display.viewport()`. It fires when
+the mode or fullscreen state changes and when the available space or orientation
+changes. Both dimensions are available CSS pixels. Canvas bitmaps scale and
+center with their original aspect ratio; pointer events still use the canvas's
+logical coordinates. Touch gamepad controls remain below the canvas in fullscreen.
+
+```js
+StationNet.start((ui) => {
+  let portrait = false;
+  const game = () => ui.canvas(320, 200, [
+    { type: "text", x: 160, y: 100, align: "center",
+      text: portrait ? "PORTRAIT" : "LANDSCAPE" }
+  ], {
+    id: "game", touchLayout: "gamepad",
+    controls: [{ label: "Fire", code: "KeyZ" }]
+  });
+  ui.render(game(),
+    ui.button("Fullscreen", async () => {
+      try { await ui.presentation.requestFullscreen(); }
+      catch (error) { ui.append(ui.text(error.message, { tone: "warning" })); }
+    }));
+  ui.presentation.onChange((_mode, viewport) => {
+    portrait = viewport?.orientation === "portrait";
+    ui.update("game", game()); // Logical drawing stays 320 by 200.
+  });
+});
+```
 
 A minimal first-person-style controller looks like this:
 
@@ -616,10 +657,17 @@ ui.update("viewport", ui.canvas(200, 140, [
 
 Canvas options are `{ id, label, onPointer, hover, controls, touchLayout }`. `id` enables
 `update`; `label` is the accessible name and defaults to `"Game playfield"`.
-`onPointer(event)` receives the scaled logical `{ x, y, phase, values, ... }`;
-`phase` is `"start"`, `"move"`, or `"end"`. `hover` defaults to `false`; when
-true, mouse moves are reported without a pressed button (touch and dragging are
-reported either way). `controls` defaults to no controls and accepts up to four
+`onPointer(event)` receives scaled logical `x` and `y`, plus `pointerId`,
+`pointerType`, `pointers` (active count), and `phase`. Each pointer has its own
+`"start"`, `"move"`, and `"end"`; interrupted pointers receive `"cancel"`.
+Additional events have `phase: "gesture"` and `gesture: "tap"`, `"drag"`,
+`"swipe"`, `"longpress"`, or `"pinch"`. Drag and swipe include `dx` and `dy` in
+CSS pixels; swipe includes `direction`; pinch includes `scale` relative to the
+distance when the second pointer landed. Long press fires after 500 ms without
+movement. The original pointer events still fire, so existing handlers that
+use `start`/`move`/`end` continue to work. `hover` defaults to `false`; when
+true, mouse moves are reported without a pressed button. `controls` defaults to
+no controls and accepts up to four
 `{ label, onClick, onPress, onRelease, variant }` entries. `label` defaults to
 `"Action"`; `onClick`, `onPress`, and `onRelease` receive the normal interaction
 event (the latter two have `phase` `"start"`/`"end"`), and `variant` may be
@@ -641,6 +689,39 @@ or `ShiftRight`; invalid codes fall back to the default. Labels are limited to
 Each button sends a normal `ui.onKey` down/up event and updates `ui.input` key
 state, including simultaneous d-pad and action presses. Presses are released
 on pointer cancellation, loss of focus, or control removal.
+
+For analog movement, pass a gamepad layout object. `joystick` and `steering`
+can each be `true` or an object with `name`, `x`, `y`, `size`, `deadzone`, and
+`onMove`. Positions are percentages of the control area; sizes are CSS pixels.
+The joystick sends both axes, and steering sends the horizontal axis. Read the
+latest values with `ui.input.axis(name)`, which returns `{ x, y }` in `[-1, 1]`.
+`onMove({ name, x, y })` receives each change. Movement past 0.4 also holds the
+matching arrow keys, so existing `ui.onKey()` and `ui.input.isDown()` game logic
+works. Set `dpad: false` to replace the D-pad with a joystick. Action controls
+accept optional `x`, `y`, and `size` for custom placement. All held buttons and
+axes reset when touches end, focus leaves the app, or the app closes.
+
+```js
+const viewport = await ui.display.viewport();
+const compact = viewport.orientation === "portrait" && viewport.width < 600;
+const layout = {
+  type: "gamepad", dpad: false,
+  joystick: { name: "move", x: 18, y: 50, size: compact ? 88 : 112 },
+  steering: { name: "steer", x: 48, y: 50, size: 88 }
+};
+ui.render(ui.canvas(320, 200, draw(), {
+  id: "game", touchLayout: layout,
+  controls: [{ label: "Fire", code: "KeyZ", x: 82, y: 35, size: 56 }],
+  onPointer(event) {
+    if (event.phase === "gesture" && event.gesture === "pinch") zoom(event.scale);
+    if (event.phase === "gesture" && event.gesture === "tap") select(event.x, event.y);
+  }
+}));
+// In a frame callback: const { x, y } = ui.input.axis("move");
+// Recheck ui.display.viewport() after orientation changes; ui.presentation.mode
+// reports "standard" or "immersive" for layout choices. The host resizes the
+// controls automatically in portrait, landscape, and immersive display modes.
+```
 
 ```js
 ui.render(ui.canvas(320, 200, draw(), {
@@ -810,8 +891,11 @@ to 2 MiB. Cancelling rejects the promise. `await ui.download.binary(filename,
 bytes, mime)` downloads up to 2 MiB; the host checks every byte, sanitizes the
 filename, and creates the Blob outside the isolated worker.
 
-`await ui.display.viewport()` returns the available display width and browser
-height in CSS pixels. Use it when a canvas needs a compact touch layout.
+`await ui.display.viewport()` returns the available display width and height
+in CSS pixels, plus `orientation` (`"portrait"` or `"landscape"`),
+`mode` (`"standard"` or `"immersive"`), and `fullscreen` (boolean). Use it when a canvas needs a compact
+touch layout. Touch controls respect mobile safe areas and suppress page
+scrolling while the player is touching the canvas or controls.
 
 The bundled SoundFont renderer is available through `ui.midi`. Pass Standard
 MIDI File bytes to `await ui.midi.load(bytes)`, then call `play()`, `pause()`,
