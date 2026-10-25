@@ -1,15 +1,13 @@
 "use strict";
 
 StationNet.start(async (ui) => {
-  const { ARENAS, createRound, queueDirection, turn, step, chooseComputerDirection, safeInset } = await ui.modules.load("engine.js");
+  const { ARENAS, DIRECTIONS, createRound, queueDirection, turn, step, chooseComputerDirection, safeInset } = await ui.modules.load("engine.js");
+  const WIDTH = 640, HEIGHT = 400, BUFFER_W = 320, BUFFER_H = 200;
   const COLORS = ["#55eaff", "#ffbd52", "#ff6ad9", "#a6ff61"];
-  const PALETTE = [
-    [0, 0, 0], [3, 14, 12], [8, 25, 21],
-    [12, 102, 119], [130, 77, 15], [121, 23, 92], [61, 116, 24],
-    [85, 234, 255], [255, 189, 82], [255, 106, 217], [166, 255, 97], [58, 16, 20]
-  ];
-  const SETTINGS = { riders: 4, humans: 1, arena: "standard", speed: "normal", rounds: 5 };
-  const PERIOD = { relaxed: 210, normal: 150, rapid: 105 };
+  const DIM_COLORS = ["#167f91", "#95691f", "#8f286f", "#56872c"];
+  const NAMES = ["CYAN", "AMBER", "MAGENTA", "LIME"];
+  const SETTINGS = { riders: 4, humans: 1, arena: "standard", speed: "arcade", difficulty: "arcade", rounds: 5 };
+  const PERIOD = { cruise: 118, arcade: 88, turbo: 66 };
   const KEYS = [
     { ArrowRight: 0, ArrowDown: 1, ArrowLeft: 2, ArrowUp: 3 },
     { KeyD: 0, KeyS: 1, KeyA: 2, KeyW: 3 },
@@ -17,25 +15,36 @@ StationNet.start(async (ui) => {
     { KeyH: 0, KeyG: 1, KeyF: 2, KeyT: 3 }
   ];
   const EMPTY_STATS = { matches: 0, wins: 0, rounds: 0, roundWins: 0, crashes: 0, bestRide: 0 };
-  let stats = { ...EMPTY_STATS }, round = null, scores = [0, 0, 0, 0], roundNumber = 0;
-  let mode = "setup", elapsed = 0, frame = null, frameArena = "", notice = "", pointerStart = null;
-  const frames = {};
-  let saveQueue = Promise.resolve();
+  const PALETTE = [
+    [1, 4, 9], [3, 13, 23], [7, 26, 39], [10, 52, 68],
+    [22, 127, 145], [149, 105, 31], [143, 40, 111], [86, 135, 44],
+    [85, 234, 255], [255, 189, 82], [255, 106, 217], [166, 255, 97],
+    [75, 8, 18], [255, 57, 88]
+  ];
+
+  let stats = { ...EMPTY_STATS }, scores = [0, 0, 0, 0], round = null, roundNumber = 0;
+  let mode = "setup", pausedMode = "running", accumulator = 0, countdownMs = 0, countdownBeat = 0, notice = "";
+  let frame = null, pointerStart = null, effects = [], hudClock = 0, saveQueue = Promise.resolve();
+  let paintedLengths = [], paintedInset = -1, renderOrigins = [];
 
   function persist() {
     const snapshot = { ...stats };
     saveQueue = saveQueue.then(() => ui.storage.set("light-cycles-stats", snapshot)).catch(() => {});
   }
 
-  function tone(kind) {
-    if (kind === "turn") ui.sound.playTone(320, 35, { waveform: "triangle", volume: .025 });
-    else if (kind === "crash") ui.sound.play([{ frequency: 130, duration: 130, waveform: "sawtooth", volume: .055 }, { frequency: 82, delay: 65, duration: 160, waveform: "square", volume: .035 }]);
-    else if (kind === "win") ui.sound.sequence([440, 554, 659, 880].map((frequency) => ({ frequency, duration: 95, waveform: "triangle", volume: .06 })));
-    else if (kind === "start") ui.sound.sequence([220, 330, 440].map((frequency) => ({ frequency, duration: 65, waveform: "square", volume: .035 })));
+  function tone(kind, value = 0) {
+    if (kind === "turn") ui.sound.playTone(420, 28, { waveform: "triangle", volume: .025, attack: 2, release: 18 });
+    else if (kind === "count") ui.sound.playTone(value ? 330 : 660, value ? 75 : 130, { waveform: "square", volume: .045, attack: 4, release: 45 });
+    else if (kind === "crash") ui.sound.play([{ frequency: 155, duration: 150, waveform: "sawtooth", volume: .065 }, { frequency: 74, delay: 45, duration: 240, waveform: "square", volume: .04 }]);
+    else if (kind === "win") ui.sound.sequence([392, 523, 659, 784].map((frequency) => ({ frequency, duration: 105, waveform: "triangle", volume: .06 })));
   }
 
   function updateStats() {
-    ui.update("stats", ui.text(`PERSONAL // ${stats.matches} matches · ${stats.wins} match wins · ${stats.rounds} rounds · ${stats.roundWins} round wins · ${stats.crashes} crashes · ${stats.bestRide} cells best ride`, { id: "stats", tone: "muted" }));
+    ui.update("stats", ui.text(`PERSONAL // ${stats.matches} matches · ${stats.wins} match wins · ${stats.roundWins} round wins · ${stats.crashes} crashes · ${stats.bestRide} cells best`, { id: "stats", tone: "muted" }));
+  }
+
+  function updateSummary() {
+    ui.update("summary", ui.text(`${SETTINGS.riders} riders · ${SETTINGS.humans} local · ${SETTINGS.riders - SETTINGS.humans} CPU · ${SETTINGS.rounds} rounds`, { id: "summary", emphasis: true }));
   }
 
   function setup() {
@@ -45,19 +54,20 @@ StationNet.start(async (ui) => {
       value: String(value), onChange: ({ value: selected }) => { apply(selected); updateSummary(); }
     });
     ui.render(
-      ui.title("Light Cycles // Arena"),
-      ui.text("Ride continuously. Turn before you meet a wall, a trail, or another bike. Last rider moving wins the round. The arena closes in during long rounds.", { tone: "muted" }),
+      ui.title("Light Cycles // Neon Arena"),
+      ui.text("Cut across the grid at full speed. Your light wall is permanent: one touch of a border, trail, or rival ends the ride.", { tone: "muted" }),
       ui.text("", { id: "summary", emphasis: true }),
       setting("riders", "Participants", ["1", "2", "3", "4"], SETTINGS.riders, (value) => {
         SETTINGS.riders = Number(value); SETTINGS.humans = Math.min(SETTINGS.humans, SETTINGS.riders);
-        ui.update("human-setting", setting("humans", "Local players", ["1", "2", "3", "4"].slice(0, SETTINGS.riders), SETTINGS.humans, (next) => { SETTINGS.humans = Number(next); }));
+        ui.update("human-setting", setting("humans", "Local players", ["1", "2", "3", "4"].slice(0, SETTINGS.riders), SETTINGS.humans, (next) => { SETTINGS.humans = Number(next); updateSummary(); }));
       }),
       setting("humans", "Local players", ["1", "2", "3", "4"], SETTINGS.humans, (value) => { SETTINGS.humans = Number(value); }),
       setting("arena", "Arena size", [{ label: "Compact", value: "compact" }, { label: "Standard", value: "standard" }, { label: "Wide", value: "wide" }], SETTINGS.arena, (value) => { SETTINGS.arena = value; }),
-      setting("speed", "Cycle speed", [{ label: "Relaxed", value: "relaxed" }, { label: "Normal", value: "normal" }, { label: "Rapid", value: "rapid" }], SETTINGS.speed, (value) => { SETTINGS.speed = value; }),
+      setting("speed", "Cycle speed", [{ label: "Cruise", value: "cruise" }, { label: "Arcade", value: "arcade" }, { label: "Turbo", value: "turbo" }], SETTINGS.speed, (value) => { SETTINGS.speed = value; }),
+      setting("difficulty", "CPU skill", [{ label: "Casual", value: "casual" }, { label: "Arcade", value: "arcade" }, { label: "Elite", value: "elite" }], SETTINGS.difficulty, (value) => { SETTINGS.difficulty = value; }),
       setting("rounds", "Match length", ["3", "5", "7"], SETTINGS.rounds, (value) => { SETTINGS.rounds = Number(value); }),
-      ui.button("Start match", startMatch),
-      ui.text("KEYS // P1 arrows  ·  P2 WASD  ·  P3 IJKL  ·  P4 TFGH. Space pauses. Touch players use their own turn buttons; P1 can also swipe the arena.", { tone: "muted" }),
+      ui.button("Enter the grid", startMatch),
+      ui.text("P1: arrows (or WASD in solo) · P2: WASD · P3: IJKL · P4: TFGH · Space pauses · Swipe or use the touch pad", { tone: "muted" }),
       ui.text("", { id: "stats", tone: "muted" }),
       ui.heading("Station leaderboard // best match round wins", 3),
       ui.table(["#", "Rider", "Wins"], [["—", "Loading…", "—"]], { id: "leaderboard" })
@@ -69,130 +79,201 @@ StationNet.start(async (ui) => {
     }).catch(() => ui.update("leaderboard", ui.text("Leaderboard unavailable", { id: "leaderboard", tone: "muted" })));
   }
 
-  function updateSummary() {
-    ui.update("summary", ui.text(`${SETTINGS.riders} riders  ·  ${SETTINGS.humans} local  ·  ${SETTINGS.riders - SETTINGS.humans} CPU  ·  ${SETTINGS.rounds} rounds`, { id: "summary", emphasis: true }));
+  function ensureFrame() {
+    if (frame) return;
+    frame = ui.graphics.framebuffer("light-cycles-arena-v2", BUFFER_W, BUFFER_H, { format: "indexed" });
+    for (let i = 0; i < PALETTE.length; i += 1) frame.palette.set([...PALETTE[i], 255], i * 4);
   }
 
-  function ensureFrame() {
-    if (frameArena === SETTINGS.arena) return;
-    const [width, height] = ARENAS[SETTINGS.arena];
-    frame = frames[SETTINGS.arena];
-    if (!frame) {
-      frame = ui.graphics.framebuffer(`light-cycles-${SETTINGS.arena}`, width, height, { format: "indexed" });
-      for (let i = 0; i < PALETTE.length; i += 1) frame.palette.set([...PALETTE[i], 255], i * 4);
-      frames[SETTINGS.arena] = frame;
+  function bufferRect(left, top, right, bottom, color) {
+    frame.fillRect(Math.floor(left), Math.floor(top), Math.max(1, Math.ceil(right - left)), Math.max(1, Math.ceil(bottom - top)), color);
+  }
+
+  function bufferLine(x1, y1, x2, y2, color, width) {
+    const distance = Math.max(1, Math.ceil(Math.hypot(x2 - x1, y2 - y1)));
+    for (let i = 0; i <= distance; i += 1) {
+      const t = i / distance, x = x1 + (x2 - x1) * t, y = y1 + (y2 - y1) * t;
+      bufferRect(x - width / 2, y - width / 2, x + width / 2, y + width / 2, color);
     }
-    frameArena = SETTINGS.arena;
+  }
+
+  function rebuildArena(force = false) {
+    if (!round) return;
+    ensureFrame();
+    const sx = BUFFER_W / round.width, sy = BUFFER_H / round.height;
+    const inset = safeInset(round.ticks);
+    const full = force || inset !== paintedInset || paintedLengths.length !== round.riders.length;
+    if (full) {
+      frame.clear(0); paintedLengths = round.riders.map(() => 1); paintedInset = inset;
+      for (let x = 0; x < BUFFER_W; x += Math.max(8, Math.round(sx * 4))) frame.fillRect(x, 0, 1, BUFFER_H, 2);
+      for (let y = 0; y < BUFFER_H; y += Math.max(8, Math.round(sy * 4))) frame.fillRect(0, y, BUFFER_W, 1, 2);
+    }
+    round.riders.forEach((rider) => {
+      const path = rider.path || [[rider.x, rider.y]];
+      const start = full ? 1 : Math.max(1, paintedLengths[rider.id] || 1);
+      for (let i = start; i < path.length; i += 1) {
+        const a = path[i - 1], b = path[i];
+        bufferLine((a[0] + .5) * sx, (a[1] + .5) * sy, (b[0] + .5) * sx, (b[1] + .5) * sy, 3 + rider.id, 3.4);
+        bufferLine((a[0] + .5) * sx, (a[1] + .5) * sy, (b[0] + .5) * sx, (b[1] + .5) * sy, 8 + rider.id, 1.15);
+      }
+      paintedLengths[rider.id] = path.length;
+    });
+    // Collapse walls are repainted only when their cell boundary advances.
+    if (full && inset) {
+      bufferRect(0, 0, inset * sx, BUFFER_H, 12); bufferRect(BUFFER_W - inset * sx, 0, BUFFER_W, BUFFER_H, 12);
+      bufferRect(inset * sx, 0, BUFFER_W - inset * sx, inset * sy, 12);
+      bufferRect(inset * sx, BUFFER_H - inset * sy, BUFFER_W - inset * sx, BUFFER_H, 12);
+    }
+    frame.present();
+  }
+
+  const rotated = (cx, cy, forward, side, x, y) => [cx + forward[0] * x + side[0] * y, cy + forward[1] * x + side[1] * y];
+
+  function bikeCommands(rider, alpha) {
+    const [dx, dy] = DIRECTIONS[rider.direction], cellW = WIDTH / round.width, cellH = HEIGHT / round.height;
+    const origin = renderOrigins[rider.id] || rider;
+    const cx = (origin.x + (rider.x - origin.x) * alpha + .5) * cellW;
+    const cy = (origin.y + (rider.y - origin.y) * alpha + .5) * cellH;
+    const forward = [dx, dy], side = [-dy, dx], length = Math.max(10, Math.min(18, Math.min(cellW, cellH) * 1.75));
+    const width = Math.max(5, Math.min(9, length * .48)), color = COLORS[rider.id];
+    const body = [[.62, 0], [.18, -.5], [-.5, -.44], [-.64, 0], [-.5, .44], [.18, .5]]
+      .map(([x, y]) => rotated(cx, cy, forward, side, x * length, y * width));
+    const nose = [rotated(cx, cy, forward, side, length * .74, 0), rotated(cx, cy, forward, side, length * .34, -width * .3), rotated(cx, cy, forward, side, length * .34, width * .3)];
+    const commands = [
+      { type: "line", x1: (origin.x + .5) * cellW, y1: (origin.y + .5) * cellH, x2: cx, y2: cy, width: Math.max(3, width * .55), color: DIM_COLORS[rider.id] },
+      { type: "line", x1: (origin.x + .5) * cellW, y1: (origin.y + .5) * cellH, x2: cx, y2: cy, width: 1.5, color },
+      { type: "circle", x: cx, y: cy, radius: width * .9, color: `${color}28` },
+      { type: "polygon", points: body, fill: "#061018", stroke: color, width: 2.5 },
+      { type: "polygon", points: nose, fill: "#ffffff", stroke: color, width: 1 },
+      { type: "circle", x: cx - forward[0] * length * .12, y: cy - forward[1] * length * .12, radius: width * .25, color }
+    ];
+    return commands;
   }
 
   function draw() {
     if (!round) return;
-    ensureFrame();
-    const pixels = frame.pixels;
-    const inset = safeInset(round.ticks);
-    for (let y = 0; y < round.height; y += 1) for (let x = 0; x < round.width; x += 1) {
-      const i = y * round.width + x, owner = round.occupied[i];
-      pixels[i] = x < inset || x >= round.width - inset || y < inset || y >= round.height - inset ? 11 :
-        owner ? owner + 2 : ((x % 6 === 0 || y % 6 === 0) ? 2 : 1);
+    const interpolating = mode === "running" || (mode === "paused" && pausedMode === "running");
+    const alpha = interpolating ? Math.min(1, accumulator / PERIOD[SETTINGS.speed]) : 0;
+    const commands = [ui.graphics.frame(frame, 0, 0, WIDTH, HEIGHT)];
+    round.riders.forEach((rider) => { if (rider.alive) commands.push(...bikeCommands(rider, alpha)); });
+    effects.forEach((effect) => {
+      const progress = Math.min(1, effect.age / .55), radius = 8 + progress * 30;
+      commands.push({ type: "circle", x: effect.x, y: effect.y, radius, color: `${effect.color}${Math.round((1 - progress) * 110).toString(16).padStart(2, "0")}` });
+      commands.push({ type: "circle", x: effect.x, y: effect.y, radius: Math.max(0, radius - 5), color: "#010409" });
+      for (let i = 0; i < 8; i += 1) {
+        const angle = i * Math.PI / 4 + effect.seed;
+        commands.push({ type: "line", x1: effect.x + Math.cos(angle) * 5, y1: effect.y + Math.sin(angle) * 5,
+          x2: effect.x + Math.cos(angle) * radius * 1.5, y2: effect.y + Math.sin(angle) * radius * 1.5, width: 2, color: effect.color });
+      }
+    });
+    commands.push(
+      { type: "rect", x: 0, y: 0, width: WIDTH, height: 3, color: "#1dd6c1" },
+      { type: "rect", x: 0, y: HEIGHT - 3, width: WIDTH, height: 3, color: "#1dd6c1" },
+      { type: "rect", x: 0, y: 0, width: 3, height: HEIGHT, color: "#1dd6c1" },
+      { type: "rect", x: WIDTH - 3, y: 0, width: 3, height: HEIGHT, color: "#1dd6c1" }
+    );
+    if (mode === "countdown") {
+      const label = countdownMs > 650 ? String(Math.ceil((countdownMs - 650) / 1000)) : "GO";
+      commands.push({ type: "rect", x: 0, y: 0, width: WIDTH, height: HEIGHT, color: "#00000088" });
+      commands.push({ type: "text", x: WIDTH / 2, y: HEIGHT / 2, text: label, size: label === "GO" ? 44 : 64, align: "center", color: "#ffffff" });
+    } else if (mode === "paused") {
+      commands.push({ type: "rect", x: 0, y: 0, width: WIDTH, height: HEIGHT, color: "#00000088" });
+      commands.push({ type: "text", x: WIDTH / 2, y: HEIGHT / 2, text: "PAUSED", size: 42, align: "center", color: "#55eaff" });
     }
-    for (const rider of round.riders) if (rider.alive) pixels[rider.y * round.width + rider.x] = rider.id + 7;
-    frame.present();
-    const cellW = 640 / round.width, cellH = 400 / round.height;
-    const commands = [ui.graphics.frame(frame, 0, 0, 640, 400)];
-    if (inset > 0) {
-      const x = inset * cellW, y = inset * cellH;
-      commands.push({ type: "rect", x, y, width: 640 - x * 2, height: 2, color: "#ff6363" },
-        { type: "rect", x, y: 400 - y - 2, width: 640 - x * 2, height: 2, color: "#ff6363" },
-        { type: "rect", x, y, width: 2, height: 400 - y * 2, color: "#ff6363" },
-        { type: "rect", x: 640 - x - 2, y, width: 2, height: 400 - y * 2, color: "#ff6363" });
-    }
-    for (const rider of round.riders) if (rider.alive) {
-      const cx = (rider.x + .5) * cellW, cy = (rider.y + .5) * cellH;
-      commands.push({ type: "circle", x: cx, y: cy, radius: Math.min(cellW, cellH) * .75, color: COLORS[rider.id] });
-      commands.push({ type: "circle", x: cx, y: cy, radius: Math.min(cellW, cellH) * .3, color: "#ffffff" });
-    }
-    commands.push({ type: "rect", x: 0, y: 0, width: 640, height: 3, color: "#299b73" },
-      { type: "rect", x: 0, y: 397, width: 640, height: 3, color: "#299b73" },
-      { type: "rect", x: 0, y: 0, width: 3, height: 400, color: "#299b73" },
-      { type: "rect", x: 637, y: 0, width: 3, height: 400, color: "#299b73" });
-    ui.update("arena", ui.canvas(640, 400, commands, { id: "arena", label: "Light Cycles arena", onPointer: pointer }));
+    // The pointer action is installed once on the initial canvas. Omitting it
+    // here avoids allocating a new action handler on every animation frame.
+    ui.update("arena", ui.canvas(WIDTH, HEIGHT, commands, { id: "arena", label: "Light Cycles neon arena. Swipe to steer player one." }));
   }
 
   function updateHud() {
-    ui.update("score", ui.text(round.riders.map((rider) => `P${rider.id + 1} ${rider.id < SETTINGS.humans ? "LOCAL" : "CPU"} ${scores[rider.id]}${rider.alive ? " ●" : " ×"}`).join("    "), { id: "score", emphasis: true }));
-    ui.update("round", ui.text(`ROUND ${roundNumber} / ${SETTINGS.rounds}  ·  ${PERIOD[SETTINGS.speed]} ms / cell`, { id: "round", tone: "muted" }));
-    ui.update("status", ui.text(mode === "running" && round.ticks >= 170 ? "WARNING // ARENA CLOSING" : notice, { id: "status", tone: round.ticks >= 170 && mode === "running" ? "warning" : mode === "roundover" || mode === "matchover" ? "accent" : "muted" }));
+    if (!round) return;
+    const riders = round.riders.map((rider) => `P${rider.id + 1} ${rider.id < SETTINGS.humans ? "LOCAL" : "CPU"} ${scores[rider.id]} ${rider.alive ? "●" : "×"}`).join("    ");
+    ui.update("score", ui.text(riders, { id: "score", emphasis: true }));
+    ui.update("round", ui.text(`ROUND ${roundNumber} / ${SETTINGS.rounds} · ${Math.round(1000 / PERIOD[SETTINGS.speed])} CELLS/SEC · ${SETTINGS.difficulty.toUpperCase()} CPU`, { id: "round", tone: "muted" }));
+    const closing = mode === "running" && round.ticks >= 250;
+    ui.update("status", ui.text(closing ? "WARNING // ARENA COLLAPSING" : notice, { id: "status", tone: closing ? "warning" : (mode === "roundover" || mode === "matchover" ? "accent" : "muted") }));
   }
 
-  function updateActions() {
-    ui.update("action", ui.button(mode === "ready" ? "Start round" : mode === "paused" ? "Resume" : mode === "roundover" ? "Next round" : mode === "matchover" ? "New match" : "Pause", () => {
-      if (mode === "ready" || mode === "paused") resume();
+  function updateAction() {
+    const label = mode === "paused" ? "Resume" : mode === "roundover" ? "Next round" : mode === "matchover" ? "New match" : "Pause";
+    ui.update("action", ui.button(label, () => {
+      if (mode === "paused") resume();
       else if (mode === "roundover") nextRound();
       else if (mode === "matchover") setup();
-      else pause();
+      else if (mode === "running" || mode === "countdown") pause();
     }, { id: "action" }));
   }
 
-  function controls() {
-    const rows = [];
-    for (let id = 0; id < SETTINGS.humans; id += 1) {
-      const rider = id;
-      rows.push(ui.menu(`P${id + 1} // ${["CYAN", "AMBER", "MAGENTA", "LIME"][id]} turn`, [
-        { label: "↶ LEFT", value: "left" }, { label: "RIGHT ↷", value: "right" }
-      ], ({ value }) => { if (mode === "running" && turn(round, rider, value)) tone("turn"); }));
+  function steer(id, direction) {
+    if (mode !== "running" || !round || !queueDirection(round, id, direction)) return;
+    tone("turn");
+  }
+
+  function touchControls() {
+    const controls = [ui.menu("P1 // SWIPE OR TAP", [
+      { label: "▲", value: "3" }, { label: "◀", value: "2" }, { label: "▼", value: "1" }, { label: "▶", value: "0" }
+    ], ({ value }) => steer(0, Number(value)), { id: "touch-p1", layout: "dpad" })];
+    for (let id = 1; id < SETTINGS.humans; id += 1) {
+      controls.push(ui.menu(`P${id + 1} // ${NAMES[id]} TURN`, [{ label: "↶ LEFT", value: "left" }, { label: "RIGHT ↷", value: "right" }], ({ value }) => {
+        if (mode === "running" && turn(round, id, value)) tone("turn");
+      }));
     }
-    return rows;
+    return controls;
   }
 
   function startMatch() {
     scores = [0, 0, 0, 0]; roundNumber = 0;
-    nextRound(true);
     ui.storage.set("light-cycles-settings", { ...SETTINGS }).catch(() => {});
+    nextRound(true);
   }
 
   function nextRound(first = false) {
     roundNumber += 1; round = createRound(SETTINGS.riders, SETTINGS.arena);
-    mode = "ready"; elapsed = 0; notice = SETTINGS.riders === 1 ? "SOLO // SURVIVE AS LONG AS YOU CAN" : "READY // LAST RIDER MOVING WINS";
+    mode = "countdown"; accumulator = 0; countdownMs = 3650; countdownBeat = 4; effects = [];
+    notice = "GET READY";
+    paintedLengths = []; paintedInset = -1;
+    renderOrigins = round.riders.map((rider) => ({ x: rider.x, y: rider.y }));
+    rebuildArena(true);
     if (first) {
       ui.render(
-        ui.title("Light Cycles // Arena"),
+        ui.title("Light Cycles // Neon Arena"),
         ui.text("", { id: "round", tone: "muted" }),
         ui.text("", { id: "score", emphasis: true }),
         ui.text("", { id: "status", tone: "accent" }),
-        ui.canvas(640, 400, [], { id: "arena", label: "Light Cycles arena", onPointer: pointer }),
-        ui.button("Start round", resume, { id: "action" }),
-        ...controls(),
-        ui.text("Space pauses · Swipe to steer P1 · A reverse turn is ignored", { tone: "muted" }),
+        ui.canvas(WIDTH, HEIGHT, [], { id: "arena", label: "Light Cycles neon arena. Swipe to steer player one.", onPointer: pointer }),
+        ui.button("Pause", () => pause(), { id: "action" }),
+        ...touchControls(),
+        ui.text("Arrow keys / WASD · swipe or tap the direction pad · Space pauses · reverse turns are blocked", { tone: "muted" }),
         ui.text("", { id: "stats", tone: "muted" })
       );
       updateStats();
     }
-    updateHud(); updateActions(); draw();
+    updateHud(); updateAction(); draw();
   }
 
   function resume() {
-    if (mode !== "ready" && mode !== "paused") return;
-    mode = "running"; elapsed = 0; notice = "RUNNING"; tone("start"); updateHud(); updateActions();
+    if (mode !== "paused") return;
+    mode = pausedMode === "countdown" ? "countdown" : "running";
+    notice = mode === "countdown" ? "GET READY" : "RUNNING"; updateHud(); updateAction(); draw();
   }
 
   function pause(message = "PAUSED") {
-    if (mode !== "running") return;
-    mode = "paused"; elapsed = 0; notice = message; updateHud(); updateActions();
+    if (mode !== "running" && mode !== "countdown") return;
+    pausedMode = mode; mode = "paused"; notice = message; updateHud(); updateAction(); draw();
   }
 
   function finishRound() {
     if (mode !== "running") return;
     mode = roundNumber >= SETTINGS.rounds ? "matchover" : "roundover";
     stats.rounds += 1;
-    for (const rider of round.riders.slice(0, SETTINGS.humans)) {
+    round.riders.slice(0, SETTINGS.humans).forEach((rider) => {
       stats.bestRide = Math.max(stats.bestRide, rider.survived);
       if (!rider.alive) stats.crashes += 1;
-    }
+    });
     if (round.winner !== null) {
       scores[round.winner] += 1;
       if (round.winner < SETTINGS.humans) stats.roundWins += 1;
-      notice = `ROUND ${roundNumber} // P${round.winner + 1} WINS`;
-      tone("win");
+      notice = `ROUND ${roundNumber} // P${round.winner + 1} WINS`; tone("win");
     } else if (SETTINGS.riders === 1) {
       scores[0] += Math.floor(round.riders[0].survived / 10);
       notice = `SOLO RIDE // ${round.riders[0].survived} CELLS`;
@@ -206,43 +287,67 @@ StationNet.start(async (ui) => {
       const localBest = Math.max(...scores.slice(0, SETTINGS.humans));
       if (SETTINGS.riders > 1 && localBest > 0) ui.scores.submit(localBest).catch(() => {});
     }
-    persist(); updateStats(); updateHud(); updateActions(); draw();
+    persist(); updateStats(); updateHud(); updateAction(); draw();
   }
 
   function pointer(event) {
     if (event.phase === "start") pointerStart = [event.x, event.y];
-    if (event.phase !== "end" || !pointerStart || mode !== "running") return;
+    if (event.phase !== "end" || !pointerStart) return;
     const dx = event.x - pointerStart[0], dy = event.y - pointerStart[1]; pointerStart = null;
-    if (Math.max(Math.abs(dx), Math.abs(dy)) < 18) return;
-    const direction = Math.abs(dx) > Math.abs(dy) ? (dx > 0 ? 0 : 2) : (dy > 0 ? 1 : 3);
-    if (queueDirection(round, 0, direction)) tone("turn");
+    if (Math.max(Math.abs(dx), Math.abs(dy)) < 16) return;
+    steer(0, Math.abs(dx) > Math.abs(dy) ? (dx > 0 ? 0 : 2) : (dy > 0 ? 1 : 3));
+  }
+
+  function addCrashEffects(ids) {
+    const cellW = WIDTH / round.width, cellH = HEIGHT / round.height;
+    ids.forEach((id) => {
+      const rider = round.riders[id];
+      const [dx, dy] = DIRECTIONS[rider.queued];
+      effects.push({ x: Math.max(4, Math.min(WIDTH - 4, (rider.x + .5 + dx) * cellW)),
+        y: Math.max(4, Math.min(HEIGHT - 4, (rider.y + .5 + dy) * cellH)), color: COLORS[id], age: 0, seed: Math.random() * Math.PI });
+    });
   }
 
   ui.onKey(({ code, phase, repeat }) => {
     if (phase !== "down" || repeat) return;
-    if (code === "Space") { if (mode === "running") pause(); else if (mode === "paused") resume(); return; }
-    if (code === "Enter") { if (mode === "ready" || mode === "paused") resume(); else if (mode === "roundover") nextRound(); return; }
+    if (code === "Space") { if (mode === "running" || mode === "countdown") pause(); else if (mode === "paused") resume(); return; }
+    if (code === "Enter") { if (mode === "paused") resume(); else if (mode === "roundover") nextRound(); return; }
     if (mode !== "running") return;
-    for (let id = 0; id < SETTINGS.humans; id += 1) {
-      const direction = KEYS[id][code];
-      if (direction !== undefined && queueDirection(round, id, direction)) tone("turn");
-    }
+    if (SETTINGS.humans === 1 && KEYS[1][code] !== undefined) { steer(0, KEYS[1][code]); return; }
+    for (let id = 0; id < SETTINGS.humans; id += 1) if (KEYS[id][code] !== undefined) { steer(id, KEYS[id][code]); return; }
   });
+
   ui.onVisibility(({ value }) => { if (value === "hidden") pause("PAUSED // WINDOW INACTIVE"); });
+
   ui.animate(({ delta }) => {
-    if (mode !== "running") return;
-    elapsed += Math.min(delta * 1000, 250);
-    if (elapsed < PERIOD[SETTINGS.speed]) return;
-    elapsed -= PERIOD[SETTINGS.speed];
-    for (let id = SETTINGS.humans; id < SETTINGS.riders; id += 1) {
-      const direction = chooseComputerDirection(round, id);
-      if (direction !== null) queueDirection(round, id, direction);
+    const dt = Math.min(.05, delta);
+    effects.forEach((effect) => { effect.age += dt; }); effects = effects.filter((effect) => effect.age < .55);
+    if (mode === "countdown") {
+      countdownMs -= dt * 1000;
+      const beat = Math.max(0, Math.ceil((countdownMs - 650) / 1000));
+      if (beat < countdownBeat) { countdownBeat = beat; tone("count", beat); }
+      if (countdownMs <= 0) { mode = "running"; countdownMs = 0; accumulator = PERIOD[SETTINGS.speed]; notice = "RUNNING"; updateHud(); updateAction(); }
+      draw(); return;
     }
-    const result = step(round);
-    if (result.eliminated.length) tone("crash");
-    if (result.over) finishRound();
-    else { updateHud(); draw(); }
+    if (mode !== "running") { if (effects.length) draw(); return; }
+    accumulator += dt * 1000; hudClock += dt * 1000;
+    const period = PERIOD[SETTINGS.speed];
+    let steps = 0;
+    while (accumulator >= period && steps < 5 && mode === "running") {
+      accumulator -= period; steps += 1;
+      for (let id = SETTINGS.humans; id < SETTINGS.riders; id += 1) {
+        const direction = chooseComputerDirection(round, id, Math.random, SETTINGS.difficulty);
+        if (direction !== null) queueDirection(round, id, direction);
+      }
+      const before = round.riders.map((rider) => ({ x: rider.x, y: rider.y }));
+      const result = step(round); renderOrigins = before; rebuildArena();
+      if (result.eliminated.length) { addCrashEffects(result.eliminated); tone("crash"); updateHud(); }
+      if (result.over) finishRound();
+    }
+    if (hudClock >= 500) { hudClock = 0; updateHud(); }
+    draw();
   });
+
   const [storedStats, storedSettings] = await Promise.all([
     ui.storage.get("light-cycles-stats").catch(() => null),
     ui.storage.get("light-cycles-settings").catch(() => null)
@@ -255,6 +360,7 @@ StationNet.start(async (ui) => {
     if ([1, 2, 3, 4].includes(storedSettings.humans)) SETTINGS.humans = Math.min(storedSettings.humans, SETTINGS.riders);
     if (ARENAS[storedSettings.arena]) SETTINGS.arena = storedSettings.arena;
     if (PERIOD[storedSettings.speed]) SETTINGS.speed = storedSettings.speed;
+    if (["casual", "arcade", "elite"].includes(storedSettings.difficulty)) SETTINGS.difficulty = storedSettings.difficulty;
     if ([3, 5, 7].includes(storedSettings.rounds)) SETTINGS.rounds = storedSettings.rounds;
   }
   setup();

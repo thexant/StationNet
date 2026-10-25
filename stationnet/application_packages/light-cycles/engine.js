@@ -1,7 +1,8 @@
-// Pure, fixed-tick rules shared by the game and its collision tests.
+// Pure, deterministic fixed-step rules. Rendering interpolates between these
+// cells, so collision remains exact while bikes move smoothly at display rate.
 export const ARENAS = { compact: [40, 26], standard: [56, 36], wide: [72, 46] };
 export const DIRECTIONS = [[1, 0], [0, 1], [-1, 0], [0, -1]];
-export const safeInset = (ticks) => Math.max(0, Math.floor((ticks - 180) / 10));
+export const safeInset = (ticks) => Math.max(0, Math.floor((ticks - 260) / 14));
 
 function inside(round, x, y, inset) {
   return x >= inset && x < round.width - inset && y >= inset && y < round.height - inset;
@@ -18,7 +19,7 @@ export function createRound(count, arena = "standard") {
   const occupied = new Uint8Array(width * height);
   const riders = starts.slice(0, Math.max(1, Math.min(4, count))).map(([x, y, direction], id) => {
     occupied[y * width + x] = id + 1;
-    return { id, x, y, direction, queued: direction, alive: true, survived: 0 };
+    return { id, x, y, direction, queued: direction, alive: true, survived: 0, path: [[x, y]] };
   });
   return { width, height, occupied, riders, ticks: 0, over: false, winner: null };
 }
@@ -71,6 +72,7 @@ export function step(round) {
     rider.direction = next.direction;
     rider.queued = next.direction;
     rider.survived += 1;
+    rider.path.push([next.x, next.y]);
     round.occupied[next.y * round.width + next.x] = id + 1;
   });
   round.ticks += 1;
@@ -109,9 +111,14 @@ function openArea(round, x, y) {
   return queue.length;
 }
 
-export function chooseComputerDirection(round, id, random = Math.random) {
+export function chooseComputerDirection(round, id, random = Math.random, difficulty = "arcade") {
   const rider = round.riders[id];
   if (!rider || !rider.alive) return null;
+  const profile = {
+    casual: { run: 1.15, area: .09, side: .9, straight: 4.5, noise: 7 },
+    arcade: { run: 1.6, area: .18, side: 1.4, straight: 2.5, noise: 2 },
+    elite: { run: 2.1, area: .28, side: 1.8, straight: 1.2, noise: .35 }
+  }[difficulty] || { run: 1.6, area: .18, side: 1.4, straight: 2.5, noise: 2 };
   let best = rider.direction, bestScore = -Infinity;
   const inset = safeInset(round.ticks + 1);
   for (const direction of [rider.direction, (rider.direction + 3) % 4, (rider.direction + 1) % 4]) {
@@ -120,7 +127,8 @@ export function chooseComputerDirection(round, id, random = Math.random) {
     const run = clearRun(round, x, y, direction);
     const area = openArea(round, x, y);
     const sideOpen = [3, 1].reduce((sum, offset) => sum + Math.min(4, clearRun(round, x, y, (direction + offset) % 4)), 0);
-    const score = run * 1.5 + area * .16 + sideOpen * 1.3 + (direction === rider.direction ? 3 : 0) + random() * 2;
+    const score = run * profile.run + area * profile.area + sideOpen * profile.side +
+      (direction === rider.direction ? profile.straight : 0) + random() * profile.noise;
     if (score > bestScore) { bestScore = score; best = direction; }
   }
   return best;
