@@ -2,8 +2,6 @@
 
 for(const mud of document.querySelectorAll("[data-mud]")){
   const events=mud.querySelector("[data-mud-events]");
-  const main=mud.querySelector(".mud-main");
-  const history=mud.querySelector(".mud-history");
   const actions=mud.querySelector("[data-mud-actions]");
   const form=mud.querySelector("[data-mud-command]");
   const input=form.querySelector("[data-command-input]");
@@ -38,13 +36,6 @@ for(const mud of document.querySelectorAll("[data-mud]")){
   const scrollEventsToLatest=()=>requestAnimationFrame(()=>{
     events.scrollTop=Math.max(0,events.scrollHeight-events.clientHeight);
   });
-  const syncHistoryLayout=()=>main?.classList.toggle("mud-history-collapsed",!history?.open);
-  history?.addEventListener("toggle",()=>{
-    syncHistoryLayout();
-    if(history.open)scrollEventsToLatest();
-  });
-  syncHistoryLayout();
-
   const requestId=()=>globalThis.crypto?.randomUUID?.()||`${Date.now()}-${Math.random().toString(36).slice(2)}`;
   let clientId;
   try{
