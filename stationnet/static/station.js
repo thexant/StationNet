@@ -269,7 +269,7 @@ if(inviteInput&&!inviteInput.value&&location.hash){
 }
 
 for(const panel of document.querySelectorAll("[data-collapsible-panel]")){
-  const toggle=panel.querySelector(":scope > [data-panel-toggle]");
+  const toggle=panel.querySelector("[data-panel-toggle]");
   const content=panel.querySelector(":scope > [data-panel-content]");
   if(!toggle||!content)continue;
   const storageKey=`stationnet.panel.${panel.dataset.panelKey||content.id}`;
@@ -284,6 +284,7 @@ for(const panel of document.querySelectorAll("[data-collapsible-panel]")){
     expanded=value;
     toggle.setAttribute("aria-expanded",String(expanded));
     content.hidden=!expanded;
+    panel.classList.toggle("is-collapsed",!expanded);
     if(persist)try{localStorage.setItem(storageKey,expanded?"expanded":"collapsed")}catch(_){}
   };
   setExpanded(expanded,false);

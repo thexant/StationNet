@@ -16,9 +16,12 @@
 
   <div class="mud-layout">
     <section class="mud-main" aria-label="MUD terminal">
-      <section class="mud-game" aria-labelledby="mud-game-heading">
+      <section class="mud-game collapsible-panel" data-collapsible-panel data-panel-key="mud-game" aria-labelledby="mud-game-heading">
         <div class="mud-game-bar">
-          <span class="mud-game-label" id="mud-game-heading">GAME</span>
+          <button type="button" class="mud-game-toggle" data-panel-toggle aria-expanded="true" aria-controls="mud-game-content" aria-label="Game activity">
+            <span class="mud-game-label" id="mud-game-heading">GAME</span>
+            <span class="collapsible-panel-chevron" aria-hidden="true"></span>
+          </button>
           <div class="mud-game-place">
             <span class="mud-game-location" data-mud-room-name>{{ room.name }}</span>
             <span class="mud-game-preview" data-mud-room-preview>{{ room.description }}</span>
@@ -29,6 +32,7 @@
             <button type="button" data-mud-clear-events aria-label="Clear gameplay activity history">CLEAR</button>
           </div>
         </div>
+        <div class="mud-game-content" id="mud-game-content" data-panel-content>
         <div class="mud-scene-view" id="mud-room-view" data-mud-room-view hidden>
           <article class="mud-scene" data-mud-room aria-label="Current room" aria-live="polite">
             <div class="mud-scene-heading"><span>YOU ARE HERE</span><h2 data-mud-scene-name>{{ room.name }}</h2></div>
@@ -63,9 +67,16 @@
             {% endfor %}
           </div>
         </div>
+        </div>
       </section>
-      <section class="mud-context" aria-labelledby="mud-actions-heading">
-        <div class="mud-section-heading"><span id="mud-actions-heading">QUICK ACTIONS</span><small>Context-sensitive</small></div>
+      <section class="mud-context collapsible-panel" data-collapsible-panel data-panel-key="mud-actions" aria-labelledby="mud-actions-heading">
+        <div class="mud-section-heading">
+          <button type="button" class="mud-context-toggle" data-panel-toggle aria-expanded="true" aria-controls="mud-actions-content">
+            <span id="mud-actions-heading">QUICK ACTIONS</span><span class="collapsible-panel-chevron" aria-hidden="true"></span>
+          </button>
+          <small>Context-sensitive</small>
+        </div>
+        <div class="mud-actions-content" id="mud-actions-content" data-panel-content>
         <div class="mud-action-groups" data-mud-actions>
           {% for group in mud_actions|groupby('group') %}
           <div class="mud-action-group" data-action-group="{{ group.grouper }}">
@@ -73,6 +84,7 @@
             <div>{% for action in group.list %}<button type="button" class="secondary" data-mud-action="{{ action.key }}" data-mud-parameters='{{ action.parameters|tojson }}' title="{{ action.description }}">{{ action.label }}</button>{% endfor %}</div>
           </div>
           {% endfor %}
+        </div>
         </div>
       </section>
 
