@@ -28,7 +28,12 @@
       ('mail.inbox', 'PRIVATE MAIL', 'COMPOSE AND READ PRIVATE MESSAGES'),
       ('radio.console', 'RADIO', 'AUDIO RECEIVER AND TRANSMISSION CONSOLE'),
       ('archive.index', 'FILE ARCHIVE', 'SHARED STATION FILES'),
-      ('users.directory', 'USER DIRECTORY', 'LIST OF REGISTERED USERS ON THIS STATION'),
+      ('users.directory', 'USER DIRECTORY', 'LIST OF REGISTERED USERS ON THIS STATION')
+    ] %}
+    {% if g.station.office_enabled %}
+      {% set services = services + [('office.index', 'OFFICE', 'STATIONNET OFFICE SUITE')] %}
+    {% endif %}
+    {% set services = services + [
       ('applications.index', 'PROGRAM MANAGER', 'STATION-HOSTED SOFTWARE AND GAMES DIRECTORY')
     ] %}
     {% if g.station.mud_enabled %}

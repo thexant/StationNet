@@ -39,6 +39,7 @@ CREATE TABLE IF NOT EXISTS station (
  videos_enabled INTEGER NOT NULL DEFAULT 0 CHECK(videos_enabled IN (0,1)),
  imageboard_enabled INTEGER NOT NULL DEFAULT 0 CHECK(imageboard_enabled IN (0,1)),
  events_enabled INTEGER NOT NULL DEFAULT 0 CHECK(events_enabled IN (0,1)),
+ office_enabled INTEGER NOT NULL DEFAULT 0 CHECK(office_enabled IN (0,1)),
  events_create_permission TEXT NOT NULL DEFAULT 'sysops' CHECK(events_create_permission IN ('sysops','groups','members')),
  videos_mode TEXT NOT NULL DEFAULT 'community' CHECK(videos_mode IN ('community','curated')),
  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);
@@ -1007,10 +1008,20 @@ def _migrate_events(database):
         database.execute("ALTER TABLE station ADD COLUMN events_create_permission TEXT NOT NULL DEFAULT 'sysops' CHECK(events_create_permission IN ('sysops','groups','members'))")
 
 
+def _migrate_office(database):
+    columns = {row["name"] for row in database.execute("PRAGMA table_info(station)")}
+    if "office_enabled" not in columns:
+        database.execute(
+            "ALTER TABLE station ADD COLUMN office_enabled INTEGER NOT NULL DEFAULT 0 "
+            "CHECK(office_enabled IN (0,1))"
+        )
+
+
 def init_db():
     database = get_db()
     database.executescript(SCHEMA)
     _migrate_events(database)
+    _migrate_office(database)
     _migrate_mud_dungeon_content_types(database)
     _migrate_station_customization(database)
     _migrate_themes(database)

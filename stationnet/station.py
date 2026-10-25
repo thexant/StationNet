@@ -580,6 +580,13 @@ def settings():
             database.commit()
             flash("User Feeds enabled." if enabled else "User Feeds disabled.", "success")
             return redirect(url_for("station.settings") + "#user-feeds")
+        if request.form.get("settings_section") == "office":
+            enabled = request.form.get("office_enabled") == "on"
+            database = get_db()
+            database.execute("UPDATE station SET office_enabled=? WHERE id=1", (enabled,))
+            database.commit()
+            flash("Office enabled." if enabled else "Office disabled.", "success")
+            return redirect(url_for("station.settings") + "#office-suite")
         if request.form.get("settings_section") == "imageboard":
             enabled = request.form.get("imageboard_enabled") == "on"
             max_threads = request.form.get("imageboard_max_threads", g.station["imageboard_max_threads"], type=int)
