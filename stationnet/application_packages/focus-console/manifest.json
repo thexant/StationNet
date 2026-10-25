@@ -1,0 +1,10 @@
+{
+  "package_format": 1,
+  "slug": "focus-console",
+  "name": "Focus Console",
+  "description": "Pomodoro timer with session logging, weekly chart, streaks, and a station-wide focus leaderboard.",
+  "author": "StationNet Core",
+  "version": "1.0.0",
+  "category": "Apps",
+  "entrypoint": "main.js"
+}

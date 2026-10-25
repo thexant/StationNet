@@ -1,0 +1,13 @@
+{
+  "package_format": 1,
+  "slug": "calculator",
+  "name": "Calculator",
+  "description": "Standard and scientific calculator with memory, history, keyboard and touch input.",
+  "author": "StationNet Core",
+  "version": "1.0.0",
+  "category": "Apps",
+  "entrypoint": "src/main.js",
+  "platforms": ["desktop", "touch"],
+  "required_inputs": [],
+  "preferred_presentation": "standard"
+}

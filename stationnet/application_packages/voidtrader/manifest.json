@@ -1,0 +1,13 @@
+{
+  "package_format": 1,
+  "slug": "void-trader",
+  "name": "Void Trader",
+  "description": "A wireframe space trading sim with mouse flight controls, pirate combat, freight contracts and hyperspace routes.",
+  "author": "StationNet Core",
+  "version": "1.2.0",
+  "category": "Games",
+  "entrypoint": "main.js",
+  "platforms": ["desktop"],
+  "required_inputs": ["keyboard"],
+  "preferred_presentation": "standard"
+}
