@@ -265,7 +265,8 @@ function initialize() {
       if (!crypto?.getRandomValues) throw new Error('This browser lacks secure random number generation.');
       const vault = await requestJson(app.dataset.vault, { method: 'POST', body: '{}' });
       const result = await requestJson(api);
-      if (!result.documents.length) {
+      const sheets = await requestJson(app.dataset.sheetsApi);
+      if (!result.documents.length && !sheets.sheets.length) {
         const confirmRow = $('#document-confirm-row');
         if (confirmRow.hidden) {
           confirmRow.hidden = false;
@@ -278,6 +279,7 @@ function initialize() {
       }
       key = await pbkdf2Async(sha256, textEncoder.encode(passphrase), unb64(vault.salt), { c: 210000, dkLen: 32, asyncTick: 20 });
       if (result.documents.length) decrypt(result.documents[0].envelope);
+      else if (sheets.sheets.length) decrypt(sheets.sheets[0].envelope);
       $('#document-passphrase').value = '';
       $('#document-passphrase-confirm').value = '';
       $('#document-confirm-row').hidden = true;
@@ -290,7 +292,7 @@ function initialize() {
       else await newDocument();
     } catch (error) {
       key?.fill(0); key = null;
-      errorBox.textContent = 'Could not unlock. Check your document passphrase and try again. ' + error.message;
+      errorBox.textContent = 'Could not unlock. Check your OFFICE Password and try again. ' + error.message;
       errorBox.hidden = false; status('LOCKED', 'error');
     }
   }

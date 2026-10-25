@@ -1,0 +1,478 @@
+Bundled license information:
+
+exceljs/dist/exceljs.min.js:
+  /*! ExcelJS 19-10-2023 */
+  /*!
+   * The buffer module from node.js, for the browser.
+   *
+   * @author   Feross Aboukhadijeh <https://feross.org>
+   * @license  MIT
+   */
+  /*! ieee754. BSD-3-Clause License. Feross Aboukhadijeh <https://feross.org/opensource> */
+  /*!
+  
+  JSZip v3.10.1 - A JavaScript class for generating and reading zip files
+  <http://stuartk.com/jszip>
+  
+  (c) 2009-2016 Stuart Knightley <stuart [at] stuartk.com>
+  Dual licenced under the MIT license or GPLv3. See https://raw.github.com/Stuk/jszip/main/LICENSE.markdown.
+  
+  JSZip uses the library pako released under the MIT license :
+  https://github.com/nodeca/pako/blob/main/LICENSE
+  */
+  /*! safe-buffer. MIT License. Feross Aboukhadijeh <https://feross.org/opensource> */
+  /**
+   * Character classes and associated utilities for the 5th edition of XML 1.0.
+   *
+   * @author Louis-Dominique Dubeau
+   * @license MIT
+   * @copyright Louis-Dominique Dubeau
+   */
+  /**
+   * Character classes and associated utilities for the 2nd edition of XML 1.1.
+   *
+   * @author Louis-Dominique Dubeau
+   * @license MIT
+   * @copyright Louis-Dominique Dubeau
+   */
+  /**
+   * Character class utilities for XML NS 1.0 edition 3.
+   *
+   * @author Louis-Dominique Dubeau
+   * @license MIT
+   * @copyright Louis-Dominique Dubeau
+   */
+
+@noble/ciphers/utils.js:
+  /*! noble-ciphers - MIT License (c) 2023 Paul Miller (paulmillr.com) */
+
+hyperformula/es/parser/ColumnAddress.mjs:
+hyperformula/es/parser/RowAddress.mjs:
+hyperformula/es/parser/CellAddress.mjs:
+hyperformula/es/parser/parser-consts.mjs:
+hyperformula/es/parser/addressRepresentationConverters.mjs:
+hyperformula/es/parser/Ast.mjs:
+hyperformula/es/parser/binaryOpTokenMap.mjs:
+hyperformula/es/parser/Cache.mjs:
+hyperformula/es/error-message.mjs:
+hyperformula/es/parser/CellReferenceMatcher.mjs:
+hyperformula/es/parser/NamedExpressionMatcher.mjs:
+hyperformula/es/parser/LexerConfig.mjs:
+hyperformula/es/parser/FormulaParser.mjs:
+hyperformula/es/parser/Unparser.mjs:
+hyperformula/es/parser/ParserWithCaching.mjs:
+hyperformula/es/parser/collectDependencies.mjs:
+hyperformula/es/parser/RelativeDependency.mjs:
+hyperformula/es/parser/index.mjs:
+hyperformula/es/absolutizeDependencies.mjs:
+hyperformula/es/interpreter/InterpreterValue.mjs:
+hyperformula/es/SimpleRangeValue.mjs:
+hyperformula/es/ContentChanges.mjs:
+hyperformula/es/NamedExpressions.mjs:
+hyperformula/es/Span.mjs:
+hyperformula/es/statistics/StatType.mjs:
+hyperformula/es/statistics/Statistics.mjs:
+hyperformula/es/statistics/EmptyStatistics.mjs:
+hyperformula/es/statistics/index.mjs:
+hyperformula/es/errors.mjs:
+hyperformula/es/DependencyGraph/AddressMapping/AddressMapping.mjs:
+hyperformula/es/DependencyGraph/ArrayMapping.mjs:
+hyperformula/es/ArrayValue.mjs:
+hyperformula/es/DependencyGraph/Vertex.mjs:
+hyperformula/es/DependencyGraph/CellVertex.mjs:
+hyperformula/es/DependencyGraph/FormulaVertex.mjs:
+hyperformula/es/DependencyGraph/RangeVertex.mjs:
+hyperformula/es/DependencyGraph/collectAddressesDependentToRange.mjs:
+hyperformula/es/DependencyGraph/TopSort.mjs:
+hyperformula/es/DependencyGraph/ProcessableValue.mjs:
+hyperformula/es/DependencyGraph/Graph.mjs:
+hyperformula/es/DependencyGraph/RangeMapping.mjs:
+hyperformula/es/i18n/TranslationPackage.mjs:
+hyperformula/es/i18n/index.mjs:
+hyperformula/es/DependencyGraph/SheetMapping.mjs:
+hyperformula/es/DependencyGraph/SheetReferenceRegistrar.mjs:
+hyperformula/es/Sheet.mjs:
+hyperformula/es/DependencyGraph/DependencyGraph.mjs:
+hyperformula/es/DependencyGraph/EmptyCellVertex.mjs:
+hyperformula/es/DependencyGraph/ValueCellVertex.mjs:
+hyperformula/es/DependencyGraph/ParsingErrorVertex.mjs:
+hyperformula/es/DependencyGraph/AddressMapping/SparseStrategy.mjs:
+hyperformula/es/DependencyGraph/AddressMapping/DenseStrategy.mjs:
+hyperformula/es/DependencyGraph/index.mjs:
+hyperformula/es/Cell.mjs:
+hyperformula/es/AbsoluteCellRange.mjs:
+hyperformula/es/interpreter/InterpreterState.mjs:
+hyperformula/es/StringHelper.mjs:
+hyperformula/es/interpreter/ArithmeticHelper.mjs:
+hyperformula/es/interpreter/plugin/FunctionPlugin.mjs:
+hyperformula/es/interpreter/index.mjs:
+hyperformula/es/DateTimeDefault.mjs:
+hyperformula/es/DateTimeHelper.mjs:
+hyperformula/es/DependencyGraph/AddressMapping/ChooseAddressMappingPolicy.mjs:
+hyperformula/es/format/parser.mjs:
+hyperformula/es/format/format.mjs:
+hyperformula/es/license/LicenseEntitlement.mjs:
+hyperformula/es/license/featureCapabilities.mjs:
+hyperformula/es/license/functionCapabilities.mjs:
+hyperformula/es/license/capabilities.mjs:
+hyperformula/es/license/CapabilityRegistry.mjs:
+hyperformula/es/helpers/licenseKeyHelper.mjs:
+hyperformula/es/helpers/licenseKeyValidator.mjs:
+hyperformula/es/license/licenseResolution.mjs:
+hyperformula/es/Config.mjs:
+hyperformula/es/ArgumentSanitization.mjs:
+hyperformula/es/CellContentParser.mjs:
+hyperformula/es/ClipboardOperations.mjs:
+hyperformula/es/dependencyTransformers/Transformer.mjs:
+hyperformula/es/dependencyTransformers/AddColumnsTransformer.mjs:
+hyperformula/es/dependencyTransformers/AddRowsTransformer.mjs:
+hyperformula/es/dependencyTransformers/CleanOutOfScopeDependenciesTransformer.mjs:
+hyperformula/es/dependencyTransformers/MoveCellsTransformer.mjs:
+hyperformula/es/dependencyTransformers/RemoveColumnsTransformer.mjs:
+hyperformula/es/dependencyTransformers/RemoveRowsTransformer.mjs:
+hyperformula/es/dependencyTransformers/RenameSheetTransformer.mjs:
+hyperformula/es/Operations.mjs:
+hyperformula/es/UndoRedo.mjs:
+hyperformula/es/CrudOperations.mjs:
+hyperformula/es/Evaluator.mjs:
+hyperformula/es/CellValue.mjs:
+hyperformula/es/Exporter.mjs:
+hyperformula/es/GraphBuilder.mjs:
+hyperformula/es/interpreter/Criterion.mjs:
+hyperformula/es/interpreter/Interpreter.mjs:
+hyperformula/es/dependencyTransformers/CombinedTransformer.mjs:
+hyperformula/es/LazilyTransformingAstService.mjs:
+hyperformula/es/license/ensureFeatureAllowed.mjs:
+hyperformula/es/interpreter/binarySearch.mjs:
+hyperformula/es/Lookup/AdvancedFind.mjs:
+hyperformula/es/Lookup/ColumnBinarySearch.mjs:
+hyperformula/es/Lookup/ColumnIndex.mjs:
+hyperformula/es/Lookup/SearchStrategy.mjs:
+hyperformula/es/NumberLiteralHelper.mjs:
+hyperformula/es/Serialization.mjs:
+hyperformula/es/BuildEngineFactory.mjs:
+hyperformula/es/Destroy.mjs:
+hyperformula/es/Emitter.mjs:
+hyperformula/es/interpreter/functionMetadata/categories/array-manipulation.mjs:
+hyperformula/es/interpreter/functionMetadata/categories/database.mjs:
+hyperformula/es/interpreter/functionMetadata/categories/date-and-time.mjs:
+hyperformula/es/interpreter/functionMetadata/categories/engineering.mjs:
+hyperformula/es/interpreter/functionMetadata/categories/financial.mjs:
+hyperformula/es/interpreter/functionMetadata/categories/information.mjs:
+hyperformula/es/interpreter/functionMetadata/categories/logical.mjs:
+hyperformula/es/interpreter/functionMetadata/categories/lookup-and-reference.mjs:
+hyperformula/es/interpreter/functionMetadata/categories/math-and-trigonometry.mjs:
+hyperformula/es/interpreter/functionMetadata/categories/matrix-functions.mjs:
+hyperformula/es/interpreter/functionMetadata/categories/operator.mjs:
+hyperformula/es/interpreter/functionMetadata/categories/statistical.mjs:
+hyperformula/es/interpreter/functionMetadata/categories/text.mjs:
+hyperformula/es/interpreter/functionMetadata/FunctionDescription.mjs:
+hyperformula/es/interpreter/functionMetadata/index.mjs:
+hyperformula/es/interpreter/functionMetadata/buildFunctionDescriptions.mjs:
+hyperformula/es/interpreter/functionMetadata/protectedFunctionMetadata.mjs:
+hyperformula/es/HyperFormula.mjs:
+hyperformula/es/interpreter/plugin/VersionPlugin.mjs:
+hyperformula/es/interpreter/FunctionRegistry.mjs:
+hyperformula/es/license/FunctionCallLicenseGate.mjs:
+hyperformula/es/ArraySize.mjs:
+hyperformula/es/i18n/languages/enGB.mjs:
+hyperformula/es/interpreter/plugin/AddressPlugin.mjs:
+hyperformula/es/interpreter/plugin/ArrayPlugin.mjs:
+hyperformula/es/interpreter/plugin/AbsPlugin.mjs:
+hyperformula/es/interpreter/plugin/BitShiftPlugin.mjs:
+hyperformula/es/interpreter/plugin/BitwiseLogicOperationsPlugin.mjs:
+hyperformula/es/interpreter/plugin/BooleanPlugin.mjs:
+hyperformula/es/interpreter/plugin/CharPlugin.mjs:
+hyperformula/es/interpreter/plugin/CodePlugin.mjs:
+hyperformula/es/interpreter/plugin/CountBlankPlugin.mjs:
+hyperformula/es/interpreter/plugin/CountUniquePlugin.mjs:
+hyperformula/es/interpreter/doubleDouble.mjs:
+hyperformula/es/interpreter/plugin/MomentsAggregate.mjs:
+hyperformula/es/interpreter/plugin/DatabasePlugin.mjs:
+hyperformula/es/interpreter/plugin/DateTimePlugin.mjs:
+hyperformula/es/interpreter/plugin/DegreesPlugin.mjs:
+hyperformula/es/interpreter/plugin/DeltaPlugin.mjs:
+hyperformula/es/interpreter/plugin/ExpPlugin.mjs:
+hyperformula/es/interpreter/plugin/FinancialPlugin.mjs:
+hyperformula/es/interpreter/plugin/FormulaTextPlugin.mjs:
+hyperformula/es/interpreter/plugin/HyperlinkPlugin.mjs:
+hyperformula/es/interpreter/plugin/InformationPlugin.mjs:
+hyperformula/es/interpreter/plugin/IsEvenPlugin.mjs:
+hyperformula/es/interpreter/plugin/IsOddPlugin.mjs:
+hyperformula/es/interpreter/plugin/LogarithmPlugin.mjs:
+hyperformula/es/interpreter/plugin/MathConstantsPlugin.mjs:
+hyperformula/es/interpreter/plugin/MatrixPlugin.mjs:
+hyperformula/es/interpreter/plugin/MedianPlugin.mjs:
+hyperformula/es/interpreter/plugin/ModuloPlugin.mjs:
+hyperformula/es/interpreter/plugin/PercentilePlugin.mjs:
+hyperformula/es/interpreter/plugin/AverageResult.mjs:
+hyperformula/es/interpreter/plugin/NumericAggregationPlugin.mjs:
+hyperformula/es/interpreter/plugin/PowerPlugin.mjs:
+hyperformula/es/interpreter/plugin/RadiansPlugin.mjs:
+hyperformula/es/interpreter/plugin/RadixConversionPlugin.mjs:
+hyperformula/es/interpreter/plugin/RandomPlugin.mjs:
+hyperformula/es/interpreter/plugin/SequencePlugin.mjs:
+hyperformula/es/interpreter/plugin/UniquePlugin.mjs:
+hyperformula/es/interpreter/plugin/SortPlugin.mjs:
+hyperformula/es/interpreter/plugin/RoundingPlugin.mjs:
+hyperformula/es/interpreter/plugin/SqrtPlugin.mjs:
+hyperformula/es/generatorUtils.mjs:
+hyperformula/es/interpreter/CriterionFunctionCompute.mjs:
+hyperformula/es/interpreter/plugin/ConditionalAggregationPlugin.mjs:
+hyperformula/es/interpreter/plugin/SumprodPlugin.mjs:
+hyperformula/es/interpreter/plugin/TextPlugin.mjs:
+hyperformula/es/interpreter/plugin/TrigonometryPlugin.mjs:
+hyperformula/es/Lookup/RowSearchStrategy.mjs:
+hyperformula/es/interpreter/plugin/LookupPlugin.mjs:
+hyperformula/es/interpreter/plugin/RomanPlugin.mjs:
+hyperformula/es/interpreter/plugin/SimpleArithmertic.mjs:
+hyperformula/es/interpreter/plugin/StatisticalPlugin.mjs:
+hyperformula/es/interpreter/plugin/MathPlugin.mjs:
+hyperformula/es/interpreter/plugin/ComplexPlugin.mjs:
+hyperformula/es/interpreter/deviationSums.mjs:
+hyperformula/es/interpreter/plugin/StatisticalAggregationPlugin.mjs:
+hyperformula/es/interpreter/plugin/index.mjs:
+hyperformula/es/index.mjs:
+  /**
+   * @license
+   * Copyright (c) 2025 Handsoncode. All rights reserved.
+   */
+
+hyperformula/es/interpreter/plugin/3rdparty/bessel/bessel.mjs:
+  /**
+   * @license
+   bessel.js (C) 2013-present SheetJS -- http://sheetjs.com
+  
+   Apache License
+   Version 2.0, January 2004
+   http://www.apache.org/licenses/
+  
+   TERMS AND CONDITIONS FOR USE, REPRODUCTION, AND DISTRIBUTION
+  
+   1. Definitions.
+  
+   "License" shall mean the terms and conditions for use, reproduction,
+   and distribution as defined by Sections 1 through 9 of this document.
+  
+   "Licensor" shall mean the copyright owner or entity authorized by
+   the copyright owner that is granting the License.
+  
+   "Legal Entity" shall mean the union of the acting entity and all
+   other entities that control, are controlled by, or are under common
+   control with that entity. For the purposes of this definition,
+   "control" means (i) the power, direct or indirect, to cause the
+   direction or management of such entity, whether by contract or
+   otherwise, or (ii) ownership of fifty percent (50%) or more of the
+   outstanding shares, or (iii) beneficial ownership of such entity.
+  
+   "You" (or "Your") shall mean an individual or Legal Entity
+   exercising permissions granted by this License.
+  
+   "Source" form shall mean the preferred form for making modifications,
+   including but not limited to software source code, documentation
+   source, and configuration files.
+  
+   "Object" form shall mean any form resulting from mechanical
+   transformation or translation of a Source form, including but
+   not limited to compiled object code, generated documentation,
+   and conversions to other media types.
+  
+   "Work" shall mean the work of authorship, whether in Source or
+   Object form, made available under the License, as indicated by a
+   copyright notice that is included in or attached to the work
+   (an example is provided in the Appendix below).
+  
+   "Derivative Works" shall mean any work, whether in Source or Object
+   form, that is based on (or derived from) the Work and for which the
+   editorial revisions, annotations, elaborations, or other modifications
+   represent, as a whole, an original work of authorship. For the purposes
+   of this License, Derivative Works shall not include works that remain
+   separable from, or merely link (or bind by name) to the interfaces of,
+   the Work and Derivative Works thereof.
+  
+   "Contribution" shall mean any work of authorship, including
+   the original version of the Work and any modifications or additions
+   to that Work or Derivative Works thereof, that is intentionally
+   submitted to Licensor for inclusion in the Work by the copyright owner
+   or by an individual or Legal Entity authorized to submit on behalf of
+   the copyright owner. For the purposes of this definition, "submitted"
+   means any form of electronic, verbal, or written communication sent
+   to the Licensor or its representatives, including but not limited to
+   communication on electronic mailing lists, source code control systems,
+   and issue tracking systems that are managed by, or on behalf of, the
+   Licensor for the purpose of discussing and improving the Work, but
+   excluding communication that is conspicuously marked or otherwise
+   designated in writing by the copyright owner as "Not a Contribution."
+  
+   "Contributor" shall mean Licensor and any individual or Legal Entity
+   on behalf of whom a Contribution has been received by Licensor and
+   subsequently incorporated within the Work.
+  
+   2. Grant of Copyright License. Subject to the terms and conditions of
+   this License, each Contributor hereby grants to You a perpetual,
+   worldwide, non-exclusive, no-charge, royalty-free, irrevocable
+   copyright license to reproduce, prepare Derivative Works of,
+   publicly display, publicly perform, sublicense, and distribute the
+   Work and such Derivative Works in Source or Object form.
+  
+   3. Grant of Patent License. Subject to the terms and conditions of
+   this License, each Contributor hereby grants to You a perpetual,
+   worldwide, non-exclusive, no-charge, royalty-free, irrevocable
+   (except as stated in this section) patent license to make, have made,
+   use, offer to sell, sell, import, and otherwise transfer the Work,
+   where such license applies only to those patent claims licensable
+   by such Contributor that are necessarily infringed by their
+   Contribution(s) alone or by combination of their Contribution(s)
+   with the Work to which such Contribution(s) was submitted. If You
+   institute patent litigation against any entity (including a
+   cross-claim or counterclaim in a lawsuit) alleging that the Work
+   or a Contribution incorporated within the Work constitutes direct
+   or contributory patent infringement, then any patent licenses
+   granted to You under this License for that Work shall terminate
+   as of the date such litigation is filed.
+  
+   4. Redistribution. You may reproduce and distribute copies of the
+   Work or Derivative Works thereof in any medium, with or without
+   modifications, and in Source or Object form, provided that You
+   meet the following conditions:
+  
+   (a) You must give any other recipients of the Work or
+   Derivative Works a copy of this License; and
+  
+   (b) You must cause any modified files to carry prominent notices
+   stating that You changed the files; and
+  
+   (c) You must retain, in the Source form of any Derivative Works
+   that You distribute, all copyright, patent, trademark, and
+   attribution notices from the Source form of the Work,
+   excluding those notices that do not pertain to any part of
+   the Derivative Works; and
+  
+   (d) If the Work includes a "NOTICE" text file as part of its
+   distribution, then any Derivative Works that You distribute must
+   include a readable copy of the attribution notices contained
+   within such NOTICE file, excluding those notices that do not
+   pertain to any part of the Derivative Works, in at least one
+   of the following places: within a NOTICE text file distributed
+   as part of the Derivative Works; within the Source form or
+   documentation, if provided along with the Derivative Works; or,
+   within a display generated by the Derivative Works, if and
+   wherever such third-party notices normally appear. The contents
+   of the NOTICE file are for informational purposes only and
+   do not modify the License. You may add Your own attribution
+   notices within Derivative Works that You distribute, alongside
+   or as an addendum to the NOTICE text from the Work, provided
+   that such additional attribution notices cannot be construed
+   as modifying the License.
+  
+   You may add Your own copyright statement to Your modifications and
+   may provide additional or different license terms and conditions
+   for use, reproduction, or distribution of Your modifications, or
+   for any such Derivative Works as a whole, provided Your use,
+   reproduction, and distribution of the Work otherwise complies with
+   the conditions stated in this License.
+  
+   5. Submission of Contributions. Unless You explicitly state otherwise,
+   any Contribution intentionally submitted for inclusion in the Work
+   by You to the Licensor shall be under the terms and conditions of
+   this License, without any additional terms or conditions.
+   Notwithstanding the above, nothing herein shall supersede or modify
+   the terms of any separate license agreement you may have executed
+   with Licensor regarding such Contributions.
+  
+   6. Trademarks. This License does not grant permission to use the trade
+   names, trademarks, service marks, or product names of the Licensor,
+   except as required for reasonable and customary use in describing the
+   origin of the Work and reproducing the content of the NOTICE file.
+  
+   7. Disclaimer of Warranty. Unless required by applicable law or
+   agreed to in writing, Licensor provides the Work (and each
+   Contributor provides its Contributions) on an "AS IS" BASIS,
+   WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or
+   implied, including, without limitation, any warranties or conditions
+   of TITLE, NON-INFRINGEMENT, MERCHANTABILITY, or FITNESS FOR A
+   PARTICULAR PURPOSE. You are solely responsible for determining the
+   appropriateness of using or redistributing the Work and assume any
+   risks associated with Your exercise of permissions under this License.
+  
+   8. Limitation of Liability. In no event and under no legal theory,
+   whether in tort (including negligence), contract, or otherwise,
+   unless required by applicable law (such as deliberate and grossly
+   negligent acts) or agreed to in writing, shall any Contributor be
+   liable to You for damages, including any direct, indirect, special,
+   incidental, or consequential damages of any character arising as a
+   result of this License or out of the use or inability to use the
+   Work (including but not limited to damages for loss of goodwill,
+   work stoppage, computer failure or malfunction, or any and all
+   other commercial damages or losses), even if such Contributor
+   has been advised of the possibility of such damages.
+  
+   9. Accepting Warranty or Additional Liability. While redistributing
+   the Work or Derivative Works thereof, You may choose to offer,
+   and charge a fee for, acceptance of support, warranty, indemnity,
+   or other liability obligations and/or rights consistent with this
+   License. However, in accepting such obligations, You may act only
+   on Your own behalf and on Your sole responsibility, not on behalf
+   of any other Contributor, and only if You agree to indemnify,
+   defend, and hold each Contributor harmless for any liability
+   incurred by, or claims asserted against, such Contributor by reason
+   of your accepting any such warranty or additional liability.
+  
+   END OF TERMS AND CONDITIONS
+  
+   APPENDIX: How to apply the Apache License to your work.
+  
+   To apply the Apache License to your work, attach the following
+   boilerplate notice, with the fields enclosed by brackets "{}"
+   replaced with your own identifying information. (Don't include
+   the brackets!)  The text should be enclosed in the appropriate
+   comment syntax for the file format. We also recommend that a
+   file or class name and description of purpose be included on the
+   same "printed page" as the copyright notice for easier
+   identification within third-party archives.
+  
+   Copyright (C) 2013-present   SheetJS LLC
+  
+   Licensed under the Apache License, Version 2.0 (the "License");
+   you may not use this file except in compliance with the License.
+   You may obtain a copy of the License at
+  
+   http://www.apache.org/licenses/LICENSE-2.0
+  
+   Unless required by applicable law or agreed to in writing, software
+   distributed under the License is distributed on an "AS IS" BASIS,
+   WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+   See the License for the specific language governing permissions and
+   limitations under the License.
+  
+   */
+
+hyperformula/es/interpreter/plugin/3rdparty/jstat/jstat.mjs:
+  /**
+   * @license
+   Copyright (c) 2013 jStat
+  
+   Permission is hereby granted, free of charge, to any person obtaining a copy
+   of this software and associated documentation files (the "Software"), to deal
+   in the Software without restriction, including without limitation the rights
+   to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+   copies of the Software, and to permit persons to whom the Software is
+   furnished to do so, subject to the following conditions:
+  
+   The above copyright notice and this permission notice shall be included in
+   all copies or substantial portions of the Software.
+  
+   THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+   IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+   FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+   AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+   LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+   OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+   THE SOFTWARE.
+   */
+
+xlsx/xlsx.mjs:
+  /*! xlsx.js (C) 2013-present SheetJS -- http://sheetjs.com */
+
+xlsx/xlsx.mjs:
+  /*! sheetjs (C) 2013-present SheetJS -- http://sheetjs.com */

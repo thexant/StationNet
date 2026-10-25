@@ -1,6 +1,7 @@
 {% extends 'base.html' %}
 {% block title %}Office{% endblock %}
 {% block content %}
+<link rel="stylesheet" href="{{ url_for('static', filename='office-documents.css', v='2') }}">
 <section class="terminal-card">
   <p class="eyebrow">STATIONNET OFFICE</p>
   <h1>Office</h1>
@@ -11,6 +12,11 @@
     <h2>DOCUMENTS</h2>
     <p>Write, import, and export private documents in a rich-text editor.</p>
     <span>OPEN DOCUMENTS →</span>
+  </a>
+  <a class="terminal-card office-program" href="{{ url_for('office.sheets') }}">
+    <h2>SHEETS</h2>
+    <p>Create, calculate, chart, import, and export private spreadsheets.</p>
+    <span>OPEN SHEETS →</span>
   </a>
 </section>
 {% endblock %}
