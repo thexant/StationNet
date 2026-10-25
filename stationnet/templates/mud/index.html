@@ -16,37 +16,44 @@
 
   <div class="mud-layout">
     <section class="mud-main" aria-label="MUD terminal">
-      <section class="mud-gameplay" aria-labelledby="mud-gameplay-heading">
-        <header class="mud-room" data-mud-room aria-live="polite" aria-atomic="true">
-          <div class="mud-room-heading">
-            <p class="eyebrow" id="mud-gameplay-heading">GAMEPLAY</p>
-            <h2 data-mud-room-name>{{ room.name }}</h2>
+      <section class="mud-game" aria-labelledby="mud-game-heading">
+        <div class="mud-game-bar">
+          <span class="mud-game-label" id="mud-game-heading">GAME</span>
+          <span class="mud-game-location" data-mud-room-name>{{ room.name }}</span>
+          <div class="mud-game-jumps">
+            <button type="button" data-mud-jump-room aria-label="Show current room details">ROOM</button>
+            <button type="button" data-mud-jump-latest aria-label="Jump to latest gameplay activity">LATEST</button>
           </div>
-          <p data-mud-room-description>{{ room.description }}</p>
-          <p class="mud-room-instructions" data-mud-room-instructions {% if not room.instructions %}hidden{% endif %}>{{ room.instructions }}</p>
-          <div class="mud-room-facts" aria-label="Location details">
-            <p class="mud-room-exits"><span>EXITS</span> <span data-mud-room-exits>{% if room.exits %}{% for exit in room.exits %}{{ exit.direction or exit.name }}{% if not loop.last %}, {% endif %}{% endfor %}{% else %}none{% endif %}</span></p>
-            <p class="mud-room-exits"><span>ITEMS</span> <span data-mud-room-items>{% if room['items'] %}{% for item in room['items'] %}{{ item.name }}{% if not loop.last %}, {% endif %}{% endfor %}{% else %}none{% endif %}</span></p>
-            <p class="mud-room-exits"><span>NPCS</span> <span data-mud-room-npcs>{% if room.npcs %}{% for npc in room.npcs %}{{ npc.name }}{% if not loop.last %}, {% endif %}{% endfor %}{% else %}none{% endif %}</span></p>
-          </div>
-          <div class="mud-combat-status" data-mud-combat aria-label="Nearby enemies">
-            {% for enemy in combat.enemies %}<article class="mud-enemy {% if enemy.status=='defeated' %}defeated{% endif %}"><span><strong>{{ enemy.name }}</strong><small>{{ enemy.status|upper }}</small></span><progress value="{{ enemy.health }}" max="{{ enemy.maximum_health }}">{{ enemy.health }}/{{ enemy.maximum_health }}</progress><output>{{ enemy.health }} / {{ enemy.maximum_health }} HP</output></article>{% endfor %}
-          </div>
-          <div class="mud-occupants" data-mud-occupants aria-label="Other players in this room">
-            <span>PLAYERS</span>
-            <div>{% if room.occupants %}{% for player in room.occupants %}<span class="mud-entity" data-player-id="{{ player.id }}" data-character-id="{{ player.character_id or '' }}">{{ player.character_name or 'Adventurer' }}</span>{% endfor %}{% else %}<span class="muted" data-mud-no-occupants>none</span>{% endif %}</div>
-          </div>
-        </header>
-        <div class="mud-events" data-mud-events role="log" aria-live="polite" aria-label="Gameplay activity">
-          <article class="mud-event mud-event-system">
-            <span>SYSTEM</span>
-            <p>Connected. Use the navigation controls or /help for commands.</p>
+        </div>
+        <div class="mud-game-scroll" data-mud-game-scroll>
+          <article class="mud-scene" data-mud-room aria-label="Current room" aria-live="polite">
+            <div class="mud-scene-heading"><span>YOU ARE HERE</span><h2 data-mud-scene-name>{{ room.name }}</h2></div>
+            <p class="mud-scene-description" data-mud-room-description>{{ room.description }}</p>
+            <p class="mud-scene-instructions" data-mud-room-instructions {% if not room.instructions %}hidden{% endif %}>{{ room.instructions }}</p>
+            <dl class="mud-scene-facts" aria-label="Location details">
+              <div><dt>EXITS</dt><dd data-mud-room-exits>{% if room.exits %}{% for exit in room.exits %}{{ exit.direction or exit.name }}{% if not loop.last %}, {% endif %}{% endfor %}{% else %}none{% endif %}</dd></div>
+              <div><dt>ITEMS</dt><dd data-mud-room-items>{% if room['items'] %}{% for item in room['items'] %}{{ item.name }}{% if not loop.last %}, {% endif %}{% endfor %}{% else %}none{% endif %}</dd></div>
+              <div><dt>NPCS</dt><dd data-mud-room-npcs>{% if room.npcs %}{% for npc in room.npcs %}{{ npc.name }}{% if not loop.last %}, {% endif %}{% endfor %}{% else %}none{% endif %}</dd></div>
+            </dl>
+            <div class="mud-combat-status" data-mud-combat aria-label="Nearby enemies">
+              {% for enemy in combat.enemies %}<article class="mud-enemy {% if enemy.status=='defeated' %}defeated{% endif %}"><span><strong>{{ enemy.name }}</strong><small>{{ enemy.status|upper }}</small></span><progress value="{{ enemy.health }}" max="{{ enemy.maximum_health }}">{{ enemy.health }}/{{ enemy.maximum_health }}</progress><output>{{ enemy.health }} / {{ enemy.maximum_health }} HP</output></article>{% endfor %}
+            </div>
+            <div class="mud-occupants" data-mud-occupants aria-label="Other players in this room">
+              <span>PLAYERS</span>
+              <div>{% if room.occupants %}{% for player in room.occupants %}<span class="mud-entity" data-player-id="{{ player.id }}" data-character-id="{{ player.character_id or '' }}">{{ player.character_name or 'Adventurer' }}</span>{% endfor %}{% else %}<span class="muted" data-mud-no-occupants>none</span>{% endif %}</div>
+            </div>
           </article>
-          {% for event in events %}
-          <article class="mud-event mud-event-{{ event.event_type }}" data-event-id="{{ event.id }}">
-            <span>{{ event.event_type|upper }}</span><p>{{ event.body }}</p>
-          </article>
-          {% endfor %}
+          <div class="mud-game-feed" data-mud-events role="log" aria-live="polite" aria-label="Gameplay activity">
+            <article class="mud-event mud-event-system">
+              <span>SYSTEM</span>
+              <p>Connected. Use the navigation controls or /help for commands.</p>
+            </article>
+            {% for event in events %}
+            <article class="mud-event mud-event-{{ event.event_type }}" data-event-id="{{ event.id }}">
+              <span>{{ event.event_type|upper }}</span><p>{{ event.body }}</p>
+            </article>
+            {% endfor %}
+          </div>
         </div>
       </section>
       <section class="mud-context" aria-labelledby="mud-actions-heading">

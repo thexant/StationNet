@@ -2,11 +2,15 @@
 
 for(const mud of document.querySelectorAll("[data-mud]")){
   const events=mud.querySelector("[data-mud-events]");
+  const gameScroll=mud.querySelector("[data-mud-game-scroll]");
+  const latestButton=mud.querySelector("[data-mud-jump-latest]");
+  const roomButton=mud.querySelector("[data-mud-jump-room]");
   const actions=mud.querySelector("[data-mud-actions]");
   const form=mud.querySelector("[data-mud-command]");
   const input=form.querySelector("[data-command-input]");
   const error=mud.querySelector("[data-mud-error]");
   const roomName=mud.querySelector("[data-mud-room-name]");
+  const sceneName=mud.querySelector("[data-mud-scene-name]");
   const roomDescription=mud.querySelector("[data-mud-room-description]");
   const roomInstructions=mud.querySelector("[data-mud-room-instructions]");
   const roomExits=mud.querySelector("[data-mud-room-exits]");
@@ -38,9 +42,11 @@ for(const mud of document.querySelectorAll("[data-mud]")){
   let busy=false, pollBusy=false;
   let lastId=Math.max(0,...Array.from(events.querySelectorAll("[data-event-id]"),row=>Number(row.dataset.eventId)||0));
 
-  const scrollEventsToLatest=()=>requestAnimationFrame(()=>{
-    events.scrollTop=Math.max(0,events.scrollHeight-events.clientHeight);
-  });
+  const atLatest=()=>gameScroll.scrollHeight-gameScroll.scrollTop-gameScroll.clientHeight<48;
+  const scrollEventsToLatest=()=>{
+    gameScroll.scrollTop=gameScroll.scrollHeight;
+    latestButton.classList.remove("is-unread");
+  };
   const requestId=()=>globalThis.crypto?.randomUUID?.()||`${Date.now()}-${Math.random().toString(36).slice(2)}`;
   let clientId;
   try{
@@ -51,6 +57,7 @@ for(const mud of document.querySelectorAll("[data-mud]")){
   const appendEvent=event=>{
     lastId=Math.max(lastId,Number(event.id)||0);
     if(event.id&&events.querySelector(`[data-event-id="${event.id}"]`))return;
+    const follow=atLatest();
     const row=document.createElement("article");
     row.className=`mud-event mud-event-${event.event_type||"system"}`;
     if(event.id)row.dataset.eventId=event.id;
@@ -63,7 +70,8 @@ for(const mud of document.querySelectorAll("[data-mud]")){
     while(events.querySelectorAll("[data-event-id]").length>200){
       events.querySelector("[data-event-id]")?.remove();
     }
-    scrollEventsToLatest();
+    if(follow)scrollEventsToLatest();
+    else latestButton.classList.add("is-unread");
   };
   const renderActions=available=>{
     const groups=new Map();
@@ -97,6 +105,7 @@ for(const mud of document.querySelectorAll("[data-mud]")){
   const renderRoom=room=>{
     if(!room)return;
     roomName.textContent=room.name||"Unknown Location";
+    sceneName.textContent=room.name||"Unknown Location";
     roomDescription.textContent=room.description||"";
     if(roomInstructions){roomInstructions.textContent=room.instructions||"";roomInstructions.hidden=!room.instructions}
     roomExits.textContent=(room.exits||[]).map(exit=>exit.direction||exit.name).join(", ")||"none";
@@ -268,6 +277,9 @@ for(const mud of document.querySelectorAll("[data-mud]")){
     const button=event.target.closest("[data-mud-action]");
     if(button)dispatch({action:button.dataset.mudAction,parameters:button.dataset.mudParameters||"{}"});
   });
+  roomButton.addEventListener("click",()=>{gameScroll.scrollTop=0});
+  latestButton.addEventListener("click",scrollEventsToLatest);
+  gameScroll.addEventListener("scroll",()=>{if(atLatest())latestButton.classList.remove("is-unread")},{passive:true});
   form.addEventListener("submit",async event=>{
     event.preventDefault();
     const text=input.value.trim();
@@ -281,7 +293,7 @@ for(const mud of document.querySelectorAll("[data-mud]")){
     data.set("csrf_token",mud.dataset.csrf);data.set("client_id",clientId);
     navigator.sendBeacon?.(mud.dataset.disconnectUrl,data);
   });
-  scrollEventsToLatest();
+  requestAnimationFrame(scrollEventsToLatest);
   addEventListener("load",scrollEventsToLatest,{once:true});
   poll();
   setInterval(poll,2000);

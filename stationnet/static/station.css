@@ -699,16 +699,25 @@ button:disabled { opacity: .5; cursor: not-allowed; }
 .mud-link-state { color: var(--green-bright); font-size: var(--text-xs); letter-spacing: .08em; white-space: nowrap; }
 .mud-layout { display: grid; grid-template-columns: minmax(0, 1fr) 15rem; min-height: 0; flex: 1; border: 1px solid var(--green); }
 .mud-main { display: grid; grid-template-rows: minmax(16rem, 1fr) auto auto; min-width: 0; min-height: 0; overflow: hidden; border-right: 1px solid var(--green-dim); }
-.mud-gameplay { display: grid; grid-template-rows: auto minmax(0, 1fr); min-height: 0; overflow: hidden; background: var(--surface-field); }
-.mud-room { min-height: 0; padding: .65rem .85rem; overflow-wrap: anywhere; border-bottom: 1px solid var(--green-dim); background: rgba(var(--theme-rgb),.035); }
-.mud-room-heading { display: flex; align-items: baseline; gap: .65rem; margin-bottom: .25rem; }
-.mud-room .eyebrow { flex: none; margin: 0; }
-.mud-room h2 { margin: 0 0 .25rem; color: var(--green-bright); font-size: 1.05rem; }
-.mud-room > p:not(.eyebrow):not(.mud-room-exits) { margin: 0; color: var(--white); font-size: .76rem; white-space: pre-wrap; }
-.mud-room > .mud-room-instructions { margin-top: .45rem; padding: .35rem .5rem; border-left: 2px solid var(--cyan); color: var(--cyan); background: rgba(0,229,255,.045); }
-.mud-room-facts { display: flex; flex-wrap: wrap; gap: .15rem .9rem; margin-top: .35rem; }
-.mud-room-exits { margin: 0; color: var(--grey); font-size: var(--text-xs); }
-.mud-room-exits > span:first-child { margin-right: .35rem; color: var(--cyan); letter-spacing: .07em; }
+.mud-game { display: grid; grid-template-rows: auto minmax(0, 1fr); min-height: 0; overflow: hidden; background: var(--surface-field); }
+.mud-game-bar { display: flex; align-items: center; gap: .65rem; min-width: 0; min-height: 2.65rem; padding: .3rem .7rem; border-bottom: 1px solid var(--green-dim); background: var(--surface-title); }
+.mud-game-label { flex: none; padding: .08rem .35rem; color: #000; background: var(--green); font-size: .72rem; font-weight: 700; letter-spacing: .12em; }
+.mud-game-location { min-width: 0; overflow: hidden; color: var(--green-bright); font-size: .78rem; text-overflow: ellipsis; white-space: nowrap; }
+.mud-game-jumps { display: flex; gap: .3rem; margin-left: auto; }
+.mud-game-jumps button { min-height: 1.75rem; padding: .15rem .45rem; border-color: var(--green-dim); background: transparent; color: var(--cyan); font-size: .62rem; letter-spacing: .05em; }
+.mud-game-jumps button:hover, .mud-game-jumps button:focus-visible { color: #000; background: var(--cyan); }
+.mud-game-jumps [data-mud-jump-latest].is-unread { color: var(--amber); border-color: var(--amber); }
+.mud-game-scroll { min-height: 0; overflow-y: auto; overscroll-behavior: contain; scrollbar-color: var(--green-dim) #000; }
+.mud-scene { margin: .65rem .7rem .8rem; padding: .75rem .85rem; overflow-wrap: anywhere; border: 1px solid var(--green-dim); border-left: 3px solid var(--cyan); background: linear-gradient(105deg, rgba(var(--accent-rgb),.065), rgba(var(--theme-rgb),.015) 65%); }
+.mud-scene-heading { display: flex; align-items: baseline; gap: .65rem; margin-bottom: .35rem; }
+.mud-scene-heading > span { flex: none; color: var(--cyan); font-size: .62rem; letter-spacing: .1em; }
+.mud-scene h2 { margin: 0; color: var(--green-bright); font-size: 1rem; line-height: 1.3; }
+.mud-scene-description { max-width: 72ch; margin: 0; color: var(--white); font-size: .76rem; white-space: pre-wrap; }
+.mud-scene-instructions { margin: .55rem 0 0; padding: .35rem .5rem; border-left: 2px solid var(--cyan); color: var(--cyan); background: rgba(var(--accent-rgb),.045); font-size: .73rem; white-space: pre-wrap; }
+.mud-scene-facts { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: .5rem; margin: .7rem 0 0; padding-top: .55rem; border-top: 1px dotted var(--green-dim); }
+.mud-scene-facts div { min-width: 0; }
+.mud-scene-facts dt { color: var(--cyan); font-size: .62rem; letter-spacing: .09em; }
+.mud-scene-facts dd { margin: .12rem 0 0; color: var(--white); font-size: .72rem; overflow-wrap: anywhere; }
 .mud-occupants { display: flex; align-items: center; flex-wrap: wrap; gap: .35rem .55rem; margin-top: .55rem; color: var(--grey); font-size: var(--text-xs); }
 .mud-occupants > span { color: var(--cyan); letter-spacing: .07em; }
 .mud-occupants > div { display: flex; flex-wrap: wrap; gap: .35rem; }
@@ -720,7 +729,7 @@ button:disabled { opacity: .5; cursor: not-allowed; }
 .mud-enemy small, .mud-enemy output { color: var(--grey); font-size: var(--text-xs); }
 .mud-enemy progress { width: 100%; height: .5rem; accent-color: var(--red); }
 .mud-enemy.defeated { opacity: .62; }
-.mud-events { min-height: 0; padding: .45rem .7rem; overflow-y: auto; overscroll-behavior: contain; background: var(--surface-field); scrollbar-color: var(--green-dim) #000; }
+.mud-game-feed { padding: 0 .7rem .65rem; }
 .mud-event { display: grid; grid-template-columns: 4.5rem minmax(0,1fr); gap: .65rem; padding: .3rem .2rem; border-bottom: 1px dotted var(--border-soft); }
 .mud-event span { color: var(--cyan); font-size: var(--text-xs); letter-spacing: .06em; }
 .mud-event p { margin: 0; color: var(--white); font-size: .76rem; white-space: pre-wrap; overflow-wrap: anywhere; }
@@ -1043,7 +1052,6 @@ button:disabled { opacity: .5; cursor: not-allowed; }
   .playlist-settings { grid-template-columns: 1fr; }
   .track-row { align-items: flex-start; flex-direction: column; }
   .mud-header { align-items: start; flex-direction: column; }
-  .mud-events { max-height: 45vh; }
   .mud-event { grid-template-columns: 1fr; gap: .2rem; }
   .mud-section-heading { align-items: flex-start; flex-direction: column; }
   .mud-action-group > div { display: grid; grid-template-columns: 1fr; }
@@ -1082,8 +1090,7 @@ button:disabled { opacity: .5; cursor: not-allowed; }
 .chat-message details{font-size:.75rem;margin-top:.35rem}
 .chat-message details button{margin:.25rem}
 
-/* MUD uses the viewport as a game surface: the event stream owns the scroll,
-   while room context, quick actions, and command entry stay discoverable. */
+/* The room scene and activity share one scroll surface inside GAME. */
 .mud-shell .collapsible-panel-toggle { width: 100%; min-height: 2.15rem; padding: .25rem 0; }
 .mud-shell .collapsible-panel-heading { display: flex; align-items: baseline; gap: .45rem; min-width: 0; }
 .mud-shell .collapsible-panel-heading .eyebrow { margin: 0; font-size: .58rem; }
@@ -1106,7 +1113,7 @@ button:disabled { opacity: .5; cursor: not-allowed; }
   .mud-shell { height: auto; min-height: 0; }
   .mud-layout { display: block; }
   .mud-main { display: flex; flex-direction: column; min-height: 0; overflow: visible; border-right: 0; }
-  .mud-gameplay { flex: none; height: clamp(22rem, 62dvh, 34rem); }
+  .mud-game { flex: none; height: clamp(26rem, 62dvh, 38rem); }
   .mud-context { flex: none; max-height: none; overflow: visible; }
   .mud-command { flex: none; }
   .mud-sidebar { display: grid; grid-template-columns: 1fr 1fr; max-height: none; overflow: visible; border-top: 1px solid var(--green-dim); }
@@ -1117,8 +1124,8 @@ button:disabled { opacity: .5; cursor: not-allowed; }
 @media (max-width: 430px) {
   .mud-header { align-items: flex-start; }
   .mud-header h1 { font-size: 1.1rem; }
-  .mud-room-facts { display: grid; grid-template-columns: 1fr 1fr; gap: .15rem .6rem; }
-  .mud-room-facts .mud-room-exits:last-child { grid-column: 1 / -1; }
+  .mud-scene-facts { grid-template-columns: 1fr 1fr; }
+  .mud-scene-facts div:last-child { grid-column: 1 / -1; }
   .mud-action-groups { grid-template-columns: 1fr; gap: .45rem; }
   .mud-action-group[data-action-group="NAVIGATION"] { grid-column: auto; }
   .mud-action-group > div { grid-template-columns: 1fr; }
@@ -1140,7 +1147,6 @@ button:disabled { opacity: .5; cursor: not-allowed; }
 .mud-page .main-panel { min-height: 0; padding-block: .65rem; }
 .mud-shell { width: 100%; height: clamp(36rem, calc(100dvh - 16rem), 72rem); }
 .mud-layout { grid-template-columns: minmax(0, 1fr) clamp(16rem, 20vw, 19rem); }
-.mud-room > p:not(.eyebrow):not(.mud-room-exits),
 .mud-event p { max-width: 72ch; }
 .mud-shell .mud-inventory-list button { min-height: 2.25rem; }
 
@@ -1160,7 +1166,7 @@ button:disabled { opacity: .5; cursor: not-allowed; }
   .mud-shell { height: auto; min-height: 0; }
   .mud-layout { display: block; }
   .mud-main { display: flex; flex-direction: column; min-height: 0; overflow: visible; border-right: 0; }
-  .mud-gameplay { flex: none; height: clamp(22rem, 62dvh, 34rem); }
+  .mud-game { flex: none; height: clamp(26rem, 62dvh, 38rem); }
   .mud-context { flex: none; max-height: none; overflow: visible; }
   .mud-command { flex: none; }
   .mud-sidebar { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); max-height: none; overflow: visible; border-top: 1px solid var(--green-dim); }
@@ -1171,8 +1177,9 @@ button:disabled { opacity: .5; cursor: not-allowed; }
 @media (max-width: 520px) {
   .mud-sidebar { grid-template-columns: 1fr; }
   .mud-panel { border-right: 0; }
-  .mud-gameplay { height: auto; grid-template-rows: auto auto; }
-  .mud-events { max-height: min(22rem, 45dvh); }
+  .mud-game { height: clamp(26rem, 62dvh, 38rem); }
+  .mud-game-bar { gap: .4rem; padding-inline: .45rem; }
+  .mud-game-jumps button { padding-inline: .3rem; }
   .mud-action-groups { grid-template-columns: 1fr; }
   .mud-action-group[data-action-group="NAVIGATION"] { grid-column: auto; }
   .mud-action-group > div { grid-template-columns: repeat(2, minmax(0, 1fr)); }
