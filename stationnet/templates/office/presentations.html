@@ -1,7 +1,7 @@
 {% extends 'base.html' %}
 {% block title %}Presentations{% endblock %}
 {% block content %}
-<link rel="stylesheet" href="{{ url_for('static', filename='office-presentations.css', v='2') }}">
+<link rel="stylesheet" href="{{ url_for('static', filename='office-presentations.css', v='3') }}">
 <div class="presentations-app" data-api="{{ url_for('office.presentation_list') }}" data-documents-api="{{ url_for('office.document_list') }}" data-sheets-api="{{ url_for('office.sheet_list') }}" data-vault="{{ url_for('office.vault') }}" data-csrf="{{ session.csrf_token }}">
   <header class="presentations-head"><div><p class="eyebrow"><a href="{{ url_for('office.index') }}">OFFICE</a> / PRESENTATIONS</p><h1>Presentations</h1></div><div><span id="presentations-status" role="status" aria-live="polite">LOCKED</span> <button type="button" id="presentations-lock" class="secondary" hidden>LOCK</button></div></header>
   <section id="presentations-unlock" class="terminal-card presentations-unlock"><h2>Unlock OFFICE</h2><p>One OFFICE Password unlocks documents, sheets, and presentations in this browser tab. It encrypts files before saving and is separate from your StationNet password. If lost, saved files cannot be recovered.</p><form id="presentations-unlock-form" class="form-grid"><label>OFFICE Password<input id="presentations-password" type="password" minlength="12" required autocomplete="off"></label><label id="presentations-confirm-row" hidden>Confirm new OFFICE Password<input id="presentations-confirm" type="password" minlength="12" autocomplete="off"></label><button type="submit">UNLOCK PRESENTATIONS</button></form><p id="presentations-unlock-error" role="alert" hidden></p></section>
