@@ -461,6 +461,7 @@ function initialize() {
   };
   grid.oncopy = event => { event.preventDefault(); const text = clipboardText(); lastCopy = { text, sheet: active, bounds: bounds() }; event.clipboardData.setData('text/plain', text); };
   grid.onpaste = event => { event.preventDefault(); paste(event.clipboardData.getData('text/plain')); };
+  new ResizeObserver(scheduleRender).observe(grid);
   window.addEventListener('beforeunload', event => { if (dirty || saving || conflict) { event.preventDefault(); event.returnValue = ''; } });
   (async () => {
     key = readOfficeKey(csrf);

@@ -2,3 +2,26 @@
 @media(max-width:800px){.sheets-workspace{grid-template-columns:1fr}.sheets-library{padding:.6rem}.sheets-library ul{display:flex;gap:.3rem;max-height:7rem}.sheets-library li{min-width:145px}.sheets-grid{height:55vh;min-height:300px}.sheets-title-row{flex-wrap:wrap}.sheets-title-row input{flex-basis:100%}.sheets-toolbar{margin:.5rem 0}.sheets-tabs{gap:.2rem}.sheets-tabs button{padding:.4rem}}
 .sheets-col-head.frozen,.sheets-row-head.frozen{z-index:5}
 @media print{body{background:white!important;color:black!important}.station-header,.flash-stack,.statusbar,.radio-player,.sheets-head,.sheets-library,.sheets-editor>*:not(.sheets-print){display:none!important}.station-shell,.main-panel,.sheets-app,.sheets-workspace,.sheets-editor{display:block!important;width:100%!important;max-width:none!important;margin:0!important;padding:0!important;border:0!important;background:white!important}.sheets-print{display:block!important;color:black;background:white;font:11px Arial,sans-serif}.sheets-print h1{font-size:16px}.sheets-print table{border-collapse:collapse}.sheets-print td{border:1px solid #999;padding:3px 5px;white-space:nowrap}body::after{display:none}}
+
+/* Use the desktop viewport for the workbook and grid. */
+@media screen{
+  .sheets-page .station-shell{width:min(2200px,100%)}
+  .sheets-app{max-width:none}
+  .sheets-library,.sheets-editor{width:100%;margin:0}
+  .sheets-library-head{flex-wrap:wrap}
+  .sheets-toolbar select{width:auto}
+}
+@media screen and (min-width:801px){
+  .sheets-grid{height:min(74vh,960px)}
+}
+@media screen and (min-width:1101px){
+  .sheets-toolbar{flex-wrap:wrap;overflow-x:visible;white-space:normal}
+}
+@media screen and (min-width:801px) and (max-width:1100px){
+  .sheets-workspace{grid-template-columns:1fr}
+  .sheets-library{padding:.6rem}
+  .sheets-library ul{display:flex;gap:.3rem;max-height:7rem}
+  .sheets-library li{min-width:145px}
+  .sheets-title-row{flex-wrap:wrap}
+  .sheets-title-row input{flex-basis:100%}
+}

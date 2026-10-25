@@ -1,7 +1,7 @@
 {% extends 'base.html' %}
 {% block title %}Documents{% endblock %}
 {% block content %}
-<link rel="stylesheet" href="{{ url_for('static', filename='office-documents.css', v='2') }}">
+<link rel="stylesheet" href="{{ url_for('static', filename='office-documents.css', v='3') }}">
 <div class="documents-app" data-api="{{ url_for('office.document_list') }}" data-sheets-api="{{ url_for('office.sheet_list') }}" data-presentations-api="{{ url_for('office.presentation_list') }}" data-vault="{{ url_for('office.vault') }}" data-csrf="{{ session.csrf_token }}">
   <header class="documents-head">
     <div><p class="eyebrow"><a href="{{ url_for('office.index') }}">OFFICE</a> / DOCUMENTS</p><h1>Documents</h1></div>
