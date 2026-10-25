@@ -38,6 +38,7 @@
   let realtimeSession = null;
   const activeTones = new Set();
   const images = new Map();
+  const decodedImages = new Map();
   const tileMaps = new Map();
   const framebuffers = new Map();
   let framebufferPixels = 0;
@@ -238,7 +239,7 @@
     const path = text(message.path, 200);
     const mime = /\.png$/i.test(path) ? "image/png" : /\.jpe?g$/i.test(path) ? "image/jpeg" :
       /\.gif$/i.test(path) ? "image/gif" : /\.webp$/i.test(path) ? "image/webp" : null;
-    if (!mime || images.has(path) || images.size >= 32 || typeof message.data !== "string" ||
+    if (!mime || images.has(path) || images.size + decodedImages.size >= 32 || typeof message.data !== "string" ||
         message.data.length > 1400000 || imageBytes + message.data.length > 6000000) return;
     imageBytes += message.data.length;
     images.set(path, null);
@@ -264,6 +265,61 @@
         redrawScenes();
       }).catch(() => {});
     } catch (_) { /* malformed image data is ignored */ }
+  }
+
+  function decodeImageResult(request, path, ok, value, error) {
+    if (!frame.contentWindow || closed) return;
+    const response = { protocol: PROTOCOL, type: "graphics-decode-image-result", request, path, ok,
+      ...(value || {}), error: error ? text(error.message || error, 200) : undefined };
+    frame.contentWindow.postMessage(response, "*", value ? [value.pixels.buffer] : []);
+  }
+
+  async function decodeBundledImage(message) {
+    const request = message.request, path = message.path;
+    if (typeof request !== "string" || !/^image-[1-9]\d{0,9}$/.test(request) ||
+        typeof path !== "string" || !/^[^\\/][^\\]*\.png$/i.test(path) || path.length > 200 ||
+        path.split("/").some(part => !part || part === "." || part === "..") ||
+        typeof message.data !== "string" || message.data.length > 1400000 ||
+        decodedImages.has(path) || images.size + decodedImages.size >= 32 ||
+        imageBytes + message.data.length > 6000000) {
+      decodeImageResult(request, path, false, null, "Image decode limit exceeded or invalid request"); return;
+    }
+    decodedImages.set(path, true);
+    imageBytes += message.data.length;
+    try {
+      const binary = atob(message.data);
+      if (binary.length < 24 || !binary.startsWith("\x89PNG\r\n\x1a\n") ||
+          binary.slice(12, 16) !== "IHDR") throw new Error("Invalid PNG");
+      const dimension = (offset) => (binary.charCodeAt(offset) * 16777216 +
+        binary.charCodeAt(offset + 1) * 65536 + binary.charCodeAt(offset + 2) * 256 + binary.charCodeAt(offset + 3));
+      const width = dimension(16), height = dimension(20), count = width * height;
+      if (!width || !height || width > 2048 || height > 2048 || count > 4194304 ||
+          imagePixels + count > 8388608) throw new Error("Image pixel budget exceeded");
+      const bytes = Uint8Array.from(binary, character => character.charCodeAt(0));
+      const blob = new Blob([bytes], { type: "image/png" });
+      const bitmap = await (typeof createImageBitmap === "function" ? createImageBitmap(blob) :
+        new Promise((resolve, reject) => {
+          const url = URL.createObjectURL(blob);
+          const picture = new Image();
+          picture.onload = () => { URL.revokeObjectURL(url); resolve(picture); };
+          picture.onerror = () => { URL.revokeObjectURL(url); reject(new Error("Invalid PNG")); };
+          picture.src = url;
+        }));
+      try {
+        if (bitmap.width !== width || bitmap.height !== height || imagePixels + count > 8388608)
+          throw new Error("Image pixel budget exceeded");
+        const canvas = document.createElement("canvas"); canvas.width = width; canvas.height = height;
+        const context = canvas.getContext("2d", { willReadFrequently: true });
+        if (!context) throw new Error("Image decoding is unavailable");
+        context.drawImage(bitmap, 0, 0);
+        const pixels = new Uint8Array(context.getImageData(0, 0, width, height).data);
+        imagePixels += count;
+        decodeImageResult(request, path, true, { width, height, pixels });
+      } finally { bitmap.close?.(); }
+    } catch (error) {
+      decodedImages.delete(path);
+      decodeImageResult(request, path, false, null, error);
+    }
   }
 
   function registerMap(message) {
@@ -1034,6 +1090,7 @@
     }
     else if (message.type === "render") render(message);
     else if (message.type === "graphics-image") registerImage(message);
+    else if (message.type === "graphics-decode-image") decodeBundledImage(message);
     else if (message.type === "graphics-map") registerMap(message);
     else if (message.type === "graphics-frame") registerFrame(message);
     else if (message.type === "storage") storage(message);
@@ -1115,7 +1172,7 @@
     if (frame.contentWindow) frame.contentWindow.postMessage({ protocol: PROTOCOL, type: "terminate" }, "*");
     stopSounds();
     midiEngine?.stop();
-    images.forEach((bitmap) => bitmap?.close?.()); images.clear(); tileMaps.clear();
+    images.forEach((bitmap) => bitmap?.close?.()); images.clear(); decodedImages.clear(); tileMaps.clear();
     frame.remove(); keyboardActions.clear(); lifecycleActions.clear(); pressedKeys.clear();
   }
   if (immersiveButton) immersiveButton.addEventListener("click", () => setImmersive(!immersive));

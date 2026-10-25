@@ -91,6 +91,14 @@ image asynchronously, and redraws the latest canvas scene when it is ready.
 GIFs use their first frame; use sprite sheets for game animation. No package
 file becomes a web URL. Audio files are not played.
 
+`await ui.assets.decodeImage(path)` decodes a bundled PNG on the trusted host
+and returns `{ width, height, pixels }`, with row-major RGBA bytes in a fresh
+`Uint8Array`. The optional `palette` field is reserved for indexed decoders;
+PNG results currently use RGBA. Decode once during setup and sample the array
+in the worker. Decoded images share the image count, byte, dimension, and
+8,388,608-pixel budgets with canvas images; repeated calls for one path are
+cached and return independent pixel arrays.
+
 `await ui.modules.load(path)` imports a bundled `.js` ES module and returns its
 exports. Imports are cached by path. Use this API for each module; ordinary
 relative `import` declarations inside a bundled module do not resolve against
@@ -355,6 +363,31 @@ software rasterizers, voxel columns, texture mapping, and palette effects.
 are convenience operations. For RGBA, `value` is `[r, g, b, a]`; alpha defaults
 to 255. For indexed color, `value` is a palette index. Direct array loops are
 usually faster for whole-frame rendering.
+
+`buffer.blit(src, sx, sy, sw, sh, dx, dy, { colorKey, flipX, flipY })` copies
+a clipped source rectangle from another framebuffer or a decoded image.
+`buffer.copyFrom(src, dx = 0, dy = 0)` copies the whole source, and
+`buffer.scroll(dx, dy, fillValue)` shifts pixels inside the buffer, filling
+newly exposed areas. Coordinates are bounded integers. RGBA sources can be
+blitted to RGBA buffers; indexed sources can be blitted to indexed or RGBA
+buffers using their palette. Indexed destinations require indexed sources.
+An indexed `colorKey` is a palette index; an RGBA key is an RGB or RGBA byte
+array. Fully transparent RGBA source pixels are skipped. Create an indexed
+buffer with `{ format: "indexed", transparentIndex: 0 }` to set palette entry
+0's alpha to zero and skip that index when blitting from it. Overlapping
+blits within one buffer use a source snapshot.
+
+```js
+const wall = await ui.assets.decodeImage("assets/brick.png");
+const view = ui.graphics.framebuffer("view", 320, 200);
+// In a raycaster's wall-column loop, texX and top/height come from the ray hit.
+for (let y = top; y < top + height; y++) {
+  const texY = Math.floor((y - top) * wall.height / height);
+  const src = (texY * wall.width + texX) * 4;
+  view.pixel(column, y, wall.pixels.subarray(src, src + 4));
+}
+view.present();
+```
 
 Call `buffer.present()` after writing pixels, then draw it with
 `ui.graphics.frame(buffer, x, y, width, height, { opacity })` inside a canvas.

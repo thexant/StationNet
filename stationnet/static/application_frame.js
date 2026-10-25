@@ -125,6 +125,16 @@
       scheduleAnimations();
       return;
     }
+    if (event.data.type === "graphics-decode-image") {
+      const value = event.data;
+      if (typeof value.path !== "string" || !/\.png$/i.test(value.path) ||
+          !Object.prototype.hasOwnProperty.call(files, value.path) || files[value.path] !== value.data ||
+          typeof value.request !== "string" || !/^image-[1-9]\d{0,9}$/.test(value.request)) {
+        worker.postMessage({ protocol, type: "graphics-decode-image-result", request: value.request,
+          path: value.path, ok: false, error: "Invalid bundled PNG request" });
+        return;
+      }
+    }
     const canvas = event.data.type === "render" && event.data.mode === "update"
       && event.data.components?.length === 1 && event.data.components[0]?.type === "canvas";
     if (canvas) {
@@ -145,7 +155,9 @@
       setVisible(event.data.visible);
       return;
     }
-    worker.postMessage(event.data);
+    const transfer = event.data.type === "graphics-decode-image-result" && event.data.pixels instanceof Uint8Array
+      ? [event.data.pixels.buffer, ...(event.data.palette instanceof Uint8Array ? [event.data.palette.buffer] : [])] : [];
+    worker.postMessage(event.data, transfer);
     if (event.data.type === "terminate") setTimeout(stop, 25);
   });
 

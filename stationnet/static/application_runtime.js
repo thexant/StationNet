@@ -27,6 +27,7 @@
   delete self.__stationnetPackageFiles;
   const moduleCache = new Map();
   const registeredImages = new Set();
+  const decodedImages = new Map();
   const framebuffers = new Map();
   let framebufferPixels = 0;
   let nextAction = 1;
@@ -54,6 +55,23 @@
       send("graphics-image", { path, data: packageFiles[path] });
     }
     return path;
+  }
+
+  function decodeImage(path) {
+    if (typeof path !== "string" || !/\.png$/i.test(path))
+      return Promise.reject(new Error("Decoded image must be a bundled PNG"));
+    try { bundledBytes(path); }
+    catch (error) { return Promise.reject(error); }
+    if (!decodedImages.has(path)) {
+      const request = `image-${nextRequest++}`;
+      const pending = new Promise((resolve, reject) => {
+        decodedImages.set(path, { request, resolve, reject, promise: null });
+        send("graphics-decode-image", { request, path, data: packageFiles[path] });
+      });
+      decodedImages.get(path).promise = pending;
+    }
+    return decodedImages.get(path).promise.then((value) => ({ width: value.width, height: value.height,
+      pixels: value.pixels.slice(), ...(value.palette ? { palette: value.palette.slice() } : {}) }));
   }
 
   function sprite(source, frame, x, y, settings) {
@@ -101,9 +119,46 @@
     const pixels = new Uint8Array(width * height * (format === "rgba" ? 4 : 1));
     const palette = format === "indexed" ? new Uint8Array(256 * 4) : null;
     if (palette) for (let i = 0; i < 256; i++) palette[i * 4 + 3] = 255;
+    const transparentIndex = opts.transparentIndex;
+    if (transparentIndex != null && (format !== "indexed" || !Number.isInteger(transparentIndex) ||
+        transparentIndex < 0 || transparentIndex > 255))
+      throw new RangeError("transparentIndex requires an indexed buffer and a palette index from 0 to 255");
+    if (transparentIndex != null) palette[transparentIndex * 4 + 3] = 0;
+    const rgbaColor = (value) => {
+      if (!value || typeof value !== "object" || value.length < 3 || value.length > 4 ||
+          !Array.from(value).every((channel) => Number.isInteger(channel) && channel >= 0 && channel <= 255))
+        throw new RangeError("RGBA color must contain three or four bytes");
+      return [value[0], value[1], value[2], value[3] ?? 255];
+    };
+    const coordinate = (value) => Number.isInteger(value) && Math.abs(value) <= 1000000;
+    const fillPixels = (value) => {
+      if (format === "indexed") {
+        if (!Number.isInteger(value) || value < 0 || value > 255) throw new RangeError("Invalid palette index");
+        pixels.fill(value);
+      } else {
+        const color = rgbaColor(value);
+        for (let offset = 0; offset < pixels.length; offset += 4) pixels.set(color, offset);
+      }
+    };
+    const sourceInfo = (src) => {
+      if (!src || !Number.isInteger(src.width) || !Number.isInteger(src.height) ||
+          src.width < 1 || src.height < 1 || src.width > 2048 || src.height > 2048 ||
+          src.width * src.height > 4194304 || !(src.pixels instanceof Uint8Array))
+        throw new TypeError("blit source must be a framebuffer or decoded image");
+      const sourceFormat = src.format === "indexed" ? "indexed" : "rgba";
+      if (src.pixels.length !== src.width * src.height * (sourceFormat === "indexed" ? 1 : 4) ||
+          (sourceFormat === "indexed" && !(src.palette instanceof Uint8Array && src.palette.length === 1024)))
+        throw new TypeError("Invalid blit source pixels or palette");
+      if (format === "indexed" && sourceFormat !== "indexed")
+        throw new TypeError("Indexed destinations require an indexed source");
+      return sourceFormat;
+    };
     const buffer = {
-      id, width, height, format, pixels, palette,
-      clear(value = 0) { pixels.fill(value); },
+      id, width, height, format, pixels, palette, transparentIndex: transparentIndex ?? null,
+      clear(value = 0) {
+        if (format === "rgba" && value === 0) pixels.fill(0);
+        else fillPixels(value);
+      },
       pixel(x, y, value) {
         if (!Number.isInteger(x) || !Number.isInteger(y) || x < 0 || y < 0 || x >= width || y >= height) return;
         if (format === "indexed") pixels[y * width + x] = value;
@@ -122,6 +177,63 @@
         } else {
           const color = [value[0], value[1], value[2], value[3] ?? 255];
           for (let row = top; row < bottom; row++) for (let col = left; col < right; col++) pixels.set(color, (row * width + col) * 4);
+        }
+      },
+      blit(src, sx, sy, sw, sh, dx, dy, settings) {
+        if (![sx, sy, sw, sh, dx, dy].every(coordinate) || sw < 0 || sh < 0)
+          throw new RangeError("Blit coordinates must be bounded integers and sizes nonnegative");
+        const sourceFormat = sourceInfo(src);
+        const opts = options(settings);
+        const key = opts.colorKey;
+        if (key != null && (sourceFormat === "indexed" ?
+            !Number.isInteger(key) || key < 0 || key > 255 :
+            !Array.isArray(key) || key.length < 3 || key.length > 4 ||
+              !key.every((channel) => Number.isInteger(channel) && channel >= 0 && channel <= 255)))
+          throw new RangeError("colorKey must be a palette index or RGB/RGBA byte array");
+        // Clip in destination space. Source bounds are checked per sample to
+        // keep flipped and partially out-of-bounds rectangles symmetric.
+        const left = Math.max(0, -dx), top = Math.max(0, -dy);
+        const right = Math.min(sw, width - dx), bottom = Math.min(sh, height - dy);
+        if (right <= left || bottom <= top) return;
+        const sourcePixels = src.pixels === pixels ? pixels.slice() : src.pixels;
+        for (let y = top; y < bottom; y++) {
+          const sourceY = sy + (opts.flipY ? sh - 1 - y : y);
+          if (sourceY < 0 || sourceY >= src.height) continue;
+          for (let x = left; x < right; x++) {
+            const sourceX = sx + (opts.flipX ? sw - 1 - x : x);
+            if (sourceX < 0 || sourceX >= src.width) continue;
+            const sourceOffset = (sourceY * src.width + sourceX) * (sourceFormat === "rgba" ? 4 : 1);
+            const destinationOffset = ((dy + y) * width + dx + x) * (format === "rgba" ? 4 : 1);
+            if (sourceFormat === "indexed") {
+              const index = sourcePixels[sourceOffset];
+              if (index === key || index === src.transparentIndex) continue;
+              if (format === "indexed") pixels[destinationOffset] = index;
+              else pixels.set(src.palette.subarray(index * 4, index * 4 + 4), destinationOffset);
+            } else {
+              const red = sourcePixels[sourceOffset], green = sourcePixels[sourceOffset + 1];
+              const blue = sourcePixels[sourceOffset + 2], alpha = sourcePixels[sourceOffset + 3];
+              if (!alpha || key && red === key[0] && green === key[1] && blue === key[2] &&
+                  (key.length === 3 || alpha === key[3])) continue;
+              pixels.set(sourcePixels.subarray(sourceOffset, sourceOffset + 4), destinationOffset);
+            }
+          }
+        }
+      },
+      copyFrom(src, dx = 0, dy = 0) {
+        sourceInfo(src);
+        this.blit(src, 0, 0, src.width, src.height, dx, dy);
+      },
+      scroll(dx, dy, fillValue = format === "indexed" ? 0 : [0, 0, 0, 0]) {
+        if (!coordinate(dx) || !coordinate(dy)) throw new RangeError("Scroll offsets must be bounded integers");
+        const old = pixels.slice();
+        fillPixels(fillValue);
+        const left = Math.max(0, dx), right = Math.min(width, width + dx);
+        const top = Math.max(0, dy), bottom = Math.min(height, height + dy);
+        if (right <= left || bottom <= top) return;
+        const stride = format === "rgba" ? 4 : 1;
+        for (let y = top; y < bottom; y++) {
+          const from = ((y - dy) * width + left - dx) * stride;
+          pixels.set(old.subarray(from, from + (right - left) * stride), (y * width + left) * stride);
         }
       },
       present(settings) {
@@ -587,7 +699,7 @@
       bytes(path) { return bundledBytes(path); },
       text(path) { return bundledText(path); },
       json(path) { return JSON.parse(bundledText(path)); },
-      image
+      image, decodeImage
     }),
     modules: Object.freeze({ load: loadModule }),
     scores: Object.freeze({
@@ -778,6 +890,22 @@
       message.ok ? pending.resolve(message.value) : pending.reject(new Error(message.error || "Storage request failed"));
       return;
     }
+    if (message.type === "graphics-decode-image-result") {
+      const pending = decodedImages.get(message.path);
+      if (!pending || pending.request !== message.request) return;
+      if (message.ok && Number.isInteger(message.width) && Number.isInteger(message.height) &&
+          message.width > 0 && message.height > 0 && message.width <= 2048 && message.height <= 2048 &&
+          message.width * message.height <= 4194304 && message.pixels instanceof Uint8Array &&
+          message.pixels.length === message.width * message.height * 4 &&
+          (message.palette == null || message.palette instanceof Uint8Array && message.palette.length === 1024)) {
+        pending.resolve({ width: message.width, height: message.height,
+          pixels: message.pixels, palette: message.palette });
+      } else {
+        decodedImages.delete(message.path);
+        pending.reject(new Error(message.error || "Image decode failed"));
+      }
+      return;
+    }
     if (message.type === "scores-result") {
       const pending = scoreRequests.get(message.request);
       if (!pending) return;
@@ -838,6 +966,7 @@
     if (realtimeConnected) send("realtime", { operation: "disconnect" });
     if (multiplayerSession) send("multiplayer", { operation: "disconnect", payload: { session_id: multiplayerSession } });
     storageRequests.forEach(({ reject }) => reject(new Error("Application terminated")));
+    decodedImages.forEach(({ reject }) => reject(new Error("Application terminated")));
     storageRequests.clear();
     scoreRequests.forEach(({ reject }) => reject(new Error("Application terminated")));
     scoreRequests.clear();
