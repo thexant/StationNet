@@ -515,7 +515,8 @@ button:focus-visible, .button:focus-visible, a:focus-visible, summary:focus-visi
 .application-pointer-prompt button { margin-right: .45rem; }
 .application-viewport { min-height: 24rem; margin: 1rem; border: 1px solid var(--green-dim); }
 .application-status { padding: .4rem .55rem; color: var(--amber); border-bottom: 1px dotted var(--green-dim); font-size: var(--text-xs); letter-spacing: .08em; }
-.application-runtime { position: absolute; width: 1px; height: 1px; border: 0; opacity: 0; pointer-events: none; }
+/* Keep the relay in the viewport so browsers continue its animation frames as the layout changes. */
+.application-runtime { position: fixed; top: 0; left: 0; width: 1px; height: 1px; border: 0; opacity: 0; pointer-events: none; }
 .application-surface { display: grid; align-content: start; gap: .85rem; min-height: 21rem; padding: clamp(1rem,3vw,2rem); }
 .application-surface:focus { outline: 1px dotted var(--cyan); outline-offset: -4px; }
 .application-surface > * { max-width: 100%; margin: 0; }
