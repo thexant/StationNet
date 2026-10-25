@@ -289,6 +289,16 @@ def content(path):
     return _proxy(path, request.query_string.decode("latin-1"))
 
 
+def _redirect_location(target, interactive=False):
+    query = target.query
+    if interactive:
+        args = [(key, value) for key, value in parse_qsl(query, keep_blank_values=True)
+                if key != INTERACTIVE_QUERY]
+        args.append((INTERACTIVE_QUERY, "1"))
+        query = urlencode(args)
+    return (target.path or "") + ("?" + query if query else "")
+
+
 def _proxy(path, query):
     server = current_app.extensions["kiwix"]
     ready, error = server.ready()
@@ -299,6 +309,7 @@ def _proxy(path, query):
     # This StationNet-only flag selects the sandboxed runtime response. Never
     # pass it through to kiwix-serve, where it could alter an archive route or
     # create a duplicate upstream cache entry.
+    interactive = request.args.get(INTERACTIVE_QUERY) == "1"
     if INTERACTIVE_QUERY in request.args:
         query = urlencode([(key, value) for key, value in parse_qsl(query, keep_blank_values=True)
                            if key != INTERACTIVE_QUERY])
@@ -333,7 +344,10 @@ def _proxy(path, query):
         if upstream.headers.get(name):
             headers[name] = upstream.headers[name]
     if location:
-        headers["Location"] = (target.path or "") + ("?" + target.query if target.query else "")
+        # Kiwix commonly redirects a collection root to its index.html. Keep
+        # the browser in interactive mode across that trusted internal hop;
+        # the flag remains StationNet-only and was removed upstream above.
+        headers["Location"] = _redirect_location(target, interactive)
     if request.method == "HEAD":
         status = upstream.status
         upstream.close()

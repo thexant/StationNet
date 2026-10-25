@@ -104,6 +104,11 @@
 
   function needsInteractiveRuntime(doc) {
     if (!doc.querySelector('script')) return false;
+    // Production maps2zim bundles use fingerprinted asset names, so neither
+    // their module URL nor the initial fallback text necessarily says MapLibre
+    // or WebGL. Detect the app's stable boot/loading/error structure as well.
+    if (doc.querySelector('script[type="module"]') && doc.querySelector('#map') &&
+        doc.querySelector('#loading') && doc.querySelector('#error')) return true;
     const text = `${doc.title || ''} ${doc.body?.textContent || ''}`;
     if (/\b(?:webgl|maplibre|mapbox|openlayers|leaflet)\b/i.test(text) ||
         /requires?\s+(?:javascript|webgl)|(?:javascript|webgl)\s+(?:is\s+)?required/i.test(text)) return true;
@@ -121,7 +126,7 @@
     const frame = document.createElement('iframe');
     frame.className = 'wiki-interactive-frame';
     frame.title = doc.title || 'Interactive offline map';
-    frame.setAttribute('sandbox', 'allow-scripts allow-forms allow-pointer-lock allow-downloads');
+    frame.setAttribute('sandbox', 'allow-scripts allow-same-origin allow-forms allow-pointer-lock allow-downloads');
     frame.setAttribute('referrerpolicy', 'same-origin');
     frame.src = source.href;
     frame.addEventListener('load', () => status.remove(), {once: true});

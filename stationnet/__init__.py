@@ -150,13 +150,13 @@ def create_app(test_config=None):
             )
         if request.endpoint in {"kiwix.content", "kiwix.search_source"}:
             if request.args.get("stationnet-interactive") == "1":
-                # JavaScript-first ZIMs (notably maps) run in an opaque-origin
-                # sandbox. This retains WebGL, workers, pointer interaction and
-                # bundled assets without granting archive code access to
-                # StationNet's DOM, cookies, storage, or authenticated APIs.
+                # JavaScript-first ZIMs (notably official openZIM maps) need a
+                # same-origin module graph: their startup probe fetches bundled
+                # config before MapLibre initializes. These archives are
+                # installed by the station operator, never uploaded by users.
                 response.headers["X-Frame-Options"] = "SAMEORIGIN"
                 response.headers["Content-Security-Policy"] = (
-                    "sandbox allow-scripts allow-forms allow-pointer-lock allow-downloads; "
+                    "sandbox allow-scripts allow-same-origin allow-forms allow-pointer-lock allow-downloads; "
                     "default-src 'self' data: blob:; "
                     "script-src 'self' 'unsafe-inline' 'unsafe-eval' 'wasm-unsafe-eval' blob:; "
                     "style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; "
@@ -171,9 +171,8 @@ def create_app(test_config=None):
                     "img-src 'self' data: blob:; media-src 'self'; font-src 'self' data:; "
                     "object-src 'none'; base-uri 'none'; frame-ancestors 'none'"
                 )
-            # A sandboxed interactive document has an opaque `null` origin.
-            # Bundled map tiles and data still come only through this read-only
-            # proxy, but WebGL/fetch need CORS permission to read them.
+            # Retain support for browsers which issue sandboxed subresource
+            # requests with an opaque origin during frame initialization.
             if request.headers.get("Origin") == "null":
                 response.headers["Access-Control-Allow-Origin"] = "null"
                 response.headers["Vary"] = "Origin"
