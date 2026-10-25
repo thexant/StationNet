@@ -112,6 +112,21 @@
     </label>
     <div class="button-row"><button>IMPORT THEME</button></div>
   </form>
+  {% if custom_themes %}
+  <form method="post" action="{{ url_for('station.remove_theme') }}" class="form-grid">
+    <input type="hidden" name="csrf_token" value="{{ session.csrf_token }}">
+    <div class="divider">REMOVE CUSTOM COLOUR THEME</div>
+    <label>Installed theme
+      <select name="theme_id" required>
+        <option value="">Select a custom theme</option>
+        {% for id, theme in custom_themes.items() %}<option value="{{ id }}">{{ theme.name }} ({{ id }}) — {{ theme.author }}</option>{% endfor %}
+      </select>
+    </label>
+    <label class="switch"><input type="checkbox" name="confirm_remove" required> Confirm removal of the selected theme</label>
+    <small>Station selections return to Default / Cyan. Member selections return to the station theme.</small>
+    <div class="button-row"><button type="submit" class="secondary">REMOVE THEME</button></div>
+  </form>
+  {% endif %}
   </div>
 </section>
 
@@ -320,6 +335,21 @@
       <label>Dungeon theme file<input type="file" name="dungeon_file" accept=".json,application/json" required></label>
       <button>IMPORT DUNGEON</button>
     </form>
+    {% if mud_daily_themes|selectattr('custom')|list %}
+    <form method="post" action="{{ url_for('station.remove_dungeon') }}" class="form-grid">
+      <input type="hidden" name="csrf_token" value="{{ session.csrf_token }}">
+      <div class="divider">REMOVE CUSTOM DUNGEON THEME</div>
+      <label>Installed dungeon theme
+        <select name="theme_id" required>
+          <option value="">Select a custom dungeon theme</option>
+          {% for theme in mud_daily_themes if theme.custom %}<option value="{{ theme.id }}">{{ theme.name }} ({{ theme.id }}@{{ theme.version }}) — {{ theme.author }}</option>{% endfor %}
+        </select>
+      </label>
+      <label class="switch"><input type="checkbox" name="confirm_remove" required> Confirm removal of the selected dungeon theme</label>
+      <small>Existing runs and today's dungeon remain available. Future runs cannot select this theme.</small>
+      <button type="submit" class="secondary">REMOVE DUNGEON</button>
+    </form>
+    {% endif %}
     <p class="muted">Available themes: {% for theme in mud_daily_themes %}{{ theme.name }} ({{ theme.id }}@{{ theme.version }}){% if theme.author %} by {{ theme.author }}{% endif %}{{ ', ' if not loop.last }}{% else %}none{% endfor %}</p>
   </section>
   </div>

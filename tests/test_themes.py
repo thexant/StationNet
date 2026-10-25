@@ -91,3 +91,44 @@ def test_partial_themes_and_invalid_uploads(tmp_path):
     assert b"six-digit hex" in _import(client, json.dumps(invalid).encode()).data
     assert not (tmp_path / "themes" / "bad-css.json").exists()
     assert b"already installed" in _import(client, json.dumps(site).encode()).data
+
+
+def test_remove_custom_theme_requires_confirmation_and_resets_selections(tmp_path):
+    app, client, sysop, member = _client(tmp_path)
+    assert b"Imported theme" in _import(client, _theme()).data
+    path = tmp_path / "themes" / "ocean-night.json"
+    with app.app_context():
+        db = get_db()
+        db.execute("UPDATE station SET site_theme=?,masthead_theme=?",
+                   ("custom-ocean-night", "custom-ocean-night"))
+        db.execute("UPDATE users SET site_theme=?,masthead_theme=? WHERE id=?",
+                   ("custom-ocean-night", "custom-ocean-night", member))
+        db.commit()
+    route = "/sysop/settings/theme/remove"
+    response = client.post(route, data={"csrf_token": "test-token", "theme_id": "ocean-night"},
+                           follow_redirects=True)
+    assert b"Check the confirmation box" in response.data
+    assert path.is_file()
+    response = client.post(route, data={"csrf_token": "test-token", "theme_id": "cyan",
+                                        "confirm_remove": "on"}, follow_redirects=True)
+    assert b"Select an installed custom theme" in response.data
+    assert path.is_file()
+    with client.session_transaction() as session:
+        session["user_id"] = member
+    assert b"SYSOP authorization required" in client.post(
+        route, data={"csrf_token": "test-token", "theme_id": "ocean-night",
+                     "confirm_remove": "on"}, follow_redirects=True).data
+    assert path.is_file()
+    with client.session_transaction() as session:
+        session["user_id"] = sysop
+    response = client.post(route, data={"csrf_token": "test-token", "theme_id": "ocean-night",
+                                        "confirm_remove": "on"}, follow_redirects=True)
+    assert b"Removed theme Ocean Night" in response.data
+    assert not path.exists()
+    assert b"REMOVE CUSTOM COLOUR THEME" not in response.data
+    with app.app_context():
+        db = get_db()
+        station = db.execute("SELECT site_theme,masthead_theme FROM station").fetchone()
+        user = db.execute("SELECT site_theme,masthead_theme FROM users WHERE id=?", (member,)).fetchone()
+        assert tuple(station) == ("cyan", "cyan")
+        assert tuple(user) == (None, None)

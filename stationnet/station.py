@@ -135,6 +135,39 @@ def import_theme():
     return redirect(url_for("station.settings") + "#station-parameters")
 
 
+@bp.post("/sysop/settings/theme/remove")
+@admin_required
+def remove_theme():
+    validate_csrf()
+    destination = url_for("station.settings") + "#station-parameters"
+    theme_id = request.form.get("theme_id", "")
+    if request.form.get("confirm_remove") != "on":
+        flash("Check the confirmation box before removing a theme.", "error")
+        return redirect(destination)
+    installed = themes.custom_themes()
+    if theme_id not in installed:
+        flash("Select an installed custom theme to remove.", "error")
+        return redirect(destination)
+    path = themes.directory() / f"{theme_id}.json"
+    if path.is_symlink():
+        flash("Cannot remove a linked theme file.", "error")
+        return redirect(destination)
+    try:
+        path.unlink()
+    except OSError:
+        flash("Could not remove the theme file.", "error")
+        return redirect(destination)
+    choice = f"custom-{theme_id}"
+    database = get_db()
+    database.execute("UPDATE station SET site_theme='cyan' WHERE site_theme=?", (choice,))
+    database.execute("UPDATE station SET masthead_theme='cyan' WHERE masthead_theme=?", (choice,))
+    database.execute("UPDATE users SET site_theme=NULL WHERE site_theme=?", (choice,))
+    database.execute("UPDATE users SET masthead_theme=NULL WHERE masthead_theme=?", (choice,))
+    database.commit()
+    flash(f"Removed theme {installed[theme_id]['name']}.", "success")
+    return redirect(destination)
+
+
 def _header_color(value):
     """Return a safe configured CSS color, or the theme's normal cyan."""
     return value if isinstance(value, str) and HEX_COLOR_RE.fullmatch(value) else ""
@@ -482,6 +515,50 @@ def import_dungeon():
         flash("A dungeon theme file with that ID already exists.", "error")
         return redirect(destination)
     flash(f"Imported dungeon theme {document['name']} by {document['author']}.", "success")
+    return redirect(destination)
+
+
+@bp.post("/sysop/settings/dungeons/remove")
+@admin_required
+def remove_dungeon():
+    validate_csrf()
+    destination = url_for("station.settings") + "#dungeon-themes"
+    theme_id = request.form.get("theme_id", "")
+    if request.form.get("confirm_remove") != "on":
+        flash("Check the confirmation box before removing a dungeon theme.", "error")
+        return redirect(destination)
+    try:
+        installed = dungeons.discover_templates()
+    except dungeons.TemplateError as problem:
+        flash(f"Installed dungeon themes need attention: {problem}", "error")
+        return redirect(destination)
+    entry = installed.get(theme_id)
+    path = dungeons.custom_themes_directory() / f"{theme_id}.json"
+    if entry is None or entry[0] != path or path.is_symlink():
+        flash("Select an installed custom dungeon theme to remove.", "error")
+        return redirect(destination)
+    try:
+        path.unlink()
+    except OSError:
+        flash("Could not remove the dungeon theme file.", "error")
+        return redirect(destination)
+    database = get_db()
+    settings = database.execute(
+        "SELECT eligible_theme_ids_json FROM mud_daily_dungeon_settings WHERE id=1"
+    ).fetchone()
+    if settings:
+        try:
+            eligible = json.loads(settings["eligible_theme_ids_json"] or "[]")
+        except json.JSONDecodeError:
+            eligible = None
+        if isinstance(eligible, list) and theme_id in eligible:
+            eligible = [item for item in eligible if item != theme_id]
+            database.execute(
+                "UPDATE mud_daily_dungeon_settings SET eligible_theme_ids_json=? WHERE id=1",
+                (json.dumps(eligible),),
+            )
+            database.commit()
+    flash(f"Removed dungeon theme {entry[1]['name']}.", "success")
     return redirect(destination)
 
 
@@ -838,11 +915,12 @@ def settings():
         "SELECT * FROM mud_daily_dungeon_settings WHERE id=1"
     ).fetchone()
     try:
-        mud_daily_themes = [template for _key, template in (
-            (key, {"id": key, "name": value[1]["name"], "version": value[1]["version"],
-                   "author": value[1].get("author")})
-            for key, value in dungeons.discover_templates().items()
-        )]
+        mud_daily_themes = [
+            {"id": key, "name": template["name"], "version": template["version"],
+             "author": template.get("author"),
+             "custom": path.parent == dungeons.custom_themes_directory() and not path.is_symlink()}
+            for key, (path, template) in dungeons.discover_templates().items()
+        ]
     except dungeons.TemplateError:
         mud_daily_themes = []
     try:
@@ -865,6 +943,7 @@ def settings():
     event_creation_groups = {row["group_id"] for row in database.execute("SELECT group_id FROM event_creation_groups")}
     return render_template("settings.html", header_fonts=header_fonts,
                            site_themes=themes.options("site"), masthead_themes=themes.options("masthead"),
+                           custom_themes=themes.custom_themes(),
                            station_icon_exists=_station_icon_path().is_file(),
                            event_creation_groups=event_creation_groups,
                            bands=bands, groups=groups, users=users,
