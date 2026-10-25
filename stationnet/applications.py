@@ -44,7 +44,7 @@ STORAGE_SHARED_BYTES = 2 * 1024 * 1024
 SCORE_MAX = 1_000_000_000
 MANIFEST_PERMISSIONS = frozenset({"multiplayer"})
 MANIFEST_PLATFORMS = frozenset({"desktop", "touch"})
-MANIFEST_INPUTS = frozenset({"keyboard", "pointer", "fine-pointer", "touch", "pointer-lock"})
+MANIFEST_INPUTS = frozenset({"keyboard", "pointer", "fine-pointer", "touch", "pointer-lock", "gamepad"})
 PRESENTATION_MODES = frozenset({"standard", "immersive"})
 
 

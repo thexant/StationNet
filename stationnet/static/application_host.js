@@ -259,7 +259,8 @@
     const mobile = navigator.userAgentData?.mobile ?? /Android|iPhone|iPad|Mobile/i.test(navigator.userAgent);
     return {
       keyboard: finePointer || !mobile, pointer, "fine-pointer": finePointer, touch,
-      "pointer-lock": "pointerLockElement" in document && typeof surface.requestPointerLock === "function"
+      "pointer-lock": "pointerLockElement" in document && typeof surface.requestPointerLock === "function",
+      gamepad: sampleGamepads().some((pad) => pad !== null)
     };
   };
   const environmentCompatibility = () => {
@@ -287,6 +288,27 @@
   const number = (value, fallback, min, max) => {
     const parsed = Number(value);
     return Number.isFinite(parsed) ? Math.min(max, Math.max(min, parsed)) : fallback;
+  };
+  const sampleGamepads = () => {
+    if (typeof navigator.getGamepads !== "function") return [];
+    let pads;
+    try { pads = navigator.getGamepads(); } catch (_) { return []; }
+    const result = [];
+    for (let index = 0; index < 4; index++) {
+      const pad = pads?.[index];
+      if (!pad || !pad.connected) { result.push(null); continue; }
+      const buttonCount = Number.isInteger(pad.buttons?.length) ? Math.min(32, Math.max(0, pad.buttons.length)) : 0;
+      const axisCount = Number.isInteger(pad.axes?.length) ? Math.min(16, Math.max(0, pad.axes.length)) : 0;
+      result.push({
+        buttons: Array.from({ length: buttonCount }, (_, i) => pad.buttons[i]).map((button) => {
+          const value = button?.value;
+          return typeof value === "number" && Number.isFinite(value) ? Math.max(0, Math.min(1, value)) : 0;
+        }),
+        axes: Array.from({ length: axisCount }, (_, i) => pad.axes[i]).map((axis) =>
+          typeof axis === "number" && Number.isFinite(axis) ? Math.max(-1, Math.min(1, axis)) : 0)
+      });
+    }
+    return result;
   };
 
   function audio() {
@@ -1504,8 +1526,13 @@
   }
 
   addEventListener("message", (event) => {
-    if (event.source !== frame.contentWindow || !event.data || event.data.protocol !== PROTOCOL || !allowedEvent()) return;
+    if (event.source !== frame.contentWindow || !event.data || event.data.protocol !== PROTOCOL) return;
     const message = event.data;
+    if (message.type === "gamepad-sample") {
+      if (!closed) frame.contentWindow.postMessage({ protocol: PROTOCOL, type: "gamepad-state", gamepads: sampleGamepads() }, "*");
+      return;
+    }
+    if (!allowedEvent()) return;
     if (message.type === "initialized") {
       clearTimeout(startupTimer); status.textContent = "PROGRAM STATUS / INITIALIZED";
       reportVisibility();
@@ -1551,8 +1578,13 @@
     if ((event.ctrlKey || event.metaKey) && ["KeyS", "KeyZ", "KeyY", "KeyC", "KeyV", "KeyD", "KeyA"].includes(event.code)) event.preventDefault();
   };
   const releasePressedKeys = () => {
+    pressedKeys.forEach((event) => sendInputKey(event.code, false));
     pressedKeys.forEach((event) => keyboardActions.forEach((action) => interact(action, { ...event, phase: "up", repeat: false })));
     pressedKeys.clear();
+  };
+  const sendInputKey = (code, down) => {
+    if (closed || !frame.contentWindow || typeof code !== "string" || !/^[A-Za-z0-9]{1,40}$/.test(code)) return;
+    frame.contentWindow.postMessage({ protocol: PROTOCOL, type: "input-key", code, down }, "*");
   };
   addEventListener("keydown", (event) => {
     unlockAudio();
@@ -1564,6 +1596,7 @@
     preventGameKeyDefault(event);
     const payload = keyboardEvent(event, "down");
     if (!event.repeat) pressedKeys.set(payload.code || payload.key, payload);
+    if (!event.repeat) sendInputKey(payload.code, true);
     keyboardActions.forEach((action) => interact(action, payload));
   });
   addEventListener("keyup", (event) => {
@@ -1571,6 +1604,7 @@
     if (!pressedKeys.has(identity)) return;
     preventGameKeyDefault(event);
     pressedKeys.delete(identity);
+    sendInputKey(identity, false);
     const payload = keyboardEvent(event, "up");
     keyboardActions.forEach((action) => interact(action, payload));
   });

@@ -6,6 +6,11 @@
   const PROTOCOL = "stationnet-app-v1";
   const actions = new Map();
   const animations = new Map();
+  const downKeys = new Set(), pressedKeys = new Set(), releasedKeys = new Set();
+  const framePressedKeys = new Set(), frameReleasedKeys = new Set();
+  let inAnimationFrame = false;
+  let gamepads = [];
+  let randomState = 0x6d2b79f5;
   const cleanups = [];
   const storageRequests = new Map();
   const multiplayerRequests = new Map();
@@ -562,6 +567,7 @@
 
   function animate(handler) {
     if (typeof handler !== "function") throw new TypeError("An animation callback is required");
+    if (animations.size >= 16) throw new RangeError("At most 16 animation callbacks are allowed");
     const id = `animation-${nextAction++}`;
     let active = true, paused = false;
     animations.set(id, handler);
@@ -587,6 +593,60 @@
     return cancel;
   }
 
+  function fixedStep(hz, handler) {
+    if (!Number.isInteger(hz) || hz < 10 || hz > 120) throw new RangeError("Fixed step rate must be 10-120 Hz");
+    if (typeof handler !== "function") throw new TypeError("A fixed step callback is required");
+    const step = 1 / hz;
+    let accumulator = 0, tick = 0;
+    return animate(async ({ delta }) => {
+      if (!delta) { accumulator = 0; return; }
+      accumulator = Math.min(accumulator + Math.min(delta, 1), step * 5);
+      let steps = Math.min(5, Math.floor((accumulator + 1e-10) / step));
+      while (steps-- > 0) {
+        accumulator -= step;
+        await handler(Object.freeze({ delta: step, tick: ++tick }));
+      }
+    });
+  }
+
+  function inputComponent(name, label, settings) {
+    const opts = options(settings);
+    return identified({ type: "input", name: String(name), label: String(label), placeholder: String(opts.placeholder || ""), value: String(opts.value || ""), maxLength: opts.maxLength, submitAction: action(opts.onSubmit) }, opts);
+  }
+  function validCode(code) {
+    if (typeof code !== "string" || !/^[A-Za-z0-9]{1,40}$/.test(code)) throw new TypeError("Invalid keyboard code");
+    return code;
+  }
+  inputComponent.isDown = (code) => downKeys.has(validCode(code));
+  inputComponent.wasPressed = (code) => (inAnimationFrame ? framePressedKeys : pressedKeys).has(validCode(code));
+  inputComponent.wasReleased = (code) => (inAnimationFrame ? frameReleasedKeys : releasedKeys).has(validCode(code));
+  inputComponent.gamepad = (index = 0, settings) => {
+    const deadzone = options(settings).deadzone ?? 0;
+    if (!Number.isInteger(index) || index < 0 || index > 3 ||
+        typeof deadzone !== "number" || !Number.isFinite(deadzone) || deadzone < 0 || deadzone >= 1)
+      throw new RangeError("Gamepad index must be 0-3 and deadzone must be 0-<1");
+    const pad = gamepads[index];
+    return Object.freeze({ buttons: Object.freeze(pad ? pad.buttons.slice() : []),
+      axes: Object.freeze(pad ? pad.axes.map((axis) => Math.abs(axis) < deadzone ? 0 : axis) : []) });
+  };
+  Object.freeze(inputComponent);
+
+  const random = Object.freeze({
+    seed(value) {
+      if (!Number.isSafeInteger(value)) throw new TypeError("Random seed must be a safe integer");
+      randomState = value >>> 0;
+    },
+    next() {
+      randomState = (Math.imul(randomState, 1664525) + 1013904223) >>> 0;
+      return randomState / 4294967296;
+    },
+    int(min, max) {
+      if (!Number.isSafeInteger(min) || !Number.isSafeInteger(max) || min > max || max - min >= 4294967296)
+        throw new RangeError("Random integer bounds must be ordered safe integers within a 32-bit span");
+      return min + Math.floor(random.next() * (max - min + 1));
+    }
+  });
+
   const api = Object.freeze({
     text(content, settings) {
       const opts = options(settings);
@@ -609,10 +669,7 @@
         })
       }, opts);
     },
-    input(name, label, settings) {
-      const opts = options(settings);
-      return identified({ type: "input", name: String(name), label: String(label), placeholder: String(opts.placeholder || ""), value: String(opts.value || ""), maxLength: opts.maxLength, submitAction: action(opts.onSubmit) }, opts);
-    },
+    input: inputComponent,
     dateInput(name, label, settings) {
       const opts = options(settings);
       return identified({ type: "date", name: String(name), label: String(label), value: String(opts.value || "") }, opts);
@@ -750,6 +807,8 @@
     timeout(handler, delay) { return scheduled(handler, delay, false); },
     interval(handler, delay) { return scheduled(handler, delay, true); },
     animate,
+    fixedStep,
+    random,
     storage: Object.freeze({
       set(key, value, settings) { return storage("set", String(key), value, settings); },
       get(key, settings) { return storage("get", String(key), undefined, settings); },
@@ -967,18 +1026,43 @@
       presentationHandlers.forEach((handler) => Promise.resolve().then(() => handler(presentationMode)).catch(fail));
       return;
     }
+    if (message.type === "input-key") {
+      if (typeof message.code !== "string" || !/^[A-Za-z0-9]{1,40}$/.test(message.code) || typeof message.down !== "boolean") return;
+      if (message.down) {
+        if (!downKeys.has(message.code)) pressedKeys.add(message.code);
+        downKeys.add(message.code);
+      } else {
+        if (downKeys.delete(message.code)) releasedKeys.add(message.code);
+      }
+      return;
+    }
     if (message.type === "animation-frame") {
-      const handler = animations.get(message.action);
+      gamepads = Array.isArray(message.gamepads) ? message.gamepads.slice(0, 4).map((pad) =>
+        pad && Array.isArray(pad.buttons) && Array.isArray(pad.axes) ? {
+          buttons: pad.buttons.slice(0, 32).map((value) => typeof value === "number" && Number.isFinite(value) ? Math.max(0, Math.min(1, value)) : 0),
+          axes: pad.axes.slice(0, 16).map((value) => typeof value === "number" && Number.isFinite(value) ? Math.max(-1, Math.min(1, value)) : 0)
+        } : null) : [];
+      const frames = Array.isArray(message.frames) ? message.frames.slice(0, 16) :
+        [{ action: message.action, time: message.time, delta: message.delta }];
+      framePressedKeys.clear(); frameReleasedKeys.clear();
+      pressedKeys.forEach((code) => framePressedKeys.add(code));
+      releasedKeys.forEach((code) => frameReleasedKeys.add(code));
+      pressedKeys.clear(); releasedKeys.clear();
+      inAnimationFrame = true;
       try {
-        if (handler) await handler(Object.freeze({
-          time: Number(message.time) || 0,
-          delta: Math.max(0, Number(message.delta) || 0)
-        }));
+        for (const frame of frames) {
+          const handler = animations.get(frame.action);
+          if (handler) await handler(Object.freeze({
+            time: Number.isFinite(frame.time) ? frame.time : 0,
+            delta: Number.isFinite(frame.delta) ? Math.max(0, Math.min(1, frame.delta)) : 0
+          }));
+        }
       } catch (error) { fail(error); }
       // This acknowledgement is runtime flow control, not an application
       // event, and is consumed by the trusted relay rather than the host.
       finally {
-        if (!stopped) postMessage({ protocol: PROTOCOL, type: "animation-ready", action: String(message.action || "") });
+        inAnimationFrame = false; framePressedKeys.clear(); frameReleasedKeys.clear();
+        if (!stopped) frames.forEach((frame) => postMessage({ protocol: PROTOCOL, type: "animation-ready", action: String(frame.action || "") }));
       }
       return;
     }
@@ -1088,6 +1172,8 @@
     capabilityRequests.clear();
     pointerLockChangeHandlers.clear(); pointerLockMoveHandlers.clear(); presentationHandlers.clear();
     pointerLockActive = false; presentationMode = "standard";
+    downKeys.clear(); pressedKeys.clear(); releasedKeys.clear();
+    framePressedKeys.clear(); frameReleasedKeys.clear(); inAnimationFrame = false; gamepads = [];
     animations.clear();
     actions.clear();
     send("terminated");

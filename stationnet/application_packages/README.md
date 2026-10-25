@@ -50,7 +50,7 @@ keep `"entrypoint": "main.js"` unchanged.
 The final three fields are optional, so existing packages remain universal and
 use the normal StationNet layout. `platforms` may be `"universal"`,
 `["desktop"]`, `["touch"]`, or `["desktop", "touch"]`. Input requirements may
-contain `keyboard`, `pointer`, `fine-pointer`, `touch`, and `pointer-lock`.
+contain `keyboard`, `pointer`, `fine-pointer`, `touch`, `pointer-lock`, and `gamepad`.
 StationNet checks real browser input capabilities first (including hybrid
 devices) and uses a desktop/mobile heuristic only where browsers expose no
 keyboard capability signal. If a requirement is not met, launch pauses with an
@@ -269,6 +269,21 @@ pause/resume for game state such as menus. Canvas-only updates to the same id ar
 coalesced before paint (latest frame wins), and the existing canvas element and
 bitmap allocation are reused while its dimensions stay unchanged.
 
+`ui.fixedStep(hz, handler)` uses the same display scheduler and returns the same
+cancel/pause/resume handle. `hz` must be an integer from 10 through 120. The
+handler receives `{ delta: 1 / hz, tick }`; `tick` starts at 1 and advances once
+per simulation step. Up to five steps run per animation frame. Excess elapsed
+time is discarded so a slow frame cannot create an unbounded catch-up loop.
+The first frame and the first frame after a pause run no steps. Async handlers
+finish before the next step. Keep rendering in a separate `ui.animate` callback
+if it should happen once per display frame.
+
+`ui.random.seed(n)` sets a deterministic 32-bit sequence from a safe integer.
+`ui.random.next()` returns a number in `[0, 1)`. `ui.random.int(min, max)` returns
+an integer in the inclusive range; both bounds must be safe integers and their
+span must fit in 32 bits. The default seed is fixed, so call `seed` to choose a
+different repeatable sequence.
+
 `ui.onVisibility(handler)` registers a handler called immediately and whenever
 the page is hidden/shown or loses/gains focus. It receives an event object whose
 `value` is `"hidden"` or `"visible"`; it returns an unsubscribe function. Pause
@@ -299,6 +314,21 @@ marked with `repeat: true`. StationNet sends an `"up"` event for every pressed
 key when the application loses focus, so games do not leave movement stuck.
 Key handling is skipped while typing in a text input, textarea, or select. The
 method returns an unsubscribe function.
+
+`ui.input.isDown(code)` reports whether a key is held. `wasPressed(code)` and
+`wasReleased(code)` report edges during the current animation frame and reset
+after its callbacks finish. Pass a browser `KeyboardEvent.code` such as
+`"ArrowLeft"` or `"KeyA"` (1–40 letters/digits); typing in form controls does
+not enter game input. The existing `ui.input(name, label, options)` text control
+still works.
+
+`ui.input.gamepad(index = 0, { deadzone = 0 })` returns `{ buttons, axes }` from
+the latest display-frame snapshot. Indices are 0–3; at most 32 button values
+in `[0, 1]` and 16 axis values in `[-1, 1]` are exposed. Values with absolute
+magnitude below `deadzone` become zero (`0 <= deadzone < 1`). Disconnected or
+unavailable pads return empty arrays. Declare `"gamepad"` in `required_inputs`
+to show a compatibility warning when no controller is connected. Games should
+still handle disconnection during play.
 
 `button(label, onClick, options)` remains a click/tap control. Add
 `onPress(event)` and/or `onRelease(event)` to `options` to receive the start and

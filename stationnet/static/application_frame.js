@@ -25,6 +25,7 @@
   const animations = new Map();
   const pendingCanvasUpdates = new Map();
   const pendingFrames = new Map();
+  const pendingAnimationBatches = [];
 
   const flushFrames = () => {
     pendingFrames.forEach((message) => {
@@ -68,6 +69,7 @@
     animationRequest = 0;
     flushCanvasUpdates();
     if (!visible || stopped) return;
+    const due = [];
     animations.forEach((state, action) => {
       if (state.pending) return;
       if (state.nextTime != null && time + .1 < state.nextTime) return;
@@ -75,8 +77,14 @@
       state.lastTime = time; state.pending = true;
       if (state.nextTime == null) state.nextTime = time;
       do { state.nextTime += frameInterval; } while (state.nextTime <= time);
-      worker.postMessage({ protocol, type: "animation-frame", action, time, delta });
+      due.push({ action, time, delta });
     });
+    if (due.length) {
+      if (pendingAnimationBatches.length < 16) {
+        pendingAnimationBatches.push(due);
+        parent.postMessage({ protocol, type: "gamepad-sample" }, "*");
+      } else worker.postMessage({ protocol, type: "animation-frame", frames: due, gamepads: [] });
+    }
     scheduleAnimations();
   };
 
@@ -94,9 +102,12 @@
 
   worker.addEventListener("message", (event) => {
     if (!event.data || event.data.protocol !== protocol) return;
+    if (event.data.type === "gamepad-sample") return;
     if (event.data.type === "animation") {
-      const action = String(event.data.action || "");
-      if (event.data.enabled && action) animations.set(action, { pending: false, lastTime: null, nextTime: null });
+      const action = event.data.action;
+      if (typeof action !== "string" || !/^animation-[1-9]\d{0,9}$/.test(action)) return;
+      if (event.data.enabled && (animations.has(action) || animations.size < 16))
+        animations.set(action, { pending: false, lastTime: null, nextTime: null });
       else animations.delete(action);
       scheduleAnimations();
       return;
@@ -165,6 +176,14 @@
       setVisible(event.data.visible);
       return;
     }
+    if (event.data.type === "gamepad-state") {
+      const batch = pendingAnimationBatches.shift();
+      if (batch) {
+        worker.postMessage({ protocol, type: "animation-frame", frames: batch,
+          gamepads: event.data.gamepads });
+      }
+      return;
+    }
     const transfer = event.data.type === "graphics-decode-image-result" && event.data.pixels instanceof Uint8Array
       ? [event.data.pixels.buffer, ...(event.data.palette instanceof Uint8Array ? [event.data.palette.buffer] : [])] : [];
     worker.postMessage(event.data, transfer);
@@ -175,7 +194,7 @@
     if (stopped) return;
     stopped = true;
     if (animationRequest) cancelAnimationFrame(animationRequest);
-    animationRequest = 0; animations.clear(); pendingCanvasUpdates.clear(); pendingFrames.clear();
+    animationRequest = 0; animations.clear(); pendingCanvasUpdates.clear(); pendingFrames.clear(); pendingAnimationBatches.length = 0;
     worker.terminate();
     URL.revokeObjectURL(url);
   }
