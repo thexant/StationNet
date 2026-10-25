@@ -1,0 +1,47 @@
+{% extends 'base.html' %}
+{% block title %}Documents{% endblock %}
+{% block content %}
+<link rel="stylesheet" href="{{ url_for('static', filename='office-documents.css', v='2') }}">
+<div class="documents-app" data-api="{{ url_for('office.document_list') }}" data-vault="{{ url_for('office.vault') }}" data-csrf="{{ session.csrf_token }}">
+  <header class="documents-head">
+    <div><p class="eyebrow"><a href="{{ url_for('office.index') }}">OFFICE</a> / DOCUMENTS</p><h1>Documents</h1></div>
+    <div class="documents-head-actions"><span id="document-status" role="status" aria-live="polite">LOCKED</span><button type="button" id="document-lock" class="secondary" hidden>LOCK</button></div>
+  </header>
+  <section id="document-unlock" class="terminal-card documents-unlock">
+    <h2>Unlock your documents</h2>
+    <p>Your document passphrase encrypts documents in this browser before they are saved. It stays in this tab and is separate from your StationNet password. If you lose it, saved documents cannot be recovered.</p>
+    <form id="document-unlock-form" class="form-grid"><label>Document passphrase<input id="document-passphrase" type="password" minlength="12" required autocomplete="off"></label><label id="document-confirm-row" hidden>Confirm new document passphrase<input id="document-passphrase-confirm" type="password" minlength="12" autocomplete="off"></label><button type="submit">UNLOCK DOCUMENTS</button></form>
+    <p id="document-unlock-error" class="documents-error" role="alert" hidden></p>
+  </section>
+  <div id="document-workspace" class="documents-workspace" hidden>
+    <aside class="terminal-card documents-library">
+      <div class="documents-library-head"><h2>MY DOCUMENTS</h2><button type="button" id="document-new">NEW</button></div>
+      <button type="button" id="document-import" class="secondary">IMPORT FILE</button>
+      <input type="file" id="document-file" accept=".docx,.odt,.txt,.md,.html,.htm,.rtf" hidden>
+      <ul id="document-list" class="documents-list" aria-label="Saved documents"></ul>
+      <p class="documents-small">Only you can open your documents. Titles and contents are encrypted.</p>
+    </aside>
+    <section class="terminal-card documents-editor-wrap">
+      <div class="documents-title-row"><input id="document-title" aria-label="Document title" maxlength="160" placeholder="Untitled document"><div class="documents-file-actions"><button type="button" id="document-save" class="secondary">SAVE</button><button type="button" id="document-export" class="secondary">EXPORT</button><button type="button" id="document-delete" class="danger">DELETE</button></div></div>
+      <div id="document-message" class="documents-message" role="alert" hidden></div>
+      <div class="documents-toolbar" role="toolbar" aria-label="Document formatting">
+        <select id="document-block" aria-label="Text style"><option value="paragraph">Normal</option><option value="h1">Heading 1</option><option value="h2">Heading 2</option><option value="h3">Heading 3</option></select>
+        <button type="button" data-command="bold" title="Bold (Ctrl+B)"><b>B</b></button><button type="button" data-command="italic" title="Italic (Ctrl+I)"><i>I</i></button><button type="button" data-command="underline" title="Underline (Ctrl+U)"><u>U</u></button><button type="button" data-command="strike" title="Strikethrough"><s>S</s></button>
+        <button type="button" data-command="bulletList" title="Bullet list">• LIST</button><button type="button" data-command="orderedList" title="Numbered list">1. LIST</button>
+        <button type="button" data-command="alignLeft" title="Align left">LEFT</button><button type="button" data-command="alignCenter" title="Center">CENTER</button><button type="button" data-command="alignRight" title="Align right">RIGHT</button>
+        <button type="button" data-command="link" title="Insert link (Ctrl+K)">LINK</button><button type="button" data-command="blockquote">QUOTE</button><button type="button" data-command="codeBlock">CODE</button><button type="button" data-command="horizontalRule">RULE</button>
+        <button type="button" data-command="image">IMAGE</button><input type="file" id="document-image" accept="image/png,image/jpeg,image/gif,image/webp" hidden>
+        <button type="button" data-command="table">TABLE</button><button type="button" data-command="addRow">+ ROW</button><button type="button" data-command="addColumn">+ COL</button><button type="button" data-command="deleteTable">− TABLE</button>
+        <button type="button" data-command="undo" title="Undo (Ctrl+Z)">UNDO</button><button type="button" data-command="redo" title="Redo (Ctrl+Y)">REDO</button>
+        <button type="button" id="document-find-toggle" title="Find (Ctrl+F)">FIND</button><button type="button" id="document-theme" aria-pressed="false" title="Toggle the editor between Station and Print themes">PRINT THEME</button><button type="button" id="document-print" title="Print (Ctrl+P)">PRINT</button>
+      </div>
+      <div id="document-find" class="documents-find" hidden><input id="document-find-text" aria-label="Find" placeholder="Find text"><input id="document-replace-text" aria-label="Replace with" placeholder="Replace with"><button type="button" id="document-find-next">NEXT</button><button type="button" id="document-replace-one">REPLACE</button><button type="button" id="document-replace-all">REPLACE ALL</button><span id="document-find-count"></span></div>
+      <div id="document-editor" class="documents-paper" aria-label="Document content"></div>
+      <div class="documents-foot"><span id="document-word-count">0 words</span><span>Ctrl+S save · Ctrl+F find · Ctrl+P print</span></div>
+      <details class="documents-format-note"><summary>Import and export fidelity</summary><p>DOCX and ODT preserve common text structure, lists, tables, links, and images, but page layout, tracked changes, comments, fonts, and advanced styles may change. Markdown and TXT lose page styling; TXT loses all formatting and images. HTML keeps supported editor formatting after sanitizing scripts and unsafe content. RTF import may lose advanced formatting and embedded objects. PDF is a print snapshot.</p></details>
+    </section>
+  </div>
+  <dialog id="document-export-dialog"><form method="dialog"><h2>EXPORT DOCUMENT</h2><div class="documents-export-grid"><button value="docx">WORD .DOCX</button><button value="pdf">PDF</button><button value="odt">ODT</button><button value="html">HTML</button><button value="md">MARKDOWN</button><button value="txt">PLAIN TEXT</button></div><button value="cancel" class="secondary">CANCEL</button></form></dialog>
+</div>
+<script src="{{ url_for('static', filename='office-documents.js', v='2') }}" defer></script>
+{% endblock %}

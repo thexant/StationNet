@@ -2,6 +2,7 @@
   "private": true,
   "type": "module",
   "scripts": {
+    "build:documents": "node scripts/build-office-documents.mjs",
     "build:midi": "node scripts/build-midi.mjs",
     "test:midi": "node scripts/verify-composer-playback.mjs && node scripts/verify-composer-new.mjs",
     "test:light-cycles": "node scripts/verify-light-cycles.mjs && node scripts/verify-light-cycles-runtime.mjs",
@@ -10,7 +11,24 @@
     "test:application-samples": "node tests/test_application_samples.mjs"
   },
   "dependencies": {
-    "spessasynth_lib": "4.3.14"
+    "@noble/ciphers": "^2.4.0",
+    "@noble/hashes": "^2.4.0",
+    "@tiptap/core": "^3.32.0",
+    "@tiptap/extension-image": "^3.32.0",
+    "@tiptap/extension-table": "^3.32.0",
+    "@tiptap/extension-text-align": "^3.32.0",
+    "@tiptap/starter-kit": "^3.32.0",
+    "dom-docx": "^1.0.3",
+    "dompurify": "^3.4.17",
+    "html2canvas": "^1.4.1",
+    "jspdf": "^4.2.1",
+    "jszip": "^3.10.2",
+    "mammoth": "^1.13.0",
+    "marked": "^18.1.1",
+    "rtf-to-html-converter": "^1.2.4",
+    "spessasynth_lib": "4.3.14",
+    "turndown": "^7.2.4",
+    "turndown-plugin-gfm": "^1.0.2"
   },
   "devDependencies": {
     "esbuild": "0.28.0"

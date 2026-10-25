@@ -1,8 +1,16 @@
 {% extends 'base.html' %}
 {% block title %}Office{% endblock %}
 {% block content %}
-<section class="narrow terminal-card">
+<section class="terminal-card">
   <p class="eyebrow">STATIONNET OFFICE</p>
   <h1>Office</h1>
+  <p>Choose an Office program.</p>
+</section>
+<section class="office-programs" aria-label="Office programs">
+  <a class="terminal-card office-program" href="{{ url_for('office.documents') }}">
+    <h2>DOCUMENTS</h2>
+    <p>Write, import, and export private documents in a rich-text editor.</p>
+    <span>OPEN DOCUMENTS →</span>
+  </a>
 </section>
 {% endblock %}

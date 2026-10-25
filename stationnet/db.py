@@ -51,6 +51,17 @@ CREATE TABLE IF NOT EXISTS users (
  gender TEXT NOT NULL DEFAULT '', last_seen TEXT, connection_id TEXT,
  radio_quota_mb INTEGER, videos_quota_mb INTEGER, profile_photo_filename TEXT,
  site_theme TEXT, masthead_theme TEXT);
+CREATE TABLE IF NOT EXISTS office_document_vaults (
+ owner_id INTEGER PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+ salt TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS office_documents (
+ id INTEGER PRIMARY KEY AUTOINCREMENT,
+ owner_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+ envelope TEXT NOT NULL,
+ revision INTEGER NOT NULL DEFAULT 1,
+ created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+ updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);
+CREATE INDEX IF NOT EXISTS idx_office_documents_owner ON office_documents(owner_id,updated_at DESC,id DESC);
 CREATE TABLE IF NOT EXISTS events (
  id INTEGER PRIMARY KEY AUTOINCREMENT,
  creator_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
