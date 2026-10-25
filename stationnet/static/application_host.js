@@ -492,8 +492,9 @@
   function collectValues() {
     const result = Object.create(null);
     surface.querySelectorAll("[data-app-input]").forEach((input) => {
+      if (input.type === "radio" && !input.checked) return;
       if (input.type === "checkbox") result[input.name] = input.checked;
-      else result[input.name] = input.type === "number" && input.value !== "" ? Number(input.value) : input.value;
+      else result[input.name] = (input.type === "number" || input.type === "range") && input.value !== "" ? Number(input.value) : input.value;
     });
     return result;
   }
@@ -1041,8 +1042,8 @@
     if (overlay.childElementCount) wrapper.append(overlay);
   }
 
-  function renderComponent(component, depth = 0) {
-    if (!component || typeof component !== "object" || depth > 1) return null;
+  function renderComponent(component, depth = 0, budget = { remaining: LIMITS.components }) {
+    if (!component || typeof component !== "object" || depth > 3 || budget.remaining-- <= 0) return null;
     let node;
     switch (component.type) {
       case "title":
@@ -1060,6 +1061,105 @@
         if (component.variant === "secondary") node.classList.add("secondary");
         node.disabled = Boolean(component.disabled);
         bindPressable(node, { click: component.action, press: component.pressAction, release: component.releaseAction }); break;
+      case "tabs": {
+        node = document.createElement("div"); node.className = "app-tabs"; node.setAttribute("role", "tablist");
+        const labels = Array.isArray(component.labels) ? component.labels.slice(0, 16) : [];
+        const selected = Math.trunc(number(component.selected, 0, 0, Math.max(0, labels.length - 1)));
+        const buttons = [];
+        const activate = (active) => buttons.forEach((button, index) => {
+          button.setAttribute("aria-selected", String(index === active)); button.tabIndex = index === active ? 0 : -1;
+        });
+        labels.forEach((label, index) => {
+          const button = document.createElement("button"); button.type = "button"; button.setAttribute("role", "tab");
+          button.textContent = text(label, 120);
+          bindPressable(button, { click: component.action }, { value: String(index) });
+          button.addEventListener("click", () => activate(index)); buttons.push(button); node.append(button);
+        });
+        activate(selected);
+        node.addEventListener("keydown", (event) => {
+          if (!buttons.length || !["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return;
+          event.preventDefault();
+          const current = buttons.indexOf(document.activeElement);
+          const next = event.key === "Home" ? 0 : event.key === "End" ? buttons.length - 1 :
+            (Math.max(0, current) + (event.key === "ArrowRight" ? 1 : -1) + buttons.length) % buttons.length;
+          buttons[next].focus(); buttons[next].click();
+        }); break;
+      }
+      case "row": case "column": {
+        node = document.createElement("div"); node.className = component.type === "row" ? "app-row" : "app-column";
+        (Array.isArray(component.components) ? component.components : []).slice(0, 32).forEach((child) => {
+          const element = renderComponent(child, depth + 1, budget); if (element) node.append(element);
+        }); break;
+      }
+      case "slider": {
+        node = document.createElement("label"); node.className = "app-slider";
+        const caption = document.createElement("span"); caption.textContent = text(component.label, 200);
+        const input = document.createElement("input"); input.type = "range"; input.dataset.appInput = "";
+        input.name = text(component.name, 80).replace(/[^a-zA-Z0-9_-]/g, "_");
+        const min = number(component.min, 0, -1000000, 999999);
+        const upper = Math.min(1000000, min + 1000000);
+        const max = number(component.max, Math.min(upper, Math.max(min + .001, 100)), min + .001, upper);
+        const step = typeof component.step === "number" && Number.isFinite(component.step) && component.step >= .001
+          ? Math.min(component.step, max - min) : Math.min(1, max - min);
+        input.min = String(min); input.max = String(max); input.step = String(step);
+        input.value = String(number(component.value, min, min, max));
+        const output = document.createElement("output"); output.textContent = input.value;
+        input.addEventListener("input", () => { output.textContent = input.value; });
+        if (component.action) input.addEventListener("change", () => interact(text(component.action, 80), { value: Number(input.value) }));
+        node.append(caption, input, output); break;
+      }
+      case "radio": {
+        node = document.createElement("fieldset"); node.className = "app-radio";
+        const legend = document.createElement("legend"); legend.textContent = text(component.label, 200); node.append(legend);
+        const name = text(component.name, 80).replace(/[^a-zA-Z0-9_-]/g, "_");
+        const selected = text(component.value, 500);
+        (Array.isArray(component.items) ? component.items : []).slice(0, 32).forEach((item, index) => {
+          if (!item || typeof item !== "object") return;
+          const label = document.createElement("label");
+          const input = document.createElement("input"); input.type = "radio"; input.dataset.appInput = "";
+          input.name = name; input.value = text(item.value, 500); input.checked = selected ? input.value === selected : index === 0;
+          if (component.action) input.addEventListener("change", () => interact(text(component.action, 80), { value: input.value }));
+          const caption = document.createElement("span"); caption.textContent = text(item.label, 200);
+          label.append(input, caption); node.append(label);
+        }); break;
+      }
+      case "menu-bar": {
+        node = document.createElement("nav"); node.className = "app-menu-bar"; node.setAttribute("aria-label", "Application menu");
+        (Array.isArray(component.menus) ? component.menus : []).slice(0, 8).forEach((menu) => {
+          if (!menu || typeof menu !== "object") return;
+          const group = document.createElement("details"); const summary = document.createElement("summary");
+          summary.textContent = text(menu.label, 120); group.append(summary);
+          const items = document.createElement("div"); items.className = "app-menu-bar-items";
+          (Array.isArray(menu.items) ? menu.items : []).slice(0, 16).forEach((item) => {
+            if (!item || typeof item !== "object") return;
+            const button = document.createElement("button"); button.type = "button"; button.textContent = text(item.label, 120);
+            bindPressable(button, { click: component.action }, { value: text(item.value, 500) });
+            button.addEventListener("click", () => { group.open = false; }); items.append(button);
+          });
+          group.append(items); node.append(group);
+        }); break;
+      }
+      case "status-bar":
+        node = document.createElement("div"); node.className = "app-status-bar"; node.setAttribute("role", "status");
+        node.textContent = text(component.text, 1000); break;
+      case "dialog": {
+        node = document.createElement("dialog"); node.className = "app-dialog";
+        const heading = document.createElement("h3"); heading.textContent = text(component.title, 200); node.append(heading);
+        const body = document.createElement("div"); body.className = "app-dialog-body";
+        (Array.isArray(component.components) ? component.components : []).slice(0, 32).forEach((child) => {
+          if (child?.type === "dialog") return;
+          const element = renderComponent(child, depth + 1, budget); if (element) body.append(element);
+        });
+        node.append(body);
+        const actions = document.createElement("div"); actions.className = "app-dialog-actions";
+        (Array.isArray(component.buttons) ? component.buttons : []).slice(0, 8).forEach((button) => {
+          if (!button || typeof button !== "object") return;
+          const item = document.createElement("button"); item.type = "button"; item.textContent = text(button.label, 120);
+          bindPressable(item, { click: component.action }, { value: text(button.value, 500) }); actions.append(item);
+        }); node.append(actions);
+        node.addEventListener("cancel", (event) => { event.preventDefault(); interact(text(component.action, 80), { value: null }); });
+        break;
+      }
       case "menu": {
         node = document.createElement("fieldset"); node.className = "app-menu";
         if (component.layout === "dpad") node.classList.add("app-dpad");
@@ -1133,11 +1233,10 @@
         node.append(table); break;
       }
       case "panel": {
-        if (depth) return null;
         node = document.createElement("section"); node.className = "app-panel";
         const heading = document.createElement("h3"); heading.textContent = text(component.label, 200); node.append(heading);
         (Array.isArray(component.components) ? component.components : []).slice(0, LIMITS.components).forEach((child) => {
-          const element = renderComponent(child, depth + 1); if (element) node.append(element);
+          const element = renderComponent(child, depth + 1, budget); if (element) node.append(element);
         });
         break;
       }
@@ -1252,9 +1351,18 @@
     const targetId = text(message.target, 80).replace(/[^a-zA-Z0-9_.:-]/g, "_");
     const targetComponent = () => Array.from(surface.querySelectorAll("[data-app-component]"))
       .find((node) => node.dataset.appComponent === targetId);
+    const closeDialogs = (root) => {
+      if (root?.matches?.("dialog.app-dialog") && root.open) root.close();
+      root?.querySelectorAll?.("dialog.app-dialog").forEach((dialog) => { if (dialog.open) dialog.close(); });
+    };
+    const activateDialogs = () => {
+      surface.querySelectorAll("dialog.app-dialog").forEach((dialog) => {
+        if (!dialog.open && typeof dialog.showModal === "function") dialog.showModal();
+      });
+    };
     if (message.mode === "remove") {
       const target = targetComponent();
-      if (target) { const overlay = target.querySelector(".app-canvas-controls"); if (overlay) releaseGamepadOverlay(overlay); target.remove(); }
+      if (target) { closeDialogs(target); const overlay = target.querySelector(".app-canvas-controls"); if (overlay) releaseGamepadOverlay(overlay); target.remove(); }
       return;
     }
     if (message.mode === "update") {
@@ -1273,17 +1381,20 @@
       }
       const replacement = renderComponent(components[0]);
       if (target && replacement) {
+        closeDialogs(target);
         const overlay = target.querySelector(".app-canvas-controls"); if (overlay) releaseGamepadOverlay(overlay);
         target.replaceWith(replacement);
+        activateDialogs();
       }
       return;
     }
     if (message.mode !== "append")
       for (const overlay of [...gamepadOverlays.keys()]) releaseGamepadOverlay(overlay);
     const fragment = document.createDocumentFragment();
-    components.forEach((component) => { const node = renderComponent(component); if (node) fragment.append(node); });
-    if (message.mode !== "append") surface.replaceChildren();
-    surface.append(fragment); status.textContent = "PROGRAM STATUS / RUNNING";
+    const budget = { remaining: LIMITS.components };
+    components.forEach((component) => { const node = renderComponent(component, 0, budget); if (node) fragment.append(node); });
+    if (message.mode !== "append") { closeDialogs(surface); surface.replaceChildren(); }
+    surface.append(fragment); activateDialogs(); status.textContent = "PROGRAM STATUS / RUNNING";
   }
 
   function allowedEvent() {

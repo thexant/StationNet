@@ -152,9 +152,63 @@ StationNet.start((ui) => {
 ```
 
 Display methods include `render`, `append`, `update`, `remove`, `clear`, `title`,
-`heading`, `text`, `list`, `table`, `panel`, `calendar`, `preformatted`, and `grid`. Input methods
-include `button`, `menu`, `input`, `numberInput`, `textarea`, `select`,
+`heading`, `text`, `list`, `table`, `panel`, `calendar`, `preformatted`, `grid`,
+`row`, `column`, and `statusBar`. Input methods include `button`, `menu`,
+`tabs`, `slider`, `radio`, `dialog`, `menuBar`, `input`, `numberInput`, `textarea`, `select`,
 `dateInput`, `timeInput`, `checkbox`, `onKey`, and `animate`.
+
+### Desktop style controls
+
+These components are built by the trusted host using text nodes and ordinary
+DOM controls. Labels, menu items, and dialog contents never become HTML. Each
+component accepts `{ id: "..." }` as its final options argument and can be
+replaced with `ui.update(id, component)` or removed with `ui.remove(id)`.
+
+```js
+StationNet.start(async (ui) => {
+  ui.render(
+    ui.menuBar([{ label: "File", items: [{ label: "Open", value: "open" }] }],
+      ({ value }) => ui.update("status", ui.statusBar(`Selected ${value}`, { id: "status" })), { id: "menu" }),
+    ui.tabs(["General", "Sound"], ({ value }) => {
+      ui.update("status", ui.statusBar(`Tab ${value}`, { id: "status" }));
+    }, { id: "tabs", selected: 0 }),
+    ui.row([
+      ui.slider("volume", "Volume", { id: "volume", min: 0, max: 10, step: 1, value: 5 }),
+      ui.radio("mode", "Mode", ["Normal", "Quiet"], { id: "mode", value: "Normal" })
+    ], { id: "controls" }),
+    ui.column([ui.text("Current settings"), ui.button("Save", ({ values }) => {
+      // values.volume is a number; values.mode is the selected string.
+      ui.update("status", ui.statusBar(`${values.mode}: ${values.volume}`, { id: "status" }));
+    })], { id: "actions" }),
+    ui.statusBar("Ready", { id: "status" })
+  );
+
+  const choice = await ui.dialog("Save changes?", [ui.text("Confirm the settings.")],
+    [{ label: "Save", value: "save" }, { label: "Cancel", value: "cancel" }], { id: "confirm" });
+  // Awaiting opens the modal; choice is "save", "cancel", or null if dismissed.
+});
+```
+
+`ui.tabs(labels, onSelect, options)` sends the zero-based tab index as a string
+in `value`; use `options.selected` to indicate the active index. `ui.row` and
+`ui.column` lay out component arrays horizontally or vertically. A row wraps on
+narrow screens. `ui.slider(name, label, { min, max, step, value, onChange, id })`
+uses a numeric range (defaults 0–100 in steps of 1). `ui.radio(name, label,
+items, options)` accepts strings or `{ label, value }` items and selects the
+first item unless `options.value` matches another item. Slider and radio values
+are included in every interaction's `values`; `onChange` also receives the new
+value directly. `ui.menuBar(menus, onSelect, options)` receives the selected
+item's `value`. `ui.statusBar(text, options)` displays a short status line.
+
+`ui.dialog(title, components, buttons, options)` returns a modal component that
+can be passed to `render`, `append`, or `update`. `await ui.dialog(...)` opens it
+automatically and resolves to the selected button's `value`. If it was already
+rendered, await its `.result` promise instead. Escape and removal resolve to
+`null`. Dialog buttons accept strings or `{ label, value }` objects. Use a
+top-level dialog component. The host limits a render to 100 total components,
+nesting to three levels, rows/columns/dialog bodies to 32 children, tabs to 16,
+radio choices to 32, menu bars to 8 menus with 16 items each, and dialogs to 8
+buttons. Text and numeric values are bounded again by the host.
 
 `ui.dateInput(name, label, options)` and `ui.timeInput(name, label, options)`
 use the browser's native date and time controls. Their values are collected as

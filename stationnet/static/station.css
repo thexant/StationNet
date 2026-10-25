@@ -538,6 +538,30 @@ button:focus-visible, .button:focus-visible, a:focus-visible, summary:focus-visi
 .app-dpad button:nth-of-type(3) { grid-column: 2; grid-row: 3; }
 .app-dpad button:nth-of-type(4) { grid-column: 3; grid-row: 3; }
 .app-checkbox { display: flex; align-items: center; gap: .55rem; }
+.app-tabs { display: flex; flex-wrap: wrap; gap: .2rem; border-bottom: 1px solid var(--green-dim); }
+.app-tabs button { border-radius: 0; border-bottom: 0; margin: 0; }
+.app-tabs button[aria-selected="true"] { color: var(--black); background: var(--green-bright); }
+.app-row { display: flex; flex-wrap: wrap; align-items: start; gap: .75rem; min-width: 0; }
+.app-row > * { flex: 1 1 12rem; min-width: 0; }
+.app-column { display: flex; flex-direction: column; gap: .75rem; min-width: 0; }
+.app-column > * { min-width: 0; }
+.app-slider { display: flex; align-items: center; flex-wrap: wrap; gap: .6rem; }
+.app-slider input { flex: 1 1 10rem; min-width: 7rem; }
+.app-slider output { min-width: 3ch; color: var(--cyan); text-align: right; }
+.app-radio { display: flex; flex-wrap: wrap; gap: .45rem .9rem; }
+.app-radio legend { width: 100%; margin-bottom: .3rem; }
+.app-radio label { display: inline-flex; align-items: center; gap: .35rem; }
+.app-menu-bar { display: flex; flex-wrap: wrap; gap: .15rem; border: 1px solid var(--green-dim); background: var(--surface-soft); }
+.app-menu-bar details { position: relative; }
+.app-menu-bar summary { cursor: pointer; padding: .4rem .7rem; color: var(--cyan); }
+.app-menu-bar-items { position: absolute; z-index: 5; display: grid; min-width: 10rem; padding: .35rem; border: 1px solid var(--cyan); background: var(--black); box-shadow: 0 .4rem 1rem #0009; }
+.app-menu-bar-items button { width: 100%; margin: 0; text-align: left; }
+.app-status-bar { padding: .3rem .55rem; border: 1px solid var(--green-dim); color: var(--green-bright); background: var(--surface-soft); font-size: var(--text-xs); }
+.app-dialog { width: min(90vw, 36rem); max-height: 85vh; overflow: auto; padding: 1rem; border: 2px solid var(--cyan); color: var(--white); background: var(--black); }
+.app-dialog::backdrop { background: #000b; }
+.app-dialog h3 { color: var(--cyan); }
+.app-dialog-body { display: grid; gap: .7rem; margin: .8rem 0; }
+.app-dialog-actions { display: flex; flex-wrap: wrap; justify-content: end; gap: .5rem; }
 .application-surface textarea { min-height: 6rem; resize: vertical; }
 .app-list { padding-left: 1.5rem; color: var(--white); font-size: .76rem; line-height: 1.7; }
 .app-pre, .app-grid { padding: .75rem; overflow: auto; color: var(--green-bright); border: 1px dotted var(--green-dim); background: var(--surface-field); font: inherit; font-size: .75rem; line-height: 1.35; white-space: pre; }

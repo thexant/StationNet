@@ -308,6 +308,27 @@
     return component;
   }
 
+  const openDialogs = new Map();
+  let nextDialog = 1;
+  function dismissDialog(id, choice = null) {
+    const pending = openDialogs.get(id);
+    if (!pending) return;
+    openDialogs.delete(id);
+    send("render", { mode: "remove", target: id, components: [] });
+    pending.resolve(choice);
+  }
+  function markDialogs(components) {
+    for (const component of components) {
+      if (!component || component.type !== "dialog" || !component.id) continue;
+      const previous = openDialogs.get(component.id);
+      if (previous && previous.component !== component) { openDialogs.delete(component.id); previous.resolve(null); }
+      if (component._dialogState) {
+        component._dialogState.shown = true;
+        openDialogs.set(component.id, component._dialogState);
+      }
+    }
+  }
+
   function storage(operation, key, value, settings) {
     const request = `storage-${nextRequest++}`;
     const scope = options(settings).scope === "shared" ? "shared" : "user";
@@ -658,6 +679,59 @@
       const opts = options(settings);
       return identified({ type: "button", label: String(label), action: action(onClick), pressAction: action(opts.onPress), releaseAction: action(opts.onRelease), variant: opts.variant, disabled: Boolean(opts.disabled) }, opts);
     },
+    tabs(labels, onSelect, settings) {
+      const opts = options(settings);
+      return identified({ type: "tabs", labels: Array.isArray(labels) ? labels.slice(0, 16).map(String) : [],
+        selected: opts.selected, action: action(onSelect) }, opts);
+    },
+    row(components, settings) {
+      return identified({ type: "row", components: Array.isArray(components) ? components.slice(0, 32) : [] }, settings);
+    },
+    column(components, settings) {
+      return identified({ type: "column", components: Array.isArray(components) ? components.slice(0, 32) : [] }, settings);
+    },
+    slider(name, label, settings) {
+      const opts = options(settings);
+      return identified({ type: "slider", name: String(name), label: String(label), min: opts.min,
+        max: opts.max, step: opts.step, value: opts.value, action: action(opts.onChange) }, opts);
+    },
+    radio(name, label, items, settings) {
+      const opts = options(settings);
+      return identified({ type: "radio", name: String(name), label: String(label),
+        items: (Array.isArray(items) ? items : []).slice(0, 32).map((item) =>
+          item && typeof item === "object" ? { label: String(item.label), value: String(item.value) } : { label: String(item), value: String(item) }),
+        value: opts.value, action: action(opts.onChange) }, opts);
+    },
+    dialog(title, components, buttons, settings) {
+      const opts = options(settings);
+      const id = opts.id == null ? `dialog-${nextDialog++}` : String(opts.id);
+      let resolve;
+      const result = new Promise((done) => { resolve = done; });
+      const component = { type: "dialog", id, title: String(title),
+        components: Array.isArray(components) ? components.slice(0, 32) : [],
+        buttons: (Array.isArray(buttons) ? buttons : []).slice(0, 8).map((button) =>
+          button && typeof button === "object" ? { label: String(button.label), value: String(button.value) } :
+            { label: String(button), value: String(button) }),
+        action: action(({ value }) => dismissDialog(id, value)) };
+      const state = { component, resolve, shown: false };
+      Object.defineProperties(component, {
+        _dialogState: { value: state },
+        result: { value: result },
+        then: { value(onFulfilled, onRejected) {
+          if (!state.shown) { markDialogs([component]); send("render", { mode: "append", components: [component] }); }
+          return result.then(onFulfilled, onRejected);
+        } }
+      });
+      return component;
+    },
+    menuBar(menus, onSelect, settings) {
+      return identified({ type: "menu-bar", action: action(onSelect),
+        menus: (Array.isArray(menus) ? menus : []).slice(0, 8).map((menu) => ({
+          label: String(menu?.label), items: (Array.isArray(menu?.items) ? menu.items : []).slice(0, 16).map((item) =>
+            ({ label: String(item?.label), value: String(item?.value) }))
+        })) }, settings);
+    },
+    statusBar(content, settings) { return identified({ type: "status-bar", text: String(content) }, settings); },
     menu(label, items, onSelect, settings) {
       const opts = options(settings);
       return identified({
@@ -786,15 +860,32 @@
       }
     }),
     render(...components) {
-      send("render", { mode: "replace", components: components.length === 1 && Array.isArray(components[0]) ? components[0] : components });
+      const value = components.length === 1 && Array.isArray(components[0]) ? components[0] : components;
+      for (const [id, pending] of openDialogs) if (!value.includes(pending.component)) { openDialogs.delete(id); pending.resolve(null); }
+      markDialogs(value);
+      send("render", { mode: "replace", components: value });
     },
     append(...components) {
       const value = components.length === 1 && Array.isArray(components[0]) ? components[0] : components;
+      markDialogs(value);
       send("render", { mode: "append", components: value });
     },
-    update(id, component) { send("render", { mode: "update", target: String(id), components: [component] }); },
-    remove(id) { send("render", { mode: "remove", target: String(id), components: [] }); },
-    clear() { send("render", { mode: "replace", components: [] }); },
+    update(id, component) {
+      const key = String(id), pending = openDialogs.get(key);
+      if (pending && pending.component !== component) { openDialogs.delete(key); pending.resolve(null); }
+      markDialogs([component]);
+      send("render", { mode: "update", target: key, components: [component] });
+    },
+    remove(id) {
+      const key = String(id), pending = openDialogs.get(key);
+      if (pending) { openDialogs.delete(key); pending.resolve(null); }
+      send("render", { mode: "remove", target: key, components: [] });
+    },
+    clear() {
+      for (const pending of openDialogs.values()) pending.resolve(null);
+      openDialogs.clear();
+      send("render", { mode: "replace", components: [] });
+    },
     onKey(handler) {
       const id = action(handler);
       send("keyboard", { action: id, enabled: true });
