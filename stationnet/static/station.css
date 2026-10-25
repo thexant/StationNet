@@ -589,7 +589,7 @@ button:focus-visible, .button:focus-visible, a:focus-visible, summary:focus-visi
 .app-gamepad-action-4 { grid-column: 2; grid-row: 2; }
 .app-gamepad-select { grid-column: 1; grid-row: 3; }
 .app-gamepad-start { grid-column: 2; grid-row: 3; }
-body.application-immersive .app-canvas-controls.app-canvas-gamepad { width: min(100%, calc((100dvh - 9rem) * var(--app-canvas-ratio, 1))); }
+body.application-immersive .app-canvas-controls.app-canvas-gamepad { width: 100%; }
 .app-fg-0 { color: #000; } .app-fg-1 { color: #aa0000; } .app-fg-2 { color: #00aa00; } .app-fg-3 { color: #aa5500; }
 .app-fg-4 { color: #0000aa; } .app-fg-5 { color: #aa00aa; } .app-fg-6 { color: #00aaaa; } .app-fg-7 { color: #aaaaaa; }
 .app-fg-8 { color: #555555; } .app-fg-9 { color: #ff5555; } .app-fg-10 { color: #55ff55; } .app-fg-11 { color: #ffff55; }
@@ -644,14 +644,19 @@ body.application-immersive .radio-player,
 body.application-immersive .statusbar { display: none; }
 body.application-immersive .main-panel { min-height: 0; padding: 0; }
 body.application-immersive .application-display { display: flex; flex-direction: column; height: 100dvh; border: 0; }
-body.application-immersive .application-display-header { padding: .55rem 7.5rem .55rem .75rem; }
+body.application-immersive .application-display-header { justify-content: center; padding: .4rem clamp(.75rem, 8vw, 7.5rem); text-align: center; }
+body.application-immersive .application-display-header .eyebrow { display: none; }
+body.application-immersive .application-display-header h1 { font-size: 1rem; }
 body.application-immersive .application-display-header .application-display-actions { display: none; }
 body.application-immersive .application-compatibility { display: none; }
 body.application-immersive .application-viewport { display: flex; flex: 1 1 auto; flex-direction: column; min-height: 0; margin: 0; border: 0; }
-body.application-immersive .application-surface { flex: 1 1 auto; min-height: 0; overflow: auto; padding: clamp(.75rem,2vw,1.5rem); }
+body.application-immersive .application-surface { flex: 1 1 auto; width: min(100%, 100rem); min-height: 0; margin-inline: auto; overflow: auto; padding: clamp(.75rem,2vw,1.5rem); }
+body.application-immersive .application-surface:not(:has(> :is(.app-canvas-wrap,.app-calendar,.app-cell-grid))) { width: min(100%, 80rem); }
+body.application-immersive .application-surface:has(> .app-canvas-wrap) > :is(.app-title,.app-heading,.app-text,.app-menu,.app-panel,.app-status-bar,.app-row,.app-column,.app-table-wrap) { justify-self: center; width: min(100%, 80rem); }
 body.application-immersive .application-return { display: none; }
-body.application-immersive .app-canvas-wrap { width: min(100%,75rem); }
-body.application-immersive .app-canvas { width: min(100%, calc((100dvh - 9rem) * var(--app-canvas-ratio, 1))); max-height: calc(100dvh - 9rem); }
+body.application-immersive .app-canvas-wrap { --app-canvas-reserve: 17rem; --app-canvas-height: max(8rem, calc(100dvh - var(--app-canvas-reserve))); justify-self: center; width: min(100%, calc(var(--app-canvas-height) * var(--app-canvas-ratio, 1))); }
+body.application-immersive .app-canvas-wrap:has(> .app-canvas-gamepad) { --app-canvas-reserve: 21rem; }
+body.application-immersive .app-canvas { width: 100%; max-height: var(--app-canvas-height); }
 
 .live-chat { width: min(820px,100%); }
 .chat-log { height: min(52vh,30rem); margin: 1rem 0; padding: .7rem; overflow-y: auto; border: 1px solid var(--green-dim); background: var(--surface-field); }

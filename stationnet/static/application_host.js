@@ -865,7 +865,9 @@
     // only resize when an application actually requests it.
     if (canvas.width !== width) canvas.width = width;
     if (canvas.height !== height) canvas.height = height;
-    canvas.style.setProperty("--app-canvas-ratio", String(width / height));
+    const ratio = String(width / height);
+    canvas.style.setProperty("--app-canvas-ratio", ratio);
+    canvas.parentElement?.style.setProperty("--app-canvas-ratio", ratio);
     if (canvas.dataset.logicalWidth !== String(width)) canvas.dataset.logicalWidth = String(width);
     if (canvas.dataset.logicalHeight !== String(height)) canvas.dataset.logicalHeight = String(height);
     if (component.action) canvas.dataset.canvasAction = text(component.action, 80);
@@ -1317,6 +1319,7 @@
         node = document.createElement("div"); node.className = "app-canvas-wrap";
         const canvas = document.createElement("canvas"); canvas.className = "app-canvas"; canvas.tabIndex = 0;
         canvas.setAttribute("role", "img"); drawCanvas(canvas, component); node.append(canvas);
+        node.style.setProperty("--app-canvas-ratio", canvas.style.getPropertyValue("--app-canvas-ratio"));
         const point = (event, phase) => {
           const bounds = canvas.getBoundingClientRect();
           const x = (event.clientX - bounds.left) * Number(canvas.dataset.logicalWidth) / Math.max(1, bounds.width);
