@@ -49,7 +49,14 @@ StationNet.start(async (ui) => {
     try {const value=await ui.storage.get(key(id));if(!value)throw Error("Project not found.");doc=normalize(value);projectId=id;trackIndex=0;selected.clear();undo=[];redo=[];position=0;viewTick=0;notice=`Opened ${doc.name}.`;render();}
     catch(e){notice=`Open failed: ${e.message}`;render();}
   }
-  async function create() {if(dirty){await save();if(dirty)return;}await stop();doc=blank();projectId=null;trackIndex=0;selected.clear();undo=[];redo=[];viewTick=0;position=0;notice="New composition. Draw a note on the grid.";dirty=true;scheduleSave();render();}
+  async function create(discardCurrent=false) {
+    if(savePromise)await savePromise;
+    if(dirty&&!discardCurrent){await save();if(dirty){notice="Current composition could not be saved. Use Discard current & New to start blank anyway.";render();return;}}
+    saveTimer?.();saveTimer=null;
+    if(discardCurrent)await ui.storage.delete(DRAFT).catch(()=>{});
+    await stop();doc=blank();projectId=null;trackIndex=0;selected.clear();undo=[];redo=[];
+    viewTick=0;position=0;notice="New blank composition. Draw a note on the grid.";dirty=true;scheduleSave();render();
+  }
   async function removeProject() {if(!projectId)return;await stop();const id=projectId;await ui.storage.delete(key(id));projects=projects.filter(p=>p.id!==id);await ui.storage.set(INDEX,projects);doc=blank();projectId=null;trackIndex=0;selected.clear();undo=[];redo=[];dirty=false;notice="Composition deleted.";render();}
   function edit(fn) {snapshot();fn();changed();}
   function addTempo(tick,bpm) {tick=Math.max(0,step(tick));bpm=clamp(Math.round(Number(bpm)||120),20,300);edit(()=>{doc.tempo=[...doc.tempo.filter(t=>t.tick!==tick),{tick,bpm}].sort((a,b)=>a.tick-b.tick);doc.bpm=doc.tempo[0].bpm;});}
@@ -168,7 +175,10 @@ StationNet.start(async (ui) => {
       ui.text(`Tempo changes: ${doc.tempo.map(e=>`bar ${Math.floor(e.tick/measureTicks())+1}: ${e.bpm} BPM`).join(" · ")}`,{tone:"muted"}),
       ui.text(notice,{tone:notice.includes("failed")?"warning":"muted"})
     ];
-    ui.render(controls[0],controls[1],controls.at(-1),controls[2],controls[8],controls[9],controls[7],
+    ui.render(controls[0],controls[1],controls.at(-1),
+      ui.menu("Start a composition",[{label:"New blank",value:"new"},{label:"Discard current & New",value:"discard"}],
+        async({value})=>{if(value==="new")await create();if(value==="discard")await create(true);}),
+      controls[2],controls[8],controls[9],controls[7],
       controls[3],controls[4],controls[5],controls[6],...controls.slice(10,-1));
   }
   ui.onKey(({code,phase,ctrlKey,metaKey,shiftKey})=>{if(phase!=="down")return;const mod=ctrlKey||metaKey;

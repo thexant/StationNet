@@ -3,7 +3,7 @@
   "type": "module",
   "scripts": {
     "build:midi": "node scripts/build-midi.mjs",
-    "test:midi": "node scripts/verify-composer-playback.mjs"
+    "test:midi": "node scripts/verify-composer-playback.mjs && node scripts/verify-composer-new.mjs"
   },
   "dependencies": {
     "spessasynth_lib": "4.3.14"

@@ -6,6 +6,23 @@
   const one=name=>consolePanel?.querySelector(`[data-radio-${name}]`)||null;
   const every=name=>[...document.querySelectorAll(`[data-radio-${name}]`)];
   const csrf=body.dataset.radioCsrf;
+  const randomId=()=>Array.from(crypto.getRandomValues(new Uint32Array(4)),part=>part.toString(16).padStart(8,"0")).join("");
+  // Browsers copy sessionStorage when duplicating a tab. Ask other live pages
+  // whether they own the copied token before honoring its saved power state.
+  const storedTabId=sessionStorage.getItem("stationnet.radio.tab")||randomId(),radioPageId=randomId();
+  sessionStorage.setItem("stationnet.radio.tab",storedTabId);
+  let radioConnectionId=storedTabId;
+  const radioHeaders={Accept:"application/json","X-StationNet-Radio-Connection":radioConnectionId};
+  const radioTabReady=new Promise(resolve=>{
+    if(!window.BroadcastChannel){resolve(false);return}
+    const channel=new BroadcastChannel("stationnet.radio.tabs");let copied=false;
+    channel.addEventListener("message",event=>{const message=event.data||{};if(message.type==="claim"&&message.tabId===storedTabId&&message.pageId!==radioPageId)channel.postMessage({type:"occupied",tabId:storedTabId,target:message.pageId});else if(message.type==="occupied"&&message.tabId===storedTabId&&message.target===radioPageId)copied=true});
+    channel.postMessage({type:"claim",tabId:storedTabId,pageId:radioPageId});
+    setTimeout(()=>{if(copied){radioConnectionId=randomId();sessionStorage.setItem("stationnet.radio.tab",radioConnectionId);sessionStorage.removeItem("stationnet.radio.powered")}resolve(copied)},75);
+  });
+  const nativeFetch=window.fetch.bind(window);
+  const fetch=async(input,options={})=>{await radioTabReady;const headers=new Headers(options.headers||{});headers.set("X-StationNet-Radio-Connection",radioConnectionId);return nativeFetch(input,{...options,headers})};
+  const radioUrl=value=>{const url=new URL(value,location.href);url.searchParams.set("radio_connection_id",radioConnectionId);return url.href};
 
   let frequency=null, currentBand=null, cursor=0, powered=false, receiving=false,frequencyBusy=false;
   let receiveController=null,receiveFailures=0,nextReceiveAt=0;
@@ -39,7 +56,7 @@
   const setMarqueeText=(name,value,hidden=false)=>{for(const node of every(name)){const content=node.firstElementChild;if(content)content.textContent=value;else node.textContent=value;node.hidden=hidden}refreshMarquees()};
   const showError=problem=>setText("error",problem?.message||String(problem||""));
   const setStatus=(label,active=false)=>{setText("status",label);if(monitorStatus)monitorStatus.textContent=label;every("lamp").forEach(lamp=>lamp.classList.toggle("active",powered&&active))};
-  const post=async(url,values={})=>{const data=new FormData();data.set("csrf_token",csrf);for(const [name,value] of Object.entries(values))data.set(name,value);const response=await fetch(url,{method:"POST",body:data,headers:{Accept:"application/json"}}),payload=await response.json();if(!response.ok){const problem=new Error(payload.error||"Radio operation failed.");problem.status=response.status;throw problem}return payload};
+  const post=async(url,values={})=>{const data=new FormData();data.set("csrf_token",csrf);data.set("radio_connection_id",radioConnectionId);for(const [name,value] of Object.entries(values))data.set(name,value);const response=await fetch(url,{method:"POST",body:data,headers:radioHeaders}),payload=await response.json();if(!response.ok){const problem=new Error(payload.error||"Radio operation failed.");problem.status=response.status;throw problem}return payload};
   const permissionLabel=access=>access==="FULL"?"FULL":access==="LISTEN"?"RX ONLY":"ACCESS RESTRICTED";
   const formatKhz=khz=>`${Math.floor(khz/1000)}.${String(Math.floor((khz%1000)/10)).padStart(2,"0")}`;
   const parseKhz=value=>{const match=/^(\d{1,3})(?:\.(\d{1,2}))?$/.exec(String(value).trim());if(!match)return null;const result=Number(match[1])*1000+Number((match[2]||"").padEnd(2,"0"))*10;return result>=100&&result<=999990?result:null};
@@ -59,13 +76,13 @@
     const url=active.external_url;if(!url)return;
     const key=String(active.id);
     if(!externalAudio){externalAudio=new Audio();externalAudio.preload="none";externalAudio.addEventListener("error",()=>retryExternalAudio(`media error ${externalAudio.error?.code||"unknown"}`));externalAudio.addEventListener("ended",()=>retryExternalAudio("stream ended"))}
-    if(externalKey!==key){stopExternalAudio();externalKey=key;externalLastTime=0;externalLastProgress=Date.now();if((active.external_hls||/\.m3u8(?:[?#]|$)/i.test(url))&&!externalAudio.canPlayType("application/vnd.apple.mpegurl")){externalUnsupported=true;setStatus("HLS UNSUPPORTED IN THIS BROWSER");return}externalUrl=active.external_hls?url:body.dataset.radioExternalUrl.replace(/0\/audio$/,`${active.id}/audio`);externalAudio.src=externalUrl;syncVolume();externalAudio.load()}
+    if(externalKey!==key){stopExternalAudio();externalKey=key;externalLastTime=0;externalLastProgress=Date.now();if((active.external_hls||/\.m3u8(?:[?#]|$)/i.test(url))&&!externalAudio.canPlayType("application/vnd.apple.mpegurl")){externalUnsupported=true;setStatus("HLS UNSUPPORTED IN THIS BROWSER");return}externalUrl=active.external_hls?url:`${body.dataset.radioExternalUrl.replace(/0\/audio$/,`${active.id}/audio`)}?radio_connection_id=${encodeURIComponent(radioConnectionId)}`;externalAudio.src=externalUrl;syncVolume();externalAudio.load()}
     if(externalUnsupported||externalBlocked||externalRetryTimer)return;
     if(externalAudio.paused)playExternalAudio();
     if(externalAudio.currentTime>externalLastTime+.1){externalLastTime=externalAudio.currentTime;externalLastProgress=Date.now();externalError="";externalRetryCount=0}
     else if(Date.now()-externalLastProgress>20000&&!document.hidden&&(externalPlayPending||!externalAudio.paused))retryExternalAudio("playback stalled");
   };
-  const retryHostedAudio=reason=>{if(!hostedTrackKey||!powered||hostedPlaybackBlocked||hostedRetryTimer)return;hostedRetryCount++;const delay=hostedRetryCount<=6?Math.min(8000,500*2**(hostedRetryCount-1)):30000;hostedRetryAt=Date.now()+delay;if(hostedRetryCount===1||hostedRetryCount===6||hostedRetryCount%6===0)console.warn(`[radio] Hosted audio ${reason}; retry ${hostedRetryCount} in ${delay}ms (track ${hostedTrackKey})`);hostedPlayPending=0;hostedAudio.pause();hostedRetryTimer=setTimeout(()=>{hostedRetryTimer=null;if(!hostedTrackKey||!powered)return;const fileId=hostedTrackKey.split(":")[1];hostedAudio.src=`${body.dataset.broadcastAudioUrl.replace(/0$/,fileId)}?retry=${Date.now()}`;hostedAudio.load();hostedLastProgress=Date.now();hostedLastPosition=0;hostedRetryAt=0},delay)};
+  const retryHostedAudio=reason=>{if(!hostedTrackKey||!powered||hostedPlaybackBlocked||hostedRetryTimer)return;hostedRetryCount++;const delay=hostedRetryCount<=6?Math.min(8000,500*2**(hostedRetryCount-1)):30000;hostedRetryAt=Date.now()+delay;if(hostedRetryCount===1||hostedRetryCount===6||hostedRetryCount%6===0)console.warn(`[radio] Hosted audio ${reason}; retry ${hostedRetryCount} in ${delay}ms (track ${hostedTrackKey})`);hostedPlayPending=0;hostedAudio.pause();hostedRetryTimer=setTimeout(()=>{hostedRetryTimer=null;if(!hostedTrackKey||!powered)return;const fileId=hostedTrackKey.split(":")[1],url=new URL(radioUrl(body.dataset.broadcastAudioUrl.replace(/0$/,fileId)));url.searchParams.set("retry",String(Date.now()));hostedAudio.src=url.href;hostedAudio.load();hostedLastProgress=Date.now();hostedLastPosition=0;hostedRetryAt=0},delay)};
   const reportHostedEnd=()=>{const key=hostedTrackKey;if(!hostedAudio||!key||hostedAdvancePending===key||Date.now()<hostedAdvanceRetryAt)return;const [track_serial,file_id]=key.split(":").map(Number);hostedAdvancePending=key;post(body.dataset.broadcastAdvanceUrl,{file_id,track_serial}).then(payload=>{if(!payload.advanced&&hostedAdvancePending===key)hostedAdvancePending=null}).catch(()=>{if(hostedAdvancePending===key)hostedAdvancePending=null;hostedAdvanceRetryAt=Date.now()+1000})};
   const reportHostedTiming=()=>{const key=hostedTrackKey,duration=hostedAudio?.duration;if(!key||!Number.isFinite(duration)||duration<.1)return;const timingKey=`${key}:${duration.toFixed(3)}`;if(hostedTimingKey===timingKey)return;const [track_serial,file_id]=key.split(":").map(Number);hostedTimingKey=timingKey;post(body.dataset.broadcastTimingUrl,{file_id,track_serial,duration}).catch(()=>{if(hostedTimingKey===timingKey)hostedTimingKey=null})};
   const reportMidiEnd=key=>{if(key!==midiTrackKey||hostedAdvancePending===key||Date.now()<hostedAdvanceRetryAt)return;const [track_serial,file_id]=key.split(":").map(Number);hostedAdvancePending=key;post(body.dataset.broadcastAdvanceUrl,{file_id,track_serial}).then(payload=>{if(!payload.advanced&&hostedAdvancePending===key)hostedAdvancePending=null}).catch(()=>{if(hostedAdvancePending===key)hostedAdvancePending=null;hostedAdvanceRetryAt=Date.now()+1000})};
@@ -76,10 +93,10 @@
     if(!midiEngine&&!midiLoading&&Date.now()>=midiRetryAt){const base=body.dataset.midiAssetBase;midiLoading=import(`${base}/engine.js`).then(module=>{midiEngine=new module.MidiPlaybackEngine(audioContext,analyser,base,reportMidiEnd);midiLoading=null}).catch(problem=>{midiLoading=null;midiRetryAt=Date.now()+10000;showError(problem)})}
     if(!midiEngine||Date.now()<midiRetryAt)return;
     if(midiTrackKey!==key){midiTrackKey=key;hostedAdvancePending=null;hostedAdvanceRetryAt=0}
-    midiEngine.sync(key,body.dataset.broadcastAudioUrl.replace(/0$/,String(active.audio_file_id)),active.track_offset,active.mic_active?Number(active.ducking??.35):1).catch(problem=>{if(midiTrackKey===key){midiEngine.stop();midiTrackKey=null;midiRetryAt=Date.now()+5000;showError(problem)}});
+    midiEngine.sync(key,radioUrl(body.dataset.broadcastAudioUrl.replace(/0$/,String(active.audio_file_id))),active.track_offset,active.mic_active?Number(active.ducking??.35):1).catch(problem=>{if(midiTrackKey===key){midiEngine.stop();midiTrackKey=null;midiRetryAt=Date.now()+5000;showError(problem)}});
   };
   const playProgramMorse=active=>{const key=`${active.track_serial}:morse`;if(hostedActionKey===key)return;hostedActionKey=key;const audio=ensureAudio();if(!audio)return;const code={A:".-",B:"-...",C:"-.-.",D:"-..",E:".",F:"..-.",G:"--.",H:"....",I:"..",J:".---",K:"-.-",L:".-..",M:"--",N:"-.",O:"---",P:".--.",Q:"--.-",R:".-.",S:"...",T:"-",U:"..-",V:"...-",W:".--",X:"-..-",Y:"-.--",Z:"--.."};let at=audio.currentTime+.04;for(const char of String(active.action_text||"").toUpperCase()){if(char===" "){at+=.36;continue}for(const mark of code[char]||char){const oscillator=audio.createOscillator(),gain=audio.createGain(),length=mark==="-"?.18:.06;oscillator.frequency.value=650;gain.gain.setValueAtTime(0,at);gain.gain.linearRampToValueAtTime(.22,at+.005);gain.gain.setValueAtTime(.22,at+length-.005);gain.gain.linearRampToValueAtTime(0,at+length);oscillator.connect(gain).connect(analyser);oscillator.start(at);oscillator.stop(at+length+.01);at+=length+.06}at+=.12}};
-  const showProgramSstv=active=>{const key=`${active.track_serial}:sstv`;if(hostedActionKey===key||!active.content_id||!rxCanvas)return;hostedActionKey=key;const image=new Image();image.onload=()=>{const scale=Math.min(80/image.width,60/image.height,1);rxCanvas.width=Math.max(1,Math.round(image.width*scale));rxCanvas.height=Math.max(1,Math.round(image.height*scale));rxCanvas.getContext("2d").drawImage(image,0,0,rxCanvas.width,rxCanvas.height);if(rxCaption)rxCaption.textContent="RX PICTURE / PROGRAM SSTV"};image.src=body.dataset.broadcastContentImageUrl.replace(/0$/,String(active.content_id))};
+  const showProgramSstv=active=>{const key=`${active.track_serial}:sstv`;if(hostedActionKey===key||!active.content_id||!rxCanvas)return;hostedActionKey=key;const image=new Image();image.onload=()=>{const scale=Math.min(80/image.width,60/image.height,1);rxCanvas.width=Math.max(1,Math.round(image.width*scale));rxCanvas.height=Math.max(1,Math.round(image.height*scale));rxCanvas.getContext("2d").drawImage(image,0,0,rxCanvas.width,rxCanvas.height);if(rxCaption)rxCaption.textContent="RX PICTURE / PROGRAM SSTV"};image.src=radioUrl(body.dataset.broadcastContentImageUrl.replace(/0$/,String(active.content_id)))};
   const syncHostedAudio=active=>{
     if(!active?.hosted||!powered){stopHostedAudio();return}
     if(active.external){syncExternalAudio(active);return}
@@ -103,7 +120,7 @@
     if(hostedTrackKey!==trackKey){
       clearTimeout(hostedRetryTimer);hostedRetryTimer=null;hostedRetryCount=0;hostedRetryAt=0;hostedPlaybackBlocked=false;hostedPlayPending=0;
       hostedTrackKey=trackKey;hostedActionKey=null;hostedAdvancePending=null;hostedAdvanceRetryAt=0;hostedTimingKey=null;
-      hostedAudio.src=body.dataset.broadcastAudioUrl.replace(/0$/,String(active.audio_file_id));hostedAudio.load();
+      hostedAudio.src=radioUrl(body.dataset.broadcastAudioUrl.replace(/0$/,String(active.audio_file_id)));hostedAudio.load();
       hostedLastPosition=0;hostedLastProgress=Date.now();
     }
     if(hostedGain)hostedGain.gain.setTargetAtTime(active.mic_active?Number(active.ducking??.35):1,audioContext.currentTime,.03);
@@ -238,7 +255,7 @@
   imageInput?.addEventListener("change",()=>{const file=imageInput.files?.[0];preparedImage=null;sstvButton.disabled=true;if(!file)return;if(file.size>5*1024*1024){showError("Choose an image smaller than 5 MB.");return}const image=new Image(),url=URL.createObjectURL(file);image.onload=()=>{const scale=Math.min(80/image.width,60/image.height,1),width=Math.max(1,Math.round(image.width*scale)),height=Math.max(1,Math.round(image.height*scale));txCanvas.width=width;txCanvas.height=height;txCanvas.getContext("2d").drawImage(image,0,0,width,height);URL.revokeObjectURL(url);preparedImage=true;renderContextualControls()};image.onerror=()=>{URL.revokeObjectURL(url);showError("The selected image could not be read.")};image.src=url});
   sstvButton?.addEventListener("click",sendPicture);saveButton?.addEventListener("click",()=>{const link=document.createElement("a");link.download=`stationnet-sstv-${frequency}.png`;link.href=rxCanvas.toDataURL("image/png");link.click()});
   pttButton?.addEventListener("pointerdown",event=>{event.preventDefault();pttButton.setPointerCapture(event.pointerId);beginVoice()});pttButton?.addEventListener("pointerup",releaseVoice);pttButton?.addEventListener("pointercancel",releaseVoice);pttButton?.addEventListener("lostpointercapture",releaseVoice);
-  window.addEventListener("pagehide",()=>{pttHeld=false;closeVoiceMedia();if(transmissionId){const data=new FormData();data.set("csrf_token",csrf);data.set("transmission_id",transmissionId);navigator.sendBeacon(body.dataset.radioEndUrl,data)}});
+  window.addEventListener("pagehide",()=>{pttHeld=false;closeVoiceMedia();if(transmissionId){const data=new FormData();data.set("csrf_token",csrf);data.set("radio_connection_id",radioConnectionId);data.set("transmission_id",transmissionId);navigator.sendBeacon(body.dataset.radioEndUrl,data)}});
 
   const broadcastPlaylist=one("broadcast-playlist"),broadcastProgram=one("broadcast-program"),broadcastStart=one("broadcast-start"),broadcastStop=one("broadcast-stop");
   const djTake=one("dj-take"),djPause=one("dj-pause"),djSkip=one("dj-skip"),djPtt=one("dj-ptt"),djDuck=one("dj-duck"),djMicLevel=one("dj-mic-level"),djTriggerSelect=one("dj-trigger-select"),djTrigger=one("dj-trigger"),djIndicator=one("dj-indicator");let djController=false,djPaused=false;

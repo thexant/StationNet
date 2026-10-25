@@ -30,6 +30,18 @@ SSTV_MAX_WIDTH = 80
 SSTV_MAX_HEIGHT = 60
 VOICE_SIGNAL_MAX_BYTES = 65536
 VOICE_SIGNAL_TYPES = {"offer", "answer", "candidate"}
+RADIO_CONNECTION_RE = re.compile(r"^[A-Za-z0-9_-]{16,80}$")
+
+
+def _connection_id():
+    """Return a receiver identity scoped to this browser tab."""
+    token = (request.headers.get("X-StationNet-Radio-Connection") or
+             request.values.get("radio_connection_id", ""))
+    if token and RADIO_CONNECTION_RE.fullmatch(token):
+        # The server-issued prefix prevents one login session from addressing
+        # another session's receiver with a guessed client token.
+        return f'{session["connection_id"]}:{token}'
+    return session["connection_id"]
 
 
 def format_frequency(khz):
@@ -724,7 +736,8 @@ def console():
 @login_required
 def state():
     current_app.extensions["hosted_broadcasts"].refresh()
-    frequency = _store().receiver_frequency(session["connection_id"])
+    connection_id = _connection_id()
+    frequency = _store().receiver_frequency(connection_id)
     already_tuned = frequency is not None and MIN_FREQUENCY_KHZ <= frequency <= MAX_FREQUENCY_KHZ
     if not already_tuned:
         frequency = _default_frequency(g.user["id"])
@@ -746,7 +759,7 @@ def state():
 @login_required
 def power_off():
     validate_csrf()
-    _store().disconnect(session["connection_id"])
+    _store().disconnect(_connection_id())
     return jsonify(powered=False)
 
 
@@ -760,8 +773,9 @@ def tune():
     if frequency is None:
         return jsonify(error="Enter a frequency from 0.10 to 999.99 MHz with no more than two decimal places."), 400
     access = effective_access(g.user["id"], frequency)
-    _store().disconnect(session["connection_id"])
-    cursor = (_store().tune(session["connection_id"], g.user["id"], frequency)
+    connection_id = _connection_id()
+    _store().disconnect(connection_id)
+    cursor = (_store().tune(connection_id, g.user["id"], frequency)
               if access != "DENIED" else _store().cursor())
     identity, active, broadcast = _frequency_snapshot(frequency, access != "DENIED")
     return jsonify(frequency=format_frequency(frequency),
@@ -774,16 +788,17 @@ def tune():
 def receive():
     current_app.extensions["hosted_broadcasts"].refresh()
     frequency = parse_frequency(request.args.get("frequency"))
+    connection_id = _connection_id()
     if frequency is None:
-        _store().disconnect(session["connection_id"])
+        _store().disconnect(connection_id)
         return jsonify(error="ACCESS RESTRICTED", access="DENIED"), 403
     access = effective_access(g.user["id"], frequency)
     if access == "DENIED":
-        _store().disconnect(session["connection_id"])
+        _store().disconnect(connection_id)
         return jsonify(error="ACCESS RESTRICTED", access=access), 403
     after = max(0, request.args.get("after", 0, type=int))
     try:
-        events, cursor, active = _store().receive(session["connection_id"], g.user["id"], frequency, after)
+        events, cursor, active = _store().receive(connection_id, g.user["id"], frequency, after)
     except ValueError as problem:
         return jsonify(error=str(problem), access=access), 409
     identity = broadcast_identity(frequency)
@@ -801,7 +816,8 @@ def external_audio(transmission_id):
     if not source:
         return jsonify(error="External broadcast is off air."), 404
     frequency, url = source
-    if (_store().receiver_frequency(session["connection_id"]) != frequency or
+    connection_id = _connection_id()
+    if (_store().receiver_frequency(connection_id) != frequency or
             effective_access(g.user["id"], frequency) == "DENIED"):
         return jsonify(error="Tune to this broadcast to listen."), 403
     try:
@@ -811,7 +827,7 @@ def external_audio(transmission_id):
         return jsonify(error=f"External stream unavailable: {problem}"), 502
     logger = current_app.logger
     broadcasts = current_app.extensions["hosted_broadcasts"]
-    receiver = session["connection_id"]
+    receiver = connection_id
     radio_store = _store()
 
     def chunks():
@@ -869,7 +885,7 @@ def transmit_start():
         metadata.update(width=width, height=height)
     try:
         transmission_id, event = _store().start(
-            session["connection_id"], g.user["id"], frequency,
+            _connection_id(), g.user["id"], frequency,
             g.user["callsign"], mode, transmission_type=transmission_type, **metadata
         )
     except ValueError as problem:
@@ -885,13 +901,14 @@ def transmit_signal():
     validate_csrf()
     transmission_id = request.form.get("transmission_id", type=int)
     kind = request.form.get("kind", "")
-    transmission = _store().transmission(session["connection_id"], transmission_id)
+    connection_id = _connection_id()
+    transmission = _store().transmission(connection_id, transmission_id)
     if transmission and not transmission_authorized(
             g.user["id"], transmission["frequency"], transmission["transmission_type"]):
-        _store().disconnect(session["connection_id"])
+        _store().disconnect(connection_id)
         return jsonify(error="Radio permission was revoked."), 403
     try:
-        event = _store().signal(session["connection_id"], transmission_id, kind,
+        event = _store().signal(connection_id, transmission_id, kind,
                                 row=request.form.get("row", type=int), pixels=request.form.get("pixels", ""))
     except LookupError as problem:
         return jsonify(error=str(problem)), 409
@@ -905,7 +922,7 @@ def transmit_signal():
 def transmit_end():
     validate_csrf()
     try:
-        event = _store().end(session["connection_id"], request.form.get("transmission_id", type=int))
+        event = _store().end(_connection_id(), request.form.get("transmission_id", type=int))
     except LookupError as problem:
         return jsonify(error=str(problem)), 409
     return jsonify(event=event)
@@ -920,7 +937,7 @@ def scan():
     direction = -1 if request.form.get("direction") == "down" else 1
     allocations = [(frequency, frequency) for frequency in _store().active_frequencies()
                    if effective_access(g.user["id"], frequency) != "DENIED"]
-    found, cursor = _store().scan(session["connection_id"], g.user["id"], current, direction, allocations)
+    found, cursor = _store().scan(_connection_id(), g.user["id"], current, direction, allocations)
     if found is None:
         return jsonify(found=False, cursor=cursor)
     identity, active, broadcast = _frequency_snapshot(found)
@@ -935,7 +952,7 @@ def scan():
 def voice_peers():
     transmission_id = request.args.get("transmission_id", type=int)
     try:
-        peers = _store().voice_peers(session["connection_id"], transmission_id)
+        peers = _store().voice_peers(_connection_id(), transmission_id)
     except LookupError as problem:
         return jsonify(error=str(problem)), 409
     allowed = []
@@ -952,7 +969,7 @@ def voice_signals():
     if request.method == "GET":
         transmission_id = request.args.get("transmission_id", type=int)
         try:
-            signals = _store().voice_signals(session["connection_id"], transmission_id)
+            signals = _store().voice_signals(_connection_id(), transmission_id)
         except LookupError as problem:
             return jsonify(error=str(problem)), 409
         return jsonify(signals=signals)
@@ -974,7 +991,7 @@ def voice_signals():
         return jsonify(error="Invalid voice signaling payload."), 400
     try:
         _store().voice_signal(
-            session["connection_id"], transmission_id, target, kind, payload
+            _connection_id(), transmission_id, target, kind, payload
         )
     except LookupError as problem:
         return jsonify(error=str(problem)), 409

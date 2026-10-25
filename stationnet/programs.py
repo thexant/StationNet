@@ -13,7 +13,8 @@ from flask import (Blueprint, abort, current_app, flash, g, jsonify, redirect,
 from .auth import admin_required, login_required
 from .db import get_db
 from .radio import (can_manage_broadcasts, effective_access, find_band,
-                    format_frequency, parse_frequency, transmission_authorized)
+                    format_frequency, parse_frequency, transmission_authorized,
+                    _connection_id)
 from .security import validate_csrf
 
 bp = Blueprint("programs", __name__, url_prefix="/radio/manage")
@@ -466,7 +467,7 @@ def content_image(content_id):
     row = get_db().execute("SELECT * FROM radio_broadcast_content WHERE id=? AND kind='sstv'", (content_id,)).fetchone()
     if not row or not row["stored_name"]:
         abort(404)
-    tuned = current_app.extensions["radio"].receiver_frequency(session["connection_id"])
+    tuned = current_app.extensions["radio"].receiver_frequency(_connection_id())
     active = current_app.extensions["hosted_broadcasts"].all_public()
     transmission = next((item for item in active.values() if item and
                          item.get("status") == "playing" and
@@ -535,19 +536,20 @@ def start_program(program_id):
 def dj_control():
     validate_csrf(); store = current_app.extensions["hosted_broadcasts"]
     owner_key, target_session = _requested_session_key()
+    connection_id = _connection_id()
     action = request.form.get("action", "")
     force = bool(g.user["is_admin"] and request.form.get("force") == "1")
     if action == "takeover":
         if not target_session: return jsonify(error="Start a playlist or program first."), 409
-        try: _coordinator().acquire(owner_key, g.user["id"], session["connection_id"], force)
+        try: _coordinator().acquire(owner_key, g.user["id"], connection_id, force)
         except RuntimeError as problem: return jsonify(error=str(problem)), 409
         _coordinator().notify("dj_connect", target_session["frequency_khz"])
     elif action == "release":
-        _coordinator().release(owner_key, g.user["id"], session["connection_id"])
-    elif not _coordinator().owns(owner_key, g.user["id"], session["connection_id"]):
+        _coordinator().release(owner_key, g.user["id"], connection_id)
+    elif not _coordinator().owns(owner_key, g.user["id"], connection_id):
         return jsonify(error="Take control of this broadcast first."), 409
     elif action == "pause":
-        store.set_live_mix(owner_key, False, controller=session["connection_id"])
+        store.set_live_mix(owner_key, False, controller=connection_id)
         store.pause(owner_key)
     elif action == "resume":
         try: store.resume(owner_key)
@@ -579,7 +581,7 @@ def dj_control():
     elif action in {"ptt_on", "ptt_off", "heartbeat", "duck"}:
         session_data = store.public(owner_key)
         duck = request.form.get("ducking", session_data.get("ducking", .35) if session_data else .35, type=float)
-        store.set_live_mix(owner_key, action == "ptt_on" or bool(session_data and session_data.get("mic_active") and action in {"heartbeat", "duck"}), duck, session["connection_id"])
+        store.set_live_mix(owner_key, action == "ptt_on" or bool(session_data and session_data.get("mic_active") and action in {"heartbeat", "duck"}), duck, connection_id)
     else: return jsonify(error="Unknown DJ control action."), 400
     return jsonify(session=store.public(owner_key), controller=True, owner_key=str(owner_key))
 
@@ -588,7 +590,7 @@ def dj_control():
 @_host_required
 def dj_status():
     owner_key, _target_session = _requested_session_key()
-    owned = _coordinator().heartbeat(owner_key, g.user["id"], session["connection_id"])
+    owned = _coordinator().heartbeat(owner_key, g.user["id"], _connection_id())
     return jsonify(session=current_app.extensions["hosted_broadcasts"].public(owner_key),
                    controller=owned, owner_key=str(owner_key))
 

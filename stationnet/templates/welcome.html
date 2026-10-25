@@ -5,9 +5,9 @@
   <div class="gateway-marker" aria-label="Station connection status">
     <span class="gateway-symbol" aria-hidden="true">{% if g.station.registration_mode=='open' %}⌁{% elif g.station.registration_mode=='private' %}◇{% else %}×{% endif %}</span>
     <div>
-      <p>{% if g.station.registration_mode=='open' %}LOCAL NETWORK STATION{% elif g.station.registration_mode=='private' %}PRIVATE NETWORK STATION{% else %}CLOSED NETWORK STATION{% endif %}</p>
+      <p>{% if g.station.registration_mode=='open' %}OPEN NETWORK STATION{% elif g.station.registration_mode=='private' %}PRIVATE NETWORK STATION{% else %}CLOSED NETWORK STATION{% endif %}</p>
       <strong>{{ g.station.name }}</strong>
-      <small>{{ g.station.callsign }} / {% if g.station.registration_mode=='open' %}PUBLIC ENROLLMENT AVAILABLE{% elif g.station.registration_mode=='private' %}INVITATION REQUIRED{% else %}ENROLLMENT DISABLED{% endif %}</small>
+      <small>{{ g.station.callsign }} / {% if g.station.registration_mode=='open' %}PUBLIC REGISTRATION AVAILABLE{% elif g.station.registration_mode=='private' %}INVITATION REQUIRED{% else %}REGISTRATION DISABLED{% endif %}</small>
     </div>
   </div>
   <div class="station-profile">

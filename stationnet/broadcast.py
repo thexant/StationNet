@@ -15,7 +15,8 @@ from flask import (Blueprint, abort, current_app, flash, g, jsonify, redirect,
 from .auth import admin_required, login_required
 from .db import get_db
 from .radio import (can_manage_broadcasts, effective_access, find_band,
-                    format_frequency, parse_frequency, transmission_authorized)
+                    format_frequency, parse_frequency, transmission_authorized,
+                    _connection_id)
 from .security import validate_csrf
 from .external_radio import inspect_stream, validate_stream_url
 from .midi import InvalidMidi, MAX_MIDI_BYTES, inspect_midi
@@ -1868,7 +1869,7 @@ def stop_broadcast():
 
 
 def _tuned_broadcast(file_id, track_serial):
-    tuned = current_app.extensions["radio"].receiver_frequency(session["connection_id"])
+    tuned = current_app.extensions["radio"].receiver_frequency(_connection_id())
     if tuned is None or effective_access(g.user["id"], tuned) == "DENIED":
         return None
     return next((item for item in _store().all_public().values()
@@ -1924,7 +1925,7 @@ def broadcast_audio(file_id):
                  if value and value["status"] == "playing" and value["audio_file_id"] == file_id), None)
     if not item or effective_access(g.user["id"], item["frequency_khz"]) == "DENIED":
         abort(403)
-    tuned = current_app.extensions["radio"].receiver_frequency(session["connection_id"])
+    tuned = current_app.extensions["radio"].receiver_frequency(_connection_id())
     if tuned != item["frequency_khz"]:
         abort(403)
     row = get_db().execute("SELECT * FROM radio_audio_files WHERE id=?", (file_id,)).fetchone()
