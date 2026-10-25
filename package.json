@@ -5,7 +5,8 @@
     "build:midi": "node scripts/build-midi.mjs",
     "test:midi": "node scripts/verify-composer-playback.mjs && node scripts/verify-composer-new.mjs",
     "test:light-cycles": "node scripts/verify-light-cycles.mjs && node scripts/verify-light-cycles-runtime.mjs",
-    "test:application-pixels": "node tests/test_application_pixels.mjs"
+    "test:application-pixels": "node tests/test_application_pixels.mjs",
+    "test:application-graphics": "node tests/test_application_sprite_batch.mjs"
   },
   "dependencies": {
     "spessasynth_lib": "4.3.14"

@@ -41,7 +41,7 @@
       title="{{ application.name }} isolated runtime"
       aria-hidden="true" tabindex="-1"
       sandbox="allow-scripts"
-      data-runtime-src="{{ url_for('applications.runtime', slug=application.slug, v='midi-composer-3') }}"
+      data-runtime-src="{{ url_for('applications.runtime', slug=application.slug, v='graphics-1') }}"
       src="about:blank"></iframe>
     {% else %}
     <div class="application-status">PROGRAM STATUS / PLACEHOLDER</div>
@@ -62,5 +62,5 @@
   <a class="button application-return" href="{{ url_for('applications.index') }}">&lt; RETURN TO PROGRAM MANAGER</a>
 </section>
 {% if application.runnable %}<button type="button" class="application-immersive-exit" data-app-immersive-exit hidden aria-label="Exit immersive application mode">EXIT IMMERSIVE</button>{% endif %}
-{% if application.runnable %}<script src="{{ url_for('static', filename='application_host.js', v='midi-composer-3') }}" defer></script>{% endif %}
+{% if application.runnable %}<script src="{{ url_for('static', filename='application_host.js', v='graphics-1') }}" defer></script>{% endif %}
 {% endblock %}

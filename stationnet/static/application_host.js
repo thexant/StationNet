@@ -14,9 +14,207 @@
   if (!frame || !surface || !status) return;
 
   const PROTOCOL = "stationnet-app-v1";
+  // ASCII 32-126. 8x8: dhepper/font8x8 (public domain); 8x16: pcface Modern DOS (CC0).
+  const BUILTIN_FONT_ROWS = Object.freeze({
+    vga8x8: [
+      "0000000000000000",
+      "183c3c1818001800",
+      "3636000000000000",
+      "36367f367f363600",
+      "0c3e031e301f0c00",
+      "006333180c666300",
+      "1c361c6e3b336e00",
+      "0606030000000000",
+      "180c0606060c1800",
+      "060c1818180c0600",
+      "00663cff3c660000",
+      "000c0c3f0c0c0000",
+      "00000000000c0c06",
+      "0000003f00000000",
+      "00000000000c0c00",
+      "6030180c06030100",
+      "3e63737b6f673e00",
+      "0c0e0c0c0c0c3f00",
+      "1e33301c06333f00",
+      "1e33301c30331e00",
+      "383c36337f307800",
+      "3f031f3030331e00",
+      "1c06031f33331e00",
+      "3f3330180c0c0c00",
+      "1e33331e33331e00",
+      "1e33333e30180e00",
+      "000c0c00000c0c00",
+      "000c0c00000c0c06",
+      "180c0603060c1800",
+      "00003f00003f0000",
+      "060c1830180c0600",
+      "1e3330180c000c00",
+      "3e637b7b7b031e00",
+      "0c1e33333f333300",
+      "3f66663e66663f00",
+      "3c66030303663c00",
+      "1f36666666361f00",
+      "7f46161e16467f00",
+      "7f46161e16060f00",
+      "3c66030373667c00",
+      "3333333f33333300",
+      "1e0c0c0c0c0c1e00",
+      "7830303033331e00",
+      "6766361e36666700",
+      "0f06060646667f00",
+      "63777f7f6b636300",
+      "63676f7b73636300",
+      "1c36636363361c00",
+      "3f66663e06060f00",
+      "1e3333333b1e3800",
+      "3f66663e36666700",
+      "1e33070e38331e00",
+      "3f2d0c0c0c0c1e00",
+      "3333333333333f00",
+      "33333333331e0c00",
+      "6363636b7f776300",
+      "6363361c1c366300",
+      "3333331e0c0c1e00",
+      "7f6331184c667f00",
+      "1e06060606061e00",
+      "03060c1830604000",
+      "1e18181818181e00",
+      "081c366300000000",
+      "00000000000000ff",
+      "0c0c180000000000",
+      "00001e303e336e00",
+      "0706063e66663b00",
+      "00001e3303331e00",
+      "3830303e33336e00",
+      "00001e333f031e00",
+      "1c36060f06060f00",
+      "00006e33333e301f",
+      "0706366e66666700",
+      "0c000e0c0c0c1e00",
+      "300030303033331e",
+      "070666361e366700",
+      "0e0c0c0c0c0c1e00",
+      "0000337f7f6b6300",
+      "00001f3333333300",
+      "00001e3333331e00",
+      "00003b66663e060f",
+      "00006e33333e3078",
+      "00003b6e66060f00",
+      "00003e031e301f00",
+      "080c3e0c0c2c1800",
+      "0000333333336e00",
+      "00003333331e0c00",
+      "0000636b7f7f3600",
+      "000063361c366300",
+      "00003333333e301f",
+      "00003f190c263f00",
+      "380c0c070c0c3800",
+      "1818180018181800",
+      "070c0c380c0c0700",
+      "6e3b000000000000"
+    ],
+    vga8x16: [
+      "00000000000000000000000000000000",
+      "0000183c3c3c18181800181800000000",
+      "00666622220000000000000000000000",
+      "000000006c6cfe6c6cfe6c6c00000000",
+      "0010107cd6d670381cd6d67c10100000",
+      "00006092966c18306cd2920c00000000",
+      "0000386c6c383076dccccc7600000000",
+      "00181808100000000000000000000000",
+      "00000c18303030303030180c00000000",
+      "000030180c0c0c0c0c0c183000000000",
+      "0000000000663cff3c66000000000000",
+      "000000000018187e1818000000000000",
+      "00000000000000000000303010200000",
+      "00000000000000fe0000000000000000",
+      "00000000000000000000303000000000",
+      "00000002060c183060c0800000000000",
+      "00007cc6c6cedef6e6c6c67c00000000",
+      "00001838781818181818187e00000000",
+      "00007cc6060c183060c0c6fe00000000",
+      "00007cc606063c060606c67c00000000",
+      "00000c1c3c6cccccfe0c0c1e00000000",
+      "0000fec0c0c0fc060606c67c00000000",
+      "00007cc6c0c0fcc6c6c6c67c00000000",
+      "0000fec606060c183030303000000000",
+      "00007cc6c6c67cc6c6c6c67c00000000",
+      "00007cc6c6c6c67e0606c67c00000000",
+      "00000000181800000018180000000000",
+      "00000000181800000018180810000000",
+      "000000060c18306030180c0600000000",
+      "00000000007e00007e00000000000000",
+      "0000006030180c060c18306000000000",
+      "00007cc6c6060c181800181800000000",
+      "0000003c429da5a5adb6403c00000000",
+      "0000386cc6c6c6fec6c6c6c600000000",
+      "0000fc6666667c66666666fc00000000",
+      "00007cc6c6c0c0c0c0c6c67c00000000",
+      "0000fc6666666666666666fc00000000",
+      "0000fe6662687878686266fe00000000",
+      "0000fe6662687878686060f000000000",
+      "00007cc6c6c0c0cec6c6c67e00000000",
+      "0000c6c6c6c6fec6c6c6c6c600000000",
+      "00003c18181818181818183c00000000",
+      "00001e0c0c0c0c0c0ccccc7800000000",
+      "0000e666666c78786c6666e600000000",
+      "0000f06060606060606266fe00000000",
+      "000082c6eefefed6c6c6c6c600000000",
+      "000086c6e6f6fedecec6c6c600000000",
+      "00007cc6c6c6c6c6c6c6c67c00000000",
+      "0000fc666666667c606060f000000000",
+      "00007cc6c6c6c6c6c6d6de7c06000000",
+      "0000fc666666667c6c6666e600000000",
+      "00007cc6c660380c06c6c67c00000000",
+      "00007e7e5a1818181818183c00000000",
+      "0000c6c6c6c6c6c6c6c6c67c00000000",
+      "0000c6c6c6c6c6c6c66c381000000000",
+      "0000c6c6c6c6c6d6feeec68200000000",
+      "0000c6c66c7c38387c6cc6c600000000",
+      "0000666666663c181818183c00000000",
+      "0000fec6860c183060c2c6fe00000000",
+      "00003c30303030303030303c00000000",
+      "00000080c06030180c06020000000000",
+      "00003c0c0c0c0c0c0c0c0c3c00000000",
+      "000010386cc600000000000000000000",
+      "00000000000000000000000000ff0000",
+      "00181810080000000000000000000000",
+      "0000000000780c7ccccccc7600000000",
+      "0000e060607c66666666667c00000000",
+      "00000000007cc6c0c0c0c67c00000000",
+      "00001c0c0c7ccccccccccc7600000000",
+      "00000000007cc6c6fec0c67c00000000",
+      "00001c36307c30303030307800000000",
+      "000000000076cccccccccc7c0ccc7800",
+      "0000e060606c7666666666e600000000",
+      "00001818003818181818183c00000000",
+      "00000c0c001c0c0c0c0c0c0ccccc7800",
+      "0000e06060666c78786c66e600000000",
+      "00003818181818181818183c00000000",
+      "0000000000ecfed6d6d6d6c600000000",
+      "0000000000dc66666666666600000000",
+      "00000000007cc6c6c6c6c67c00000000",
+      "0000000000dc66666666667c6060f000",
+      "00000000007ccccccccccc7c0c0c1e00",
+      "0000000000de7660606060f000000000",
+      "00000000007cc660380cc67c00000000",
+      "0000103030fc30303030341800000000",
+      "0000000000cccccccccccc7600000000",
+      "0000000000c6c6c6c66c381000000000",
+      "0000000000c6d6d6d6d6fe6c00000000",
+      "0000000000c6c66c386cc6c600000000",
+      "0000000000c6c6c6c6c6c67e060cf800",
+      "0000000000fe8c183060c2fe00000000",
+      "00000e18181870181818180e00000000",
+      "00001818181800001818181800000000",
+      "0000701818180e181818187000000000",
+      "000076dc000000000000000000000000"
+    ]
+  });
   const LIMITS = {
     components: 100, text: 8000, items: 100, columns: 80, rows: 100,
-    canvasCommands: 600, canvasSegments: 10000, canvasVertices: 20000,
+    canvasCommands: 600, canvasSprites: 2000, canvasGlyphs: 2000,
+    canvasSegments: 10000, canvasVertices: 20000,
     canvasPolygons: 256, polygonVertices: 4096, capabilityText: 200000
   };
   const SOUND_LIMITS = { tones: 32, active: 24, frequency: [20, 20000], duration: [10, 10000], delay: [0, 30000], volume: [.001, .25], envelope: [0, 1000] };
@@ -38,6 +236,7 @@
   let realtimeSession = null;
   const activeTones = new Set();
   const images = new Map();
+  const builtinFontSheets = new Map();
   const decodedImages = new Map();
   const tileMaps = new Map();
   const framebuffers = new Map();
@@ -384,6 +583,111 @@
     context.restore();
   }
 
+  function drawSprite(context, entry, width, height) {
+    if (!entry || typeof entry !== "object" || !entry.sheet || typeof entry.sheet !== "object") return;
+    const sheet = entry.sheet;
+    if (typeof sheet.image !== "string" || !Number.isInteger(sheet.frameWidth) ||
+        !Number.isInteger(sheet.frameHeight) || !Number.isInteger(sheet.columns) ||
+        sheet.frameWidth < 1 || sheet.frameWidth > 2048 ||
+        sheet.frameHeight < 1 || sheet.frameHeight > 2048 ||
+        sheet.columns < 1 || sheet.columns > 2048 ||
+        !Number.isInteger(entry.frame) || entry.frame < 0 || entry.frame > 65535 ||
+        typeof entry.x !== "number" || !Number.isFinite(entry.x) ||
+        typeof entry.y !== "number" || !Number.isFinite(entry.y) ||
+        (entry.width != null && (typeof entry.width !== "number" || !Number.isFinite(entry.width))) ||
+        (entry.height != null && (typeof entry.height !== "number" || !Number.isFinite(entry.height))) ||
+        (entry.rotation != null && (typeof entry.rotation !== "number" || !Number.isFinite(entry.rotation))) ||
+        (entry.scale != null && (typeof entry.scale !== "number" || !Number.isFinite(entry.scale))) ||
+        (entry.opacity != null && (typeof entry.opacity !== "number" || !Number.isFinite(entry.opacity))) ||
+        (entry.flipX != null && typeof entry.flipX !== "boolean") ||
+        (entry.flipY != null && typeof entry.flipY !== "boolean")) return;
+    const bitmap = images.get(sheet.image);
+    if (!bitmap) return;
+    const sx = (entry.frame % sheet.columns) * sheet.frameWidth;
+    const sy = Math.floor(entry.frame / sheet.columns) * sheet.frameHeight;
+    if (sx + sheet.frameWidth > bitmap.width || sy + sheet.frameHeight > bitmap.height) return;
+    const x = number(entry.x, 0, -width, width * 2);
+    const y = number(entry.y, 0, -height, height * 2);
+    const dw = number(entry.width, sheet.frameWidth, 0, width * 2);
+    const dh = number(entry.height, sheet.frameHeight, 0, height * 2);
+    const rotation = number(entry.rotation, 0, -Math.PI * 2, Math.PI * 2);
+    const scale = number(entry.scale, 1, 0, 8);
+    if (!dw || !dh || !scale) return;
+    context.save();
+    context.globalAlpha = number(entry.opacity, 1, 0, 1);
+    context.imageSmoothingEnabled = false;
+    context.translate(x + dw / 2, y + dh / 2);
+    context.rotate(rotation);
+    context.scale((entry.flipX ? -1 : 1) * scale, (entry.flipY ? -1 : 1) * scale);
+    context.drawImage(bitmap, sx, sy, sheet.frameWidth, sheet.frameHeight,
+      -dw / 2, -dh / 2, dw, dh);
+    context.restore();
+  }
+
+  function fontSheet(font, color) {
+    if (font.sheet !== "vga8x8" && font.sheet !== "vga8x16") return images.get(font.sheet);
+    const name = font.sheet;
+    if (font.charWidth !== 8 || font.charHeight !== (name === "vga8x8" ? 8 : 16) ||
+        font.firstChar !== 32) return null;
+    const key = `${name}:${color}`;
+    if (builtinFontSheets.has(key)) return builtinFontSheets.get(key);
+    const canvas = document.createElement("canvas");
+    canvas.width = 128; canvas.height = Math.ceil(BUILTIN_FONT_ROWS[name].length / 16) * font.charHeight;
+    const context = canvas.getContext("2d");
+    if (!context) return null;
+    context.fillStyle = color;
+    BUILTIN_FONT_ROWS[name].forEach((glyph, index) => {
+      const left = index % 16 * 8, top = Math.floor(index / 16) * font.charHeight;
+      for (let row = 0; row < font.charHeight; row++) {
+        const bits = parseInt(glyph.slice(row * 2, row * 2 + 2), 16);
+        for (let col = 0; col < 8; col++) {
+          if (bits & (name === "vga8x8" ? 1 << col : 128 >> col))
+            context.fillRect(left + col, top + row, 1, 1);
+        }
+      }
+    });
+    if (builtinFontSheets.size >= 32) builtinFontSheets.delete(builtinFontSheets.keys().next().value);
+    builtinFontSheets.set(key, canvas);
+    return canvas;
+  }
+
+  function drawBitmapText(context, command, width, height, available) {
+    const font = command.font;
+    if (!font || typeof font !== "object" || typeof font.sheet !== "string" ||
+        !Number.isInteger(font.charWidth) || font.charWidth < 1 || font.charWidth > 64 ||
+        !Number.isInteger(font.charHeight) || font.charHeight < 1 || font.charHeight > 64 ||
+        !Number.isInteger(font.firstChar) || font.firstChar < 0 || font.firstChar > 65535 ||
+        typeof command.text !== "string" ||
+        (command.opacity != null && (typeof command.opacity !== "number" || !Number.isFinite(command.opacity))) ||
+        typeof command.x !== "number" || !Number.isFinite(command.x) ||
+        typeof command.y !== "number" || !Number.isFinite(command.y)) return 0;
+    const builtin = font.sheet === "vga8x8" || font.sheet === "vga8x16";
+    const source = fontSheet(font, canvasColor(command.color, "#ffffff"));
+    if (!source || source.width % font.charWidth || source.height % font.charHeight) return 0;
+    const columns = source.width / font.charWidth;
+    const count = columns * source.height / font.charHeight;
+    const lines = command.text.slice(0, 200).split(/\r\n|\r|\n/);
+    const x = number(command.x, 0, -width, width * 2);
+    const y = number(command.y, 0, -height, height * 2);
+    let visited = 0;
+    context.save(); context.globalAlpha = number(command.opacity, 1, 0, 1);
+    context.imageSmoothingEnabled = false;
+    lines.forEach((line, row) => {
+      Array.from(line).forEach((char, column) => {
+        if (visited >= available) return;
+        visited++;
+        const index = char.codePointAt(0) - font.firstChar;
+        if (index < 0 || index >= count || builtin && index >= 95) return;
+        context.drawImage(source, index % columns * font.charWidth,
+          Math.floor(index / columns) * font.charHeight, font.charWidth, font.charHeight,
+          x + column * font.charWidth, y + row * font.charHeight,
+          font.charWidth, font.charHeight);
+      });
+    });
+    context.restore();
+    return visited;
+  }
+
   function drawTileMap(context, command, width, height) {
     const map = tileMaps.get(command.map), bitmap = map && images.get(map.image);
     if (!map || !bitmap) return;
@@ -435,7 +739,7 @@
     // Canvas bitmaps clip already, but an explicit path also keeps that
     // guarantee if drawing is later moved onto a larger shared surface.
     context.save(); context.beginPath(); context.rect(0, 0, width, height); context.clip();
-    let segments = 0, vertices = 0, polygons = 0;
+    let segments = 0, vertices = 0, polygons = 0, sprites = 0, glyphs = 0;
     (Array.isArray(component.commands) ? component.commands : []).slice(0, LIMITS.canvasCommands).forEach((command) => {
       if (!command || typeof command !== "object") return;
       const x = number(command.x, 0, -width, width * 2), y = number(command.y, 0, -height, height * 2);
@@ -494,6 +798,14 @@
         const sh = number(command.sh, bitmap.height - sy, 0, bitmap.height);
         const dw = number(command.width, sw, 0, width * 2), dh = number(command.height, sh, 0, height * 2);
         drawImage(context, command, bitmap, x, y, sw, sh, sx, sy, dw, dh);
+      } else if (command.type === "sprites") {
+        if (!Array.isArray(command.sprites) || sprites >= LIMITS.canvasSprites) return;
+        const count = Math.min(command.sprites.length, LIMITS.canvasSprites - sprites);
+        for (let index = 0; index < count; index++) drawSprite(context, command.sprites[index], width, height);
+        sprites += count;
+      } else if (command.type === "bitmapText") {
+        if (glyphs >= LIMITS.canvasGlyphs) return;
+        glyphs += drawBitmapText(context, command, width, height, LIMITS.canvasGlyphs - glyphs);
       } else if (command.type === "tilemap") {
         drawTileMap(context, command, width, height);
       } else if (command.type === "framebuffer") {
@@ -724,7 +1036,10 @@
     if (Array.isArray(message.frames)) message.frames.slice(0, 4).forEach(registerFrame);
     const components = Array.isArray(message.components) ? message.components.slice(0, LIMITS.components) : [];
     try {
-      if (JSON.stringify(components).length > 250000) throw new Error("content limit exceeded");
+      const canvases = components.filter(component => component?.type === "canvas");
+      const others = components.filter(component => component?.type !== "canvas");
+      if (JSON.stringify(canvases).length > 750000 || JSON.stringify(others).length > 250000)
+        throw new Error("content limit exceeded");
     } catch (_) {
       status.textContent = "PROGRAM STATUS / REQUEST REJECTED";
       return;

@@ -86,6 +86,35 @@
       height: opts.height ?? sheet.frameHeight, flipX: opts.flipX, flipY: opts.flipY, opacity: opts.opacity };
   }
 
+  const builtinFonts = Object.freeze({
+    vga8x8: Object.freeze({ sheet: "vga8x8", charWidth: 8, charHeight: 8, firstChar: 32 }),
+    vga8x16: Object.freeze({ sheet: "vga8x16", charWidth: 8, charHeight: 16, firstChar: 32 })
+  });
+
+  function bitmapFont(sheet, settings) {
+    const opts = options(settings);
+    if (typeof sheet !== "string" || !sheet || sheet.length > 200 ||
+        !Number.isInteger(opts.charWidth) || opts.charWidth < 1 || opts.charWidth > 64 ||
+        !Number.isInteger(opts.charHeight) || opts.charHeight < 1 || opts.charHeight > 64 ||
+        (opts.firstChar != null && (!Number.isInteger(opts.firstChar) || opts.firstChar < 0 || opts.firstChar > 65535)))
+      throw new RangeError("Bitmap font requires a sheet and 1-64 pixel character dimensions");
+    if (Object.prototype.hasOwnProperty.call(builtinFonts, sheet) &&
+        (opts.charWidth !== 8 || opts.charHeight !== builtinFonts[sheet].charHeight ||
+        (opts.firstChar ?? 32) !== 32))
+      throw new RangeError("Built-in font dimensions and firstChar are fixed");
+    return Object.freeze({ sheet, charWidth: opts.charWidth, charHeight: opts.charHeight,
+      firstChar: opts.firstChar ?? 32 });
+  }
+
+  function measureBitmapText(value, font) {
+    if (!font || !Number.isInteger(font.charWidth) || font.charWidth < 1 || font.charWidth > 64 ||
+        !Number.isInteger(font.charHeight) || font.charHeight < 1 || font.charHeight > 64)
+      throw new TypeError("measureText requires a bitmap font descriptor");
+    const lines = String(value).slice(0, 200).split(/\r\n|\r|\n/);
+    return { width: Math.max(...lines.map(line => Array.from(line).length)) * font.charWidth,
+      height: lines.length * font.charHeight };
+  }
+
   function loadModule(path) {
     if (typeof path !== "string" || !path.endsWith(".js")) {
       return Promise.reject(new Error("Module path must name a bundled .js file"));
@@ -649,6 +678,19 @@
           columns: Math.max(1, Math.trunc(Number(opts.columns) || 1)) });
       },
       sprite,
+      sprites(entries) {
+        if (!Array.isArray(entries)) throw new TypeError("sprites requires an array");
+        if (entries.length > 2000) throw new RangeError("A sprites command may contain at most 2000 entries");
+        return { type: "sprites", sprites: entries };
+      },
+      fonts: builtinFonts,
+      bitmapFont,
+      bitmapText(content, font, x, y, settings) {
+        const opts = options(settings);
+        return { type: "bitmapText", text: String(content).slice(0, 200), font, x, y,
+          color: opts.color, opacity: opts.opacity };
+      },
+      measureText: measureBitmapText,
       tileMap(id, tiles, settings) {
         const opts = options(settings);
         if (typeof id !== "string" || !/^[A-Za-z0-9_.:-]{1,80}$/.test(id)) throw new Error("Invalid tile map id");

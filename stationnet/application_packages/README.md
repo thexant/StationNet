@@ -321,7 +321,8 @@ right. It does not infer directions from the labels.
 `ui.canvas(width, height, commands, options)` creates a raster playfield. Width
 and height are logical CSS-pixel units, independently clamped to 80–1,200 and
 80–800 respectively (defaults: 640 × 400 when invalid). At most 600 commands
-are drawn per call. The background is opaque `#010401`. All drawing is clipped
+are drawn per call, including one `sprites` command for an entire sprite batch.
+That batch has a separate 2,000-entry limit per canvas frame. The background is opaque `#010401`. All drawing is clipped
 to the canvas; coordinates outside the visible area are useful for shapes that
 cross an edge and cannot paint elsewhere on the page.
 
@@ -338,6 +339,8 @@ the stated default when missing or invalid.
 | `lines` | `type: "lines"`, `segments`, `color`, `width` | `segments` is an array of `[x1, y1, x2, y2]` arrays using the line ranges. Invalid segment entries are skipped. All accepted segments are stroked in one batch. |
 | `polygon` | `type: "polygon"`, `points`, `fill`, `stroke`, `width` | `points` is an array of at least three `[x, y]` pairs using the line coordinate range. `fill` and `stroke` are independent colors; omit either to disable it. If both are omitted, the polygon is filled with `color` or the default green. `width` controls the stroke as for lines. |
 | `image` | `type: "image"`, `image`, `x`, `y`, `sx`, `sy`, `sw`, `sh`, `width`, `height`, `flipX`, `flipY`, `opacity` | `image` is a path returned by `ui.assets.image`. The source rectangle defaults to the whole image and destination size defaults to the crop size. Out-of-bounds crops are skipped. Opacity is clamped to 0–1. |
+| `sprites` | `type: "sprites"`, `sprites` | One array of up to 2,000 sprite entries across all `sprites` commands in a canvas frame. Each entry has `sheet`, `frame`, `x`, `y`, optional `width`, `height`, `flipX`, `flipY`, `opacity`, `rotation`, and `scale`. Invalid entries and out-of-bounds source frames are skipped. |
+| `bitmapText` | `type: "bitmapText"`, `text`, `font`, `x`, `y`, `opacity`, `color` | Draws at most 200 characters per command and 2,000 glyphs per canvas frame. `font` is a `bitmapFont` descriptor. `x`, `y` mark the top left; newlines advance by one character height. `color` applies to built-in fonts. |
 | `tilemap` | `type: "tilemap"`, `map`, `x`, `y`, `width`, `height`, `cameraX`, `cameraY`, `opacity` | Draws the visible part of a registered map into a clipped viewport. Camera coordinates are in map pixels and default to zero. |
 
 Colors must use 3-, 4-, 6-, or 8-digit hexadecimal CSS notation (for example
@@ -429,6 +432,44 @@ grid of equal-sized frames. `columns` is the number of frames per row (default
 for a zero-based frame. Options are `width`, `height`, `flipX`, `flipY`, and
 `opacity`; changing `frame` in `ui.animate` produces animation without reloading
 the image. Frame dimensions must be positive integers.
+
+`ui.graphics.sprites(entries)` builds a batched `sprites` command. Each entry
+uses a sheet from `ui.graphics.sheet`, a zero-based integer `frame`, and finite
+`x`/`y` coordinates. Optional `width`/`height` set the untransformed size;
+`flipX`/`flipY` mirror it, `opacity` is 0–1, `rotation` is in radians (clamped
+to ±2π), and uniform `scale` is clamped to 0–8. Rotation and scale act about
+the sprite center; `x`/`y` are the untransformed top-left corner. Width, height,
+and coordinates use the `image` canvas limits. The host inspects at most 2,000
+entries in command order per canvas frame, independently of the 600-command
+limit. Canvas components in one render may use up to 750 KB of serialized
+content; other components retain their 250 KB combined limit.
+
+```js
+const atlas = ui.assets.image("assets/actors.png");
+const actors = ui.graphics.sheet(atlas, 16, 16, { columns: 8 });
+ui.update("game", ui.canvas(320, 200, [ui.graphics.sprites([
+  { sheet: actors, frame: 2, x: 20, y: 30 },
+  { sheet: actors, frame: 3, x: 70, y: 30, rotation: Math.PI / 4, scale: 2 }
+])], { id: "game" }));
+```
+
+`ui.graphics.bitmapFont(sheet, { charWidth, charHeight, firstChar })` describes
+a grid of fixed-size glyphs in a packaged image. The sheet is filled row by
+row; its pixel width and height must be multiples of the character dimensions.
+`firstChar` is the Unicode code point of the first glyph (default 32). Character
+dimensions must be integers from 1 to 64; `firstChar` is 0–65535. Use
+`ui.graphics.fonts.vga8x8` or `ui.graphics.fonts.vga8x16` for the built-in
+ASCII 32–126 VGA-style fonts. Unsupported characters leave a blank cell.
+
+`ui.graphics.bitmapText(text, font, x, y, { color, opacity })` builds a
+`bitmapText` command. Packaged sheets keep their own colors; `color` tints the
+built-in fonts (white by default). `ui.graphics.measureText(text, font)` returns
+`{ width, height }` in logical pixels using the same 200-character truncation,
+Unicode code-point count, and newline handling as `bitmapText`. Metrics include
+blank cells and are exact for the fixed-size grid. The 8×8 font is based on
+[font8x8](https://github.com/dhepper/font8x8) (public domain); the 8×16 font
+uses [Modern DOS bitmaps from PC Face](https://github.com/susam/pcface)
+(CC0).
 
 `ui.graphics.tileMap(id, tiles, { columns, image, tileWidth, tileHeight,
 sheetColumns })` registers a rectangular row-major tile array once. Each cell
