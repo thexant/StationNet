@@ -3,13 +3,16 @@
 for(const mud of document.querySelectorAll("[data-mud]")){
   const events=mud.querySelector("[data-mud-events]");
   const gameScroll=mud.querySelector("[data-mud-game-scroll]");
+  const roomView=mud.querySelector("[data-mud-room-view]");
   const latestButton=mud.querySelector("[data-mud-jump-latest]");
   const roomButton=mud.querySelector("[data-mud-jump-room]");
+  const clearButton=mud.querySelector("[data-mud-clear-events]");
   const actions=mud.querySelector("[data-mud-actions]");
   const form=mud.querySelector("[data-mud-command]");
   const input=form.querySelector("[data-command-input]");
   const error=mud.querySelector("[data-mud-error]");
   const roomName=mud.querySelector("[data-mud-room-name]");
+  const roomPreview=mud.querySelector("[data-mud-room-preview]");
   const sceneName=mud.querySelector("[data-mud-scene-name]");
   const roomDescription=mud.querySelector("[data-mud-room-description]");
   const roomInstructions=mud.querySelector("[data-mud-room-instructions]");
@@ -40,10 +43,22 @@ for(const mud of document.querySelectorAll("[data-mud]")){
   const quests=mud.querySelector("[data-mud-quests]");
   const questCount=mud.querySelector("[data-mud-quest-count]");
   let busy=false, pollBusy=false;
-  let lastId=Math.max(0,...Array.from(events.querySelectorAll("[data-event-id]"),row=>Number(row.dataset.eventId)||0));
+  let clearedThroughId=Number(mud.dataset.clearedThrough)||0;
+  let lastId=Math.max(clearedThroughId,...Array.from(events.querySelectorAll("[data-event-id]"),row=>Number(row.dataset.eventId)||0));
 
   const atLatest=()=>gameScroll.scrollHeight-gameScroll.scrollTop-gameScroll.clientHeight<48;
+  const showRoom=open=>{
+    roomView.hidden=!open;
+    gameScroll.inert=open;
+    gameScroll.setAttribute("aria-hidden",String(open));
+    roomButton.setAttribute("aria-expanded",String(open));
+    roomButton.setAttribute("aria-label",open?"Return to gameplay activity":"Show current room details");
+    roomButton.textContent=open?"BACK":"ROOM";
+    if(open)roomView.scrollTop=0;
+    else if(atLatest())latestButton.classList.remove("is-unread");
+  };
   const scrollEventsToLatest=()=>{
+    showRoom(false);
     gameScroll.scrollTop=gameScroll.scrollHeight;
     latestButton.classList.remove("is-unread");
   };
@@ -56,8 +71,10 @@ for(const mud of document.querySelectorAll("[data-mud]")){
 
   const appendEvent=event=>{
     lastId=Math.max(lastId,Number(event.id)||0);
+    if(event.id&&Number(event.id)<=clearedThroughId)return;
     if(event.id&&events.querySelector(`[data-event-id="${event.id}"]`))return;
     const follow=atLatest();
+    events.querySelector("[data-mud-empty-activity]")?.remove();
     const row=document.createElement("article");
     row.className=`mud-event mud-event-${event.event_type||"system"}`;
     if(event.id)row.dataset.eventId=event.id;
@@ -70,7 +87,7 @@ for(const mud of document.querySelectorAll("[data-mud]")){
     while(events.querySelectorAll("[data-event-id]").length>200){
       events.querySelector("[data-event-id]")?.remove();
     }
-    if(follow)scrollEventsToLatest();
+    if(follow&&roomView.hidden)scrollEventsToLatest();
     else latestButton.classList.add("is-unread");
   };
   const renderActions=available=>{
@@ -105,6 +122,7 @@ for(const mud of document.querySelectorAll("[data-mud]")){
   const renderRoom=room=>{
     if(!room)return;
     roomName.textContent=room.name||"Unknown Location";
+    roomPreview.textContent=room.description||"";
     sceneName.textContent=room.name||"Unknown Location";
     roomDescription.textContent=room.description||"";
     if(roomInstructions){roomInstructions.textContent=room.instructions||"";roomInstructions.hidden=!room.instructions}
@@ -221,7 +239,35 @@ for(const mud of document.querySelectorAll("[data-mud]")){
   const setBusy=value=>{
     busy=value;
     form.querySelector("button").disabled=value;
+    clearButton.disabled=value;
     for(const button of actions.querySelectorAll("button"))button.disabled=value;
+  };
+  const clearEvents=async()=>{
+    if(busy)return;
+    setBusy(true);
+    error.textContent="";
+    const data=new FormData();
+    data.set("csrf_token",mud.dataset.csrf);
+    try{
+      const response=await fetch(mud.dataset.clearUrl,{method:"POST",body:data,headers:{"Accept":"application/json"}});
+      if(response.status===401||response.redirected){location.reload();return}
+      const payload=await response.json();
+      if(!response.ok)throw new Error(payload.error||"Could not clear gameplay activity.");
+      clearedThroughId=Math.max(clearedThroughId,Number(payload.cleared_through_id)||0);
+      lastId=Math.max(lastId,clearedThroughId);
+      const recent=Array.from(events.querySelectorAll("[data-event-id]"))
+        .filter(row=>Number(row.dataset.eventId)>clearedThroughId);
+      events.replaceChildren(...recent);
+      if(!recent.length){
+        const empty=document.createElement("p");
+        empty.className="mud-empty-activity";
+        empty.dataset.mudEmptyActivity="";
+        empty.textContent="Activity cleared. New events will appear here.";
+        events.append(empty);
+      }
+      scrollEventsToLatest();
+    }catch(problem){error.textContent=problem.message||"MUD link interrupted."}
+    finally{setBusy(false)}
   };
   const dispatch=async fields=>{
     if(busy)return false;
@@ -277,9 +323,11 @@ for(const mud of document.querySelectorAll("[data-mud]")){
     const button=event.target.closest("[data-mud-action]");
     if(button)dispatch({action:button.dataset.mudAction,parameters:button.dataset.mudParameters||"{}"});
   });
-  roomButton.addEventListener("click",()=>{gameScroll.scrollTop=0});
+  roomButton.addEventListener("click",()=>showRoom(roomView.hidden));
   latestButton.addEventListener("click",scrollEventsToLatest);
-  gameScroll.addEventListener("scroll",()=>{if(atLatest())latestButton.classList.remove("is-unread")},{passive:true});
+  clearButton.addEventListener("click",clearEvents);
+  gameScroll.addEventListener("scroll",()=>{if(roomView.hidden&&atLatest())latestButton.classList.remove("is-unread")},{passive:true});
+  mud.addEventListener("keydown",event=>{if(event.key==="Escape"&&!roomView.hidden)showRoom(false)});
   form.addEventListener("submit",async event=>{
     event.preventDefault();
     const text=input.value.trim();

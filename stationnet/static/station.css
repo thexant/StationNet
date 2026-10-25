@@ -702,12 +702,19 @@ button:disabled { opacity: .5; cursor: not-allowed; }
 .mud-game { display: grid; grid-template-rows: auto minmax(0, 1fr); min-height: 0; overflow: hidden; background: var(--surface-field); }
 .mud-game-bar { display: flex; align-items: center; gap: .65rem; min-width: 0; min-height: 2.65rem; padding: .3rem .7rem; border-bottom: 1px solid var(--green-dim); background: var(--surface-title); }
 .mud-game-label { flex: none; padding: .08rem .35rem; color: #000; background: var(--green); font-size: .72rem; font-weight: 700; letter-spacing: .12em; }
-.mud-game-location { min-width: 0; overflow: hidden; color: var(--green-bright); font-size: .78rem; text-overflow: ellipsis; white-space: nowrap; }
-.mud-game-jumps { display: flex; gap: .3rem; margin-left: auto; }
+.mud-game-place { display: grid; gap: .02rem; flex: 1; min-width: 0; }
+.mud-game-location, .mud-game-preview { display: block; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.mud-game-location { color: var(--green-bright); font-size: .78rem; line-height: 1.3; }
+.mud-game-preview { color: var(--grey); font-size: .62rem; line-height: 1.3; }
+.mud-game-jumps { display: flex; flex: none; gap: .3rem; margin-left: auto; }
 .mud-game-jumps button { min-height: 1.75rem; padding: .15rem .45rem; border-color: var(--green-dim); background: transparent; color: var(--cyan); font-size: .62rem; letter-spacing: .05em; }
 .mud-game-jumps button:hover, .mud-game-jumps button:focus-visible { color: #000; background: var(--cyan); }
+.mud-game-jumps [data-mud-jump-room][aria-expanded="true"] { color: #000; border-color: var(--cyan); background: var(--cyan); }
 .mud-game-jumps [data-mud-jump-latest].is-unread { color: var(--amber); border-color: var(--amber); }
-.mud-game-scroll { min-height: 0; overflow-y: auto; overscroll-behavior: contain; scrollbar-color: var(--green-dim) #000; }
+.mud-game-jumps [data-mud-clear-events] { color: var(--amber); }
+.mud-game-scroll, .mud-scene-view { grid-column: 1; grid-row: 2; min-height: 0; overflow-y: auto; overscroll-behavior: contain; scrollbar-color: var(--green-dim) #000; }
+.mud-scene-view { z-index: 1; background: var(--surface-field); }
+.mud-scene-view[hidden] { display: none; }
 .mud-scene { margin: .65rem .7rem .8rem; padding: .75rem .85rem; overflow-wrap: anywhere; border: 1px solid var(--green-dim); border-left: 3px solid var(--cyan); background: linear-gradient(105deg, rgba(var(--accent-rgb),.065), rgba(var(--theme-rgb),.015) 65%); }
 .mud-scene-heading { display: flex; align-items: baseline; gap: .65rem; margin-bottom: .35rem; }
 .mud-scene-heading > span { flex: none; color: var(--cyan); font-size: .62rem; letter-spacing: .1em; }
@@ -729,7 +736,8 @@ button:disabled { opacity: .5; cursor: not-allowed; }
 .mud-enemy small, .mud-enemy output { color: var(--grey); font-size: var(--text-xs); }
 .mud-enemy progress { width: 100%; height: .5rem; accent-color: var(--red); }
 .mud-enemy.defeated { opacity: .62; }
-.mud-game-feed { padding: 0 .7rem .65rem; }
+.mud-game-feed { padding: .45rem .7rem .65rem; }
+.mud-empty-activity { max-width: none; margin: .7rem 0; padding: .7rem .8rem; border: 1px dotted var(--green-dim); color: var(--grey); font-size: .72rem; }
 .mud-event { display: grid; grid-template-columns: 4.5rem minmax(0,1fr); gap: .65rem; padding: .3rem .2rem; border-bottom: 1px dotted var(--border-soft); }
 .mud-event span { color: var(--cyan); font-size: var(--text-xs); letter-spacing: .06em; }
 .mud-event p { margin: 0; color: var(--white); font-size: .76rem; white-space: pre-wrap; overflow-wrap: anywhere; }
@@ -1090,7 +1098,7 @@ button:disabled { opacity: .5; cursor: not-allowed; }
 .chat-message details{font-size:.75rem;margin-top:.35rem}
 .chat-message details button{margin:.25rem}
 
-/* The room scene and activity share one scroll surface inside GAME. */
+/* GAME switches between room details and activity without moving through log history. */
 .mud-shell .collapsible-panel-toggle { width: 100%; min-height: 2.15rem; padding: .25rem 0; }
 .mud-shell .collapsible-panel-heading { display: flex; align-items: baseline; gap: .45rem; min-width: 0; }
 .mud-shell .collapsible-panel-heading .eyebrow { margin: 0; font-size: .58rem; }
@@ -1178,7 +1186,10 @@ button:disabled { opacity: .5; cursor: not-allowed; }
   .mud-sidebar { grid-template-columns: 1fr; }
   .mud-panel { border-right: 0; }
   .mud-game { height: clamp(26rem, 62dvh, 38rem); }
-  .mud-game-bar { gap: .4rem; padding-inline: .45rem; }
+  .mud-game-bar { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: .15rem .45rem; padding-inline: .45rem; }
+  .mud-game-label { grid-column: 1; grid-row: 1; }
+  .mud-game-jumps { grid-column: 2; grid-row: 1; justify-self: end; margin-left: 0; }
+  .mud-game-place { grid-column: 1 / -1; grid-row: 2; }
   .mud-game-jumps button { padding-inline: .3rem; }
   .mud-action-groups { grid-template-columns: 1fr; }
   .mud-action-group[data-action-group="NAVIGATION"] { grid-column: auto; }

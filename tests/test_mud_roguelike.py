@@ -236,6 +236,45 @@ def test_hub_http_controls_and_idempotent_purchase(game):
     assert denied.json["hub"]["coins"] == 6
 
 
+def test_clear_events_keeps_new_activity_and_survives_reload(game):
+    app, user_id = game
+    client = app.test_client()
+    with client.session_transaction() as session:
+        session["user_id"] = user_id
+        session["csrf_token"] = "test-token"
+    with app.app_context():
+        db = get_db()
+        old_id = db.execute(
+            "INSERT INTO mud_events(audience_type,audience_key,event_type,body) "
+            "VALUES('private',?,'system','old activity marker')",
+            (str(user_id),),
+        ).lastrowid
+        db.commit()
+    assert b"old activity marker" in client.get("/mud").data
+
+    cleared = client.post("/mud/clear-events", data={"csrf_token": "test-token"})
+    assert cleared.status_code == 200
+    assert cleared.json["cleared_through_id"] >= old_id
+    page = client.get("/mud")
+    assert b"old activity marker" not in page.data
+    assert b"Activity cleared. New events will appear here." in page.data
+
+    with app.app_context():
+        db = get_db()
+        db.execute(
+            "INSERT INTO mud_events(audience_type,audience_key,event_type,body) "
+            "VALUES('private',?,'system','new activity marker')",
+            (str(user_id),),
+        )
+        db.commit()
+        assert [row["body"] for row in mud._events_for_user(db, user_id, after=0)] == [
+            "new activity marker"
+        ]
+    page = client.get("/mud")
+    assert b"old activity marker" not in page.data
+    assert b"new activity marker" in page.data
+
+
 def test_existing_item_table_is_migrated(game):
     app, user_id = game
     with app.app_context():

@@ -3354,9 +3354,17 @@ def _insert_event(database, draft, default_user_id=None, action_id=None):
     ).fetchone()
 
 
+def _event_cutoff(database, user_id):
+    row = database.execute(
+        "SELECT cleared_through_id FROM mud_event_views WHERE user_id=?",
+        (user_id,),
+    ).fetchone()
+    return row["cleared_through_id"] if row else 0
+
+
 def _events_for_user(database, user_id, after=0, action_id=None, limit=200):
     filters = ["e.id>?"]
-    parameters = [after]
+    parameters = [max(after, _event_cutoff(database, user_id))]
     if action_id is not None:
         filters.append("e.action_id=?")
         parameters.append(action_id)
@@ -3570,14 +3578,15 @@ def _require_enabled():
 
 
 def _recent_events(database, user_id):
+    cutoff = _event_cutoff(database, user_id)
     rows = database.execute(
         "SELECT * FROM (SELECT e.id,e.event_type,e.body,e.created_at "
-        "FROM mud_events AS e WHERE "
+        "FROM mud_events AS e WHERE e.id>? AND ("
         "(e.audience_type='private' AND e.audience_key=?) OR EXISTS ("
         "SELECT 1 FROM mud_event_recipients AS r "
-        "WHERE r.event_id=e.id AND r.user_id=?) "
+        "WHERE r.event_id=e.id AND r.user_id=?)) "
         "ORDER BY e.id DESC LIMIT 100) ORDER BY id",
-        (str(user_id), user_id),
+        (cutoff, str(user_id), user_id),
     ).fetchall()
     return [dict(row) for row in rows]
 
@@ -3602,9 +3611,15 @@ def index():
     combat = combat_state(database, g.user["id"])
     mud_actions = actions.contextual(g.user, database)
     events = _recent_events(database, g.user["id"])
+    cleared_view = database.execute(
+        "SELECT cleared_through_id FROM mud_event_views WHERE user_id=?",
+        (g.user["id"],),
+    ).fetchone()
+    cleared_through_id = cleared_view["cleared_through_id"] if cleared_view else 0
     database.commit()
     return render_template(
-        "mud/index.html", events=events,
+        "mud/index.html", events=events, cleared_through_id=cleared_through_id,
+        activity_cleared=cleared_view is not None,
         mud_actions=mud_actions, room=room, character=character, inventory=inventory,
         quests=quests, combat=combat, hub=hub,
     )
@@ -3643,6 +3658,24 @@ def updates():
         raise
     return jsonify(events=events, room=room, character=character, inventory=inventory,
                    quests=quests, combat=combat, hub=hub, actions=available)
+
+
+@bp.post("/clear-events")
+@login_required
+def clear_events():
+    _require_enabled()
+    validate_csrf()
+    database = get_db()
+    database.execute("BEGIN IMMEDIATE")
+    cutoff = database.execute("SELECT COALESCE(MAX(id),0) FROM mud_events").fetchone()[0]
+    database.execute(
+        "INSERT INTO mud_event_views(user_id,cleared_through_id) VALUES(?,?) "
+        "ON CONFLICT(user_id) DO UPDATE SET "
+        "cleared_through_id=MAX(cleared_through_id,excluded.cleared_through_id)",
+        (g.user["id"], cutoff),
+    )
+    database.commit()
+    return jsonify(cleared_through_id=cutoff)
 
 
 @bp.route("/create", methods=["GET", "POST"])

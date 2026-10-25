@@ -504,6 +504,9 @@ CREATE TABLE IF NOT EXISTS mud_event_recipients (
  PRIMARY KEY(event_id,user_id));
 CREATE INDEX IF NOT EXISTS idx_mud_event_recipients_user
  ON mud_event_recipients(user_id,event_id);
+CREATE TABLE IF NOT EXISTS mud_event_views (
+ user_id INTEGER PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+ cleared_through_id INTEGER NOT NULL DEFAULT 0);
 CREATE TABLE IF NOT EXISTS mud_world_rooms (
  id TEXT PRIMARY KEY,
  name TEXT NOT NULL,
