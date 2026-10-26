@@ -231,6 +231,7 @@
         const link = document.createElement('link');
         link.rel = 'stylesheet';
         link.href = url.href;
+        if (sheet.hasAttribute('media')) link.media = sheet.media;
         shadow.append(link);
       }
       for (const style of doc.querySelectorAll('head style')) {

@@ -39,7 +39,7 @@
       <div class="wiki-reading" data-wiki-reading data-source="{{ article_source }}" data-kiwix-root="{{ url_for('kiwix.content') }}" data-content-prefix="{{ url_for('kiwix.content') }}content/" data-interactive-prefix="{{ url_for('kiwix.interactive', path='') }}" data-read-prefix="{{ url_for('kiwix.read', path='__path__')|replace('__path__', '') }}" data-theme-css="{{ url_for('static', filename='wiki_article.css', v='ifixit-1') }}" data-gutenberg-css="{{ url_for('static', filename='wiki_gutenberg.css', v='3') }}">
         <p class="muted" data-wiki-loading>OPENING PAGE…</p>
       </div>
-      <script src="{{ url_for('static', filename='wiki.js', v='8') }}" defer></script>
+      <script src="{{ url_for('static', filename='wiki.js', v='9') }}" defer></script>
     {% else %}
       <div class="wiki-library">
         {% for book in books %}
@@ -51,7 +51,7 @@
         </a>
         {% else %}<p class="muted">No collections are available yet.</p>{% endfor %}
       </div>
-      <script src="{{ url_for('static', filename='wiki.js', v='8') }}" defer></script>
+      <script src="{{ url_for('static', filename='wiki.js', v='9') }}" defer></script>
     {% endif %}
   {% else %}
   <div class="terminal-card wiki-message">
