@@ -15,6 +15,7 @@ bp = Blueprint("office", __name__, url_prefix="/office")
 MAX_ENVELOPE_BYTES = 8 * 1024 * 1024
 MAX_SHEET_ENVELOPE_BYTES = 32 * 1024 * 1024
 MAX_PRESENTATION_ENVELOPE_BYTES = 64 * 1024 * 1024
+MAX_DRAWING_ENVELOPE_BYTES = 64 * 1024 * 1024
 
 
 @bp.before_request
@@ -79,6 +80,105 @@ def presentations():
 @login_required
 def agenda():
     return render_template("office/agenda.html")
+
+
+@bp.get("/draw")
+@login_required
+def draw():
+    return render_template("office/draw.html")
+
+
+@bp.get("/draw/api")
+@login_required
+def drawing_list():
+    rows = get_db().execute(
+        "SELECT id,envelope,revision,created_at,updated_at FROM office_drawings "
+        "WHERE owner_id=? ORDER BY updated_at DESC,id DESC", (g.user["id"],)
+    ).fetchall()
+    return jsonify(drawings=[{
+        "id": row["id"], "envelope": json.loads(row["envelope"]),
+        "revision": row["revision"], "created_at": row["created_at"],
+        "updated_at": row["updated_at"],
+    } for row in rows])
+
+
+@bp.post("/draw/api")
+@login_required
+def drawing_create():
+    failure = _csrf()
+    if failure:
+        return failure
+    envelope = _envelope(MAX_DRAWING_ENVELOPE_BYTES)
+    if envelope is None:
+        return jsonify(error="Invalid encrypted drawing."), 400
+    database = get_db()
+    cursor = database.execute(
+        "INSERT INTO office_drawings(owner_id,envelope) VALUES(?,?)",
+        (g.user["id"], envelope),
+    )
+    database.commit()
+    return jsonify(id=cursor.lastrowid, revision=1), 201
+
+
+@bp.get("/draw/api/<int:drawing_id>")
+@login_required
+def drawing_get(drawing_id):
+    row = get_db().execute(
+        "SELECT id,envelope,revision,created_at,updated_at FROM office_drawings "
+        "WHERE id=? AND owner_id=?", (drawing_id, g.user["id"]),
+    ).fetchone()
+    if row is None:
+        abort(404)
+    return jsonify(id=row["id"], envelope=json.loads(row["envelope"]),
+                   revision=row["revision"], created_at=row["created_at"],
+                   updated_at=row["updated_at"])
+
+
+@bp.put("/draw/api/<int:drawing_id>")
+@login_required
+def drawing_update(drawing_id):
+    failure = _csrf()
+    if failure:
+        return failure
+    payload = request.get_json(silent=True) or {}
+    envelope = _envelope(MAX_DRAWING_ENVELOPE_BYTES)
+    revision = payload.get("revision")
+    if envelope is None or type(revision) is not int or revision < 1:
+        return jsonify(error="Invalid encrypted drawing or revision."), 400
+    database = get_db()
+    cursor = database.execute(
+        "UPDATE office_drawings SET envelope=?,revision=revision+1,updated_at=CURRENT_TIMESTAMP "
+        "WHERE id=? AND owner_id=? AND revision=?",
+        (envelope, drawing_id, g.user["id"], revision),
+    )
+    if cursor.rowcount:
+        database.commit()
+        return jsonify(revision=revision + 1)
+    row = database.execute(
+        "SELECT revision FROM office_drawings WHERE id=? AND owner_id=?",
+        (drawing_id, g.user["id"]),
+    ).fetchone()
+    if row is None:
+        abort(404)
+    return jsonify(error="Revision conflict. This drawing changed in another tab or device.",
+                   revision=row["revision"]), 409
+
+
+@bp.delete("/draw/api/<int:drawing_id>")
+@login_required
+def drawing_delete(drawing_id):
+    failure = _csrf()
+    if failure:
+        return failure
+    database = get_db()
+    cursor = database.execute(
+        "DELETE FROM office_drawings WHERE id=? AND owner_id=?",
+        (drawing_id, g.user["id"]),
+    )
+    database.commit()
+    if not cursor.rowcount:
+        abort(404)
+    return jsonify(ok=True)
 
 
 @bp.get("/agenda/api")

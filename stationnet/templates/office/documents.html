@@ -2,14 +2,14 @@
 {% block title %}Documents{% endblock %}
 {% block content %}
 <link rel="stylesheet" href="{{ url_for('static', filename='office-documents.css', v='3') }}">
-<div class="documents-app" data-api="{{ url_for('office.document_list') }}" data-sheets-api="{{ url_for('office.sheet_list') }}" data-presentations-api="{{ url_for('office.presentation_list') }}" data-agenda-api="{{ url_for('office.agenda_get') }}" data-vault="{{ url_for('office.vault') }}" data-csrf="{{ session.csrf_token }}">
+<div class="documents-app" data-api="{{ url_for('office.document_list') }}" data-sheets-api="{{ url_for('office.sheet_list') }}" data-presentations-api="{{ url_for('office.presentation_list') }}" data-agenda-api="{{ url_for('office.agenda_get') }}" data-draw-api="{{ url_for('office.drawing_list') }}" data-vault="{{ url_for('office.vault') }}" data-csrf="{{ session.csrf_token }}">
   <header class="documents-head">
     <div><p class="eyebrow"><a href="{{ url_for('office.index') }}">OFFICE</a> / DOCUMENTS</p><h1>Documents</h1></div>
     <div class="documents-head-actions"><span id="document-status" role="status" aria-live="polite">LOCKED</span><button type="button" id="document-lock" class="secondary" hidden>LOCK</button></div>
   </header>
   <section id="document-unlock" class="terminal-card documents-unlock">
     <h2>Unlock OFFICE</h2>
-    <p>One OFFICE Password unlocks Documents, Sheets, Presentations, and Agenda in this browser tab. It encrypts files before saving and is separate from your StationNet password. If you lose it, saved files cannot be recovered.</p>
+    <p>One OFFICE Password unlocks Documents, Sheets, Presentations, Agenda, and Draw in this browser tab. It encrypts files before saving and is separate from your StationNet password. If you lose it, saved files cannot be recovered.</p>
     <form id="document-unlock-form" class="form-grid"><label>OFFICE Password<input id="document-passphrase" type="password" minlength="12" required autocomplete="off"></label><label id="document-confirm-row" hidden>Confirm new OFFICE Password<input id="document-passphrase-confirm" type="password" minlength="12" autocomplete="off"></label><button type="submit">UNLOCK DOCUMENTS</button></form>
     <p id="document-unlock-error" class="documents-error" role="alert" hidden></p>
   </section>
@@ -43,5 +43,5 @@
   </div>
   <dialog id="document-export-dialog"><form method="dialog"><h2>EXPORT DOCUMENT</h2><div class="documents-export-grid"><button value="docx">WORD .DOCX</button><button value="pdf">PDF</button><button value="odt">ODT</button><button value="html">HTML</button><button value="md">MARKDOWN</button><button value="txt">PLAIN TEXT</button></div><button value="cancel" class="secondary">CANCEL</button></form></dialog>
 </div>
-<script src="{{ url_for('static', filename='office-documents.js', v='7') }}" defer></script>
+<script src="{{ url_for('static', filename='office-documents.js', v='8') }}" defer></script>
 {% endblock %}

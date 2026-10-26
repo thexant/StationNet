@@ -187,6 +187,46 @@ def test_documents_are_owner_scoped_encrypted_and_revision_checked(tmp_path):
         assert "encrypted payload tag" not in row["envelope"]
 
 
+def test_drawings_are_owner_scoped_encrypted_and_revision_checked(tmp_path):
+    app, sysop_id = _configured_app(tmp_path)
+    with app.app_context():
+        database = get_db()
+        database.execute("UPDATE station SET office_enabled=1 WHERE id=1")
+        member_id = database.execute(
+            "INSERT INTO users(username,callsign,password_hash) VALUES(?,?,?)",
+            ("artist", "ART-1", "unused"),
+        ).lastrowid
+        database.commit()
+    member, sysop = app.test_client(), app.test_client()
+    _sign_in(member, member_id)
+    _sign_in(sysop, sysop_id)
+    assert b"DRAW" in member.get("/office").data
+    assert member.get("/office/draw").status_code == 200
+    envelope = {
+        "v": 1,
+        "iv": base64.b64encode(b"twelve-bytes").decode(),
+        "data": base64.b64encode(b"encrypted drawing payload tag").decode(),
+    }
+    assert member.post("/office/draw/api", json={"envelope": envelope}).status_code == 400
+    headers = {"X-CSRF-Token": "test-token"}
+    created = member.post("/office/draw/api", json={"envelope": envelope}, headers=headers)
+    assert created.status_code == 201
+    drawing_id = created.json["id"]
+    assert member.get("/office/draw/api").json["drawings"][0]["envelope"] == envelope
+    assert sysop.get("/office/draw/api").json["drawings"] == []
+    assert sysop.get(f"/office/draw/api/{drawing_id}").status_code == 404
+    assert sysop.put(f"/office/draw/api/{drawing_id}", json={"envelope": envelope, "revision": 1}, headers=headers).status_code == 404
+    updated = member.put(f"/office/draw/api/{drawing_id}", json={"envelope": envelope, "revision": 1}, headers=headers)
+    assert updated.json["revision"] == 2
+    assert member.put(f"/office/draw/api/{drawing_id}", json={"envelope": envelope, "revision": 1}, headers=headers).status_code == 409
+    with app.app_context():
+        stored = get_db().execute("SELECT envelope FROM office_drawings WHERE id=?", (drawing_id,)).fetchone()["envelope"]
+        assert "encrypted drawing payload tag" not in stored
+    assert sysop.delete(f"/office/draw/api/{drawing_id}", headers=headers).status_code == 404
+    assert member.delete(f"/office/draw/api/{drawing_id}", headers=headers).status_code == 200
+    assert member.get(f"/office/draw/api/{drawing_id}").status_code == 404
+
+
 def test_sheets_are_owner_scoped_and_share_office_vault(tmp_path):
     app, sysop_id = _configured_app(tmp_path)
     with app.app_context():

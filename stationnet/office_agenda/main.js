@@ -91,8 +91,8 @@ function initialize() {
     try {
       if (!crypto?.getRandomValues) throw new Error('Secure browser cryptography is unavailable.');
       const vault = await request(app.dataset.vault, { method: 'POST', body: '{}' });
-      const [agenda, documents, sheets, presentations] = await Promise.all([request(api), request(app.dataset.documentsApi), request(app.dataset.sheetsApi), request(app.dataset.presentationsApi)]);
-      const first = agenda.agenda?.envelope || documents.documents[0]?.envelope || sheets.sheets[0]?.envelope || presentations.presentations[0]?.envelope;
+      const [agenda, documents, sheets, presentations, drawings] = await Promise.all([request(api), request(app.dataset.documentsApi), request(app.dataset.sheetsApi), request(app.dataset.presentationsApi), request(app.dataset.drawApi)]);
+      const first = agenda.agenda?.envelope || documents.documents[0]?.envelope || sheets.sheets[0]?.envelope || presentations.presentations[0]?.envelope || drawings.drawings[0]?.envelope;
       if (!first) {
         if ($('#agenda-confirm-row').hidden) { $('#agenda-confirm-row').hidden = false; $('#agenda-confirm').required = true; $('#agenda-confirm').focus(); status('CONFIRM NEW PASSWORD', 'pending'); return; }
         if ($('#agenda-confirm').value !== password) throw new Error('The new passwords do not match.');

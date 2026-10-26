@@ -94,6 +94,14 @@ CREATE TABLE IF NOT EXISTS office_presentations (
  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);
 CREATE INDEX IF NOT EXISTS idx_office_presentations_owner ON office_presentations(owner_id,updated_at DESC,id DESC);
+CREATE TABLE IF NOT EXISTS office_drawings (
+ id INTEGER PRIMARY KEY AUTOINCREMENT,
+ owner_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+ envelope TEXT NOT NULL,
+ revision INTEGER NOT NULL DEFAULT 1,
+ created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+ updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);
+CREATE INDEX IF NOT EXISTS idx_office_drawings_owner ON office_drawings(owner_id,updated_at DESC,id DESC);
  CREATE TABLE IF NOT EXISTS office_agendas (
   owner_id INTEGER PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
   envelope TEXT NOT NULL,
