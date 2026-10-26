@@ -7,11 +7,12 @@ from pathlib import Path
 
 from flask import (
     Blueprint, abort, current_app, flash, g, redirect, render_template, request,
-    send_from_directory, url_for,
+    send_from_directory, session, url_for,
 )
 from PIL import Image, ImageOps, UnidentifiedImageError
 
 from .auth import login_required
+from .account_deletion import delete_account, is_station_owner
 from .db import get_db
 from . import themes
 from .security import check_password, hash_password, validate_csrf, validate_password
@@ -263,8 +264,37 @@ def edit_profile(user_id):
             flash("Profile updated.", "success")
             return redirect(url_for("users.profile", user_id=user_id))
     return render_template("users/edit.html", profile=profile_user,
+                           can_delete=not is_station_owner(database, user_id),
                            site_themes=themes.options("site"), masthead_themes=themes.options("masthead"),
                            station_theme_defaults=themes.effective(g.station, None))
+
+
+@bp.get("/<int:user_id>/delete")
+@login_required
+def deletion_page(user_id):
+    if user_id != g.user["id"]:
+        abort(403)
+    if is_station_owner(get_db(), user_id):
+        abort(403)
+    return render_template("users/delete.html")
+
+
+@bp.post("/<int:user_id>/delete")
+@login_required
+def delete_own_account(user_id):
+    if user_id != g.user["id"]:
+        abort(403)
+    validate_csrf()
+    if (request.form.get("confirmation") != g.user["username"]
+            or request.form.get("final_confirm") != "on"):
+        abort(400, "Account deletion confirmation is incomplete.")
+    try:
+        delete_account(user_id)
+    except PermissionError:
+        abort(403)
+    session.clear()
+    flash("Your account and content have been deleted.", "success")
+    return redirect(url_for("station.index"))
 
 
 @bp.post("/<int:user_id>/themes")

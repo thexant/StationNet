@@ -75,6 +75,8 @@ def protect_auth_secrets(response):
 def load_logged_in_user():
     user_id = session.get("user_id")
     g.user = None if user_id is None else get_db().execute("SELECT id,username,callsign,is_admin,created_at,site_theme,masthead_theme,station_midi_enabled FROM users WHERE id=?", (user_id,)).fetchone()
+    if user_id is not None and g.user is None:
+        session.clear()
 
 def establish_connection(user_id):
     connection_id = secrets.token_urlsafe(18)

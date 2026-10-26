@@ -64,6 +64,9 @@ CREATE TABLE IF NOT EXISTS users (
  radio_quota_mb INTEGER, videos_quota_mb INTEGER, profile_photo_filename TEXT,
  site_theme TEXT, masthead_theme TEXT,
  station_midi_enabled INTEGER NOT NULL DEFAULT 0 CHECK(station_midi_enabled IN (0,1)));
+CREATE TABLE IF NOT EXISTS account_deletion_files (
+ relative_path TEXT PRIMARY KEY,
+ queued_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);
 CREATE TABLE IF NOT EXISTS office_document_vaults (
  owner_id INTEGER PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
  salt TEXT NOT NULL);
@@ -397,6 +400,7 @@ CREATE TABLE IF NOT EXISTS application_storage (
  storage_key TEXT NOT NULL,
  value_json TEXT NOT NULL,
  size_bytes INTEGER NOT NULL CHECK(size_bytes>=0),
+ last_writer_user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
  PRIMARY KEY(application_slug,storage_scope,owner_key,storage_key));
 CREATE INDEX IF NOT EXISTS idx_application_storage_namespace
@@ -1122,6 +1126,7 @@ def init_db():
     _migrate_mud_crossover(database)
     _migrate_mud_roguelike(database)
     _migrate_application_permissions(database)
+    _migrate_application_storage_writer(database)
     _migrate_application_categories(database)
     _migrate_mud_character_creation(database)
     _migrate_mud_magic(database)
@@ -1259,6 +1264,16 @@ def _migrate_application_permissions(database):
     if "capabilities_json" not in columns:
         database.execute(
             "ALTER TABLE installed_applications ADD COLUMN capabilities_json TEXT NOT NULL DEFAULT '{}'"
+        )
+
+
+def _migrate_application_storage_writer(database):
+    """Track the account responsible for shared application data."""
+    columns = {row["name"] for row in database.execute("PRAGMA table_info(application_storage)")}
+    if "last_writer_user_id" not in columns:
+        database.execute(
+            "ALTER TABLE application_storage ADD COLUMN last_writer_user_id "
+            "INTEGER REFERENCES users(id) ON DELETE CASCADE"
         )
 
 

@@ -4,6 +4,7 @@ from datetime import datetime, timedelta, timezone
 from flask import Blueprint, abort, flash, g, jsonify, redirect, render_template, request, url_for
 
 from .auth import admin_required, login_required
+from .account_deletion import delete_account, is_station_owner
 from .db import get_db
 from .realtime import utc_now
 from .security import validate_csrf
@@ -82,7 +83,29 @@ def user_detail(user_id):
         "WHERE m.user_id=? ORDER BY g.name", (user_id,),
     ).fetchall()
     return render_template("moderation/user.html", user=user, restrictions=restrictions, history=history,
-                           groups=groups, now=utc_now())
+                           groups=groups, now=utc_now(), can_delete=not is_station_owner(database, user_id))
+
+
+@bp.post("/users/<int:user_id>/delete")
+@admin_required
+def delete_user_account(user_id):
+    validate_csrf()
+    database = get_db()
+    user = database.execute("SELECT username FROM users WHERE id=?", (user_id,)).fetchone()
+    if user is None:
+        abort(404)
+    if is_station_owner(database, user_id):
+        abort(403)
+    if (request.form.get("username") != user["username"]
+            or request.form.get("confirm") != "on"):
+        abort(400, "Account deletion confirmation is incomplete.")
+    delete_account(user_id)
+    if user_id == g.user["id"]:
+        from flask import session
+        session.clear()
+        return redirect(url_for("station.index"))
+    flash(f"Account {user['username']} and all its content were deleted.", "success")
+    return redirect(url_for("moderation.dashboard"))
 
 
 @bp.post("/users/<int:user_id>/action")

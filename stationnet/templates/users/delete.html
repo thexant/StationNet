@@ -1,0 +1,22 @@
+{% extends 'base.html' %}
+{% block title %}Account Deletion{% endblock %}
+{% block content %}
+<section class="narrow terminal-card deletion-warning">
+  <p class="eyebrow">USER PROFILE / ACCOUNT DELETION</p>
+  <h1>ACCOUNT DELETION</h1>
+  <p class="deletion-alert">WARNING // THIS ACTION IS PERMANENT</p>
+  <p>Deleting <strong>{{ g.user.username }}</strong> removes your profile and all content you uploaded or posted to this station, including files, videos, imageboard images, office documents, bulletins, feed posts and comments, chat messages, mail, events, radio uploads, programs data, and MUD character data. Content in threads you started may also be removed. Your session will end immediately.</p>
+  <p>This cannot be undone.</p>
+  <form method="post" action="{{ url_for('users.delete_own_account',user_id=g.user.id) }}" class="form-grid" data-account-deletion-form data-account-username="{{ g.user.username }}">
+    <input type="hidden" name="csrf_token" value="{{ session.csrf_token }}">
+    <label>Type your username to confirm
+      <input name="confirmation" required autocomplete="off" spellcheck="false" aria-label="Type your username to confirm">
+    </label>
+    <div class="button-row"><button type="button" data-deletion-proceed>CONFIRM</button><a class="button secondary" href="{{ url_for('users.edit_profile',user_id=g.user.id) }}">CANCEL</a></div>
+    <div data-deletion-final hidden>
+      <label class="deletion-checkbox"><input type="checkbox" name="final_confirm" value="on" data-deletion-checkbox> CONFIRM</label>
+      <button type="submit" class="danger" data-deletion-submit disabled>DELETE</button>
+    </div>
+  </form>
+</section>
+{% endblock %}

@@ -709,10 +709,11 @@ def storage(slug):
     if projected > byte_limit:
         return _storage_error("Storage namespace has reached its size limit.", 413)
     database.execute(
-        "INSERT INTO application_storage(application_slug,storage_scope,owner_key,storage_key,value_json,size_bytes) "
-        "VALUES(?,?,?,?,?,?) ON CONFLICT(application_slug,storage_scope,owner_key,storage_key) "
-        "DO UPDATE SET value_json=excluded.value_json,size_bytes=excluded.size_bytes,updated_at=CURRENT_TIMESTAMP",
-        (*item_params, serialized, size),
+        "INSERT INTO application_storage(application_slug,storage_scope,owner_key,storage_key,value_json,size_bytes,last_writer_user_id) "
+        "VALUES(?,?,?,?,?,?,?) ON CONFLICT(application_slug,storage_scope,owner_key,storage_key) "
+        "DO UPDATE SET value_json=excluded.value_json,size_bytes=excluded.size_bytes,"
+        "last_writer_user_id=excluded.last_writer_user_id,updated_at=CURRENT_TIMESTAMP",
+        (*item_params, serialized, size, g.user["id"]),
     )
     database.commit()
     return jsonify(ok=True, value=True)

@@ -296,6 +296,13 @@ button:hover, .button:hover { color: #000; background: var(--green); }
 .text-button { min-height: auto; padding: .35rem; color: var(--red); background: transparent; border: 0; }
 .text-button:hover { color: var(--white); background: transparent; }
 .danger { margin-top: 1rem; color: var(--red); background: #100; border-color: var(--red); }
+.deletion-warning { border-color: var(--red); box-shadow: inset 0 0 0 1px var(--red-dim); }
+.deletion-warning > .eyebrow { color: var(--red); border-bottom-color: var(--red-dim); }
+.deletion-alert { padding: .7rem; border: 1px dashed var(--red); color: var(--red); font-weight: bold; letter-spacing: .08em; }
+.deletion-checkbox { display: flex; align-items: center; gap: .5rem; margin-top: 1rem; color: var(--red); }
+.deletion-checkbox input { width: auto; margin: 0; }
+.deletion-warning [data-deletion-final][hidden] { display: none; }
+.deletion-warning button:disabled { opacity: .4; cursor: not-allowed; }
 .button-row { display: flex; flex-wrap: wrap; gap: .65rem; }
 
 .auth-screen { width: min(700px,100%); margin: 0 auto; }

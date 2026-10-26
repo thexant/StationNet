@@ -78,6 +78,8 @@ def create_app(test_config=None):
 
     @app.before_request
     def context():
+        from .account_deletion import purge_pending_files
+        purge_pending_files()
         auth.load_logged_in_user()
         g.station = db.get_station()
         g.station_icon_exists = (data_dir / "station_icon.png").is_file()

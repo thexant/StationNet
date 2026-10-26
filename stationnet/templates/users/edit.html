@@ -56,4 +56,12 @@
     <div class="button-row"><button>CHANGE PASSWORD</button></div>
   </form>
 </section>
+{% if can_delete %}
+<section class="narrow terminal-card settings-section deletion-warning">
+  <p class="eyebrow">USER PROFILE / DANGER ZONE</p>
+  <h2>Delete account</h2>
+  <p>This permanently removes your account and all your content from this station.</p>
+  <a class="button danger" href="{{ url_for('users.deletion_page',user_id=profile.id) }}">DELETE ACCOUNT</a>
+</section>
+{% endif %}
 {% endblock %}
