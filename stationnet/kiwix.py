@@ -289,14 +289,25 @@ def content(path):
     return _proxy(path, request.query_string.decode("latin-1"))
 
 
-def _redirect_location(target, interactive=False):
+@bp.route("/interactive/", defaults={"path": ""}, methods=["GET", "HEAD"])
+@bp.route("/interactive/<path:path>", methods=["GET", "HEAD"])
+def interactive(path):
+    """Keep relative links inside the framed archive as it navigates."""
+    _enabled()
+    return _proxy(path, request.query_string.decode("latin-1"))
+
+
+def _redirect_location(target, interactive=False, framed=False):
     query = target.query
-    if interactive:
+    if interactive and not framed:
         args = [(key, value) for key, value in parse_qsl(query, keep_blank_values=True)
                 if key != INTERACTIVE_QUERY]
         args.append((INTERACTIVE_QUERY, "1"))
         query = urlencode(args)
-    return (target.path or "") + ("?" + query if query else "")
+    path = target.path or ""
+    if framed:
+        path = url_for("kiwix.interactive", path="") + path[len(ROOT):].lstrip("/")
+    return path + ("?" + query if query else "")
 
 
 def _proxy(path, query):
@@ -309,7 +320,8 @@ def _proxy(path, query):
     # This StationNet-only flag selects the sandboxed runtime response. Never
     # pass it through to kiwix-serve, where it could alter an archive route or
     # create a duplicate upstream cache entry.
-    interactive = request.args.get(INTERACTIVE_QUERY) == "1"
+    framed = request.endpoint == "kiwix.interactive"
+    interactive = framed or request.args.get(INTERACTIVE_QUERY) == "1"
     if INTERACTIVE_QUERY in request.args:
         query = urlencode([(key, value) for key, value in parse_qsl(query, keep_blank_values=True)
                            if key != INTERACTIVE_QUERY])
@@ -347,7 +359,7 @@ def _proxy(path, query):
         # Kiwix commonly redirects a collection root to its index.html. Keep
         # the browser in interactive mode across that trusted internal hop;
         # the flag remains StationNet-only and was removed upstream above.
-        headers["Location"] = _redirect_location(target, interactive)
+        headers["Location"] = _redirect_location(target, interactive, framed)
     if request.method == "HEAD":
         status = upstream.status
         upstream.close()

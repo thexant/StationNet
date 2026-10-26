@@ -102,35 +102,59 @@
     });
   }
 
-  function needsInteractiveRuntime(doc) {
+  function interactiveKind(doc) {
     if (!doc.querySelector('script')) return false;
+    if (doc.body?.classList.contains('pure-skin-gutenberg') &&
+        doc.querySelector('#books_table, .cover-content, .lcc_shelves')) return 'gutenberg';
     // Production maps2zim bundles use fingerprinted asset names, so neither
     // their module URL nor the initial fallback text necessarily says MapLibre
     // or WebGL. Detect the app's stable boot/loading/error structure as well.
     if (doc.querySelector('script[type="module"]') && doc.querySelector('#map') &&
-        doc.querySelector('#loading') && doc.querySelector('#error')) return true;
+        doc.querySelector('#loading') && doc.querySelector('#error')) return 'map';
     const text = `${doc.title || ''} ${doc.body?.textContent || ''}`;
     if (/\b(?:webgl|maplibre|mapbox|openlayers|leaflet)\b/i.test(text) ||
-        /requires?\s+(?:javascript|webgl)|(?:javascript|webgl)\s+(?:is\s+)?required/i.test(text)) return true;
+        /requires?\s+(?:javascript|webgl)|(?:javascript|webgl)\s+(?:is\s+)?required/i.test(text)) return 'map';
     return [...doc.scripts].some(script =>
-      /(?:maplibre|mapbox|openlayers|leaflet|ol(?:\.min)?\.js)(?:[/?#.]|$)/i.test(script.src || ''));
+      /(?:maplibre|mapbox|openlayers|leaflet|ol(?:\.min)?\.js)(?:[/?#.]|$)/i.test(script.src || '')) ? 'map' : null;
   }
 
-  function openInteractive(doc, sourceUrl) {
+  function themeGutenberg(frame) {
+    let frameDoc;
+    try { frameDoc = frame.contentDocument; } catch (_) { return; }
+    if (!frameDoc?.head || !frameDoc.documentElement) return;
+    const stationTheme = getComputedStyle(document.documentElement);
+    for (const name of ['black', 'green', 'green-bright', 'green-dim', 'cyan',
+                        'magenta', 'amber', 'grey', 'white', 'theme-rgb', 'accent-rgb', 'mono']) {
+      frameDoc.documentElement.style.setProperty(`--${name}`, stationTheme.getPropertyValue(`--${name}`));
+    }
+    const theme = frameDoc.createElement('link');
+    theme.rel = 'stylesheet';
+    theme.href = mount.dataset.gutenbergCss;
+    frameDoc.head.append(theme);
+  }
+
+  function openInteractive(doc, sourceUrl, kind) {
     const source = new URL(sourceUrl);
-    source.searchParams.set('stationnet-interactive', '1');
+    if (kind === 'gutenberg') {
+      source.pathname = mount.dataset.interactivePrefix + source.pathname.slice(rootPrefix.length);
+    } else {
+      source.searchParams.set('stationnet-interactive', '1');
+    }
     const theme = document.createElement('link');
     theme.rel = 'stylesheet';
     theme.href = mount.dataset.themeCss;
     shadow.append(theme);
     const frame = document.createElement('iframe');
     frame.className = 'wiki-interactive-frame';
-    frame.title = doc.title || 'Interactive offline map';
+    frame.title = doc.title || (kind === 'gutenberg' ? 'Project Gutenberg Library' : 'Interactive offline map');
     frame.setAttribute('sandbox', 'allow-scripts allow-same-origin allow-forms allow-pointer-lock allow-downloads');
     frame.setAttribute('referrerpolicy', 'same-origin');
     frame.src = source.href;
-    frame.addEventListener('load', () => status.remove(), {once: true});
-    status.textContent = 'STARTING INTERACTIVE MAP…';
+    frame.addEventListener('load', () => {
+      if (kind === 'gutenberg') themeGutenberg(frame);
+      status.remove();
+    });
+    status.textContent = kind === 'gutenberg' ? 'OPENING BOOK CATALOG…' : 'STARTING INTERACTIVE MAP…';
     shadow.append(frame);
   }
 
@@ -183,9 +207,10 @@
         return;
       }
       const doc = new DOMParser().parseFromString(await response.text(), 'text/html');
-      if (needsInteractiveRuntime(doc)) {
-        openInteractive(doc, response.url);
-        document.title = `${doc.title || 'Interactive Map'} :: StationNet`;
+      const kind = interactiveKind(doc);
+      if (kind) {
+        openInteractive(doc, response.url, kind);
+        document.title = `${doc.title || 'Reference Library'} :: StationNet`;
         return;
       }
       let base = response.url;

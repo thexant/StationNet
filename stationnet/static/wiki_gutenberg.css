@@ -1,0 +1,98 @@
+/* Applied inside framed Project Gutenberg ZIM pages after their own styles. */
+:root { color-scheme: dark; color: var(--white); background: var(--black); }
+body:not(.pure-skin-gutenberg) {
+  color: var(--white) !important;
+  background: var(--black) !important;
+  font-family: var(--mono) !important;
+  line-height: 1.65;
+  padding: 1rem;
+}
+body:not(.pure-skin-gutenberg) :is(h1, h2, h3, h4, h5, h6) {
+  color: var(--green-bright) !important;
+  font-family: var(--mono) !important;
+}
+body:not(.pure-skin-gutenberg) :is(p, li, dt, dd, blockquote, figcaption, td, th, span) {
+  color: var(--white) !important;
+}
+body:not(.pure-skin-gutenberg) :is(a, a:visited) { color: var(--cyan) !important; }
+body:not(.pure-skin-gutenberg) a:hover { color: var(--magenta) !important; }
+body:not(.pure-skin-gutenberg) :is(table, pre, blockquote) {
+  max-width: 100%;
+  border-color: var(--green-dim) !important;
+  background-color: rgba(var(--theme-rgb), .035) !important;
+}
+body:not(.pure-skin-gutenberg) img { max-width: 100%; height: auto; }
+html, body, button, input, select, textarea, .pure-g [class*="pure-u"] {
+  font-family: var(--mono) !important;
+}
+body.pure-skin-gutenberg {
+  color: var(--white) !important;
+  background: var(--black) !important;
+  line-height: 1.6;
+}
+body.pure-skin-gutenberg header {
+  color: var(--green-bright) !important;
+  background: var(--black) !important;
+  border-bottom: 1px solid var(--green-dim);
+  padding: .75rem 0 !important;
+}
+body.pure-skin-gutenberg .main_title h1 { font-size: 1.5rem !important; }
+body.pure-skin-gutenberg .main_title h2 { font-size: 1rem !important; margin-bottom: .5rem !important; }
+body.pure-skin-gutenberg .precontent { display: none !important; }
+body.pure-skin-gutenberg .content { margin-top: .75rem !important; }
+body.pure-skin-gutenberg :is(h1, h2, h3, .table-title, .cover-detail .label) {
+  color: var(--green-bright) !important;
+  font-family: var(--mono) !important;
+}
+body.pure-skin-gutenberg :is(a, a:visited, header a, header a:visited, .cover-detail.author a, .content .fa) {
+  color: var(--cyan) !important;
+}
+body.pure-skin-gutenberg :is(a:hover, a:focus-visible, .fa:hover) {
+  color: var(--magenta) !important;
+}
+body.pure-skin-gutenberg :is(.precontent, .table-author, .info-desc, .cover-detail, .bibrec, .lcc_shelves) {
+  color: var(--white) !important;
+}
+body.pure-skin-gutenberg :is(input, select, button, textarea) {
+  color: var(--white) !important;
+  background: var(--black) !important;
+  border: 1px solid var(--green-dim) !important;
+  border-radius: 0 !important;
+}
+body.pure-skin-gutenberg :is(input, select, button, textarea, a):focus-visible {
+  outline: 2px solid var(--cyan) !important;
+  outline-offset: 2px;
+}
+body.pure-skin-gutenberg :is(.bibrec, .dataTables_wrapper table, .lcc_shelves__list, .ui-autocomplete) {
+  color: var(--white) !important;
+  background: var(--black) !important;
+  border: 1px solid var(--green-dim) !important;
+  box-shadow: none !important;
+}
+body.pure-skin-gutenberg :is(tr, tr.odd, tr.even, .ui-menu-item, .ui-widget-content) {
+  color: var(--white) !important;
+  background: var(--black) !important;
+}
+body.pure-skin-gutenberg :is(table.dataTable.display tbody tr:hover, table.dataTable.display tbody tr.odd:hover, table.dataTable.display tbody tr.even:hover, .ui-state-hover, .ui-state-focus, .ui-state-active) {
+  color: var(--white) !important;
+  background: rgba(var(--theme-rgb), .08) !important;
+}
+body.pure-skin-gutenberg :is(.list-stripe, .paginate_button.current) {
+  background: var(--green-dim) !important;
+}
+body.pure-skin-gutenberg .dataTables_wrapper .dataTables_paginate .paginate_button {
+  color: var(--cyan) !important;
+  border: 1px solid transparent !important;
+}
+body.pure-skin-gutenberg .dataTables_wrapper .dataTables_paginate .paginate_button:hover {
+  color: var(--green-bright) !important;
+  background: rgba(var(--theme-rgb), .08) !important;
+  border-color: var(--green-dim) !important;
+}
+body.pure-skin-gutenberg .cover-detail { border-color: var(--green-dim) !important; }
+body.pure-skin-gutenberg .spinner { background: var(--black) !important; }
+body.pure-skin-gutenberg img { max-width: 100%; }
+@media (max-width: 700px) {
+  body.pure-skin-gutenberg .lcc_shelves { margin-inline: 1rem; }
+  body.pure-skin-gutenberg .table-title { font-size: 1.05rem; }
+}

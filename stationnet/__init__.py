@@ -153,8 +153,9 @@ def create_app(test_config=None):
                 "frame-src 'none'; worker-src blob:; base-uri 'none'; "
                 "form-action 'none'; frame-ancestors 'self'"
             )
-        if request.endpoint in {"kiwix.content", "kiwix.search_source"}:
-            if request.args.get("stationnet-interactive") == "1":
+        if request.endpoint in {"kiwix.content", "kiwix.search_source", "kiwix.interactive"}:
+            if (request.endpoint == "kiwix.interactive"
+                    or request.args.get("stationnet-interactive") == "1"):
                 # JavaScript-first ZIMs (notably official openZIM maps) need a
                 # same-origin module graph: their startup probe fetches bundled
                 # config before MapLibre initializes. These archives are
