@@ -62,7 +62,9 @@ def _path(book):
 
 def _book(book_id):
     book = get_db().execute(
-        "SELECT b.*,u.username FROM library_books b JOIN users u ON u.id=b.uploader_id WHERE b.id=?",
+        "SELECT b.*,u.username,c.name AS category_name FROM library_books b "
+        "JOIN users u ON u.id=b.uploader_id "
+        "LEFT JOIN library_categories c ON c.id=b.category_id WHERE b.id=?",
         (book_id,)).fetchone()
     if book is None:
         abort(404)
@@ -246,24 +248,75 @@ def _quota_remaining(database):
     return row["quota_mb"] * 1024 * 1024 - row["used_bytes"]
 
 
+def _categories(enabled_only=True):
+    return get_db().execute(
+        "SELECT id,name,enabled FROM library_categories " +
+        ("WHERE enabled=1 " if enabled_only else "") + "ORDER BY name COLLATE NOCASE"
+    ).fetchall()
+
+
+def _selected_category():
+    raw = request.form.get("category_id", "").strip()
+    if not raw:
+        return None
+    if not raw.isdecimal():
+        raise ValueError("Select an available category.")
+    category = get_db().execute(
+        "SELECT id FROM library_categories WHERE id=? AND enabled=1", (int(raw),)
+    ).fetchone()
+    if category is None:
+        raise ValueError("Select an available category.")
+    return category["id"]
+
+
 @bp.get("")
 def index():
     query = request.args.get("q", "").strip()[:100]
+    category = request.args.get("category", "").strip()
+    kind = request.args.get("format", "all").lower()
+    sort = request.args.get("sort", "newest")
+    if kind not in {"all", "epub", "pdf"}:
+        kind = "all"
+    orders = {"newest": "b.id DESC", "oldest": "b.id ASC",
+              "title": "b.title COLLATE NOCASE ASC,b.id DESC",
+              "author": "b.author COLLATE NOCASE ASC,b.title COLLATE NOCASE ASC,b.id DESC"}
+    if sort not in orders:
+        sort = "newest"
     page = max(1, request.args.get("page", 1, type=int) or 1)
-    where = "WHERE instr(lower(b.title || ' ' || b.author || ' ' || b.description),lower(?)) > 0" if query else ""
-    params = (query,) if query else ()
     database = get_db()
+    categories = _categories()
+    category_ids = {str(row["id"]) for row in categories}
+    if category not in category_ids:
+        category = ""
+    conditions, params = [], []
+    if query:
+        conditions.append("instr(lower(b.title || ' ' || b.author || ' ' || b.description),lower(?)) > 0")
+        params.append(query)
+    if category:
+        conditions.append("b.category_id=?")
+        params.append(int(category))
+    if kind != "all":
+        conditions.append("b.format=?")
+        params.append(kind)
+    where = "WHERE " + " AND ".join(conditions) if conditions else ""
     total = database.execute(f"SELECT COUNT(*) FROM library_books b {where}", params).fetchone()[0]
     pages = max(1, (total + 19) // 20)
     if page > pages:
         abort(404)
     books = database.execute(
-        f"SELECT b.*,u.username FROM library_books b JOIN users u ON u.id=b.uploader_id "
-        f"{where} ORDER BY b.id DESC LIMIT 20 OFFSET ?", (*params, (page - 1) * 20)).fetchall()
-    return render_template("library/index.html", books=books, query=query, page=page, pages=pages)
+        f"SELECT b.*,u.username,c.name AS category_name FROM library_books b "
+        f"JOIN users u ON u.id=b.uploader_id "
+        f"LEFT JOIN library_categories c ON c.id=b.category_id "
+        f"{where} ORDER BY {orders[sort]} LIMIT 20 OFFSET ?", (*params, (page - 1) * 20)).fetchall()
+    return render_template("library/index.html", books=books, query=query, category=category,
+                           categories=categories, kind=kind, sort=sort, page=page, pages=pages)
 
 
 def _save_upload(station_post):
+    try:
+        category_id = _selected_category()
+    except ValueError as exc:
+        return str(exc)
     uploaded = request.files.get("file")
     kind = Path(uploaded.filename or "").suffix.lower().lstrip(".") if uploaded else ""
     if kind not in {"epub", "pdf"}:
@@ -302,12 +355,12 @@ def _save_upload(station_post):
             output.write(data)
         cursor = database.execute(
             "INSERT INTO library_books(uploader_id,station_post,title,author,description,language,"
-            "publisher,identifier,stored_name,original_name,size_bytes,cover_path,format,page_count) "
-            "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            "publisher,identifier,stored_name,original_name,size_bytes,cover_path,format,page_count,category_id) "
+            "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
             (g.user["id"], station_post, title, author, description,
              fields.get("language", "")[:80], fields.get("publisher", "")[:150],
              fields.get("identifier", "")[:250], filename, Path(uploaded.filename).name[:250],
-             len(data), cover, kind, page_count))
+             len(data), cover, kind, page_count, category_id))
         database.commit()
         saved = True
         return cursor.lastrowid
@@ -331,7 +384,7 @@ def upload():
             flash("Book uploaded.", "success")
             return redirect(url_for("library.view", book_id=result))
         flash(result, "error")
-    return render_template("library/upload.html")
+    return render_template("library/upload.html", categories=_categories())
 
 
 @bp.post("/station-upload")
@@ -354,7 +407,27 @@ def view(book_id):
         progress = get_db().execute(
             "SELECT chapter,fraction FROM library_progress WHERE book_id=? AND user_id=?",
             (book_id, g.user["id"])).fetchone()
-    return render_template("library/view.html", book=book, progress=progress)
+    return render_template("library/view.html", book=book, progress=progress,
+                           categories=_categories())
+
+
+@bp.post("/<int:book_id>/category")
+@login_required
+def set_category(book_id):
+    book = _book(book_id)
+    if not g.user["is_admin"] and book["uploader_id"] != g.user["id"]:
+        abort(403)
+    validate_csrf()
+    try:
+        category_id = _selected_category()
+    except ValueError as exc:
+        flash(str(exc), "error")
+    else:
+        database = get_db()
+        database.execute("UPDATE library_books SET category_id=? WHERE id=?", (category_id, book_id))
+        database.commit()
+        flash("Book category updated.", "success")
+    return redirect(url_for("library.view", book_id=book_id))
 
 
 @bp.get("/<int:book_id>/download")

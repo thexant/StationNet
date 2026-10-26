@@ -165,3 +165,73 @@ def test_epub_rejects_unsafe_resources_and_sanitizes_chapters(tmp_path):
     assert "<script" not in response.json["content"]
     assert "onclick" not in response.json["content"]
     assert "Safe" in response.json["content"]
+
+
+def test_library_categories_filters_sorting_and_curated_mode(tmp_path):
+    app = create_app({"TESTING": True, "DATA_DIR": str(tmp_path)})
+    with app.app_context():
+        db = get_db()
+        db.execute("INSERT INTO station(name,description,callsign,library_enabled) VALUES('Test','Test','TST-1',1)")
+        admin = db.execute("INSERT INTO users(username,callsign,password_hash,is_admin) VALUES('admin','ADM-1','unused',1)").lastrowid
+        member = db.execute("INSERT INTO users(username,callsign,password_hash) VALUES('member','MEM-1','unused')").lastrowid
+        fantasy = db.execute("SELECT id FROM library_categories WHERE name='Fantasy'").fetchone()[0]
+        db.commit()
+    client = app.test_client()
+    sign_in(client, member)
+    assert client.post("/sysop/library/categories", data={"csrf_token": "library-test", "name": "Manuals"}).status_code == 302
+    with app.app_context():
+        assert get_db().execute("SELECT id FROM library_categories WHERE name='Manuals'").fetchone() is None
+    sign_in(client, admin)
+    assert client.post("/sysop/library/categories", data={"csrf_token": "library-test", "name": "Manuals"}).status_code == 302
+    with app.app_context():
+        manuals = get_db().execute("SELECT id FROM library_categories WHERE name='Manuals'").fetchone()[0]
+    duplicate = client.post("/sysop/library/categories", data={"csrf_token": "library-test", "name": "manuals"}, follow_redirects=True)
+    assert b"already exists" in duplicate.data
+    sign_in(client, member)
+    assert client.post("/library/upload", data={"csrf_token": "library-test", "category_id": str(fantasy),
+        "file": (io.BytesIO(epub()), "story.epub")}, content_type="multipart/form-data").status_code == 302
+    assert client.post("/library/upload", data={"csrf_token": "library-test", "category_id": str(manuals),
+        "file": (io.BytesIO(pdf()), "manual.pdf")}, content_type="multipart/form-data").status_code == 302
+    with app.app_context():
+        db = get_db()
+        db.execute("UPDATE library_books SET title='Zebra Story',author='Zoe' WHERE format='epub'")
+        db.execute("UPDATE library_books SET title='Alpha Manual',author='Amy' WHERE format='pdf'")
+        db.commit()
+    filtered = client.get(f"/library?category={fantasy}&format=epub&sort=title&q=Zebra")
+    assert b"Zebra Story" in filtered.data and b"Alpha Manual" not in filtered.data
+    assert b'option value="epub" selected' in filtered.data
+    assert b'option value="title" selected' in filtered.data
+    assert b"No books found" in client.get(f"/library?category={fantasy}&format=pdf").data
+    title_page = client.get("/library?sort=title").data
+    assert title_page.index(b"Alpha Manual") < title_page.index(b"Zebra Story")
+    author_page = client.get("/library?sort=author").data
+    assert author_page.index(b"Alpha Manual") < author_page.index(b"Zebra Story")
+    newest_page = client.get("/library?sort=newest").data
+    assert newest_page.index(b"Alpha Manual") < newest_page.index(b"Zebra Story")
+    oldest_page = client.get("/library?sort=oldest").data
+    assert oldest_page.index(b"Zebra Story") < oldest_page.index(b"Alpha Manual")
+    assert client.post("/library/2/category", data={"csrf_token": "library-test", "category_id": str(fantasy)}).status_code == 302
+    assert b"Fantasy" in client.get("/library/2").data
+    assert client.post("/library/2/category", data={"csrf_token": "library-test", "category_id": str(manuals)}).status_code == 302
+    sign_in(client, admin)
+    assert client.post(f"/sysop/library/categories/{fantasy}/availability", data={
+        "csrf_token": "library-test", "enabled": "0"}).status_code == 302
+    assert b"Fantasy (disabled)" in client.get("/sysop/settings").data
+    assert b"Fantasy" not in client.get("/library").data.split(b'All categories</option>')[1].split(b'</select>')[0]
+    sign_in(client, member)
+    assert b"Fantasy" in client.get("/library/1").data
+    invalid = client.post("/library/1/category", data={"csrf_token": "library-test", "category_id": str(fantasy)}, follow_redirects=True)
+    assert b"Select an available category" in invalid.data
+    with app.app_context():
+        db = get_db()
+        db.execute("UPDATE station SET library_mode='curated'")
+        db.commit()
+    assert client.get("/library/upload").status_code == 404
+    assert b"Alpha Manual" in client.get(f"/library?category={manuals}&format=pdf").data
+    sign_in(client, admin)
+    assert client.post("/library/station-upload", data={"csrf_token": "library-test", "category_id": str(manuals),
+        "file": (io.BytesIO(pdf()), "station.pdf")}, content_type="multipart/form-data").status_code == 302
+    assert b"Station Manual" in client.get(f"/library?category={manuals}&format=pdf").data
+    assert client.post(f"/sysop/library/categories/{fantasy}/availability", data={
+        "csrf_token": "library-test", "enabled": "1"}).status_code == 302
+    assert b"Fantasy" in client.get("/library").data.split(b'All categories</option>')[1].split(b'</select>')[0]

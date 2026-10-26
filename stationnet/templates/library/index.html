@@ -2,11 +2,17 @@
 {% block title %}Library{% endblock %}
 {% block content %}
 <header class="board-head"><div><p class="eyebrow">STATION BOOKS + DOCUMENTS</p><h1>Library</h1></div>{% if g.user and g.station.library_mode == 'community' %}<a class="button" href="{{ url_for('library.upload') }}">UPLOAD EPUB / PDF +</a>{% endif %}</header>
-<form method="get" action="{{ url_for('library.index') }}" class="video-search"><label>Search titles, authors, and descriptions<input type="search" name="q" value="{{ query }}" maxlength="100"></label><button>SEARCH</button>{% if query %}<a href="{{ url_for('library.index') }}">CLEAR</a>{% endif %}</form>
+<form method="get" action="{{ url_for('library.index') }}" class="library-filters">
+  <label>Search titles, authors, and descriptions<input type="search" name="q" value="{{ query }}" maxlength="100"></label>
+  <label>Category<select name="category"><option value="">All categories</option>{% for item in categories %}<option value="{{ item.id }}" {% if category == item.id|string %}selected{% endif %}>{{ item.name }}</option>{% endfor %}</select></label>
+  <label>Format<select name="format"><option value="all" {% if kind == 'all' %}selected{% endif %}>All formats</option><option value="epub" {% if kind == 'epub' %}selected{% endif %}>EPUB</option><option value="pdf" {% if kind == 'pdf' %}selected{% endif %}>PDF</option></select></label>
+  <label>Sort by<select name="sort"><option value="newest" {% if sort == 'newest' %}selected{% endif %}>Newest added</option><option value="oldest" {% if sort == 'oldest' %}selected{% endif %}>Oldest added</option><option value="title" {% if sort == 'title' %}selected{% endif %}>Title A–Z</option><option value="author" {% if sort == 'author' %}selected{% endif %}>Author A–Z</option></select></label>
+  <button>APPLY</button>{% if query or category or kind != 'all' or sort != 'newest' %}<a href="{{ url_for('library.index') }}">CLEAR</a>{% endif %}
+</form>
 <section class="library-grid" aria-label="Books">
 {% for book in books %}
-<article class="terminal-card library-card"><a href="{{ url_for('library.view',book_id=book.id) }}">{% if book.cover_path or book.format == 'pdf' %}<img src="{{ url_for('library.cover',book_id=book.id) }}" alt="Cover of {{ book.title }}" loading="lazy">{% else %}<span class="library-cover-placeholder" aria-hidden="true">BOOK</span>{% endif %}<h2>{{ book.title }}</h2></a><p>{{ book.author or 'Unknown author' }} · {{ book.format|upper }}</p>{% if g.station.library_mode == 'community' %}<small>{{ g.station.name if book.station_post else book.username }}</small>{% endif %}</article>
+<article class="terminal-card library-card"><a href="{{ url_for('library.view',book_id=book.id) }}">{% if book.cover_path or book.format == 'pdf' %}<img src="{{ url_for('library.cover',book_id=book.id) }}" alt="Cover of {{ book.title }}" loading="lazy">{% else %}<span class="library-cover-placeholder" aria-hidden="true">BOOK</span>{% endif %}<h2>{{ book.title }}</h2></a><p>{{ book.author or 'Unknown author' }} · {{ book.format|upper }}</p>{% if book.category_name %}<small>{{ book.category_name }}</small>{% endif %}{% if g.station.library_mode == 'community' %}<small>{{ g.station.name if book.station_post else book.username }}</small>{% endif %}</article>
 {% else %}<div class="empty-state"><h2>No books found.</h2></div>{% endfor %}
 </section>
-{% if pages > 1 %}<nav class="subnav" aria-label="Library pages">{% if page > 1 %}<a href="{{ url_for('library.index',q=query,page=page-1) }}">PREVIOUS</a>{% endif %}<span>PAGE {{ page }} OF {{ pages }}</span>{% if page < pages %}<a href="{{ url_for('library.index',q=query,page=page+1) }}">NEXT</a>{% endif %}</nav>{% endif %}
+{% if pages > 1 %}<nav class="subnav" aria-label="Library pages">{% if page > 1 %}<a href="{{ url_for('library.index',q=query,category=category,format=kind,sort=sort,page=page-1) }}">PREVIOUS</a>{% endif %}<span>PAGE {{ page }} OF {{ pages }}</span>{% if page < pages %}<a href="{{ url_for('library.index',q=query,category=category,format=kind,sort=sort,page=page+1) }}">NEXT</a>{% endif %}</nav>{% endif %}
 {% endblock %}

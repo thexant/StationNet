@@ -3,5 +3,5 @@
 {% block content %}
 <p><a href="{{ url_for('library.index') }}">RETURN TO LIBRARY</a></p>
 <section class="narrow terminal-card"><p class="eyebrow">LIBRARY / UPLOAD</p><h1>Upload a book or document</h1><p>Titles and other available details are read from EPUB or PDF metadata. PDFs receive a catalogue cover from their title.</p>
-<form method="post" enctype="multipart/form-data" class="form-grid"><input type="hidden" name="csrf_token" value="{{ session.csrf_token }}"><label>EPUB or PDF (up to 50 MB)<input type="file" name="file" accept=".epub,.pdf,application/epub+zip,application/pdf" required></label><button>UPLOAD TO LIBRARY</button></form></section>
+<form method="post" enctype="multipart/form-data" class="form-grid"><input type="hidden" name="csrf_token" value="{{ session.csrf_token }}"><label>EPUB or PDF (up to 50 MB)<input type="file" name="file" accept=".epub,.pdf,application/epub+zip,application/pdf" required></label><label>Category<select name="category_id"><option value="">Uncategorized</option>{% for category in categories %}<option value="{{ category.id }}">{{ category.name }}</option>{% endfor %}</select></label><button>UPLOAD TO LIBRARY</button></form></section>
 {% endblock %}

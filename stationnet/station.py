@@ -1271,6 +1271,9 @@ def settings():
         "SELECT r.*,b.name band_name FROM radio_permission_rules r "
         "LEFT JOIN radio_bands b ON b.id=r.band_id ORDER BY r.group_id,r.id"
     ).fetchall()
+    library_categories = database.execute(
+        "SELECT id,name,enabled FROM library_categories ORDER BY name COLLATE NOCASE"
+    ).fetchall()
     users = database.execute(
         "SELECT id,username,callsign,radio_quota_mb,videos_quota_mb,library_quota_mb FROM users ORDER BY username COLLATE NOCASE"
     ).fetchall()
@@ -1350,6 +1353,7 @@ def settings():
                            station_midi_exists=_station_midi_path().is_file(),
                            event_creation_groups=event_creation_groups,
                            bands=bands, groups=groups, users=users,
+                           library_categories=library_categories,
                            memberships=memberships, effective=effective,
                            broadcast_hosts=broadcast_hosts,
                            assignments=assignments, broadcast_sessions=broadcast_sessions,
@@ -1365,6 +1369,43 @@ def settings():
                            current_daily=current_daily, daily_failures=daily_failures,
                            generation_failures=generation_failures,
                            format_frequency=format_frequency)
+
+
+@bp.post("/sysop/library/categories")
+@admin_required
+def add_library_category():
+    validate_csrf()
+    name = " ".join(request.form.get("name", "").split())
+    if not 2 <= len(name) <= 50:
+        flash("Category names must be 2 to 50 characters.", "error")
+    else:
+        database = get_db()
+        try:
+            database.execute("INSERT INTO library_categories(name) VALUES(?)", (name,))
+            database.commit()
+            flash("Library category added.", "success")
+        except sqlite3.IntegrityError:
+            database.rollback()
+            flash("That library category already exists.", "error")
+    return redirect(url_for("station.settings") + "#library-service")
+
+
+@bp.post("/sysop/library/categories/<int:category_id>/availability")
+@admin_required
+def set_library_category_availability(category_id):
+    validate_csrf()
+    enabled = request.form.get("enabled")
+    if enabled not in {"0", "1"}:
+        abort(400)
+    database = get_db()
+    cursor = database.execute(
+        "UPDATE library_categories SET enabled=? WHERE id=?", (int(enabled), category_id)
+    )
+    if not cursor.rowcount:
+        abort(404)
+    database.commit()
+    flash("Library category availability updated.", "success")
+    return redirect(url_for("station.settings") + "#library-service")
 
 
 def _save_radio_bands():

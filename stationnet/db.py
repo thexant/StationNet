@@ -256,6 +256,10 @@ CREATE TABLE IF NOT EXISTS video_comments (
  author_id INTEGER NOT NULL REFERENCES users(id) ON DELETE RESTRICT,
  body TEXT NOT NULL, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);
 CREATE INDEX IF NOT EXISTS idx_video_comments_video ON video_comments(video_id,id);
+CREATE TABLE IF NOT EXISTS library_categories (
+ id INTEGER PRIMARY KEY AUTOINCREMENT,
+ name TEXT NOT NULL COLLATE NOCASE UNIQUE,
+ enabled INTEGER NOT NULL DEFAULT 1 CHECK(enabled IN (0,1)));
 CREATE TABLE IF NOT EXISTS library_books (
  id INTEGER PRIMARY KEY AUTOINCREMENT,
  uploader_id INTEGER NOT NULL REFERENCES users(id) ON DELETE RESTRICT,
@@ -265,6 +269,7 @@ CREATE TABLE IF NOT EXISTS library_books (
  stored_name TEXT NOT NULL UNIQUE, original_name TEXT NOT NULL,
  size_bytes INTEGER NOT NULL, cover_path TEXT NOT NULL DEFAULT '',
  format TEXT NOT NULL DEFAULT 'epub', page_count INTEGER NOT NULL DEFAULT 0,
+ category_id INTEGER REFERENCES library_categories(id) ON DELETE SET NULL,
  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);
 CREATE INDEX IF NOT EXISTS idx_library_books_created ON library_books(id DESC);
 CREATE TABLE IF NOT EXISTS library_progress (
@@ -1632,11 +1637,21 @@ def _migrate_videos(database):
 
 
 def _migrate_library(database):
+    database.execute("""CREATE TABLE IF NOT EXISTS library_categories (
+     id INTEGER PRIMARY KEY AUTOINCREMENT,
+     name TEXT NOT NULL COLLATE NOCASE UNIQUE,
+     enabled INTEGER NOT NULL DEFAULT 1 CHECK(enabled IN (0,1)))""")
+    for name in ("Fiction", "Horror", "Romance", "Fantasy", "Science Fiction",
+                 "Mystery", "Nonfiction", "Biography", "History", "Reference", "Technology"):
+        database.execute("INSERT OR IGNORE INTO library_categories(name) VALUES(?)", (name,))
     book_columns = {row["name"] for row in database.execute("PRAGMA table_info(library_books)")}
     if "format" not in book_columns:
         database.execute("ALTER TABLE library_books ADD COLUMN format TEXT NOT NULL DEFAULT 'epub'")
     if "page_count" not in book_columns:
         database.execute("ALTER TABLE library_books ADD COLUMN page_count INTEGER NOT NULL DEFAULT 0")
+    if "category_id" not in book_columns:
+        database.execute("ALTER TABLE library_books ADD COLUMN category_id INTEGER REFERENCES library_categories(id) ON DELETE SET NULL")
+    database.execute("CREATE INDEX IF NOT EXISTS idx_library_books_category ON library_books(category_id)")
     columns = {row["name"] for row in database.execute("PRAGMA table_info(station)")}
     for name, definition in (("library_enabled", "INTEGER NOT NULL DEFAULT 0"),
                              ("library_mode", "TEXT NOT NULL DEFAULT 'community'"),

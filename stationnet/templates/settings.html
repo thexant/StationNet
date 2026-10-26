@@ -320,6 +320,10 @@
         <label>Default per-user upload quota (MB)<input type="number" name="library_default_quota_mb" min="1" max="10240" required value="{{ g.station.library_default_quota_mb }}"></label>
         <button>SAVE LIBRARY SETTING</button>
       </form>
+      <h3>Book categories</h3>
+      <p class="muted">Disabled categories stay on existing books but cannot be selected for new assignments or catalogue filtering.</p>
+      <div class="library-category-list">{% for category in library_categories %}<form method="post" action="{{ url_for('station.set_library_category_availability',category_id=category.id) }}" class="inline-form"><input type="hidden" name="csrf_token" value="{{ session.csrf_token }}"><input type="hidden" name="enabled" value="{{ 0 if category.enabled else 1 }}"><span>{{ category.name }}{% if not category.enabled %} (disabled){% endif %}</span><button class="secondary">{{ 'DISABLE' if category.enabled else 'ENABLE' }}</button></form>{% endfor %}</div>
+      <form method="post" action="{{ url_for('station.add_library_category') }}" class="inline-form"><input type="hidden" name="csrf_token" value="{{ session.csrf_token }}"><label>New category<input name="name" minlength="2" maxlength="50" required></label><button>ADD CATEGORY</button></form>
       {% if g.station.library_enabled %}
       <p class="muted">Member uploads use the station default unless a user has an override. Station books do not count toward member quotas.</p>
       <div class="quota-admin-list">{% for user in users %}<form method="post" action="{{ url_for('station.save_library_user_quota',user_id=user.id) }}" class="inline-form"><input type="hidden" name="csrf_token" value="{{ session.csrf_token }}"><label>{{ user.username }} / {{ user.callsign }}<input type="number" name="library_quota_mb" min="1" max="10240" value="{{ user.library_quota_mb or '' }}" placeholder="INHERIT {{ g.station.library_default_quota_mb }} MB"><small>Leave blank to inherit the default.</small></label><button class="secondary">SAVE QUOTA</button></form>{% endfor %}</div>
@@ -328,6 +332,7 @@
       <form method="post" action="{{ url_for('library.station_upload') }}" enctype="multipart/form-data" class="form-grid">
         <input type="hidden" name="csrf_token" value="{{ session.csrf_token }}">
         <label>EPUB or PDF (up to 50 MB)<input type="file" name="file" accept=".epub,.pdf,application/epub+zip,application/pdf" required></label>
+        <label>Category<select name="category_id"><option value="">Uncategorized</option>{% for category in library_categories if category.enabled %}<option value="{{ category.id }}">{{ category.name }}</option>{% endfor %}</select></label>
         <button>UPLOAD STATION BOOK</button>
       </form>
       {% endif %}
