@@ -1067,6 +1067,8 @@ button:disabled { opacity: .5; cursor: not-allowed; }
 .mud-creator-steps { display: flex; flex-wrap: wrap; gap: .4rem; padding: 0; list-style: none; }
 .mud-creator-steps li { padding: .35rem .6rem; border: 1px solid var(--border, #456); font-size: .85rem; }
 .mud-creator-steps [aria-current="step"] { color: var(--green-bright, #9f9); border-color: currentColor; }
+.mud-creator-steps li { padding: 0; }
+.mud-creator-steps button { padding: .35rem .6rem; border: 0; background: transparent; color: inherit; cursor: pointer; font: inherit; }
 .mud-creator fieldset { min-width: 0; margin: 1rem 0; padding: 1rem; border: 1px solid var(--border, #456); }
 .mud-creator legend { padding: 0 .4rem; font-weight: bold; }
 .mud-creator-options, .mud-creator-attributes { display: grid; grid-template-columns: repeat(auto-fit,minmax(min(100%,240px),1fr)); gap: .65rem; }
@@ -1076,6 +1078,10 @@ button:disabled { opacity: .5; cursor: not-allowed; }
 .mud-creator-choice span, .mud-creator-attributes span { overflow-wrap: anywhere; }
 .mud-creator-choice small, .mud-creator-attributes small { color: var(--cyan, #8dd); }
 .mud-creator-attributes input { width: 6rem; }
+.mud-attribute-control { display: grid; gap: .5rem; padding: .8rem; border: 1px solid var(--border, #456); }
+.mud-attribute-control label { display: grid; gap: .35rem; padding: 0; border: 0; cursor: default; }
+.mud-attribute-buttons { display: flex; align-items: center; gap: .4rem; }
+.mud-attribute-buttons button { min-width: 2.5rem; }
 .mud-creator-nav { display: flex; flex-wrap: wrap; gap: .6rem; margin: 1rem 0; }
 .mud-creator [hidden] { display: none !important; }
 .mud-legacy-notice { padding: .75rem; margin: .5rem 0 1rem; border: 1px solid var(--cyan, #8dd); }

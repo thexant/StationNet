@@ -3986,6 +3986,69 @@ def create_character():
                            selected=selected, error=error)
 
 
+@bp.route("/character/delete", methods=["GET", "POST"])
+@login_required
+def delete_character():
+    _require_enabled()
+    database = get_db()
+    character = database.execute(
+        "SELECT id,display_name,creation_state FROM mud_characters WHERE user_id=?",
+        (g.user["id"],),
+    ).fetchone()
+    if character is None or character["creation_state"] == "pending":
+        return redirect(url_for("mud.create_character"))
+    error = None
+    if request.method == "POST":
+        validate_csrf()
+        if request.form.get("confirm_name", "").strip() != character["display_name"]:
+            error = "Enter your character name exactly to confirm deletion."
+        else:
+            user_id = g.user["id"]
+            database.execute("BEGIN IMMEDIATE")
+            try:
+                # These records are keyed by account rather than character and would
+                # otherwise carry the old character into a new save.
+                for table in (
+                    "mud_presence", "mud_player_locations", "mud_world_locations",
+                    "mud_player_stealth", "mud_death_summaries", "mud_event_views",
+                    "mud_event_recipients",
+                ):
+                    database.execute(f"DELETE FROM {table} WHERE user_id=?", (user_id,))
+                database.execute("DELETE FROM mud_action_log WHERE actor_id=?", (user_id,))
+                database.execute(
+                    "DELETE FROM mud_events WHERE audience_type='private' AND audience_key=?",
+                    (str(user_id),),
+                )
+                database.execute(
+                    "DELETE FROM mud_active_effects WHERE target_type='character' AND target_id=?",
+                    (character["id"],),
+                )
+                # Contained items have no owner_id. Remove them before their
+                # containers so the location CHECK remains satisfied.
+                owned_items = database.execute(
+                    "WITH RECURSIVE owned(id,depth) AS ("
+                    "SELECT id,0 FROM mud_item_instances WHERE owner_character_id=? "
+                    "UNION ALL SELECT i.id,owned.depth+1 FROM mud_item_instances AS i "
+                    "JOIN owned ON i.container_id=owned.id) "
+                    "SELECT id FROM owned ORDER BY depth DESC", (character["id"],)
+                ).fetchall()
+                database.executemany("DELETE FROM mud_item_instances WHERE id=?",
+                                     ((item["id"],) for item in owned_items))
+                database.execute("DELETE FROM mud_characters WHERE id=?", (character["id"],))
+                _character_row(database, user_id)
+                database.executemany(
+                    "INSERT OR IGNORE INTO mud_character_progression(character_id,track_key) "
+                    "VALUES(?,?)", ((character["id"], track) for track in PROGRESSION_TRACKS)
+                )
+                database.commit()
+                flash("Character deleted. You can create a new one.", "success")
+                return redirect(url_for("mud.create_character"))
+            except sqlite3.Error:
+                database.rollback()
+                raise
+    return render_template("mud/delete.html", character=character, error=error)
+
+
 @bp.post("/disconnect")
 @login_required
 def disconnect():

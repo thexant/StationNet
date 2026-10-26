@@ -26,6 +26,15 @@ for(const creator of document.querySelectorAll("[data-character-creator]")){
     const spent=Object.values(data.attributes).reduce((sum,value)=>sum+value-config.point_buy.base,0);
     creator.querySelector("[data-points-left]").textContent=config.point_buy.points-spent;
     creator.querySelector("[data-skills-left]").textContent=config.starting_skill_choices-data.skills.length;
+    for(const checkbox of form.querySelectorAll('input[name="skill"]')){
+      checkbox.disabled=!checkbox.checked&&data.skills.length>=config.starting_skill_choices;
+    }
+    for(const button of form.querySelectorAll("[data-adjust]")){
+      const value=data.attributes[button.dataset.for];
+      button.disabled=Number(button.dataset.adjust)>0
+        ?value>=config.point_buy.maximum||spent>=config.point_buy.points
+        :value<=config.point_buy.minimum;
+    }
     for(const [key,value] of Object.entries(data.attributes)){
       const result=final[key];
       creator.querySelector(`[data-final-attribute="${key}"]`).textContent=`Final: ${result}`;
@@ -62,6 +71,25 @@ for(const creator of document.querySelectorAll("[data-character-creator]")){
     previous.hidden=step===0;next.hidden=step===steps.length-1;submit.hidden=step!==steps.length-1;
     error.textContent="";update();
   };
+  form.querySelectorAll("[data-adjust]").forEach(button=>button.addEventListener("click",()=>{
+    const input=form.querySelector(`[data-attribute="${button.dataset.for}"]`);
+    input.value=Number(input.value)+Number(button.dataset.adjust);
+    update();
+  }));
+  form.querySelector("[data-reset-attributes]").addEventListener("click",()=>{
+    form.querySelectorAll("[data-attribute]").forEach(input=>input.value=config.point_buy.base);
+    update();
+  });
+  creator.querySelectorAll("[data-step-jump]").forEach(button=>button.addEventListener("click",()=>{
+    const target=Number(button.dataset.stepJump);
+    if(target>step){
+      for(let index=step;index<target;index++){
+        const problem=validate(index);
+        if(problem){step=index;show();error.textContent=problem;return}
+      }
+    }
+    step=target;show();
+  }));
   next.addEventListener("click",()=>{const problem=validate(step);if(problem){error.textContent=problem;return}step++;show();steps[step].scrollIntoView({block:"nearest"})});
   previous.addEventListener("click",()=>{step--;show()});
   form.addEventListener("input",update);

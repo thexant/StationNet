@@ -10,6 +10,7 @@
     </div>
     <div class="mud-header-actions">
       {% if g.mud_can_build %}<a class="button secondary" href="{{ url_for('mud.builder') }}">WORLD BUILDER</a>{% endif %}
+      <a class="button secondary" href="{{ url_for('mud.delete_character') }}">DELETE CHARACTER</a>
       <span class="mud-link-state">FOUNDATION ONLINE</span>
     </div>
   </header>
