@@ -1406,7 +1406,7 @@ def init_app(app):
         if bundled_theme.is_file() and not installed_theme.exists():
             shutil.copyfile(bundled_theme, installed_theme)
     for source_name, installed_name in (("starter-theme.json", "_template.json"),
-                                        ("TEMPLATEREADME.md", "README.md"),
+                                        ("README.md", "README.md"),
                                         ("theme-schema.json", "theme-schema.json")):
         installed = custom_path / installed_name
         if not installed.exists():

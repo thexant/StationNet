@@ -1,26 +1,121 @@
-# MUD race and class imports
+# Custom MUD races and classes
 
-Download a race or class JSON template from SYSOP Settings > MUD service. Edit
-the file and import it in that panel. The key must be unique among built-in and
-installed choices, contain 2-40 lowercase letters, digits, or hyphens, and
-start with a letter. A single file defines one race or one class. The maximum
-file size is 32 KB.
+StationNet accepts **one race or one class per UTF-8 JSON file** in SYSOP
+Settings > MUD service. Download a template there, or start with the complete
+examples below. Import a race in the Races control and a class in the Classes
+control. The same choices appear in traditional and procedural character
+creation. Each file is limited to 32 KB.
 
-Both types use `key`, `name`, `description`, `traits`, `attributes`, and
-`effects`. Attribute keys are `strength`, `agility`, `intellect`, and
-`vitality`; each integer modifier can be -10 through 10. Effect keys are
-`attack`, `defense`, and `experience_percent`; each integer can be -100 through
-100. Omit unused modifiers or set the object to `{}`.
+## Complete race example
 
-Classes also use `skill` (one of `arms`, `guard`, or `lore`), `spells` (a list of
-distinct known spell keys), and `equipment` (up to eight starting items).
-Supported spells are `ember`, `venom`, `rend`, `hex`, `mend`, `ward`, and `might`.
-Each equipment item needs a unique key, name, description, slot, and integer
-attack and defense values from 0 through 100. Slots are `head`, `body`,
-`hands`, `legs`, `feet`, `main_hand`, `off_hand`, and `accessory`.
+Save as `riverfolk.json` and import as a race:
 
-Imported definitions are enabled on import. Disabling a choice prevents new
-characters from selecting it. Removing an imported choice removes it from
-character creation; characters already using it retain their name and effects.
-The station keeps a private snapshot of a removed choice when existing
-characters still use it, so its key remains reserved.
+```json
+{
+  "key": "riverfolk",
+  "name": "Riverfolk",
+  "description": "Travelers who make their homes beside rivers and marshes.",
+  "traits": "Sure footing",
+  "attributes": {"agility": 1},
+  "effects": {"defense": 1}
+}
+```
+
+## Complete class example
+
+Save as `pathfinder.json` and import as a class:
+
+```json
+{
+  "key": "pathfinder",
+  "name": "Pathfinder",
+  "description": "A guide practiced at crossing uncertain ground.",
+  "traits": "Trail craft",
+  "attributes": {"agility": 1},
+  "effects": {"defense": 1},
+  "skill": "guard",
+  "spells": ["ward"],
+  "equipment": [
+    {"key": "trail-knife", "name": "Trail Knife",
+     "description": "A short, sturdy knife carried on the trail.",
+     "slot": "main_hand", "attack": 1, "defense": 0}
+  ]
+}
+```
+
+Starter equipment is placed in the character's inventory; the player equips
+it with `/equip <item>`. For firearms, ammunition, consumables, and combat
+effects, define items in a [traditional world](../mud_world_templates/README.md)
+or [dungeon theme](../dungeon_templates/README.md).
+
+## Fields and validation
+
+| Field | Race | Class | Rules |
+| --- | --- | --- | --- |
+| `key` | required | required | 2 to 40 lowercase letters, digits, or hyphens; starts with a letter. Unique within its choice type, including removed choices still used by characters. |
+| `name` | required | required | 2 to 80 nonblank characters. |
+| `description` | required | required | 1 to 1,000 nonblank characters. |
+| `traits` | required | required | 1 to 160 nonblank characters; display text, not a scripted ability. |
+| `attributes` | optional | optional | Object with any of `strength`, `agility`, `intellect`, `vitality`. Each modifier is an integer from -10 to 10; `{}` is valid. |
+| `effects` | optional | optional | Object with any of `attack`, `defense`, `experience_percent`. Each value is an integer from -100 to 100; `{}` is valid. |
+| `skill` | — | required | One key from the active character-options file's `skills` list. Defaults: `arms`, `guard`, `lore`. |
+| `spells` | — | optional | Array of distinct supported spell keys; `[]` gives no spells. |
+| `equipment` | — | optional | Array of up to eight starter items; `[]` gives none. |
+
+Each equipment entry needs a unique `key` within the class, a `name` of 2 to
+80 characters, a `description` of 1 to 1,000 characters, and a `slot`. Slots
+are `head`, `body`, `hands`, `legs`, `feet`, `main_hand`, `off_hand`, and
+`accessory`. Optional `attack` and `defense` are integers from 0 to 100 and
+default to zero. Origin equipment supports these basic bonuses; its JSON
+cannot specify firearm or consumable properties.
+
+Character creation allocates points according to `stationnet/character_options.json`
+(or Flask's `MUD_CHARACTER_OPTIONS` file), then adds race and class modifiers.
+**Every final attribute must be from 1 to 30.** An origin can import
+successfully yet produce an invalid race/class/point allocation combination,
+so test combinations players can select. Origin effects add to attack,
+defense, or earned experience percentage. A class's favored skill starts at
+rank 2 if the player selects it among starting skills; other selected skills
+start at rank 1. Individual imports cannot add skill types or change the point
+budget.
+
+## Spells and mana
+
+`spells` belongs to a class. The supported keys and mana costs are:
+
+| Spell | Mana | Effect |
+| --- | ---: | --- |
+| `ember` | 8 | Enemy damage and burning. |
+| `venom` | 7 | Enemy damage and poison. |
+| `rend` | 6 | Enemy damage and bleeding. |
+| `hex` | 7 | Enemy damage, weakness, and vulnerability. |
+| `mend` | 7 | Self healing. |
+| `ward` | 6 | Self defense effect. |
+| `might` | 6 | Self attack effect. |
+
+Players use `/spells` to list known spells, `/cast <spell> <enemy>` for the
+four damaging spells, and `/cast <spell>` for `mend`, `ward`, or `might`.
+`/rest` restores mana outside combat when no hostile enemy is nearby.
+Intellect raises starting mana, mana gained on level up, and spell strength.
+Spells spend mana from the active traditional or procedural progression track.
+Adding an unknown spell name to JSON cannot create a new spell implementation.
+
+## Install and maintain choices
+
+1. Pick a stable key. Save one valid UTF-8 JSON object in a file under 32 KB.
+2. Import it in the matching SYSOP control. Correct any validation error, then
+   create a test character to check its combinations, gear, and spells.
+3. Imported choices start enabled. Disabling one hides it from new character
+   creation. At least one race and class must stay enabled while either MUD
+   mode is enabled.
+4. Removing an imported choice takes it out of character creation. Existing
+   characters retain their origin abilities through a private snapshot, and
+   keys still used by characters remain reserved. Built-in choices can be
+   disabled but cannot be removed.
+
+The character-options file is a separate, station-wide configuration source
+for the point budget, skill list, and built-in races/classes. If you provide
+one through `MUD_CHARACTER_OPTIONS`, it must include `id`, `point_buy`,
+`attribute_descriptions`, `races`, `classes`, `skills`, and
+`starting_skill_choices`; see `stationnet/character_options.json` for that
+advanced format. The import UI adds one race or class without replacing it.
