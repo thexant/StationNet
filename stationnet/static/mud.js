@@ -158,7 +158,7 @@ for(const mud of document.querySelectorAll("[data-mud]")){
     const fill=(node,items,slot)=>{
       node.replaceChildren();
       if(!items?.length){const empty=document.createElement("span");empty.className="muted";empty.textContent=slot?"nothing equipped":"nothing carried";node.append(empty);return}
-      for(const item of items){const label=document.createElement("span");label.textContent=`${slot?`${(item.equipped_slot||"equipment").replaceAll("_"," ")}: `:""}${item.display_name||item.name}${item.acquired_run_id?" · RUN LOOT":""}`;node.append(label)}
+      for(const item of items){const label=document.createElement("span");const ammo=item.loaded_rounds!==undefined?` · ${item.loaded_rounds}/${item.magazine_size} loaded`:item.rounds_remaining!==undefined?` · ${item.rounds_remaining} rounds`:"";label.textContent=`${slot?`${(item.equipped_slot||"equipment").replaceAll("_"," ")}: `:""}${item.display_name||item.name}${ammo}${item.acquired_run_id?" · RUN LOOT":""}`;node.append(label)}
     };
     fill(carried,inventory.inventory,false);fill(equipped,inventory.equipment,true);
     if(hubInventory){

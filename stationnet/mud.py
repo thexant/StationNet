@@ -17,7 +17,7 @@ from flask import Blueprint, abort, flash, g, jsonify, redirect, render_template
 
 from .auth import admin_required, login_required
 from .db import get_db
-from . import dungeons, character_creation, mud_effects
+from . import dungeons, character_creation, mud_effects, mud_firearms
 from .security import validate_csrf
 
 bp = Blueprint("mud", __name__, url_prefix="/mud")
@@ -377,7 +377,7 @@ def _help_action(_database, _user, parameters):
         "/go <exit> (or /move, /walk) — travel through an exit\n"
         "/get <item> [from <container>], /drop <item>, /open <container>\n"
         "/put <item> in <container>, /equip <item>, /unequip <item>, /use <item>\n"
-        "/combat, /hide, /attack <enemy>, /defend, /flee - turn-based combat\n"
+        "/combat, /hide, /attack <enemy>, /fire <enemy>, /melee <enemy>, /reload [gun], /defend, /flee - turn-based combat\n"
         "/spells, /cast <spell> [enemy], /rest - magic and recovery\n"
         "/talk <npc>, /respond <number or response> — converse with an NPC\n"
         "/quests, /quest accept <name> — view or accept available quests\n"
@@ -807,7 +807,8 @@ def _equipment_combat_totals(database, character_id=None, npc_definition_id=None
     attack = defense = 0
     for row in rows:
         properties = _json_properties(row["properties_json"])
-        attack += max(0, _integer_property(properties, "damage", "attack", "attack_bonus"))
+        if character_id is None or not mud_firearms.is_firearm(properties):
+            attack += max(0, _integer_property(properties, "damage", "attack", "attack_bonus"))
         defense += max(0, _integer_property(properties, "armor", "defense", "defense_bonus"))
     return {"attack": attack, "defense": defense}
 
@@ -1052,6 +1053,36 @@ def _item_state(row):
         return {}
 
 
+def _loaded_rounds(item):
+    capacity = _json_properties(item["properties_json"])["magazine_size"]
+    value = _item_state(item).get("loaded", 0)
+    return min(capacity, max(0, value)) if type(value) is int else 0
+
+
+def _remaining_ammo(item):
+    full = _json_properties(item["properties_json"]).get("rounds", 0)
+    if type(full) is not int or full <= 0:
+        return 0
+    value = _item_state(item).get("rounds", full)
+    return min(full, max(0, value)) if type(value) is int else 0
+
+
+def _equipped_firearm(database, user_id):
+    for item in _inventory_rows(database, user_id, equipped=True):
+        if item["equipped_slot"] in ("main_hand", "off_hand") and mud_firearms.is_firearm(
+            _json_properties(item["properties_json"])
+        ):
+            return item
+    return None
+
+
+def _save_item_state(database, item_id, state):
+    database.execute(
+        "UPDATE mud_item_instances SET state_json=?,updated_at=CURRENT_TIMESTAMP WHERE id=?",
+        (json.dumps(state, separators=(",", ":"), sort_keys=True), item_id),
+    )
+
+
 def _item_matches(rows, target):
     rows = list(rows)
     key = " ".join(str(target).casefold().split())
@@ -1182,6 +1213,12 @@ def inventory_state(database, user_id):
     for items in (inventory, equipment):
         for item, label in _numbered_items(items):
             item["display_name"] = label
+            properties = _json_properties(item["properties_json"])
+            if mud_firearms.is_firearm(properties):
+                item["loaded_rounds"] = _loaded_rounds(item)
+                item["magazine_size"] = properties["magazine_size"]
+            elif "ammo_type" in properties and "rounds" in properties:
+                item["rounds_remaining"] = _remaining_ammo(item)
     return {
         "inventory": inventory, "equipment": equipment, "slots": EQUIPMENT_SLOTS,
         "mode": context["mode"], "sharing": "shared" if context["shared"] else "independent",
@@ -1198,6 +1235,8 @@ def _inventory_action(database, user, parameters):
         return "\n".join(
             f"  - {label}" +
             (f" ({item['equipped_slot'].replace('_', ' ')})" if equipped else "") +
+            (f" [{item['loaded_rounds']}/{item['magazine_size']} loaded]" if "loaded_rounds" in item else
+             f" [{item['rounds_remaining']} rounds]" if "rounds_remaining" in item else "") +
             (" [run loot]" if item["acquired_run_id"] else "")
             for item, label in _numbered_items(items)
         )
@@ -1224,6 +1263,12 @@ def _grant_item(database, user_id, definition_id, id_prefix="reward:item"):
 def _item_value(row):
     properties = _json_properties(row["properties_json"])
     stated = properties.get("value")
+    if "ammo_type" in properties and type(properties.get("rounds")) is int:
+        full = properties["rounds"]
+        if full > 0:
+            remaining = _remaining_ammo(row) if "state_json" in row.keys() else full
+            full_value = stated if type(stated) is int and 1 <= stated <= 100000 else 2 * full
+            return max(1, full_value * max(0, min(full, remaining)) // full)
     if isinstance(stated, int) and not isinstance(stated, bool) and 1 <= stated <= 100000:
         return stated
     name = row["name"].casefold()
@@ -1748,9 +1793,32 @@ def _enemy_turn(database, user, defending=False, chosen=None):
         "WHERE id=? AND status='ready'", (encounter["id"],),
     )
     enemy_gear = _equipment_combat_totals(database, npc_definition_id=npc["definition_id"])
+    npc_reloading = False
+    npc_firearm = next((row for row in database.execute(
+        "SELECT d.name,d.properties_json FROM mud_npc_equipment AS e "
+        "JOIN mud_item_definitions AS d ON d.id=e.item_definition_id "
+        "WHERE e.npc_definition_id=? AND e.equipment_slot IN ('main_hand','off_hand') "
+        "ORDER BY CASE e.equipment_slot WHEN 'main_hand' THEN 0 ELSE 1 END",
+        (npc["definition_id"],),
+    ) if mud_firearms.is_firearm(_json_properties(row["properties_json"]))), None)
+    if npc_firearm:
+        capacity = _json_properties(npc_firearm["properties_json"])["magazine_size"]
+        magazine = database.execute(
+            "SELECT loaded_rounds FROM mud_encounter_firearms WHERE encounter_id=?", (encounter["id"],)
+        ).fetchone()
+        if magazine is None:
+            database.execute("INSERT INTO mud_encounter_firearms(encounter_id,loaded_rounds) VALUES(?,?)",
+                             (encounter["id"], capacity - 1))
+        elif magazine["loaded_rounds"] == 0:
+            database.execute("UPDATE mud_encounter_firearms SET loaded_rounds=? WHERE encounter_id=?",
+                             (capacity, encounter["id"]))
+            npc_reloading = True
+        else:
+            database.execute("UPDATE mud_encounter_firearms SET loaded_rounds=loaded_rounds-1 WHERE encounter_id=?",
+                             (encounter["id"],))
     player_gear = _equipment_combat_totals(database, character_id=character["id"])
     effects = _character_effects(database, character["id"])
-    damage = max(1, npc["combat_attack"] + enemy_gear["attack"]
+    damage = 0 if npc_reloading else max(1, npc["combat_attack"] + (2 if npc_firearm else 0) + enemy_gear["attack"]
                  + mud_effects.modifier(database, "encounter", encounter["id"], "attack")
                  - (character["vitality"] // 10 + character["agility"] // 5
                     + player_gear["defense"] + effects["defense"]))
@@ -1764,10 +1832,12 @@ def _enemy_turn(database, user, defending=False, chosen=None):
         "WHERE character_id=? AND track_key=?", (health, character["id"], character["track_key"]),
     )
     drafts = [EventDraft(
-        f"{npc['name']} strikes for {damage} damage ({health}/{character['maximum_health']} health).",
+        (f"{npc['name']} reloads {npc_firearm['name']} ({health}/{character['maximum_health']} health)."
+         if npc_reloading else
+         f"{npc['name']} strikes for {damage} damage ({health}/{character['maximum_health']} health)."),
         event_type="combat",
     )]
-    if health > 0 and damage > 0:
+    if health > 0 and damage > 0 and not npc_reloading:
         for spec in _effect_specs(_json_properties(npc["properties_json"]), "on_hit_effects"):
             try:
                 key = mud_effects.apply(database, "character", character["id"], spec, npc["name"])
@@ -1894,6 +1964,16 @@ def _attack_action(database, user, parameters):
     encounter = _encounter_row(database, npc)
     if encounter["status"] == "defeated":
         raise ActionError(f"{npc['name']} is defeated and has not yet recovered.", 409)
+    spell_damage = parameters.get("_spell_damage")
+    firearm = None
+    if spell_damage is None and not parameters.get("_melee"):
+        equipped_gun = _equipped_firearm(database, user["id"])
+        if parameters.get("_firearm") and equipped_gun is None:
+            raise ActionError("Equip a firearm in either hand before firing.")
+        if equipped_gun is not None and _loaded_rounds(equipped_gun) > 0:
+            firearm = equipped_gun
+        elif parameters.get("_firearm"):
+            raise ActionError(f"{equipped_gun['name']} is empty. Use /reload first.")
     character = _character_row(database, user["id"])
     database.execute(
         "INSERT INTO mud_combat_participants(encounter_id,character_id) VALUES(?,?) "
@@ -1906,18 +1986,23 @@ def _attack_action(database, user, parameters):
     effects = _character_effects(database, character["id"])
     surprise = _is_hidden(database, user["id"])
     _set_hidden(database, user["id"], False)
-    spell_damage = parameters.get("_spell_damage")
     damage = (max(1, spell_damage + character["intellect"] // 3
                   - (npc["combat_defense"] + enemy_gear["defense"]
                      + mud_effects.modifier(database, "encounter", encounter["id"], "defense")) // 2)
               if spell_damage is not None else
-              max(1, 4 + character["strength"] // 2 + player_gear["attack"]
+               max(1, (6 if firearm else 4) + (character["agility"] if firearm else character["strength"]) // 2
+                   + (max(0, _integer_property(_json_properties(firearm["properties_json"]),
+                                               "damage", "attack", "attack_bonus")) if firearm else player_gear["attack"])
                   + effects["attack"] - (npc["combat_defense"] + enemy_gear["defense"]
                      + mud_effects.modifier(database, "encounter", encounter["id"], "defense")) // 2))
     if surprise:
         damage += max(2, character["agility"] // 2)
     if spell_damage is None:
         _practice_effect(database, character["id"], "attack")
+    if firearm:
+        state = _item_state(firearm)
+        state["loaded"] = _loaded_rounds(firearm) - 1
+        _save_item_state(database, firearm["id"], state)
     damage += sum(amount for _, amount in mud_effects.tick(database, "encounter", encounter["id"]))
     remaining = max(0, encounter["current_health"] - damage)
     database.execute(
@@ -1936,7 +2021,7 @@ def _attack_action(database, user, parameters):
     audience_type = "instance" if room.get("instance_id") else "room"
     audience_key = room.get("instance_id") or room["id"]
     drafts = [EventDraft(
-        f"{character['display_name']} {'casts at' if spell_damage is not None else 'surprises' if surprise else 'attacks'} {display_name} for {damage} damage "
+        f"{character['display_name']} {'casts at' if spell_damage is not None else 'fires at' if firearm else 'surprises' if surprise else 'attacks'} {display_name} for {damage} damage "
         f"({remaining}/{encounter['maximum_health']} health).",
         event_type="combat", audience_type=audience_type, audience_key=audience_key,
         recipient_ids=tuple(sorted(recipients)),
@@ -1944,7 +2029,9 @@ def _attack_action(database, user, parameters):
     if remaining > 0:
         applications = parameters.get("_spell_effects") if spell_damage is not None else []
         if spell_damage is None:
-            for equipped in _inventory_rows(database, user["id"], True):
+            for equipped in ([firearm] if firearm else _inventory_rows(database, user["id"], True)):
+                if not firearm and mud_firearms.is_firearm(_json_properties(equipped["properties_json"])):
+                    continue
                 applications += _effect_specs(_json_properties(equipped["properties_json"]), "on_hit_effects")
         for spec in applications:
             try:
@@ -1970,6 +2057,50 @@ def _attack_action(database, user, parameters):
         drafts += _encounter_reward_drafts(database, defeated, npc)
         return drafts
     return drafts + _enemy_turn(database, user, chosen=npc["id"])
+
+
+def _fire_action(database, user, parameters):
+    return _attack_action(database, user, {**parameters, "_firearm": True})
+
+
+def _melee_action(database, user, parameters):
+    return _attack_action(database, user, {**parameters, "_melee": True})
+
+
+def _reload_action(database, user, parameters):
+    arguments = parameters.get("arguments") or []
+    equipped = list(_inventory_rows(database, user["id"], equipped=True))
+    if arguments:
+        firearm = _item_matches(equipped, " ".join(arguments))
+        if not mud_firearms.is_firearm(_json_properties(firearm["properties_json"])):
+            raise ActionError("That item is not a firearm.")
+    else:
+        firearm = _equipped_firearm(database, user["id"])
+    if firearm is None:
+        raise ActionError("Equip a firearm before reloading.")
+    properties = _json_properties(firearm["properties_json"])
+    loaded = _loaded_rounds(firearm)
+    needed = properties["magazine_size"] - loaded
+    if needed <= 0:
+        raise ActionError(f"{firearm['name']} is already fully loaded.")
+    ammunition = next((item for item in _inventory_rows(database, user["id"])
+                       if _json_properties(item["properties_json"]).get("ammo_type") == properties["ammo_type"]
+                       and not mud_firearms.is_firearm(_json_properties(item["properties_json"]))
+                       and _remaining_ammo(item) > 0), None)
+    if ammunition is None:
+        raise ActionError(f"You have no {properties['ammo_type']} ammunition.")
+    available = _remaining_ammo(ammunition)
+    count = min(needed, available)
+    firearm_state = _item_state(firearm)
+    firearm_state["loaded"] = loaded + count
+    _save_item_state(database, firearm["id"], firearm_state)
+    if count == available:
+        database.execute("DELETE FROM mud_item_instances WHERE id=?", (ammunition["id"],))
+    else:
+        ammo_state = _item_state(ammunition)
+        ammo_state["rounds"] = available - count
+        _save_item_state(database, ammunition["id"], ammo_state)
+    return [EventDraft(f"You reload {firearm['name']} with {count} rounds ({loaded + count}/{properties['magazine_size']}).", event_type="item")] + _enemy_turn(database, user)
 
 
 def _defend_action(database, user, _parameters):
@@ -3380,7 +3511,10 @@ actions.register(ActionDefinition(key="spells", label="KNOWN SPELLS", descriptio
 actions.register(ActionDefinition(key="cast", label="CAST SPELL", description="Cast a known spell, targeting an enemy when required.", commands=("cast",), handler=_cast_action, group="MAGIC", show_context=False))
 actions.register(ActionDefinition(key="rest", label="REST", description="Recover mana outside combat.", commands=("rest",), handler=_rest_action, group="MAGIC"))
 actions.register(ActionDefinition(key="hide", label="HIDE", description="Hide from enemies using Agility against their awareness; your next attack gains surprise damage.", commands=("hide",), handler=_hide_action, group="COMBAT", show_context=False))
-actions.register(ActionDefinition(key="attack", label="ATTACK", description="Attack a hostile enemy and resolve one combat round.", commands=("attack", "hit"), handler=_attack_action, group="COMBAT", show_context=False))
+actions.register(ActionDefinition(key="attack", label="ATTACK", description="Attack a hostile enemy; fire an equipped loaded gun, otherwise use melee.", commands=("attack", "hit"), handler=_attack_action, group="COMBAT", show_context=False))
+actions.register(ActionDefinition(key="fire", label="FIRE", description="Fire an equipped loaded firearm at a hostile enemy.", commands=("fire", "shoot"), handler=_fire_action, group="COMBAT", show_context=False))
+actions.register(ActionDefinition(key="melee", label="MELEE", description="Use a melee attack even when a loaded firearm is equipped.", commands=("melee", "strike"), handler=_melee_action, group="COMBAT", show_context=False))
+actions.register(ActionDefinition(key="reload", label="RELOAD", description="Load compatible carried ammunition into an equipped firearm.", commands=("reload",), handler=_reload_action, group="COMBAT", show_context=False))
 actions.register(ActionDefinition(key="defend", label="DEFEND", description="Brace to reduce the next enemy attack.", commands=("defend", "guard"), handler=_defend_action, group="COMBAT", show_context=False))
 actions.register(ActionDefinition(key="flee", label="FLEE", description="Attempt a risky escape from combat.", commands=("flee",), handler=_flee_action, group="COMBAT", show_context=False))
 actions.register(ActionDefinition(
@@ -3992,6 +4126,10 @@ def builder():
         item = dict(row); properties = _json_properties(item["properties_json"])
         item["attack_bonus"] = _integer_property(properties, "damage", "attack", "attack_bonus")
         item["defense_bonus"] = _integer_property(properties, "armor", "defense", "defense_bonus")
+        item["firearm"] = mud_firearms.is_firearm(properties)
+        item["ammo_type"] = properties.get("ammo_type", "")
+        item["magazine_size"] = properties.get("magazine_size", 0)
+        item["rounds"] = properties.get("rounds", 0)
         item["use_message"] = properties.get("use_message", "")
         item["on_use_effects_json"] = json.dumps(properties.get("on_use_effects", []))
         item["on_hit_effects_json"] = json.dumps(properties.get("on_hit_effects", []))
@@ -4085,6 +4223,10 @@ def _item_definition_fields():
     use_message = request.form.get("use_message", "").strip()
     attack_bonus = request.form.get("attack_bonus", 0, type=int)
     defense_bonus = request.form.get("defense_bonus", 0, type=int)
+    firearm = request.form.get("firearm") == "1"
+    ammo_type = request.form.get("ammo_type", "").strip()
+    magazine_size = request.form.get("magazine_size", 0, type=int)
+    rounds = request.form.get("rounds", 0, type=int)
     if not 2 <= len(name) <= 80 or not 1 <= len(description) <= 4000:
         return None, "Item names must be 2–80 characters and descriptions 1–4000 characters."
     if item_type not in {"misc", "equipment", "container", "consumable", "key"}:
@@ -4099,6 +4241,13 @@ def _item_definition_fields():
     if use_message: properties["use_message"] = use_message
     if attack_bonus: properties["attack_bonus"] = attack_bonus
     if defense_bonus: properties["defense_bonus"] = defense_bonus
+    if firearm:
+        properties.update(firearm=True, ammo_type=ammo_type, magazine_size=magazine_size)
+    elif ammo_type or rounds:
+        properties.update(ammo_type=ammo_type, rounds=rounds)
+    firearm_error = mud_firearms.validate_item(item_type, slot, properties)
+    if firearm_error:
+        return None, firearm_error
     for field in ("on_use_effects", "on_hit_effects"):
         try:
             specs = json.loads(request.form.get(field, "[]") or "[]")

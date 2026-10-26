@@ -915,6 +915,9 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_mud_combat_live_enemy
  ON mud_combat_encounters(npc_instance_id) WHERE status IN ('ready','active');
 CREATE INDEX IF NOT EXISTS idx_mud_combat_scope
  ON mud_combat_encounters(scope_type,scope_key,status);
+CREATE TABLE IF NOT EXISTS mud_encounter_firearms (
+ encounter_id TEXT PRIMARY KEY REFERENCES mud_combat_encounters(id) ON DELETE CASCADE,
+ loaded_rounds INTEGER NOT NULL CHECK(loaded_rounds>=0));
 CREATE TABLE IF NOT EXISTS mud_combat_participants (
  encounter_id TEXT NOT NULL REFERENCES mud_combat_encounters(id) ON DELETE CASCADE,
  character_id TEXT NOT NULL REFERENCES mud_characters(id) ON DELETE CASCADE,

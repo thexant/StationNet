@@ -45,6 +45,8 @@ Use explicit properties for items that affect a run:
 | Item | Properties | Effect |
 | --- | --- | --- |
 | Weapon | `damage`, `attack`, or `attack_bonus` | Adds to attack damage while equipped. |
+| Firearm | `firearm: true`, `ammo_type`: nonempty string, `magazine_size`: 1–100, plus an ordinary weapon attack bonus | Hand equipment fired with `/fire <enemy>`; each shot spends one loaded round. |
+| Ammunition | `item_type: "misc"`, matching `ammo_type`, `rounds`: 1–1000 | One carried item holding that many rounds. `/reload [gun]` transfers rounds up to magazine capacity and takes a combat turn. |
 | Armour or shield | `armor`, `defense`, or `defense_bonus` | Reduces incoming damage while equipped. |
 | Healing consumable | `heal`: positive integer | Restores up to that much health, consumes the item, and advances an enemy turn if in combat. |
 | Navigation consumable | `reveal_exit: true` | Reveals the next direction toward the exit and consumes the item. |
@@ -56,6 +58,21 @@ not buy keys. Use `item_type: "consumable"` for one-use supplies; a
 `use_message` alone displays text and consumes the item but does not restore
 health. Older bundled recovery items with the former "standard recovery rules"
 message still heal for compatibility. New themes should use `heal` explicitly.
+
+Firearms start empty when acquired. A loaded firearm keeps its rounds when
+stored, dropped, traded, or carried between settings. `/attack` fires a loaded
+equipped gun and uses melee when the gun is empty. `/fire` requires a loaded gun;
+`/melee` chooses melee even while the gun is loaded. Only shots spend ammunition
+and use Agility and the firearm bonus. Guns receive a small base damage
+increase to offset reload turns. Both attacks use the same enemy defense and
+equipment rules, so armor protects against either. NPC firearms use the same
+magazine cycle and spend a turn reloading; their ammunition supply is abstract.
+For example, these two item definitions can be placed in any dungeon theme:
+
+```json
+{"id":"sidearm","name":"Sidearm","description":"A compact pistol.","item_type":"equipment","equipment_slot":"main_hand","properties":{"firearm":true,"ammo_type":"9mm","magazine_size":6,"attack_bonus":4}}
+{"id":"sidearm-ammo","name":"9mm cartridges","description":"A box of cartridges.","item_type":"misc","properties":{"ammo_type":"9mm","rounds":18}}
+```
 
 The portal room provides the shop and private persistent storage. Dungeon loot
 is marked as belonging to the active run. Completing at the exit or extracting

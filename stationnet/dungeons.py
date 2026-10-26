@@ -5,7 +5,7 @@ not start a run or move a character; Chunks 11 and 12 own those concerns.
 """
 from collections import deque
 from copy import deepcopy
-from . import mud_effects
+from . import mud_effects, mud_firearms
 import hashlib
 import json
 from pathlib import Path
@@ -238,6 +238,10 @@ def _validate_embedded_definitions(errors, template, database=None):
                     errors.append(f"{here}.equipment_slot: unsupported equipment slot")
                 if slot is not None and item_type != "equipment":
                     errors.append(f"{here}.equipment_slot: requires item_type 'equipment'")
+                if isinstance(properties, dict):
+                    firearm_error = mud_firearms.validate_item(item_type, slot, properties)
+                    if firearm_error:
+                        errors.append(f"{here}.properties: {firearm_error}")
                 if isinstance(local_id, str):
                     item_slots[local_id] = slot
                 continue
