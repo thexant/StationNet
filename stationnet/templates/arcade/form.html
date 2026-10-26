@@ -1,0 +1,10 @@
+{% extends 'base.html' %}
+{% block title %}{{ 'Edit ' ~ game.title if game else 'Upload game' }} · Arcade{% endblock %}
+{% block extra_styles %}<link rel="stylesheet" href="{{ url_for('static',filename='arcade.css') }}">{% endblock %}
+{% block content %}
+<header class="board-head"><div><p class="eyebrow">ARCADE / {{ 'MANAGE GAME' if game else 'UPLOAD' }}</p><h1>{{ 'Edit ' ~ game.title if game else 'Upload a game' }}</h1></div><a class="button secondary" href="{{ url_for('arcade.view',game_id=game.id) if game else url_for('arcade.index') }}">BACK TO ARCADE</a></header>
+<section class="terminal-card arcade-editor">
+  {% with action=url_for('arcade.edit',game_id=game.id) if game else url_for('arcade.upload') %}{% include 'arcade/_fields.html' %}{% endwith %}
+  {% if game %}<form method="post" action="{{ url_for('arcade.delete',game_id=game.id) }}" onsubmit="return confirm('Remove this game and its files?')"><input type="hidden" name="csrf_token" value="{{ session.csrf_token }}"><button class="secondary">REMOVE GAME</button></form>{% endif %}
+</section>
+{% endblock %}

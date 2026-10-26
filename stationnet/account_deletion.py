@@ -74,6 +74,9 @@ def delete_account(user_id):
                 "SELECT stored_name FROM library_books WHERE uploader_id=? AND station_post=1")
         collect(data / "library" / "users" / str(user_id),
                 "SELECT stored_name FROM library_books WHERE uploader_id=? AND station_post=0")
+        collect(data / "arcade" / "roms", "SELECT stored_name FROM arcade_games WHERE uploader_id=?")
+        collect(data / "arcade" / "covers", "SELECT cover_name FROM arcade_games WHERE uploader_id=?",
+                columns=("cover_name",))
         collect(data / "radio_audio" / str(user_id),
                 "SELECT stored_name FROM radio_audio_files WHERE owner_id=?")
         collect(data / "radio_content" / str(user_id),
@@ -108,6 +111,7 @@ def delete_account(user_id):
         database.execute("DELETE FROM library_bookmarks WHERE user_id=?", (user_id,))
         database.execute("DELETE FROM library_progress WHERE user_id=?", (user_id,))
         database.execute("DELETE FROM library_books WHERE uploader_id=?", (user_id,))
+        database.execute("DELETE FROM arcade_games WHERE uploader_id=?", (user_id,))
         database.execute("DELETE FROM archive_files WHERE uploader_id=?", (user_id,))
         database.execute("DELETE FROM user_feed_comments WHERE author_id=?", (user_id,))
         database.execute("DELETE FROM posts WHERE author_id=?", (user_id,))

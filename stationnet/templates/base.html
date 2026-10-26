@@ -55,6 +55,7 @@
         {% if g.station.kiwix_enabled %}<i>*</i><a href="{{ url_for('kiwix.index') }}" {% if request.blueprint=='kiwix' %}aria-current="page"{% endif %}>WIKI</a>{% endif %}
         {% if g.station.videos_enabled %}<i>*</i><a href="{{ url_for('videos.index') }}" {% if request.blueprint=='videos' %}aria-current="page"{% endif %}>VIDEOS</a>{% endif %}
         {% if g.station.library_enabled %}<i>*</i><a href="{{ url_for('library.index') }}" {% if request.blueprint=='library' %}aria-current="page"{% endif %}>LIBRARY</a>{% endif %}
+        {% if g.station.arcade_enabled %}<i>*</i><a href="{{ url_for('arcade.index') }}" {% if request.blueprint=='arcade' %}aria-current="page"{% endif %}>ARCADE</a>{% endif %}
         {% if g.user %}
         <i>*</i><a href="{{ url_for('chat.station_chat') }}" {% if request.blueprint=='chat' %}aria-current="page"{% endif %}>CHAT <span class="direct-count" data-direct-count hidden></span></a>
         <i>*</i><a href="{{ url_for('mail.inbox') }}" {% if request.blueprint=='mail' %}aria-current="page"{% endif %}>MAIL <span class="mail-count" data-mail-count hidden></span></a>

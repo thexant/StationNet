@@ -1,0 +1,15 @@
+<form method="post" action="{{ action }}" enctype="multipart/form-data" class="form-grid arcade-game-form">
+  <input type="hidden" name="csrf_token" value="{{ session.csrf_token }}">
+  <label>Title<input name="title" required maxlength="150" value="{{ game.title if game else '' }}"></label>
+  <label>Platform<select name="platform" required>{% for key, info in platforms.items() %}<option value="{{ key }}" {% if game and game.platform == key %}selected{% endif %}>{{ info[0] }}</option>{% endfor %}</select></label>
+  <label>Genre<input name="genre" maxlength="80" value="{{ game.genre if game else '' }}" placeholder="Action, Puzzle, RPG…"></label>
+  <label>Release year<input name="release_year" type="number" min="1970" max="2100" value="{{ game.release_year or '' if game else '' }}"></label>
+  <label>Developer<input name="developer" maxlength="120" value="{{ game.developer if game else '' }}"></label>
+  <label>Publisher<input name="publisher" maxlength="120" value="{{ game.publisher if game else '' }}"></label>
+  <label>Players<input name="players" maxlength="40" value="{{ game.players if game else '' }}" placeholder="1–2"></label>
+  <label class="arcade-wide">Description<textarea name="description" rows="4" maxlength="5000">{{ game.description if game else '' }}</textarea></label>
+  <label>ROM file{% if game %} (leave blank to keep current){% endif %}<input type="file" name="rom" accept=".nes,.sfc,.smc,.gb,.gbc,.gba,.md,.gen,.bin,.sms,.gg,.a26,.a78,.lnx,.pce,.col,.rom,.nds,.n64,.z64,.v64,.zip" {% if not game %}required{% endif %}><small>Use a ROM you are permitted to share. Maximum 96 MB.</small></label>
+  <label>Cover art{% if game %} (leave blank to keep current){% endif %}<input type="file" name="cover" accept="image/png,image/jpeg,image/webp,image/gif,.png,.jpg,.jpeg,.webp,.gif"><small>Optional; up to 8 MB.</small></label>
+  {% if game and game.cover_name %}<label class="switch"><input type="checkbox" name="remove_cover"> Remove current cover</label>{% endif %}
+  <button>{{ 'SAVE GAME' if game else 'UPLOAD GAME' }}</button>
+</form>

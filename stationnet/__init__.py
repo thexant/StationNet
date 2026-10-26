@@ -4,7 +4,7 @@ import secrets
 from datetime import timedelta
 from pathlib import Path
 from flask import Flask, g, jsonify, redirect, render_template, request, url_for
-from . import announcements, applications, archive, auth, board, broadcast, chat, db, downloads, dungeons, events, feeds, header_taglines, imageboard, kiwix, library, mail, moderation, mud, mud_worlds, office, programs, pwa, radio, station, themes, users, videos
+from . import announcements, applications, arcade, archive, auth, board, broadcast, chat, db, downloads, dungeons, events, feeds, header_taglines, imageboard, kiwix, library, mail, moderation, mud, mud_worlds, office, programs, pwa, radio, station, themes, users, videos
 from .ansi import station_banner
 from .realtime import DirectChatStore
 from .radio import RadioStore
@@ -58,6 +58,7 @@ def create_app(test_config=None):
     app.register_blueprint(archive.bp)
     app.register_blueprint(videos.bp)
     app.register_blueprint(library.bp)
+    app.register_blueprint(arcade.bp)
     app.register_blueprint(users.bp)
     app.register_blueprint(feeds.bp)
     app.register_blueprint(announcements.bp)
@@ -138,7 +139,7 @@ def create_app(test_config=None):
             return redirect(url_for("station.index"))
         if (g.station is not None and g.user is None and not g.station["guest_access"]
                 and (endpoint == "station.terminal"
-                     or request.blueprint in {"board", "announcements", "kiwix", "videos", "library"})):
+                     or request.blueprint in {"board", "announcements", "kiwix", "videos", "library", "arcade"})):
             return redirect(url_for("auth.login", next=request.path))
 
     @app.context_processor
@@ -157,6 +158,16 @@ def create_app(test_config=None):
             response.headers["X-Frame-Options"] = "SAMEORIGIN"
             response.headers["Content-Security-Policy"] = (
                 "default-src 'none'; base-uri 'none'; frame-ancestors 'self'"
+            )
+        if request.endpoint == "arcade.player":
+            response.headers["X-Frame-Options"] = "SAMEORIGIN"
+            response.headers["Content-Security-Policy"] = (
+                "default-src 'self' data: blob:; script-src 'self' 'unsafe-inline' "
+                "'unsafe-eval' 'wasm-unsafe-eval' blob:; style-src 'self' 'unsafe-inline'; "
+                "connect-src 'self' data: blob:; img-src 'self' data: blob:; "
+                "media-src 'self' data: blob:; worker-src 'self' blob:; "
+                "font-src 'self' data:; object-src 'none'; base-uri 'none'; "
+                "frame-ancestors 'self'"
             )
         if request.endpoint in {"applications.runtime", "applications.source"}:
             # The iframe has an opaque origin (no allow-same-origin). Its CSP

@@ -25,6 +25,9 @@
   {% if g.station.library_enabled %}
     {% set services = services + [('library.index', 'LIBRARY', 'READ STATION BOOKS')] %}
   {% endif %}
+  {% if g.station.arcade_enabled %}
+    {% set services = services + [('arcade.index', 'ARCADE', 'PLAY STATION GAMES OFFLINE')] %}
+  {% endif %}
   {% if g.user %}
     {% set services = services + [
       ('chat.station_chat', 'STATION CHAT', 'LIVE STATION CHAT'),

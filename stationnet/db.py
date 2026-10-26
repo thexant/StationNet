@@ -41,6 +41,9 @@ CREATE TABLE IF NOT EXISTS station (
  kiwix_enabled INTEGER NOT NULL DEFAULT 0 CHECK(kiwix_enabled IN (0,1)),
  videos_enabled INTEGER NOT NULL DEFAULT 0 CHECK(videos_enabled IN (0,1)),
  library_enabled INTEGER NOT NULL DEFAULT 0 CHECK(library_enabled IN (0,1)),
+ arcade_enabled INTEGER NOT NULL DEFAULT 0 CHECK(arcade_enabled IN (0,1)),
+ arcade_mode TEXT NOT NULL DEFAULT 'community' CHECK(arcade_mode IN ('community','curated')),
+ arcade_default_quota_mb INTEGER NOT NULL DEFAULT 512,
  library_mode TEXT NOT NULL DEFAULT 'community' CHECK(library_mode IN ('community','curated')),
  library_default_quota_mb INTEGER NOT NULL DEFAULT 512,
  imageboard_enabled INTEGER NOT NULL DEFAULT 0 CHECK(imageboard_enabled IN (0,1)),
@@ -67,6 +70,7 @@ CREATE TABLE IF NOT EXISTS users (
  gender TEXT NOT NULL DEFAULT '', last_seen TEXT, connection_id TEXT,
  radio_quota_mb INTEGER, videos_quota_mb INTEGER, profile_photo_filename TEXT,
  library_quota_mb INTEGER,
+ arcade_quota_mb INTEGER,
  site_theme TEXT, masthead_theme TEXT,
  station_midi_enabled INTEGER NOT NULL DEFAULT 0 CHECK(station_midi_enabled IN (0,1)));
 CREATE TABLE IF NOT EXISTS account_deletion_files (
@@ -250,6 +254,20 @@ CREATE TABLE IF NOT EXISTS videos (
  stored_name TEXT NOT NULL UNIQUE, mime_type TEXT NOT NULL,
  size_bytes INTEGER NOT NULL, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);
 CREATE INDEX IF NOT EXISTS idx_videos_created ON videos(id DESC);
+CREATE TABLE IF NOT EXISTS arcade_games (
+ id INTEGER PRIMARY KEY AUTOINCREMENT,
+ uploader_id INTEGER NOT NULL REFERENCES users(id) ON DELETE RESTRICT,
+ station_post INTEGER NOT NULL DEFAULT 0 CHECK(station_post IN (0,1)),
+ title TEXT NOT NULL, description TEXT NOT NULL DEFAULT '', platform TEXT NOT NULL,
+ genre TEXT NOT NULL DEFAULT '', release_year INTEGER, developer TEXT NOT NULL DEFAULT '',
+ publisher TEXT NOT NULL DEFAULT '', players TEXT NOT NULL DEFAULT '',
+ original_name TEXT NOT NULL, stored_name TEXT NOT NULL UNIQUE,
+ size_bytes INTEGER NOT NULL, cover_name TEXT NOT NULL DEFAULT '',
+ created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+ updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);
+CREATE INDEX IF NOT EXISTS idx_arcade_games_title ON arcade_games(title COLLATE NOCASE);
+CREATE TABLE IF NOT EXISTS arcade_core_preferences (
+ platform TEXT PRIMARY KEY, core TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS video_comments (
  id INTEGER PRIMARY KEY AUTOINCREMENT,
  video_id INTEGER NOT NULL REFERENCES videos(id) ON DELETE CASCADE,
@@ -1181,6 +1199,7 @@ def init_db():
     _migrate_videos(database)
     _migrate_imageboard(database)
     _migrate_library(database)
+    _migrate_arcade(database)
     _migrate_registration_policy(database)
     _migrate_community_fields(database)
     _migrate_mail_threads(database)
@@ -1634,6 +1653,34 @@ def _migrate_videos(database):
     user_columns = {row["name"] for row in database.execute("PRAGMA table_info(users)")}
     if "videos_quota_mb" not in user_columns:
         database.execute("ALTER TABLE users ADD COLUMN videos_quota_mb INTEGER")
+
+
+def _migrate_arcade(database):
+    columns = {row["name"] for row in database.execute("PRAGMA table_info(station)")}
+    if "arcade_enabled" not in columns:
+        database.execute("ALTER TABLE station ADD COLUMN arcade_enabled INTEGER NOT NULL DEFAULT 0")
+    if "arcade_mode" not in columns:
+        database.execute("ALTER TABLE station ADD COLUMN arcade_mode TEXT NOT NULL DEFAULT 'community'")
+    if "arcade_default_quota_mb" not in columns:
+        database.execute("ALTER TABLE station ADD COLUMN arcade_default_quota_mb INTEGER NOT NULL DEFAULT 512")
+    user_columns = {row["name"] for row in database.execute("PRAGMA table_info(users)")}
+    if "arcade_quota_mb" not in user_columns:
+        database.execute("ALTER TABLE users ADD COLUMN arcade_quota_mb INTEGER")
+    database.executescript("""CREATE TABLE IF NOT EXISTS arcade_games (
+     id INTEGER PRIMARY KEY AUTOINCREMENT,
+     uploader_id INTEGER NOT NULL REFERENCES users(id) ON DELETE RESTRICT,
+     station_post INTEGER NOT NULL DEFAULT 0 CHECK(station_post IN (0,1)),
+     title TEXT NOT NULL, description TEXT NOT NULL DEFAULT '', platform TEXT NOT NULL,
+     genre TEXT NOT NULL DEFAULT '', release_year INTEGER,
+     developer TEXT NOT NULL DEFAULT '', publisher TEXT NOT NULL DEFAULT '',
+     players TEXT NOT NULL DEFAULT '', original_name TEXT NOT NULL,
+     stored_name TEXT NOT NULL UNIQUE, size_bytes INTEGER NOT NULL,
+     cover_name TEXT NOT NULL DEFAULT '',
+     created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+     updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);
+     CREATE INDEX IF NOT EXISTS idx_arcade_games_title ON arcade_games(title COLLATE NOCASE);
+     CREATE TABLE IF NOT EXISTS arcade_core_preferences (
+     platform TEXT PRIMARY KEY, core TEXT NOT NULL);""")
 
 
 def _migrate_library(database):

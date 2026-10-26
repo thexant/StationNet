@@ -12,7 +12,7 @@ from PIL import Image, ImageOps, UnidentifiedImageError
 from .auth import admin_required, invitation_digest
 from .ansi import available_header_fonts, is_available_header_font, station_banner
 from .db import get_db
-from . import character_creation, dungeons, header_taglines, mud_worlds
+from . import arcade, character_creation, dungeons, header_taglines, mud_worlds
 from . import themes
 from .markdown import render_markdown
 from .midi import InvalidMidi, MAX_MIDI_BYTES, inspect_midi
@@ -1172,6 +1172,21 @@ def settings():
                 database.commit()
                 flash("Library settings updated.", "success")
             return redirect(url_for("station.settings") + "#library-service")
+        if request.form.get("settings_section") == "arcade":
+            mode = request.form.get("arcade_mode")
+            quota = request.form.get("arcade_default_quota_mb", type=int)
+            if mode not in {"community", "curated"}:
+                flash("Select a valid Arcade mode.", "error")
+            elif quota is None or not 1 <= quota <= 10240:
+                flash("Arcade quota must be between 1 and 10240 MB.", "error")
+            else:
+                database = get_db()
+                database.execute("UPDATE station SET arcade_enabled=?,arcade_mode=?,"
+                                 "arcade_default_quota_mb=? WHERE id=1",
+                                 (request.form.get("arcade_enabled") == "on", mode, quota))
+                database.commit()
+                flash("Arcade settings updated.", "success")
+            return redirect(url_for("station.settings") + "#arcade-service")
         name = request.form.get("name", "").strip()
         description = request.form.get("description", "").strip()
         landing_message = request.form.get(
@@ -1275,7 +1290,7 @@ def settings():
         "SELECT id,name,enabled FROM library_categories ORDER BY name COLLATE NOCASE"
     ).fetchall()
     users = database.execute(
-        "SELECT id,username,callsign,radio_quota_mb,videos_quota_mb,library_quota_mb FROM users ORDER BY username COLLATE NOCASE"
+        "SELECT id,username,callsign,radio_quota_mb,videos_quota_mb,library_quota_mb,arcade_quota_mb FROM users ORDER BY username COLLATE NOCASE"
     ).fetchall()
     assignments = {row["user_id"]: row for row in database.execute(
         "SELECT a.*,u.callsign FROM radio_broadcast_assignments a JOIN users u ON u.id=a.user_id"
@@ -1346,6 +1361,7 @@ def settings():
     ).fetchall()
     event_creation_groups = {row["group_id"] for row in database.execute("SELECT group_id FROM event_creation_groups")}
     return render_template("settings.html", header_fonts=header_fonts,
+                           **arcade.settings_data(),
                            header_taglines=header_taglines.configured(g.station),
                            site_themes=themes.options("site"), masthead_themes=themes.options("masthead"),
                            custom_themes=themes.custom_themes(),
