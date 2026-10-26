@@ -8,9 +8,12 @@
   <link rel="icon" type="image/png" href="{{ url_for('pwa.icon', size=192) }}">
   <link rel="apple-touch-icon" href="{{ url_for('pwa.icon', size=192) }}">
   <title>{% block title %}StationNet{% endblock %}{% if g.station %} :: {{ g.station.name }}{% endif %}</title>
-  <link rel="stylesheet" href="{{ url_for('static',filename='station.css',v='broadcast-collapse-1') }}">
+  <link rel="stylesheet" href="{{ url_for('static',filename='station.css',v='header-taglines-1') }}">
   <link rel="stylesheet" href="{{ url_for('station.masthead_css') }}">
-  <script src="{{ url_for('static',filename='station.js',v='station-midi-volume-1') }}" defer></script>
+  {% set header_tagline = station_header_tagline() if g.station else none %}
+  {% if header_tagline and header_tagline.color %}<style nonce="{{ g.style_nonce }}">.brand-tag-current { color: {{ header_tagline.color }}; }</style>{% endif %}
+  {% block extra_styles %}{% endblock %}
+  <script src="{{ url_for('static',filename='station.js',v='header-taglines-1') }}" defer></script>
   <script src="{{ url_for('static',filename='account-deletion.js',v='1') }}" defer></script>
   <script src="{{ url_for('static',filename='pwa.js',v='1') }}" defer></script>
   <script src="{{ url_for('static',filename='feeds.js',v='1') }}" defer></script>
@@ -30,7 +33,7 @@
         {% else %}
         <pre class="ansi-logo" aria-hidden="true">{{ g.station_banner }}</pre>
         {% endif %}
-        <span class="brand-tag">{{ g.station.brand_tagline if g.station else '// YOUR COMMUNITY STATION //' }}</span>
+        {% if header_tagline %}<span class="brand-tag{% if header_tagline.color %} brand-tag-current{% endif %} tagline-effect-{{ header_tagline.effect }}"{% if header_tagline.effect == 'typewriter' %} data-tagline-typewriter{% endif %}>{% if header_tagline.effect == 'typewriter' %}<span data-typewriter-visible aria-hidden="true">{{ header_tagline.text }}</span><span class="tagline-screenreader">{{ header_tagline.text }}</span>{% else %}{{ header_tagline.text }}{% endif %}</span>{% elif not g.station %}<span class="brand-tag">// YOUR COMMUNITY STATION //</span>{% endif %}
       </a>
 
       {% if g.station %}

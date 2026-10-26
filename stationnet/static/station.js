@@ -256,6 +256,77 @@ const localTimestamp=value=>{
   return Number.isNaN(timestamp.getTime())?value:timestamp.toLocaleString([],{dateStyle:"medium",timeStyle:"short"});
 };
 for(const time of document.querySelectorAll("[data-local-time]"))time.textContent=localTimestamp(time.dateTime||time.textContent);
+const reducedTaglineMotion=window.matchMedia("(prefers-reduced-motion: reduce)");
+const taglineTimers=new WeakMap();
+const typeTagline=(element,value)=>{
+  clearInterval(taglineTimers.get(element));
+  element.dataset.taglineFullText=value;
+  element.textContent=value;
+  if(reducedTaglineMotion.matches)return;
+  const characters=typeof Intl.Segmenter==="function"?[...new Intl.Segmenter(undefined,{granularity:"grapheme"}).segment(value)].map(part=>part.segment):Array.from(value);
+  element.textContent="";
+  let position=0;
+  const timer=setInterval(()=>{
+    position=Math.min(position+1,characters.length);
+    element.textContent=characters.slice(0,position).join("");
+    if(position===characters.length){clearInterval(timer);taglineTimers.delete(element)}
+  },Math.max(25,Math.min(70,2400/Math.max(characters.length,1))));
+  taglineTimers.set(element,timer);
+};
+for(const tagline of document.querySelectorAll("[data-tagline-typewriter]")){
+  const visible=tagline.querySelector("[data-typewriter-visible]");
+  if(visible)typeTagline(visible,visible.textContent);
+}
+reducedTaglineMotion.addEventListener?.("change",()=>{
+  if(reducedTaglineMotion.matches){
+    for(const element of document.querySelectorAll("[data-tagline-full-text]")){
+      clearInterval(taglineTimers.get(element));
+      element.textContent=element.dataset.taglineFullText;
+    }
+  }
+});
+for(const editor of document.querySelectorAll("[data-tagline-editor]")){
+  const list=editor.querySelector("[data-tagline-list]");
+  const template=editor.querySelector("[data-tagline-template]");
+  const output=editor.querySelector("[data-tagline-preview-output]");
+  const style=editor.querySelector("[data-tagline-preview-style]");
+  const original=list.innerHTML;
+  const preview=row=>{
+    const value=row.querySelector("[data-tagline-text]").value;
+    const effect=row.querySelector("[data-tagline-effect]").value;
+    const mode=row.querySelector("[data-tagline-color-mode]").value;
+    const color=row.querySelector("[data-tagline-color-value]").value;
+    clearInterval(taglineTimers.get(output));
+    output.className=`brand-tag tagline-effect-${effect}${mode==="custom"?" tagline-preview-current":""}`;
+    style.textContent=mode==="custom"?`.tagline-preview-current { color: ${color}; }`:"";
+    if(effect==="typewriter")typeTagline(output,value);
+    else output.textContent=value;
+  };
+  editor.querySelector("[data-tagline-add]").addEventListener("click",()=>{
+    if(list.children.length>=32){editor.querySelector("[data-tagline-status]").textContent="A station can have up to 32 taglines.";return}
+    const row=template.content.firstElementChild.cloneNode(true);
+    list.append(row);
+    editor.querySelector("[data-tagline-status]").textContent="Tagline added. Save to apply changes.";
+    row.querySelector("[data-tagline-text]").focus();
+  });
+  list.addEventListener("click",event=>{
+    const button=event.target.closest("button");
+    const row=button?.closest("[data-tagline-row]");
+    if(!row)return;
+    if(button.matches("[data-tagline-preview-button]"))preview(row);
+    else if(button.matches("[data-tagline-delete]")){row.remove();output.className="brand-tag";output.textContent="Choose PREVIEW on a tagline to see its current text, color, and effect.";style.textContent=""}
+    else if(button.matches("[data-tagline-up]")&&row.previousElementSibling)list.insertBefore(row,row.previousElementSibling);
+    else if(button.matches("[data-tagline-down]")&&row.nextElementSibling)list.insertBefore(row.nextElementSibling,row);
+  });
+  editor.addEventListener("reset",()=>setTimeout(()=>{
+    list.innerHTML=original;
+    clearInterval(taglineTimers.get(output));
+    output.className="brand-tag";
+    output.textContent="Choose PREVIEW on a tagline to see its current text, color, and effect.";
+    style.textContent="";
+    editor.querySelector("[data-tagline-status]").textContent="Changes canceled.";
+  }));
+}
 document.addEventListener("keydown",e=>{const editing=e.target instanceof HTMLInputElement||e.target instanceof HTMLTextAreaElement||e.target instanceof HTMLSelectElement||e.target?.isContentEditable;if(e.key==="/"&&!editing&&!e.ctrlKey&&!e.metaKey&&!e.altKey){e.preventDefault();const command=document.querySelector("[data-command-input]");if(command){command.focus();if(!command.value)command.value="/"}else document.querySelector("#service-nav")?.focus()}});
 for(const selector of document.querySelectorAll("[data-theme-selector]")){
   const preview=selector.closest("form")?.querySelector(`[data-theme-preview="${selector.dataset.themeSelector}"]`);

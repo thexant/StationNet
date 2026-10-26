@@ -114,7 +114,12 @@ function start() {
     g.prepend(node); return g;
   }
   function renderCanvas() {
-    const scale = zoom === 'fit' ? Math.min(1, Math.max(.15, ($('#draw-stage').clientWidth - 50) / drawing.width)) : zoom;
+    const stage = $('#draw-stage');
+    const padding = window.matchMedia('(max-width: 700px)').matches ? 26 : 50;
+    const scale = zoom === 'fit' ? Math.min(3, Math.max(.15, Math.min(
+      (stage.clientWidth - padding) / drawing.width,
+      (stage.clientHeight - padding) / drawing.height,
+    ))) : zoom;
     svg.setAttribute('viewBox', `0 0 ${drawing.width} ${drawing.height}`); svg.style.width = `${drawing.width * scale}px`; svg.style.height = `${drawing.height * scale}px`;
     svg.replaceChildren(svgEl('rect', { width: drawing.width, height: drawing.height, fill: drawing.background || '#ffffff', 'pointer-events': 'none' }));
     for (const o of drawing.objects) svg.append(shapeNode(o));

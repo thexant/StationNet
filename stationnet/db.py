@@ -15,6 +15,7 @@ CREATE TABLE IF NOT EXISTS station (
  landing_message_enabled INTEGER NOT NULL DEFAULT 1
  CHECK(landing_message_enabled IN (0,1)),
  brand_tagline TEXT NOT NULL DEFAULT 'H7/dS! // YOUR INDEPENDENT COMMUNITY STATION //',
+ header_taglines_json TEXT,
  display_station_icon INTEGER NOT NULL DEFAULT 0 CHECK(display_station_icon IN (0,1)),
  use_station_icon_for_web_app INTEGER NOT NULL DEFAULT 0 CHECK(use_station_icon_for_web_app IN (0,1)),
  play_station_midi INTEGER NOT NULL DEFAULT 0 CHECK(play_station_midi IN (0,1)),
@@ -1139,6 +1140,7 @@ def init_db():
     _migrate_office(database)
     _migrate_mud_dungeon_content_types(database)
     _migrate_station_customization(database)
+    _migrate_header_taglines(database)
     _migrate_station_midi(database)
     _migrate_themes(database)
     _migrate_user_feeds(database)
@@ -1710,6 +1712,20 @@ def _migrate_station_customization(database):
             "H7/dS! // YOUR INDEPENDENT COMMUNITY NODE //",
         ),
     )
+
+
+def _migrate_header_taglines(database):
+    """Keep the existing tagline as the first entry on older installations."""
+    columns = {row["name"] for row in database.execute("PRAGMA table_info(station)")}
+    if "header_taglines_json" not in columns:
+        database.execute("ALTER TABLE station ADD COLUMN header_taglines_json TEXT")
+    for row in database.execute(
+        "SELECT id,brand_tagline FROM station WHERE header_taglines_json IS NULL"
+    ).fetchall():
+        database.execute(
+            "UPDATE station SET header_taglines_json=? WHERE id=?",
+            (json.dumps([{"text": row["brand_tagline"], "color": "", "effect": "none"}], ensure_ascii=False), row["id"]),
+        )
 
 
 def _migrate_station_midi(database):

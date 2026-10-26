@@ -12,7 +12,7 @@ from PIL import Image, ImageOps, UnidentifiedImageError
 from .auth import admin_required, invitation_digest
 from .ansi import available_header_fonts, is_available_header_font, station_banner
 from .db import get_db
-from . import character_creation, dungeons, mud_worlds
+from . import character_creation, dungeons, header_taglines, mud_worlds
 from . import themes
 from .markdown import render_markdown
 from .midi import InvalidMidi, MAX_MIDI_BYTES, inspect_midi
@@ -1043,6 +1043,20 @@ def save_videos_user_quota(user_id):
 def settings():
     if request.method == "POST":
         validate_csrf()
+        if request.form.get("settings_section") == "header_taglines":
+            try:
+                entries = header_taglines.parse_form(request.form)
+            except ValueError as error:
+                flash(str(error), "error")
+            else:
+                database = get_db()
+                database.execute(
+                    "UPDATE station SET header_taglines_json=?,brand_tagline=? WHERE id=1",
+                    (json.dumps(entries, ensure_ascii=False), entries[0]["text"] if entries else ""),
+                )
+                database.commit()
+                flash("Header taglines updated.", "success")
+            return redirect(url_for("station.settings") + "#header-taglines")
         if request.form.get("settings_section") == "events":
             permission = request.form.get("events_create_permission")
             if permission not in {"sysops", "groups", "members"}:
@@ -1155,7 +1169,7 @@ def settings():
         elif len(description) > 500: flash("Station description cannot exceed 500 characters.", "error")
         elif len(landing_heading) > 100: flash("Landing message heading cannot exceed 100 characters.", "error")
         elif len(landing_message) > 4000: flash("Landing message cannot exceed 4000 characters.", "error")
-        elif not 1 <= len(brand_tagline) <= 160: flash("Header tagline must be between 1 and 160 characters.", "error")
+        elif "brand_tagline" in request.form and not 1 <= len(brand_tagline) <= 160: flash("Header tagline must be between 1 and 160 characters.", "error")
         elif len(header_text) > 80: flash("Banner text must be 80 characters or fewer.", "error")
         elif not is_available_header_font(header_font): flash("Select a valid FIGlet header style.", "error")
         elif header_color and not HEX_COLOR_RE.fullmatch(header_color): flash("Banner color must be a six-digit hexadecimal color.", "error")
@@ -1202,6 +1216,17 @@ def settings():
                     file_limit,
                 ) + access_values,
             )
+            if "brand_tagline" in request.form:
+                # Older station settings forms still submit the single tagline.
+                current = header_taglines.configured(g.station)
+                if current:
+                    current[0] = {**current[0], "text": brand_tagline}
+                else:
+                    current = [{"text": brand_tagline, "color": "", "effect": "none"}]
+                database.execute(
+                    "UPDATE station SET header_taglines_json=? WHERE id=1",
+                    (json.dumps(current, ensure_ascii=False),),
+                )
             database.commit(); flash("Station parameters updated.", "success")
             return redirect(url_for("station.settings"))
     database = get_db()
@@ -1284,6 +1309,7 @@ def settings():
     ).fetchall()
     event_creation_groups = {row["group_id"] for row in database.execute("SELECT group_id FROM event_creation_groups")}
     return render_template("settings.html", header_fonts=header_fonts,
+                           header_taglines=header_taglines.configured(g.station),
                            site_themes=themes.options("site"), masthead_themes=themes.options("masthead"),
                            custom_themes=themes.custom_themes(),
                            station_icon_exists=_station_icon_path().is_file(),

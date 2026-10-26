@@ -1,5 +1,17 @@
 {% extends 'base.html' %}
 {% block title %}SYSOP Settings{% endblock %}
+{% block extra_styles %}<style nonce="{{ g.style_nonce }}" data-tagline-preview-style></style>{% endblock %}
+{% macro tagline_row(entry) %}
+<div class="tagline-editor-row" data-tagline-row>
+  <label>Tagline text<input name="tagline_text" maxlength="160" required value="{{ entry.text }}" placeholder="★ YOUR STATION MESSAGE ★" data-tagline-text></label>
+  <div class="tagline-editor-options">
+    <label>Text color<select name="tagline_color_mode" data-tagline-color-mode><option value="inherit" {% if not entry.color %}selected{% endif %}>Inherit station theme</option><option value="custom" {% if entry.color %}selected{% endif %}>Custom color</option></select></label>
+    <label>Custom color<input type="color" name="tagline_color_value" value="{{ entry.color or '#e6a431' }}" data-tagline-color-value></label>
+    <label>Animation<select name="tagline_effect" data-tagline-effect><option value="none" {% if entry.effect == 'none' %}selected{% endif %}>None (static)</option><option value="blink" {% if entry.effect == 'blink' %}selected{% endif %}>Blink</option><option value="rainbow" {% if entry.effect == 'rainbow' %}selected{% endif %}>Rainbow / Color Cycle</option><option value="glow" {% if entry.effect == 'glow' %}selected{% endif %}>Glow / Pulse</option><option value="typewriter" {% if entry.effect == 'typewriter' %}selected{% endif %}>Typewriter</option></select></label>
+  </div>
+  <div class="button-row tagline-editor-actions"><button type="button" class="secondary" data-tagline-preview-button>PREVIEW</button><button type="button" class="secondary" data-tagline-up aria-label="Move tagline up">↑ UP</button><button type="button" class="secondary" data-tagline-down aria-label="Move tagline down">↓ DOWN</button><button type="button" class="text-button" data-tagline-delete>DELETE</button></div>
+</div>
+{% endmacro %}
 {% block content %}
 <nav class="subnav settings-jump-nav" aria-label="Settings sections"><a href="#station-parameters">STATION</a><a href="#access-policy">ACCESS</a><a href="#events-service">EVENTS</a><a href="#user-feeds">USER FEEDS</a><a href="#office-suite">OFFICE</a><a href="#videos-service">VIDEOS</a><a href="#imageboard-service">IMAGEBOARD</a><a href="#kiwix-service">WIKI</a><a href="#mud-service">MUD</a><a href="#dungeon-themes">DUNGEON THEMES</a><a href="#mud-daily">DAILY MUD</a><a href="#radio-storage">RADIO STORAGE</a><a href="#radio-spectrum">SPECTRUM</a><a href="#broadcast-frequencies">FREQUENCIES</a><a href="#radio-permissions">PERMISSIONS</a><a href="#radio-users">USERS</a><a href="{{ url_for('moderation.dashboard') }}">MODERATION</a><a href="{{ url_for('application_admin.manage') }}">PROGRAMS</a></nav>
 <section class="narrow terminal-card collapsible-panel" id="station-parameters" data-collapsible-panel data-panel-key="sysop-station-parameters">
@@ -41,6 +53,16 @@
     <button type="submit" class="secondary">CLEAR MIDI THEME</button>
   </form>
   {% endif %}
+  <form method="post" action="{{ url_for('station.settings') }}" class="form-grid tagline-editor" id="header-taglines" data-tagline-editor>
+    <input type="hidden" name="csrf_token" value="{{ session.csrf_token }}"><input type="hidden" name="settings_section" value="header_taglines">
+    <div class="divider">HEADER TAGLINES</div>
+    <p class="muted">One message is picked when each page opens. The same message is avoided on the next page when possible. Symbols and Unicode text are welcome. Rainbow cycles colors while active; the selected color appears when motion is reduced.</p>
+    <div class="tagline-editor-list" data-tagline-list>{% for entry in header_taglines %}{{ tagline_row(entry) }}{% endfor %}</div>
+    <template data-tagline-template>{{ tagline_row({'text': '', 'color': '', 'effect': 'none'}) }}</template>
+    <div class="button-row"><button type="button" class="secondary" data-tagline-add>ADD TAGLINE</button><small data-tagline-status role="status"></small></div>
+    <div class="tagline-preview-panel"><span class="eyebrow">TAGLINE PREVIEW</span><span class="brand-tag" data-tagline-preview-output>Choose PREVIEW on a tagline to see its current text, color, and effect.</span></div>
+    <div class="button-row"><button>SAVE TAGLINES</button><button type="reset" class="secondary">CANCEL CHANGES</button></div>
+  </form>
   <form method="post" action="{{ url_for('station.settings') }}" class="form-grid" data-banner-editor data-preview-url="{{ url_for('station.banner_preview') }}">
     <input type="hidden" name="csrf_token" value="{{ session.csrf_token }}">
     <label>Station name
@@ -59,10 +81,6 @@
     <label>Message body (Markdown supported)
       <textarea name="landing_message" maxlength="4000" rows="7" placeholder="Use the automatic access-aware welcome message">{{ g.station.landing_message }}</textarea>
       <small>Supports headings, lists, links, emphasis, quotes, and code. Leave blank to use the automatic welcome message.</small>
-    </label>
-    <label>Header tagline
-      <input name="brand_tagline" maxlength="160" required value="{{ g.station.brand_tagline }}">
-      <small>Shown beneath the station logo on every page.</small>
     </label>
     <div class="divider">STATION THEMES</div>
     <label>Site-wide theme

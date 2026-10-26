@@ -6,3 +6,14 @@
 .draw-properties{border:1px solid var(--border-soft);background:var(--surface-field);padding:.55rem;align-self:start;display:grid;gap:.48rem}.draw-properties p{font-size:.68rem;color:var(--grey);margin:0}.draw-properties label{display:flex;justify-content:space-between;align-items:center;gap:.35rem;font-size:.64rem;color:var(--cyan)}.draw-properties label input[type=number]{width:72px}.draw-properties label input[type=color]{width:42px;height:28px;padding:0}.draw-properties label input[type=range]{width:65px}.draw-properties output{min-width:32px;color:var(--green)}.draw-properties button{font-size:.66rem}
 #draw-message{margin:.5rem 0;padding:.55rem;border:1px solid var(--red-dim);color:var(--red);font-size:.72rem}#draw-message button{margin-left:.4rem}
 @media(max-width:1050px){.draw-workspace{grid-template-columns:1fr}.draw-library ul{display:flex;gap:.35rem;max-height:none;overflow:auto}.draw-library li{flex:0 0 155px}.draw-library p{display:none}}@media(max-width:700px){.draw-body{grid-template-columns:1fr}.draw-stage{min-height:380px;max-height:60vh;padding:12px}.draw-properties{grid-template-columns:repeat(2,minmax(0,1fr));gap:.55rem}.draw-properties h2,.draw-properties p{grid-column:1/-1}.draw-file-row>div{width:100%}.draw-file-row>div button{flex:1}.draw-toolbar button,.draw-command-row button{min-height:38px}.draw-help{line-height:1.5}}
+
+/* Give the drawing workspace the same desktop room as Sheets and Presentations. */
+.draw-page .station-shell{width:min(2200px,100%)}
+.draw-app{width:100%;max-width:none}
+.draw-library,.draw-editor{width:100%;margin:0;min-width:0}
+.draw-workspace{grid-template-columns:minmax(210px,240px) minmax(0,1fr);gap:1rem}
+.draw-body{grid-template-columns:minmax(0,1fr) minmax(190px,220px);gap:1rem;min-height:0}
+.draw-stage{width:100%;height:min(74vh,1100px);min-height:520px;max-height:none}
+.draw-stage svg{margin-inline:auto}
+@media(max-width:1050px){.draw-workspace{grid-template-columns:1fr}}
+@media(max-width:700px){.draw-body{grid-template-columns:1fr}.draw-stage{height:60vh;min-height:380px;max-height:620px;padding:12px}}

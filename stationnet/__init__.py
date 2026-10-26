@@ -4,7 +4,7 @@ import secrets
 from datetime import timedelta
 from pathlib import Path
 from flask import Flask, g, jsonify, redirect, render_template, request, url_for
-from . import announcements, applications, archive, auth, board, broadcast, chat, db, downloads, dungeons, events, feeds, imageboard, kiwix, mail, moderation, mud, mud_worlds, office, programs, pwa, radio, station, themes, users, videos
+from . import announcements, applications, archive, auth, board, broadcast, chat, db, downloads, dungeons, events, feeds, header_taglines, imageboard, kiwix, mail, moderation, mud, mud_worlds, office, programs, pwa, radio, station, themes, users, videos
 from .ansi import station_banner
 from .realtime import DirectChatStore
 from .radio import RadioStore
@@ -78,6 +78,7 @@ def create_app(test_config=None):
 
     @app.before_request
     def context():
+        g.style_nonce = secrets.token_urlsafe(16)
         from .account_deletion import purge_pending_files
         purge_pending_files()
         auth.load_logged_in_user()
@@ -139,13 +140,17 @@ def create_app(test_config=None):
                      or request.blueprint in {"board", "announcements", "kiwix", "videos"})):
             return redirect(url_for("auth.login", next=request.path))
 
+    @app.context_processor
+    def tagline_context():
+        return {"station_header_tagline": lambda: header_taglines.pick_for_page(g.station)}
+
     @app.after_request
     def headers(response):
         response.headers.update({
             "X-Content-Type-Options": "nosniff", "X-Frame-Options": "DENY",
             "Referrer-Policy": "no-referrer" if request.endpoint == "auth.register" else "same-origin",
             "Permissions-Policy": "microphone=(self)",
-            "Content-Security-Policy": "default-src 'self'; style-src 'self'; script-src 'self' 'wasm-unsafe-eval'; img-src 'self' data: blob:; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'",
+            "Content-Security-Policy": f"default-src 'self'; style-src 'self' 'nonce-{g.style_nonce}'; script-src 'self' 'wasm-unsafe-eval'; img-src 'self' data: blob:; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'",
         })
         if request.endpoint in {"applications.runtime", "applications.source"}:
             # The iframe has an opaque origin (no allow-same-origin). Its CSP
