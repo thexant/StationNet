@@ -91,10 +91,14 @@
         <a class="activity-item activity-count" href="{{ url_for('mail.inbox') }}">
           <span>UNOPENED MESSAGES</span><strong>{{ activity.unread_mail }}</strong><small>{{ 'UNREAD MESSAGE' if activity.unread_mail == 1 else 'UNREAD MESSAGES' }}</small>
         </a>
-        <a class="activity-item activity-broadcasts" href="{{ url_for('radio.console') }}">
-          <span>ACTIVE BROADCASTS</span>
-          {% for broadcast in activity.broadcasts %}<div class="activity-broadcast"><strong>{{ broadcast.name }}</strong><small>{{ broadcast.frequency }} MHz / {% if broadcast.automated %}STATION AUTOMATION{% else %}{{ broadcast.username }} - [{{ broadcast.callsign }}]{% endif %}</small>{% if broadcast.message %}<p>{{ broadcast.message }}</p>{% endif %}<em>{{ broadcast.track_title }}{% if broadcast.track_artist %} / {{ broadcast.track_artist }}{% endif %}</em></div>{% else %}<em>NO AUTHORIZED BROADCASTS ON AIR</em>{% endfor %}
-        </a>
+        <div class="activity-broadcasts" data-activity-broadcasts>
+          <a class="activity-item activity-broadcast-link" id="activity-broadcast-list" href="{{ url_for('radio.console') }}">
+            <span>ACTIVE BROADCASTS</span>
+            {% for broadcast in activity.broadcasts %}<div class="activity-broadcast"{% if loop.index > 5 %} hidden{% endif %}><strong>{{ broadcast.name }}</strong><small>{{ broadcast.frequency }} MHz / {% if broadcast.automated %}STATION AUTOMATION{% else %}{{ broadcast.username }} - [{{ broadcast.callsign }}]{% endif %}</small>{% if broadcast.message %}<p>{{ broadcast.message }}</p>{% endif %}<em>{{ broadcast.track_title }}{% if broadcast.track_artist %} / {{ broadcast.track_artist }}{% endif %}</em></div>{% else %}<em>NO AUTHORIZED BROADCASTS ON AIR</em>{% endfor %}
+            {% if activity.broadcasts|length > 5 %}<small class="activity-broadcast-more" data-activity-broadcast-more>and {{ activity.broadcasts|length - 5 }} more</small>{% endif %}
+          </a>
+          {% if activity.broadcasts|length > 5 %}<button class="activity-broadcast-toggle" type="button" aria-label="Show all active broadcasts" aria-controls="activity-broadcast-list" aria-expanded="false" data-activity-broadcast-toggle><span aria-hidden="true">&#9662;</span></button>{% endif %}
+        </div>
       </div>
     </aside>
     {% endif %}

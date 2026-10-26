@@ -301,6 +301,20 @@ for(const panel of document.querySelectorAll("[data-collapsible-panel]")){
   toggle.addEventListener("click",()=>setExpanded(!expanded));
 }
 
+for(const section of document.querySelectorAll("[data-activity-broadcasts]")){
+  const toggle=section.querySelector("[data-activity-broadcast-toggle]");
+  if(!toggle)continue;
+  const broadcasts=section.querySelectorAll(".activity-broadcast[hidden]");
+  const more=section.querySelector("[data-activity-broadcast-more]");
+  toggle.addEventListener("click",()=>{
+    const expanded=toggle.getAttribute("aria-expanded")!=="true";
+    toggle.setAttribute("aria-expanded",String(expanded));
+    toggle.setAttribute("aria-label",expanded?"Show fewer active broadcasts":"Show all active broadcasts");
+    for(const broadcast of broadcasts)broadcast.hidden=!expanded;
+    if(more)more.hidden=expanded;
+  });
+}
+
 if(document.body.dataset.presenceUrl){
   setInterval(()=>fetch(document.body.dataset.presenceUrl,{cache:"no-store"}).catch(()=>{}),20000);
 }
