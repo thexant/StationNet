@@ -642,7 +642,8 @@ body.application-immersive .app-canvas-controls.app-canvas-gamepad { width: 100%
 .application-return { margin: 0 1rem 1rem; }
 .application-immersive-exit { position: fixed; top: .65rem; right: .65rem; z-index: 40; color: #000; border-color: var(--amber); background: var(--amber); }
 .application-immersive-exit[hidden] { display: none; }
-.application-fullscreen-exit { position: fixed; top: max(.65rem, env(safe-area-inset-top)); right: max(.65rem, env(safe-area-inset-right)); z-index: 50; color: #000; border-color: var(--amber); background: var(--amber); }
+.application-fullscreen-exit { position: fixed; top: max(.65rem, env(safe-area-inset-top)); right: max(.65rem, env(safe-area-inset-right)); z-index: 50; padding: .45rem .65rem; color: var(--grey); border-color: var(--border-muted); background: rgba(0, 0, 0, .82); font-size: var(--text-xs); }
+.application-fullscreen-exit:hover, .application-fullscreen-exit:focus-visible { color: var(--cyan); border-color: var(--cyan); background: var(--surface-soft-hover); }
 .application-fullscreen-exit[hidden] { display: none; }
 body.application-immersive { overflow: hidden; }
 body.application-immersive .station-shell { width: 100%; height: 100dvh; padding: 0; grid-template-rows: 1fr; }
@@ -675,6 +676,8 @@ body.application-immersive .app-canvas { width: 100%; max-height: var(--app-canv
 .application-display:fullscreen .application-return { display: none; }
 .application-display:fullscreen .application-viewport { display: flex; flex: 1 1 0; flex-direction: column; min-width: 0; min-height: 0; margin: 0; border: 0; }
 .application-display:fullscreen .application-surface { display: grid; flex: 1 1 0; align-content: start; justify-items: stretch; box-sizing: border-box; width: 100%; min-width: 0; min-height: 0; margin: 0; overflow: auto; overscroll-behavior: contain; padding: var(--app-fullscreen-top) max(.65rem, env(safe-area-inset-right)) max(.65rem, env(safe-area-inset-bottom)) max(.65rem, env(safe-area-inset-left)); }
+.application-display:fullscreen[data-fullscreen-target="application"] .application-surface { width: min(100%, 68rem); margin-inline: auto; }
+.application-display:fullscreen[data-fullscreen-target="application"] .app-canvas-wrap { justify-self: center; }
 .application-display:fullscreen .app-canvas-wrap { --app-canvas-height: auto; width: min(100%, calc(70dvh * var(--app-canvas-ratio, 1))); max-width: none; }
 .application-display:fullscreen .app-canvas { width: 100%; max-height: none; box-sizing: border-box; }
 .application-display:fullscreen .app-canvas-controls.app-canvas-gamepad { width: 100%; }

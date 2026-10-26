@@ -155,6 +155,7 @@ def test_browser_fullscreen_restores_layout_and_scales_canvas(tmp_path, mobile):
                 assert metrics["x"] >= 0 and metrics["y"] >= 0
                 assert metrics["x"] + metrics["width"] <= metrics["screenWidth"] + 1
                 assert metrics["y"] + metrics["height"] <= metrics["screenHeight"] + 1
+                assert abs(metrics["x"] + metrics["width"] / 2 - metrics["screenWidth"] / 2) < 2
                 assert abs(metrics["width"] / metrics["height"] - metrics["logicalWidth"] / metrics["logicalHeight"]) < 0.03
                 if mobile:
                     assert page.locator(".app-canvas-gamepad").is_visible()
@@ -177,6 +178,7 @@ def test_browser_fullscreen_restores_layout_and_scales_canvas(tmp_path, mobile):
                         { type: 'button', label: 'BOTTOM CONTROL' }] } }));
                 }""")
                 surface = page.locator("[data-app-surface]")
+                assert surface.evaluate("node => { const r = node.getBoundingClientRect(); return Math.abs(r.left + r.width / 2 - innerWidth / 2) < 2; }")
                 top = page.get_by_text("TOP CONTROL")
                 bottom = page.get_by_role("button", name="BOTTOM CONTROL")
                 assert top.evaluate("node => node.getBoundingClientRect().top >= 0")
