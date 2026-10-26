@@ -312,7 +312,7 @@
       <span class="collapsible-panel-chevron" aria-hidden="true"></span>
     </button>
     <div id="library-service-content" data-panel-content>
-      <p class="muted">EPUB books stay in station data when disabled. Community allows member contributions; curated allows station uploads only.</p>
+      <p class="muted">EPUB books and PDF documents stay in station data when disabled. Community allows member contributions; curated allows station uploads only.</p>
       <form method="post" action="{{ url_for('station.settings') }}" class="form-grid">
         <input type="hidden" name="csrf_token" value="{{ session.csrf_token }}"><input type="hidden" name="settings_section" value="library">
         <label class="switch"><input type="checkbox" name="library_enabled" {% if g.station.library_enabled %}checked{% endif %}> Enable Library</label>
@@ -324,10 +324,10 @@
       <p class="muted">Member uploads use the station default unless a user has an override. Station books do not count toward member quotas.</p>
       <div class="quota-admin-list">{% for user in users %}<form method="post" action="{{ url_for('station.save_library_user_quota',user_id=user.id) }}" class="inline-form"><input type="hidden" name="csrf_token" value="{{ session.csrf_token }}"><label>{{ user.username }} / {{ user.callsign }}<input type="number" name="library_quota_mb" min="1" max="10240" value="{{ user.library_quota_mb or '' }}" placeholder="INHERIT {{ g.station.library_default_quota_mb }} MB"><small>Leave blank to inherit the default.</small></label><button class="secondary">SAVE QUOTA</button></form>{% endfor %}</div>
       <h3>Upload a station book</h3>
-      <p class="muted">Title, author, description, and cover are read from the EPUB.</p>
+      <p class="muted">Details are read from EPUB or PDF metadata. PDFs receive a catalogue cover from their title.</p>
       <form method="post" action="{{ url_for('library.station_upload') }}" enctype="multipart/form-data" class="form-grid">
         <input type="hidden" name="csrf_token" value="{{ session.csrf_token }}">
-        <label>EPUB book (up to 50 MB)<input type="file" name="file" accept=".epub,application/epub+zip" required></label>
+        <label>EPUB or PDF (up to 50 MB)<input type="file" name="file" accept=".epub,.pdf,application/epub+zip,application/pdf" required></label>
         <button>UPLOAD STATION BOOK</button>
       </form>
       {% endif %}

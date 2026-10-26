@@ -1,16 +1,19 @@
-"""Offline EPUB library and themed chapter reader."""
+"""Offline EPUB and PDF library with integrated readers."""
 import html
 from html.parser import HTMLParser
 import io
 from pathlib import Path
 import posixpath
 import secrets
+import textwrap
 from urllib.parse import unquote
 import zipfile
 import xml.etree.ElementTree as ET
+from pypdf import PdfReader
+from pypdf.errors import PdfReadError
 
 from flask import (Blueprint, abort, current_app, flash, g, jsonify, redirect,
-                   render_template, request, send_file, url_for)
+                   render_template, request, send_file, url_for, Response)
 
 from .auth import login_required
 from .db import get_db
@@ -22,6 +25,27 @@ MAX_BOOK_BYTES = 50 * 1024 * 1024
 MAX_EXPANDED_BYTES = 150 * 1024 * 1024
 IMAGE_TYPES = {".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg",
                ".gif": "image/gif", ".webp": "image/webp"}
+
+
+def _pdf_fields(data):
+    if not data.startswith(b"%PDF-"):
+        raise ValueError("Invalid PDF header")
+    reader = PdfReader(io.BytesIO(data), strict=False)
+    if reader.is_encrypted:
+        raise ValueError("Encrypted PDFs are not supported")
+    count = len(reader.pages)
+    if count < 1 or count > 10000:
+        raise ValueError("Invalid PDF page count")
+    metadata = reader.metadata or {}
+    def field(key):
+        value = metadata.get(key, "")
+        return " ".join(str(value or "").split())
+    return ({"title": field("/Title"), "creator": field("/Author"),
+             "description": field("/Subject")}, count)
+
+
+def _format(book):
+    return book["format"] if book["format"] in {"epub", "pdf"} else "epub"
 
 
 @bp.before_request
@@ -241,16 +265,23 @@ def index():
 
 def _save_upload(station_post):
     uploaded = request.files.get("file")
-    if not uploaded or Path(uploaded.filename or "").suffix.lower() != ".epub":
-        return "Select an EPUB book."
+    kind = Path(uploaded.filename or "").suffix.lower().lstrip(".") if uploaded else ""
+    if kind not in {"epub", "pdf"}:
+        return "Select an EPUB or PDF document."
     data = uploaded.stream.read(MAX_BOOK_BYTES + 1)
     if len(data) > MAX_BOOK_BYTES:
-        return "EPUB exceeds the 50 MB limit."
+        return "Document exceeds the 50 MB limit."
     try:
-        with zipfile.ZipFile(io.BytesIO(data)) as zf:
-            fields, _, _, _, cover = _archive(zf)
-    except (ValueError, KeyError, zipfile.BadZipFile, ET.ParseError, RuntimeError):
-        return "EPUB is invalid, encrypted, or contains unsafe resources."
+        if kind == "epub":
+            with zipfile.ZipFile(io.BytesIO(data)) as zf:
+                fields, _, _, _, cover = _archive(zf)
+            page_count = 0
+        else:
+            fields, page_count = _pdf_fields(data)
+            cover = ""
+    except (ValueError, KeyError, zipfile.BadZipFile, ET.ParseError, RuntimeError,
+            PdfReadError, TypeError, IndexError):
+        return "Document is invalid, encrypted, or contains unsafe resources."
     title = fields.get("title", "").strip()[:150] or Path(uploaded.filename).stem[:150]
     author = fields.get("creator", "")[:150]
     description = fields.get("description", "")[:5000]
@@ -258,7 +289,7 @@ def _save_upload(station_post):
     folder = Path(current_app.config["DATA_DIR"]) / "library" / (
         "station" if station_post else f"users/{g.user['id']}")
     folder.mkdir(parents=True, exist_ok=True)
-    filename = secrets.token_hex(20) + ".epub"
+    filename = secrets.token_hex(20) + "." + kind
     path = folder / filename
     saved = False
     try:
@@ -271,12 +302,12 @@ def _save_upload(station_post):
             output.write(data)
         cursor = database.execute(
             "INSERT INTO library_books(uploader_id,station_post,title,author,description,language,"
-            "publisher,identifier,stored_name,original_name,size_bytes,cover_path) "
-            "VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
+            "publisher,identifier,stored_name,original_name,size_bytes,cover_path,format,page_count) "
+            "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
             (g.user["id"], station_post, title, author, description,
              fields.get("language", "")[:80], fields.get("publisher", "")[:150],
              fields.get("identifier", "")[:250], filename, Path(uploaded.filename).name[:250],
-             len(data), cover))
+             len(data), cover, kind, page_count))
         database.commit()
         saved = True
         return cursor.lastrowid
@@ -332,13 +363,37 @@ def download(book_id):
     path = _path(book)
     if not path.is_file():
         abort(404)
-    return send_file(path, mimetype="application/epub+zip", as_attachment=True,
+    return send_file(path, mimetype="application/pdf" if _format(book) == "pdf" else "application/epub+zip", as_attachment=True,
                      download_name=book["original_name"], conditional=True)
+
+
+@bp.get("/<int:book_id>/pdf")
+def pdf_file(book_id):
+    book = _book(book_id)
+    if _format(book) != "pdf" or not _path(book).is_file():
+        abort(404)
+    response = send_file(_path(book), mimetype="application/pdf", conditional=True)
+    response.headers["Content-Disposition"] = "inline"
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    return response
 
 
 @bp.get("/<int:book_id>/cover")
 def cover(book_id):
     book = _book(book_id)
+    if _format(book) == "pdf":
+        title_lines = textwrap.wrap(book["title"][:100], width=18,
+                                    break_long_words=True, break_on_hyphens=False)[:6]
+        title = "".join(f'<tspan x="42" dy="38">{html.escape(line)}</tspan>'
+                        for line in title_lines)
+        author = html.escape(book["author"][:70])
+        svg = (f'<svg xmlns="http://www.w3.org/2000/svg" width="360" height="480" viewBox="0 0 360 480">'
+               f'<rect width="360" height="480" fill="#f5f2e9"/><rect x="22" y="22" width="316" height="436" fill="none" stroke="#79766f" stroke-width="2"/>'
+               f'<text x="42" y="80" fill="#5c5b57" font-family="sans-serif" font-size="22" font-weight="bold">PDF DOCUMENT</text>'
+               f'<text x="42" y="115" fill="#242424" font-family="sans-serif" font-size="29" font-weight="bold">{title}</text>'
+               f'<text x="42" y="425" fill="#5c5b57" font-family="sans-serif" font-size="17">{author}</text>'
+               f'</svg>')
+        return Response(svg, mimetype="image/svg+xml", headers={"Cache-Control": "private, max-age=3600"})
     if not book["cover_path"]:
         abort(404)
     return resource(book_id, book["cover_path"])
@@ -347,7 +402,7 @@ def cover(book_id):
 @bp.get("/<int:book_id>/resource/<path:path>")
 def resource(book_id, path):
     book = _book(book_id)
-    if Path(path).suffix.lower() not in IMAGE_TYPES or not _path(book).is_file():
+    if _format(book) != "epub" or Path(path).suffix.lower() not in IMAGE_TYPES or not _path(book).is_file():
         abort(404)
     try:
         with zipfile.ZipFile(_path(book)) as zf:
@@ -369,6 +424,26 @@ def read(book_id):
     path = _path(book)
     if not path.is_file():
         abort(404)
+    if _format(book) == "pdf":
+        page = request.args.get("page", type=int)
+        if page is None and g.user:
+            last = get_db().execute(
+                "SELECT chapter FROM library_progress WHERE book_id=? AND user_id=?",
+                (book_id, g.user["id"])).fetchone()
+            page = last["chapter"] + 1 if last else 1
+        elif page is None:
+            page = 1
+        if not 1 <= page <= book["page_count"]:
+            abort(404)
+        progress = bookmarks = None
+        if g.user:
+            database = get_db()
+            progress = database.execute("SELECT * FROM library_progress WHERE book_id=? AND user_id=?",
+                                        (book_id, g.user["id"])).fetchone()
+            bookmarks = database.execute("SELECT * FROM library_bookmarks WHERE book_id=? AND user_id=? "
+                                         "ORDER BY id DESC", (book_id, g.user["id"])).fetchall()
+        return render_template("library/read_pdf.html", book=book, page=page,
+                               progress=progress, bookmarks=bookmarks or [])
     try:
         with zipfile.ZipFile(path) as zf:
             _, manifest, chapters, titles, _ = _archive(zf)

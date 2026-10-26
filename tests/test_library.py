@@ -1,6 +1,7 @@
-"""EPUB library upload, reader, and access rules."""
+"""EPUB and PDF library upload, reader, and access rules."""
 import io
 import zipfile
+from pypdf import PdfWriter
 
 from stationnet import create_app
 from stationnet.db import get_db
@@ -26,6 +27,65 @@ def sign_in(client, user_id):
     with client.session_transaction() as session:
         session["user_id"] = user_id
         session["csrf_token"] = "library-test"
+
+
+def pdf():
+    stream = io.BytesIO()
+    writer = PdfWriter()
+    writer.add_blank_page(width=612, height=792)
+    writer.add_blank_page(width=612, height=792)
+    writer.add_metadata({"/Title": "Station Manual", "/Author": "Ada Reader",
+                         "/Subject": "Operational reference"})
+    writer.write(stream)
+    return stream.getvalue()
+
+
+def test_pdf_library_upload_reader_and_modes(tmp_path):
+    app = create_app({"TESTING": True, "DATA_DIR": str(tmp_path)})
+    with app.app_context():
+        db = get_db()
+        db.execute("INSERT INTO station(name,description,callsign,library_enabled) VALUES('Test','Test','TST-1',1)")
+        admin = db.execute("INSERT INTO users(username,callsign,password_hash,is_admin) VALUES('admin','ADM-1','unused',1)").lastrowid
+        member = db.execute("INSERT INTO users(username,callsign,password_hash) VALUES('member','MEM-1','unused')").lastrowid
+        db.commit()
+    client = app.test_client()
+    sign_in(client, member)
+    data = pdf()
+    result = client.post("/library/upload", data={"csrf_token": "library-test",
+        "file": (io.BytesIO(data), "manual.pdf")}, content_type="multipart/form-data")
+    assert result.status_code == 302
+    with app.app_context():
+        book = get_db().execute("SELECT * FROM library_books").fetchone()
+        assert book["format"] == "pdf" and book["page_count"] == 2
+        assert book["title"] == "Station Manual" and book["author"] == "Ada Reader"
+    assert b"Station Manual" in client.get("/library?q=Station").data
+    assert client.get("/library/1/cover").mimetype == "image/svg+xml"
+    assert client.get("/library/1/download").data == data
+    inline = client.get("/library/1/pdf")
+    assert inline.data == data and inline.mimetype == "application/pdf"
+    assert inline.headers["Content-Disposition"] == "inline"
+    assert inline.headers["X-Frame-Options"] == "SAMEORIGIN"
+    reader = client.get("/library/1/read?page=2")
+    assert b"library-pdf-reader.js" in reader.data and b'data-page="2"' in reader.data
+    assert client.get("/library/1/read?page=3").status_code == 404
+    assert client.get("/library/1/resource/cover.png").status_code == 404
+    assert client.post("/library/1/progress", json={"chapter": 1, "fraction": 0, "text_size": 100},
+                       headers={"X-CSRF-Token": "library-test"}).status_code == 200
+    assert b"page=2" in client.get("/library/1").data
+    mark = client.post("/library/1/bookmarks", json={"chapter": 1, "fraction": 0, "label": "Page 2"},
+                       headers={"X-CSRF-Token": "library-test"})
+    assert mark.status_code == 200 and b"Page 2" in client.get("/library/1/read").data
+    bad = client.post("/library/upload", data={"csrf_token": "library-test",
+        "file": (io.BytesIO(b"not a pdf"), "bad.pdf")}, content_type="multipart/form-data", follow_redirects=True)
+    assert b"invalid" in bad.data
+    with app.app_context():
+        db = get_db()
+        db.execute("UPDATE station SET library_mode='curated'")
+        db.commit()
+    assert client.get("/library/upload").status_code == 404
+    sign_in(client, admin)
+    assert client.post("/library/station-upload", data={"csrf_token": "library-test",
+        "file": (io.BytesIO(data), "station.pdf")}, content_type="multipart/form-data").status_code == 302
 
 
 def test_library_upload_read_progress_bookmarks_and_modes(tmp_path):

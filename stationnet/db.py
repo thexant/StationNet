@@ -264,6 +264,7 @@ CREATE TABLE IF NOT EXISTS library_books (
  language TEXT NOT NULL DEFAULT '', publisher TEXT NOT NULL DEFAULT '', identifier TEXT NOT NULL DEFAULT '',
  stored_name TEXT NOT NULL UNIQUE, original_name TEXT NOT NULL,
  size_bytes INTEGER NOT NULL, cover_path TEXT NOT NULL DEFAULT '',
+ format TEXT NOT NULL DEFAULT 'epub', page_count INTEGER NOT NULL DEFAULT 0,
  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);
 CREATE INDEX IF NOT EXISTS idx_library_books_created ON library_books(id DESC);
 CREATE TABLE IF NOT EXISTS library_progress (
@@ -1631,6 +1632,11 @@ def _migrate_videos(database):
 
 
 def _migrate_library(database):
+    book_columns = {row["name"] for row in database.execute("PRAGMA table_info(library_books)")}
+    if "format" not in book_columns:
+        database.execute("ALTER TABLE library_books ADD COLUMN format TEXT NOT NULL DEFAULT 'epub'")
+    if "page_count" not in book_columns:
+        database.execute("ALTER TABLE library_books ADD COLUMN page_count INTEGER NOT NULL DEFAULT 0")
     columns = {row["name"] for row in database.execute("PRAGMA table_info(station)")}
     for name, definition in (("library_enabled", "INTEGER NOT NULL DEFAULT 0"),
                              ("library_mode", "TEXT NOT NULL DEFAULT 'community'"),

@@ -153,6 +153,11 @@ def create_app(test_config=None):
             "Permissions-Policy": "microphone=(self)",
             "Content-Security-Policy": f"default-src 'self'; style-src 'self' 'nonce-{g.style_nonce}'; script-src 'self' 'wasm-unsafe-eval'; img-src 'self' data: blob:; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'",
         })
+        if request.endpoint == "library.pdf_file":
+            response.headers["X-Frame-Options"] = "SAMEORIGIN"
+            response.headers["Content-Security-Policy"] = (
+                "default-src 'none'; base-uri 'none'; frame-ancestors 'self'"
+            )
         if request.endpoint in {"applications.runtime", "applications.source"}:
             # The iframe has an opaque origin (no allow-same-origin). Its CSP
             # also closes every network channel available to application code.

@@ -86,7 +86,7 @@ Under **SYSOP CONTROL → VIDEOS**, SYSOPs can set a default member upload quota
 
 ### Optional Library
 
-The **Library** module is disabled by default. SYSOPs can enable it under **SYSOP CONTROL → LIBRARY** and choose curated (station uploads only) or community (member contributions). EPUB is the initial supported format, with a 50 MB per-book limit and configurable member quotas. Titles, authors, descriptions, and covers are extracted from the EPUB. Readers can search, download, or read chapters in StationNet's theme; signed-in readers get bookmarks and saved progress across devices on the same station. The reader and all book assets are hosted locally. Back up the station data directory to preserve `library/` and the database records.
+The **Library** module is disabled by default. SYSOPs can enable it under **SYSOP CONTROL → LIBRARY** and choose curated (station uploads only) or community (member contributions). EPUB books and PDF documents share the catalogue, 50 MB per-file limit, and configurable member quotas. Titles, authors, and descriptions are read from available file metadata. EPUB covers are extracted; PDFs receive a title-based catalogue cover. Readers can search, download, and read either format. EPUB chapters use StationNet's theme; PDF pages keep their original appearance in the browser's PDF renderer, while the surrounding controls follow the station theme. Signed-in readers get bookmarks and saved progress across devices on the same station. The reader and all files are hosted locally. Back up the station data directory to preserve `library/` and the database records.
 
 ### Optional WIKI (Kiwix)
 
