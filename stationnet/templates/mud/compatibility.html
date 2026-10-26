@@ -1,0 +1,26 @@
+{% extends 'base.html' %}
+{% block title %}Update character · StationNet{% endblock %}
+{% block content %}
+<section class="panel">
+  <h1>Update {{ character.display_name }}</h1>
+  <p>The available MUD races or classes changed. Choose a replacement for {{ missing|join(' and ') }} before continuing.</p>
+  <p>Your name, level, experience, earned skills, inventory, and quest progress will stay with your character. Stats and health or mana limits will adjust to your new origin. Class spells follow the new class; gear you no longer qualify for will be unequipped and kept.</p>
+  {% if error %}<p role="alert" class="mud-error">{{ error }}</p>{% endif %}
+  <form method="post" class="form-grid">
+    <input type="hidden" name="csrf_token" value="{{ session.csrf_token }}">
+    {% for kind in ('races', 'classes') %}
+    {% set singular = 'race' if kind == 'races' else 'class' %}
+    <label>{{ singular|title }}
+      <select name="{{ singular }}" required {% if kind not in missing %}disabled{% endif %}>
+        {% if kind in missing %}<option value="">Choose a {{ singular }}</option>{% endif %}
+        {% for entry in entries[kind] if entry.enabled or entry.key == current[kind] %}
+        <option value="{{ entry.key }}" {% if entry.key == current[kind] %}selected{% endif %} {% if not entry.enabled %}disabled{% endif %}>{{ entry.definition.name }}{% if not entry.enabled %} (unavailable){% endif %}</option>
+        {% endfor %}
+      </select>
+    </label>
+    {% if kind not in missing %}<input type="hidden" name="{{ singular }}" value="{{ current[kind] }}">{% endif %}
+    {% endfor %}
+    <button>UPDATE CHARACTER</button>
+  </form>
+</section>
+{% endblock %}

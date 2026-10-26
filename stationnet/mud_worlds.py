@@ -2,6 +2,7 @@
 from io import BytesIO
 import hashlib
 import json
+import hashlib
 from pathlib import Path
 import re
 import uuid
@@ -349,28 +350,10 @@ def world_origin_keys(database, world_id):
 
 def set_availability(database, world_id, mode="preserve", selected=None):
     from . import character_creation
-
+    chosen = availability_choice(database, world_id, mode, selected)
     if mode == "preserve":
         return
-    if mode not in {"only", "combine", "manual"}:
-        raise WorldError("Choose a valid race and class availability mode.")
     entries = character_creation.catalog(database)
-    available = {kind: {entry["key"] for entry in entries[kind]} for kind in character_creation.KINDS}
-    bundled = world_origin_keys(database, world_id)
-    current = {kind: {entry["key"] for entry in entries[kind] if entry["enabled"]}
-               for kind in character_creation.KINDS}
-    if mode == "only":
-        chosen = bundled
-    elif mode == "combine":
-        chosen = {kind: current[kind] | bundled[kind] for kind in character_creation.KINDS}
-    else:
-        chosen = {kind: set((selected or {}).get(kind, ())) for kind in character_creation.KINDS}
-        if any(chosen[kind] - available[kind] for kind in character_creation.KINDS):
-            raise WorldError("Choose only installed races and classes.")
-    station = database.execute(
-        "SELECT mud_enabled,mud_traditional_enabled,mud_procedural_enabled FROM station LIMIT 1").fetchone()
-    if station and any(station) and any(not chosen[kind] for kind in character_creation.KINDS):
-        raise WorldError("Enable at least one race and one class while a MUD mode is enabled.")
     for kind in character_creation.KINDS:
         for entry in entries[kind]:
             enabled = int(entry["key"] in chosen[kind])
@@ -382,6 +365,34 @@ def set_availability(database, world_id, mode="preserve", selected=None):
                     "INSERT INTO mud_origin_definitions(kind,key,enabled) VALUES(?,?,?) "
                     "ON CONFLICT(kind,key) DO UPDATE SET enabled=excluded.enabled",
                     (kind, entry["key"], enabled))
+
+
+def availability_choice(database, world_id, mode="preserve", selected=None):
+    from . import character_creation
+    if mode not in {"only", "combine", "manual"}:
+        if mode != "preserve":
+            raise WorldError("Choose a valid race and class availability mode.")
+    entries = character_creation.catalog(database)
+    available = {kind: {entry["key"] for entry in entries[kind]} for kind in character_creation.KINDS}
+    world_keys = world_origin_keys(database, world_id)
+    bundled = {kind: world_keys[kind] & available[kind] for kind in character_creation.KINDS}
+    current = {kind: {entry["key"] for entry in entries[kind] if entry["enabled"]}
+               for kind in character_creation.KINDS}
+    if mode == "preserve":
+        chosen = current
+    elif mode == "only":
+        chosen = bundled
+    elif mode == "combine":
+        chosen = {kind: current[kind] | bundled[kind] for kind in character_creation.KINDS}
+    else:
+        chosen = {kind: set((selected or {}).get(kind, ())) for kind in character_creation.KINDS}
+        if any(chosen[kind] - available[kind] for kind in character_creation.KINDS):
+            raise WorldError("Choose only installed races and classes.")
+    station = database.execute(
+        "SELECT mud_enabled,mud_traditional_enabled,mud_procedural_enabled FROM station LIMIT 1").fetchone()
+    if station and any(station) and any(not chosen[kind] for kind in character_creation.KINDS):
+        raise WorldError("Enable at least one race and one class while a MUD mode is enabled.")
+    return chosen
 
 
 def install(database, payload, *, origin_mode="preserve", selected=None):
@@ -557,10 +568,61 @@ def export(database, world_id, *, origin_keys=None):
     return package_bytes(document)
 
 
-def activate(database, world_id, *, origin_mode="preserve", selected=None):
-    from . import mud
+def activation_impact(database, world_id, *, origin_mode="preserve", selected=None):
+    """Read-only impact and state fingerprint used by the confirmation form."""
+    from . import character_creation
+    world = database.execute("SELECT id,name,start_room_id,active FROM mud_world_packages WHERE id=?",
+                             (world_id,)).fetchone()
+    if world is None:
+        raise WorldError("World was not found.")
+    if database.execute("SELECT 1 FROM mud_world_rooms WHERE id=? AND world_id=?",
+                        (world["start_room_id"], world_id)).fetchone() is None:
+        raise WorldError("World starting room is missing.")
+    chosen = availability_choice(database, world_id, origin_mode, selected)
+    current = database.execute("SELECT id,name FROM mud_world_packages WHERE active=1").fetchone()
+    definitions = character_creation.catalog(database, include_removed=True)
+    names = {kind: {e["key"]: e["definition"]["name"] for e in definitions[kind]}
+             for kind in character_creation.KINDS}
+    characters = []
+    for row in database.execute("SELECT user_id,display_name,race_key,class_key,creation_state "
+                                "FROM mud_characters ORDER BY user_id"):
+        if row["creation_state"] == "pending":
+            continue
+        missing = [kind for kind, column in (("races", "race_key"), ("classes", "class_key"))
+                   if row["creation_state"] == "complete" and row[column] is not None
+                   and row[column] not in chosen[kind]]
+        characters.append({"user_id": row["user_id"], "name": row["display_name"],
+                           "missing": missing, "race": names["races"].get(row["race_key"], row["race_key"]),
+                           "class": names["classes"].get(row["class_key"], row["class_key"])})
+    relocated = database.execute(
+        "SELECT COUNT(*) FROM mud_player_locations WHERE mode='traditional' AND location_type='world_room'").fetchone()[0]
+    archive = database.execute("SELECT id,created_at FROM mud_campaign_archives WHERE world_id=? "
+                               "ORDER BY id DESC LIMIT 1", (world_id,)).fetchone()
+    result = {"world_id": world_id, "world_name": world["name"],
+              "current_world": current["name"] if current else None,
+              "current_world_id": current["id"] if current else None,
+              "world_changed": not bool(world["active"]), "characters": characters,
+              "relocated": relocated, "archive": dict(archive) if archive else None,
+              "chosen": {kind: sorted(chosen[kind]) for kind in character_creation.KINDS}}
+    result["fingerprint"] = hashlib.sha256(json.dumps(result, sort_keys=True).encode()).hexdigest()
+    return result
+
+
+def activate(database, world_id, *, origin_mode="preserve", selected=None,
+             campaign="migrate", archive_id=None, fingerprint=None):
+    from . import mud, mud_compat
     with database:
         database.execute("BEGIN IMMEDIATE")
+        impact = activation_impact(database, world_id, origin_mode=origin_mode, selected=selected)
+        if fingerprint is not None and fingerprint != impact["fingerprint"]:
+            raise WorldError("The world impact changed. Preview and confirm again.")
+        if campaign not in ("migrate", "new", "restore"):
+            raise WorldError("Choose a valid campaign option.")
+        if campaign != "migrate" and not impact["world_changed"]:
+            raise WorldError("Choose another world to start or restore a campaign.")
+        if campaign == "restore" and (not impact["archive"] or
+                                       str(impact["archive"]["id"]) != str(archive_id)):
+            raise WorldError("That campaign archive is no longer available.")
         world = database.execute("SELECT * FROM mud_world_packages WHERE id=?", (world_id,)).fetchone()
         if world is None:
             raise WorldError("World was not found.")
@@ -571,9 +633,13 @@ def activate(database, world_id, *, origin_mode="preserve", selected=None):
                                  (world["start_room_id"], world_id)).fetchone()
         if start is None:
             raise WorldError("World starting room is missing.")
-        affected = database.execute(
+        affected = (database.execute(
             "SELECT user_id FROM mud_player_locations WHERE mode='traditional' AND location_type='world_room'"
-        ).fetchall()
+        ).fetchall() if campaign == "migrate" else [])
+        if campaign in ("new", "restore") and impact["current_world_id"]:
+            mud_compat.archive_campaign(database, impact["current_world_id"], impact["current_world"])
+        if campaign == "restore":
+            mud_compat.restore_campaign(database, int(archive_id))
         database.execute("UPDATE mud_world_rooms SET is_start=0 WHERE is_start=1")
         database.execute("UPDATE mud_world_rooms SET is_start=1 WHERE id=?", (start["id"],))
         database.execute("UPDATE mud_world_packages SET active=0 WHERE active=1")
@@ -587,6 +653,22 @@ def activate(database, world_id, *, origin_mode="preserve", selected=None):
             mud._insert_event(database, mud.EventDraft(
                 f"The active MUD world changed to {world['name']}. You have been moved to {start['name']}.",
                 event_type="movement", recipient_ids=(user_id,)), default_user_id=user_id)
+        if campaign == "migrate" and impact["world_changed"]:
+            for character in impact["characters"]:
+                mud._insert_event(database, mud.EventDraft(
+                    f"The active MUD world changed to {world['name']}. "
+                    + ("Choose a replacement race or class before continuing."
+                       if character["missing"] else "Your character progress is preserved."),
+                    event_type="character", recipient_ids=(character["user_id"],)),
+                    default_user_id=character["user_id"])
+        if campaign in ("new", "restore"):
+            for row in database.execute("SELECT user_id FROM mud_characters"):
+                mud._insert_event(database, mud.EventDraft(
+                    (f"A new MUD campaign has begun in {world['name']}. Create a new character to enter."
+                     if campaign == "new" else
+                     f"Your archived MUD character was restored for {world['name']}."),
+                    event_type="character", recipient_ids=(row["user_id"],)),
+                    default_user_id=row["user_id"])
     return True
 
 

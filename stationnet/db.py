@@ -473,8 +473,19 @@ CREATE TABLE IF NOT EXISTS mud_characters (
  creation_state TEXT NOT NULL DEFAULT 'pending' CHECK(creation_state IN ('pending','legacy','complete')),
  race_key TEXT,
  class_key TEXT,
+ base_attributes_json TEXT,
  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);
+CREATE TABLE IF NOT EXISTS mud_campaign_archives (
+ id INTEGER PRIMARY KEY AUTOINCREMENT,
+ world_id TEXT NOT NULL,
+ world_name TEXT NOT NULL,
+ created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);
+CREATE TABLE IF NOT EXISTS mud_campaign_characters (
+ archive_id INTEGER NOT NULL REFERENCES mud_campaign_archives(id) ON DELETE CASCADE,
+ user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+ snapshot_json TEXT NOT NULL,
+ PRIMARY KEY(archive_id,user_id));
 CREATE TABLE IF NOT EXISTS mud_character_skills (
  character_id TEXT NOT NULL REFERENCES mud_characters(id) ON DELETE CASCADE,
  skill_key TEXT NOT NULL,
@@ -1141,6 +1152,7 @@ def init_db():
     _migrate_application_storage_writer(database)
     _migrate_application_categories(database)
     _migrate_mud_character_creation(database)
+    _migrate_mud_campaign_archives(database)
     _migrate_mud_magic(database)
     _initialize_mud_characters(database)
     _initialize_mud_world(database)
@@ -1342,6 +1354,8 @@ def _migrate_mud_character_creation(database):
         database.execute("ALTER TABLE mud_characters ADD COLUMN race_key TEXT")
     if "class_key" not in columns:
         database.execute("ALTER TABLE mud_characters ADD COLUMN class_key TEXT")
+    if "base_attributes_json" not in columns:
+        database.execute("ALTER TABLE mud_characters ADD COLUMN base_attributes_json TEXT")
     database.execute(
         "CREATE TABLE IF NOT EXISTS mud_character_skills ("
         "character_id TEXT NOT NULL REFERENCES mud_characters(id) ON DELETE CASCADE,"
@@ -1349,6 +1363,16 @@ def _migrate_mud_character_creation(database):
         "experience INTEGER NOT NULL DEFAULT 0 CHECK(experience>=0),"
         "PRIMARY KEY(character_id,skill_key))"
     )
+
+
+def _migrate_mud_campaign_archives(database):
+    database.execute("CREATE TABLE IF NOT EXISTS mud_campaign_archives ("
+                     "id INTEGER PRIMARY KEY AUTOINCREMENT,world_id TEXT NOT NULL,"
+                     "world_name TEXT NOT NULL,created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP)")
+    database.execute("CREATE TABLE IF NOT EXISTS mud_campaign_characters ("
+                     "archive_id INTEGER NOT NULL REFERENCES mud_campaign_archives(id) ON DELETE CASCADE,"
+                     "user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,"
+                     "snapshot_json TEXT NOT NULL,PRIMARY KEY(archive_id,user_id))")
 
 
 def _migrate_mud_magic(database):

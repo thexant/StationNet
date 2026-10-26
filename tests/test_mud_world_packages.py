@@ -1,6 +1,7 @@
 """Portable traditional worlds can be installed, selected, exported, and removed."""
 from io import BytesIO
 import json
+import re
 from pathlib import Path
 import shutil
 import uuid
@@ -50,6 +51,17 @@ def _client(app, user_id):
         session["user_id"] = user_id
         session["csrf_token"] = "test-token"
     return client
+
+
+def _activate(client, world_id, origin_mode="preserve", **choices):
+    data = {"csrf_token": "test-token", "world_id": world_id,
+            "origin_mode": origin_mode, **choices}
+    preview = client.post("/sysop/settings/mud-worlds/activation-preview", data=data)
+    assert preview.status_code == 200
+    fingerprint = re.search(rb'name="fingerprint" value="([0-9a-f]+)"', preview.data).group(1).decode()
+    return client.post("/sysop/settings/mud-worlds/activate",
+                       data={**data, "fingerprint": fingerprint, "confirm": "yes", "campaign": "migrate"},
+                       follow_redirects=True)
 
 
 @pytest.fixture
@@ -105,8 +117,7 @@ def test_world_lifecycle_and_player_relocation(tmp_path):
         assert b"already installed" in client.post("/sysop/settings/mud-worlds/import", data={
             "csrf_token": "test-token", "world_file": (BytesIO(_archive()), "harbor.zip")},
             follow_redirects=True).data
-        switched = client.post("/sysop/settings/mud-worlds/activate", data={
-            "csrf_token": "test-token", "world_id": "harbor"}, follow_redirects=True)
+        switched = _activate(client, "harbor")
         assert b"Active MUD world changed" in switched.data
         with app.app_context():
             db = get_db()
@@ -141,8 +152,7 @@ def test_world_lifecycle_and_player_relocation(tmp_path):
         assert b"Select another active world" in client.post("/sysop/settings/mud-worlds/remove", data={
             "csrf_token": "test-token", "world_id": "harbor", "confirm_remove": "on"},
             follow_redirects=True).data
-        client.post("/sysop/settings/mud-worlds/activate", data={
-            "csrf_token": "test-token", "world_id": "stationnet"})
+        _activate(client, "stationnet")
         removed = client.post("/sysop/settings/mud-worlds/remove", data={
             "csrf_token": "test-token", "world_id": "harbor", "confirm_remove": "on"},
             follow_redirects=True)
@@ -230,9 +240,7 @@ def test_bundled_origins_import_modes_export_and_reinstall(tmp_path):
             assert db.execute("SELECT enabled,installed FROM mud_origin_definitions "
                               "WHERE kind='races' AND key=?", (race_key,)).fetchone()[:] == (0, 1)
             assert race_key not in {item["key"] for item in character_creation.options(db)["races"]}
-        activated = client.post("/sysop/settings/mud-worlds/activate", data={
-            "csrf_token": "test-token", "world_id": "harbor", "origin_mode": "only"},
-            follow_redirects=True)
+        activated = _activate(client, "harbor", "only")
         assert b"Active MUD world changed" in activated.data
         with app.app_context():
             db = get_db()
@@ -242,17 +250,12 @@ def test_bundled_origins_import_modes_export_and_reinstall(tmp_path):
             assert exported["origins"]["races"][0]["key"] == "riverfolk"
             assert exported["origins"]["classes"][0]["key"] == "pathfinder"
             assert mud_worlds.export(db, "harbor", origin_keys=set())
-        client.post("/sysop/settings/mud-worlds/activate", data={
-            "csrf_token": "test-token", "world_id": "stationnet", "origin_mode": "manual",
-            "races": ["human"], "classes": ["warrior"]})
-        client.post("/sysop/settings/mud-worlds/activate", data={
-            "csrf_token": "test-token", "world_id": "harbor", "origin_mode": "combine"})
+        _activate(client, "stationnet", "manual", races=["human"], classes=["warrior"])
+        _activate(client, "harbor", "combine")
         with app.app_context():
             db = get_db()
             assert {"human", race_key} <= {item["key"] for item in character_creation.options(db)["races"]}
-        client.post("/sysop/settings/mud-worlds/activate", data={
-            "csrf_token": "test-token", "world_id": "harbor", "origin_mode": "manual",
-            "races": ["human"], "classes": [class_key]})
+        _activate(client, "harbor", "manual", races=["human"], classes=[class_key])
         with app.app_context():
             db = get_db()
             assert {item["key"] for item in character_creation.options(db)["races"]} == {"human"}
@@ -271,8 +274,7 @@ def test_bundled_origins_import_modes_export_and_reinstall(tmp_path):
             db = get_db()
             assert db.execute("SELECT id FROM mud_world_packages WHERE active=1").fetchone()[0] == "harbor"
             assert {"human", copy_race} <= {item["key"] for item in character_creation.options(db)["races"]}
-        client.post("/sysop/settings/mud-worlds/activate", data={
-            "csrf_token": "test-token", "world_id": "stationnet"})
+        _activate(client, "stationnet")
         client.post("/sysop/settings/mud-worlds/remove", data={
             "csrf_token": "test-token", "world_id": "harbor", "confirm_remove": "on"})
         with app.app_context():

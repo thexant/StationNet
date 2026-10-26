@@ -741,16 +741,39 @@ def download_mud_world_template():
                      as_attachment=True, download_name="mud-world-template.zip")
 
 
+@bp.post("/sysop/settings/mud-worlds/activation-preview")
+@admin_required
+def preview_mud_world_activation():
+    validate_csrf()
+    selected = {kind: request.form.getlist(kind) for kind in character_creation.KINDS}
+    world_id = request.form.get("world_id", "")
+    origin_mode = request.form.get("origin_mode", "combine")
+    try:
+        impact = mud_worlds.activation_impact(get_db(), world_id, origin_mode=origin_mode,
+                                              selected=selected)
+    except mud_worlds.WorldError as error:
+        flash(str(error), "error")
+        return redirect(url_for("station.settings") + "#mud-worlds")
+    return render_template("mud/activation_preview.html", impact=impact,
+                           origin_mode=origin_mode, selected=selected)
+
+
 @bp.post("/sysop/settings/mud-worlds/activate")
 @admin_required
 def activate_mud_world():
     validate_csrf()
     destination = url_for("station.settings") + "#mud-worlds"
+    if not request.form.get("fingerprint") or request.form.get("confirm") != "yes":
+        flash("Preview the world impact before confirming activation.", "error")
+        return redirect(destination)
     try:
         changed = mud_worlds.activate(
             get_db(), request.form.get("world_id", ""),
             origin_mode=request.form.get("origin_mode", "preserve"),
-            selected={kind: request.form.getlist(kind) for kind in character_creation.KINDS})
+            selected={kind: request.form.getlist(kind) for kind in character_creation.KINDS},
+            campaign=request.form.get("campaign", "migrate"),
+            archive_id=request.form.get("archive_id"),
+            fingerprint=request.form.get("fingerprint"))
     except mud_worlds.WorldError as error:
         flash(str(error), "error")
     else:

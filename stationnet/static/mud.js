@@ -298,6 +298,7 @@ for(const mud of document.querySelectorAll("[data-mud]")){
       const response=await fetch(mud.dataset.actionUrl,{method:"POST",body:data,headers:{"Accept":"application/json"}});
       if(response.status===401||response.redirected){location.reload();return false}
       const payload=await response.json();
+      if(payload.compatibility_url){location.assign(payload.compatibility_url);return false}
       updateSuggestionState(payload);
       renderRoom(payload.room);
       renderCharacter(payload.character);
@@ -321,6 +322,7 @@ for(const mud of document.querySelectorAll("[data-mud]")){
       const response=await fetch(url,{headers:{Accept:"application/json"},cache:"no-store"});
       if(response.status===401||response.redirected){location.reload();return}
       const payload=await response.json();
+      if(payload.compatibility_url){location.assign(payload.compatibility_url);return}
       if(!response.ok)throw new Error(payload.error||"MUD link interrupted.");
       updateSuggestionState(payload);
       renderRoom(payload.room);

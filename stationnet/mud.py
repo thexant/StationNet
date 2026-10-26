@@ -17,7 +17,7 @@ from flask import Blueprint, abort, flash, g, jsonify, redirect, render_template
 
 from .auth import admin_required, login_required
 from .db import get_db
-from . import dungeons, character_creation, mud_effects, mud_firearms
+from . import dungeons, character_creation, mud_effects, mud_firearms, mud_compat
 from .security import validate_csrf
 
 bp = Blueprint("mud", __name__, url_prefix="/mud")
@@ -3853,6 +3853,8 @@ class MudService:
             ).fetchone()
             if creation is None or creation["creation_state"] == "pending":
                 raise ActionError("Create your character before entering the MUD.", 409)
+            if mud_compat.incompatible(database, user["id"]):
+                raise ActionError("Choose replacement race or class before entering the MUD.", 409)
             if action_request.client_id:
                 _register_presence(database, user, action_request.client_id)
             else:
@@ -3940,6 +3942,8 @@ def index():
     ).fetchone()
     if creation is None or creation["creation_state"] == "pending":
         return redirect(url_for("mud.create_character"))
+    if mud_compat.incompatible(database, g.user["id"]):
+        return redirect(url_for("mud.character_compatibility"))
     database.execute("BEGIN IMMEDIATE")
     _prune_presence(database)
     room = _room_state(database, g.user["id"])
@@ -3977,6 +3981,9 @@ def updates():
     ).fetchone()
     if creation is None or creation["creation_state"] == "pending":
         return jsonify(error="Create your character before entering the MUD."), 409
+    if mud_compat.incompatible(get_db(), g.user["id"]):
+        return jsonify(error="Choose replacement race or class before entering the MUD.",
+                       compatibility_url=url_for("mud.character_compatibility")), 409
     client_id = request.args.get("client_id", "").strip()
     after = max(0, request.args.get("after", 0, type=int))
     database = get_db()
@@ -4037,7 +4044,8 @@ def create_character():
         ).fetchone()
         database.commit()
     if row["creation_state"] == "complete":
-        return redirect(url_for("mud.index"))
+        return redirect(url_for("mud.character_compatibility") if mud_compat.incompatible(database, g.user["id"])
+                        else url_for("mud.index"))
     config = character_creation.options()
     error = None
     selected = {}
@@ -4058,8 +4066,45 @@ def create_character():
                      if isinstance(problem, sqlite3.IntegrityError) else str(problem))
             if not isinstance(selected, dict):
                 selected = {}
+    archive_notice = database.execute(
+        "SELECT a.world_name FROM mud_campaign_archives a "
+        "JOIN mud_campaign_characters c ON c.archive_id=a.id "
+        "WHERE c.user_id=? ORDER BY a.id DESC LIMIT 1", (g.user["id"],)).fetchone()
     return render_template("mud/create.html", config=config, character=row,
-                           selected=selected, error=error)
+                           selected=selected, error=error, archive_notice=archive_notice)
+
+
+@bp.route("/character/compatibility", methods=["GET", "POST"])
+@login_required
+def character_compatibility():
+    _require_enabled()
+    database = get_db()
+    character = database.execute("SELECT * FROM mud_characters WHERE user_id=?", (g.user["id"],)).fetchone()
+    if character is None or character["creation_state"] == "pending":
+        return redirect(url_for("mud.create_character"))
+    missing = mud_compat.incompatible(database, g.user["id"])
+    if not missing:
+        return redirect(url_for("mud.index"))
+    error = None
+    if request.method == "POST":
+        validate_csrf()
+        try:
+            database.execute("BEGIN IMMEDIATE")
+            mud_compat.replace_origins(database, g.user["id"], request.form.get("race", ""),
+                                       request.form.get("class", ""))
+            _insert_event(database, EventDraft(
+                "Your character's origins were updated. Your level, experience, identity, earned skills, "
+                "inventory and quest progress were preserved.", event_type="character",
+                recipient_ids=(g.user["id"],)), default_user_id=g.user["id"])
+            database.commit()
+            return redirect(url_for("mud.index"))
+        except (ValueError, sqlite3.Error) as problem:
+            database.rollback()
+            error = str(problem)
+    entries = character_creation.catalog(database, include_removed=True)
+    current = {"races": character["race_key"], "classes": character["class_key"]}
+    return render_template("mud/compatibility.html", character=character, missing=missing,
+                           entries=entries, current=current, error=error)
 
 
 @bp.route("/character/delete", methods=["GET", "POST"])
@@ -4155,6 +4200,9 @@ def perform_action():
     ).fetchone()
     if creation is None or creation["creation_state"] == "pending":
         return jsonify(error="Create your character before entering the MUD."), 409
+    if mud_compat.incompatible(get_db(), g.user["id"]):
+        return jsonify(error="Choose replacement race or class before entering the MUD.",
+                       compatibility_url=url_for("mud.character_compatibility")), 409
     try:
         action_request = service.normalize(request.form)
         action_key, events = service.execute(action_request, g.user)

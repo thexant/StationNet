@@ -201,7 +201,7 @@ def complete(database, user_id, payload, possession_mode="traditional"):
     config = options(database)
     if possession_mode not in ("traditional", "procedural"):
         raise ValueError("Invalid starting mode.")
-    name, race, archetype, _allocated, attributes, skills = validate(payload, config)
+    name, race, archetype, allocated, attributes, skills = validate(payload, config)
     row = database.execute(
         "SELECT id,creation_state FROM mud_characters WHERE user_id=?", (user_id,)
     ).fetchone()
@@ -257,9 +257,10 @@ def complete(database, user_id, payload, possession_mode="traditional"):
             (f"origin:item:{uuid.uuid4().hex}", definition_id, row["id"], possession_mode),
         )
     database.execute(
-        "UPDATE mud_characters SET display_name=?,race_key=?,class_key=?,creation_state='complete',"
+        "UPDATE mud_characters SET display_name=?,race_key=?,class_key=?,base_attributes_json=?,"
+        "creation_state='complete',"
         "updated_at=CURRENT_TIMESTAMP WHERE id=? AND creation_state IN ('pending','legacy')",
-        (name, race["key"], archetype["key"], row["id"]),
+        (name, race["key"], archetype["key"], json.dumps(allocated), row["id"]),
     )
     return name
 

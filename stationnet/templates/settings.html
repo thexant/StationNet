@@ -353,7 +353,7 @@
   </form>
   <section id="mud-origins" aria-labelledby="mud-origins-heading">
     <h3 id="mud-origins-heading">Races and Classes</h3>
-    <p class="muted">Import a JSON definition for a new race or class. Enabled choices appear in character creation for both MUD modes. Existing characters keep their abilities if a choice is disabled or removed.</p>
+    <p class="muted">Import a JSON definition for a new race or class. Enabled choices appear in character creation for both MUD modes. Characters using a disabled or removed choice must select a replacement on their next visit.</p>
     <form method="post" action="{{ url_for('station.mud_origin_availability') }}" class="form-grid">
       <input type="hidden" name="csrf_token" value="{{ session.csrf_token }}">
       {% for kind in ('races', 'classes') %}
@@ -422,7 +422,7 @@
       <button>IMPORT WORLD</button>
     </form>
     {% if mud_world_list|length > 1 %}
-    <form method="post" action="{{ url_for('station.activate_mud_world') }}" class="form-grid">
+    <form method="post" action="{{ url_for('station.preview_mud_world_activation') }}" class="form-grid">
       <input type="hidden" name="csrf_token" value="{{ session.csrf_token }}">
       <label>Active world<select name="world_id" required>{% for world in mud_world_list %}<option value="{{ world.id }}" {% if world.active %}selected{% endif %}>{{ world.name }} by {{ world.author }}</option>{% endfor %}</select></label>
       <label>Race and class availability<select name="origin_mode" id="world-activate-mode">
@@ -439,8 +439,8 @@
         {% endfor %}
         {% endfor %}
       </div>
-      <small>Players in the traditional world move to the selected world's starting room and receive a notice.</small>
-      <button>SELECT ACTIVE WORLD</button>
+      <small>Review the effect on characters before changing worlds.</small>
+      <button>PREVIEW WORLD ACTIVATION</button>
     </form>
     {% endif %}
     {% if mud_world_list|selectattr('imported')|list %}
