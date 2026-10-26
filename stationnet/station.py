@@ -668,6 +668,7 @@ def remove_mud_origin(kind):
             )
         else:
             database.execute("DELETE FROM mud_origin_definitions WHERE kind=? AND key=?", (kind, key))
+        database.execute("DELETE FROM mud_world_origins WHERE kind=? AND origin_key=?", (kind, key))
         if (g.station["mud_enabled"] or g.station["mud_traditional_enabled"] or
                 g.station["mud_procedural_enabled"]):
             character_creation.require_available(database)
@@ -690,12 +691,47 @@ def import_mud_world():
         flash("Choose a world ZIP file to import.", "error")
         return redirect(destination)
     try:
-        world = mud_worlds.install(get_db(), uploaded.read(mud_worlds.MAX_ZIP_BYTES + 1))
+        world = mud_worlds.install(
+            get_db(), uploaded.read(mud_worlds.MAX_ZIP_BYTES + 1),
+            origin_mode=request.form.get("origin_mode", "preserve"),
+            selected={kind: request.form.getlist(kind) for kind in character_creation.KINDS})
     except (mud_worlds.WorldError, sqlite3.Error, OSError) as error:
         flash(f"World import failed: {error}", "error")
     else:
         flash(f"Imported world {world['name']} by {world['author']}.", "success")
     return redirect(destination)
+
+
+@bp.post("/sysop/settings/mud-worlds/preview")
+@admin_required
+def preview_mud_world():
+    validate_csrf()
+    uploaded = request.files.get("world_file")
+    try:
+        document = mud_worlds.read_package(uploaded.read(mud_worlds.MAX_ZIP_BYTES + 1) if uploaded else b"")
+        origins = {kind: [{"key": mud_worlds.bundled_key(document["id"], kind, item["key"]),
+                           "name": item.get("name", item["key"])}
+                          for item in document["origins"].get(kind, [])]
+                   for kind in character_creation.KINDS}
+    except (mud_worlds.WorldError, KeyError, TypeError) as error:
+        return jsonify(error=str(error)), 400
+    return jsonify(world=document["name"], origins=origins)
+
+
+@bp.post("/sysop/settings/mud-worlds/export")
+@admin_required
+def export_mud_world():
+    validate_csrf()
+    world_id = request.form.get("world_id", "")
+    selected = {(kind, key) for kind in character_creation.KINDS
+                for key in request.form.getlist(kind)}
+    try:
+        payload = mud_worlds.export(get_db(), world_id, origin_keys=selected)
+    except mud_worlds.WorldError as error:
+        flash(f"World export failed: {error}", "error")
+        return redirect(url_for("station.settings") + "#mud-worlds")
+    return send_file(BytesIO(payload), mimetype="application/zip", as_attachment=True,
+                     download_name=f"{world_id}-world.zip")
 
 
 @bp.get("/sysop/settings/mud-worlds/template")
@@ -711,11 +747,17 @@ def activate_mud_world():
     validate_csrf()
     destination = url_for("station.settings") + "#mud-worlds"
     try:
-        changed = mud_worlds.activate(get_db(), request.form.get("world_id", ""))
+        changed = mud_worlds.activate(
+            get_db(), request.form.get("world_id", ""),
+            origin_mode=request.form.get("origin_mode", "preserve"),
+            selected={kind: request.form.getlist(kind) for kind in character_creation.KINDS})
     except mud_worlds.WorldError as error:
         flash(str(error), "error")
     else:
-        flash("Active MUD world changed." if changed else "That world is already active.", "success")
+        message = ("Active MUD world changed." if changed else
+                   "World race and class availability updated." if request.form.get("origin_mode", "preserve") != "preserve"
+                   else "That world is already active.")
+        flash(message, "success")
     return redirect(destination)
 
 
@@ -1184,6 +1226,10 @@ def settings():
         "SELECT id,name,author,imported,active FROM mud_world_packages ORDER BY active DESC,name COLLATE NOCASE"
     ).fetchall()
     mud_origins = character_creation.catalog(database)
+    mud_world_origin_keys = {
+        world["id"]: {kind: sorted(keys) for kind, keys in mud_worlds.world_origin_keys(
+            database, world["id"]).items()}
+        for world in mud_world_list}
     mud_daily_settings_row = database.execute(
         "SELECT * FROM mud_daily_dungeon_settings WHERE id=1"
     ).fetchone()
@@ -1229,6 +1275,7 @@ def settings():
                            mud_crossover=mud_crossover,
                            mud_world_list=mud_world_list,
                            mud_origins=mud_origins,
+                           mud_world_origin_keys=mud_world_origin_keys,
                            mud_daily_settings=mud_daily_settings_row,
                            mud_daily_themes=mud_daily_themes,
                            configured_daily_themes=configured_daily_themes,

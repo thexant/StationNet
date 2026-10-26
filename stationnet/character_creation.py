@@ -70,7 +70,7 @@ def _text(value, label, maximum, minimum=1):
     return value.strip()
 
 
-def validate_origin(kind, document, database):
+def validate_origin(kind, document, database, *, check_key=True):
     """Validate an imported JSON definition against supported MUD mechanics."""
     if kind not in KINDS or not isinstance(document, dict):
         raise ValueError("Choose a race or class JSON object.")
@@ -127,7 +127,7 @@ def validate_origin(kind, document, database):
         if len({item["key"] for item in parsed}) != len(parsed):
             raise ValueError("Equipment keys must be distinct within a class.")
         definition["equipment"] = parsed
-    if any(entry["key"] == key for entry in catalog(database, include_removed=True)[kind]):
+    if check_key and any(entry["key"] == key for entry in catalog(database, include_removed=True)[kind]):
         raise ValueError(f"A {KIND_NAMES[kind]} with that key already exists or was used by a character.")
     return definition
 

@@ -556,6 +556,12 @@ CREATE TABLE IF NOT EXISTS mud_world_packages (
  start_room_id TEXT NOT NULL,
  imported INTEGER NOT NULL DEFAULT 1 CHECK(imported IN (0,1)),
  active INTEGER NOT NULL DEFAULT 0 CHECK(active IN (0,1)));
+CREATE TABLE IF NOT EXISTS mud_world_origins (
+ world_id TEXT NOT NULL REFERENCES mud_world_packages(id) ON DELETE CASCADE,
+ kind TEXT NOT NULL CHECK(kind IN ('races','classes')),
+ origin_key TEXT NOT NULL,
+ local_key TEXT NOT NULL,
+ PRIMARY KEY(world_id,kind,origin_key));
 CREATE UNIQUE INDEX IF NOT EXISTS idx_mud_world_one_active
  ON mud_world_packages(active) WHERE active=1;
 CREATE UNIQUE INDEX IF NOT EXISTS idx_mud_world_single_start

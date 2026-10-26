@@ -4,15 +4,16 @@ StationNet stores imported world ZIPs in `data/mud_worlds/` (or
 `<STATIONNET_DATA>/mud_worlds/`). You can build a traditional world with a text
 editor. Put three UTF-8 JSON files at the root of a ZIP archive:
 `manifest.json`, `rooms.json`, and `exits.json`. Add `content.json` for items,
-NPCs, dialogue, quests, and placements. No code or scripts run from a world
+NPCs, dialogue, quests, and placements. Add `origins.json` for custom races and
+classes. No code or scripts run from a world
 package.
 
 Archives are limited to 16 MB, each JSON file to 8 MB, 1000 rooms, and 5000
 exits. `content.json` may have up to 5,000 records in each supported array.
 The ZIP must contain only those three required files and optional
-`content.json`, all at its root. Imports validate references and reject
-duplicate world IDs. A world ZIP does not include race or class choices;
-import those separately with the [origin guide](../mud_origin_templates/README_RACES_CLASSES.md).
+`content.json` and `origins.json`, all at its root. Imports validate references
+and reject duplicate world IDs. Standalone race and class imports remain
+available through the [origin guide](../mud_origin_templates/README_RACES_CLASSES.md).
 
 ## 1. Name the world and choose its entry room
 
@@ -275,7 +276,29 @@ NPC peaceful with `{"aggressive": false}` or `{"friendly": true}`.
 The ZIP contains authored definitions and placements; it does not carry
 characters, inventories, quest progress, or procedural dungeon runs.
 
-## 5. Import, edit, export, and remove
+## 5. Add optional races and classes
+
+`origins.json` has `races` and/or `classes` arrays. Each object uses the same
+fields as a standalone race or class JSON file. For example:
+
+```json
+{
+  "races": [{"key": "riverfolk", "name": "Riverfolk",
+    "description": "Travelers of the river", "traits": "Sure footing",
+    "attributes": {"agility": 1}}],
+  "classes": [{"key": "pathfinder", "name": "Pathfinder",
+    "description": "A practiced guide", "traits": "Trail craft",
+    "skill": "guard", "spells": ["ward"]}]
+}
+```
+
+Keys in this file are local to the world. StationNet derives stable global keys
+from the world ID, kind, and local key, so another world or standalone import
+may use the same local key. At most 100 definitions of each kind may be bundled.
+Imported definitions stay installed even when disabled or when the world is
+removed. Importing a world does not activate it or change existing characters.
+
+## 6. Import, edit, export, and remove
 
 Download the starter ZIP from **SYSOP Settings → MUD service → Traditional
 Worlds**, or zip the files at the archive root yourself. For the four example
@@ -289,14 +312,19 @@ Compress-Archive -Path manifest.json,rooms.json,exits.json,content.json -Destina
 zip lantern-isles.zip manifest.json rooms.json exits.json content.json
 ```
 
-If you omit `content.json`, omit it from the command too. Confirm the ZIP
+If you omit `content.json` or `origins.json`, omit them from the command too. Confirm the ZIP
 lists the JSON files directly, without a containing folder. In **SYSOP Settings → MUD service →
-Traditional Worlds**, import the ZIP and select it as the active world. The
+Traditional Worlds**, import the ZIP and select it as the active world. Choose
+whether its bundled races and classes replace, combine with, or are selected
+alongside currently available choices. The same controls are available on
+activation; manual selection can include any installed origin. The
 world builder can then edit its rooms and exits. The **Export World ZIP** button
 downloads the current map, including builder changes. For a station-built
 world, the exported manifest uses `my-world` as a starter ID; change it before
 importing on the same station. The exporter assigns simple room IDs so the
-files remain easy to edit.
+files remain easy to edit. In sysop settings, choose any installed custom races
+and classes to bundle in an export. The builder export includes the world's
+linked definitions automatically.
 
 Changing the active world moves traditional-world players to the new starting
 room and informs them. Procedural dungeon players remain where they are. To

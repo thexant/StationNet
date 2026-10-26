@@ -386,18 +386,59 @@
   </section>
   <section id="mud-worlds" aria-labelledby="mud-worlds-heading">
     <h3 id="mud-worlds-heading">Traditional Worlds</h3>
-    <p class="muted">Build a world from files and import its ZIP, or export the current builder world. World files live in <code>data/mud_worlds/</code>. See the world creation README there for the format.</p>
+    <p class="muted">World ZIPs can include rooms, content, and optional races and classes. Import installs a world without activating it or moving characters. World files live in <code>data/mud_worlds/</code>.</p>
     <p><a href="{{ url_for('station.download_mud_world_template') }}">DOWNLOAD WORLD TEMPLATE ZIP</a></p>
-    <p><a href="{{ url_for('mud.builder_export_world') }}">EXPORT ACTIVE WORLD ZIP</a></p>
-    <form method="post" action="{{ url_for('station.import_mud_world') }}" enctype="multipart/form-data" class="form-grid">
+    <form method="post" action="{{ url_for('station.export_mud_world') }}" class="form-grid">
       <input type="hidden" name="csrf_token" value="{{ session.csrf_token }}">
-      <label>World ZIP<input type="file" name="world_file" accept=".zip,application/zip" required></label>
+      <label>World to export<select name="world_id" id="world-export-id">{% for world in mud_world_list %}<option value="{{ world.id }}" {% if world.active %}selected{% endif %}>{{ world.name }} by {{ world.author }}</option>{% endfor %}</select></label>
+      <small>Choose custom races and classes to include. The active world's linked definitions are selected by default.</small>
+      {% for kind in ('races', 'classes') %}
+      <div class="divider">{{ kind|upper }} TO BUNDLE</div>
+      {% for entry in mud_origins[kind] if entry.imported %}
+      <label class="switch"><input type="checkbox" class="world-export-origin" name="{{ kind }}" value="{{ entry.key }}" {% if entry.key in mud_world_origin_keys[mud_world_list[0].id][kind] %}checked{% endif %}> {{ entry.definition.name }}</label>
+      {% endfor %}
+      {% endfor %}
+      <button>EXPORT WORLD ZIP</button>
+    </form>
+    <form method="post" action="{{ url_for('station.import_mud_world') }}" enctype="multipart/form-data" class="form-grid" id="world-import-form">
+      <input type="hidden" name="csrf_token" value="{{ session.csrf_token }}">
+      <label>World ZIP<input type="file" name="world_file" id="world-import-file" accept=".zip,application/zip" required></label>
+      <label>Race and class availability after import<select name="origin_mode" id="world-import-mode">
+        <option value="preserve">Keep current choices (default)</option>
+        <option value="only">Use only this world's bundled choices</option>
+        <option value="combine">Combine bundled and current choices</option>
+        <option value="manual">Select choices manually</option>
+      </select></label>
+      <div id="world-import-manual" hidden>
+        <small>Select an archive to show its bundled races and classes.</small>
+        {% for kind in ('races', 'classes') %}
+        <div class="divider">{{ kind|upper }}</div>
+        {% for entry in mud_origins[kind] %}
+        <label class="switch"><input type="checkbox" name="{{ kind }}" value="{{ entry.key }}" {% if entry.enabled %}checked{% endif %}> {{ entry.definition.name }}</label>
+        {% endfor %}
+        <div id="world-import-bundled-{{ kind }}"></div>
+        {% endfor %}
+      </div>
       <button>IMPORT WORLD</button>
     </form>
     {% if mud_world_list|length > 1 %}
     <form method="post" action="{{ url_for('station.activate_mud_world') }}" class="form-grid">
       <input type="hidden" name="csrf_token" value="{{ session.csrf_token }}">
       <label>Active world<select name="world_id" required>{% for world in mud_world_list %}<option value="{{ world.id }}" {% if world.active %}selected{% endif %}>{{ world.name }} by {{ world.author }}</option>{% endfor %}</select></label>
+      <label>Race and class availability<select name="origin_mode" id="world-activate-mode">
+        <option value="combine">Combine this world's bundled and current choices</option>
+        <option value="only">Use only this world's bundled choices</option>
+        <option value="manual">Select choices manually</option>
+        <option value="preserve">Keep current choices</option>
+      </select></label>
+      <div id="world-activate-manual" hidden>
+        {% for kind in ('races', 'classes') %}
+        <div class="divider">{{ kind|upper }}</div>
+        {% for entry in mud_origins[kind] %}
+        <label class="switch"><input type="checkbox" name="{{ kind }}" value="{{ entry.key }}" {% if entry.enabled %}checked{% endif %}> {{ entry.definition.name }}</label>
+        {% endfor %}
+        {% endfor %}
+      </div>
       <small>Players in the traditional world move to the selected world's starting room and receive a notice.</small>
       <button>SELECT ACTIVE WORLD</button>
     </form>
@@ -410,6 +451,51 @@
       <button class="secondary">REMOVE WORLD</button>
     </form>
     {% endif %}
+    <script>
+      (() => {
+        const linked = {{ mud_world_origin_keys|tojson }};
+        const exportSelect = document.getElementById('world-export-id');
+        exportSelect?.addEventListener('change', () => {
+          document.querySelectorAll('.world-export-origin').forEach(box => {
+            box.checked = (linked[exportSelect.value]?.[box.name] || []).includes(box.value);
+          });
+        });
+        for (const prefix of ['world-import', 'world-activate']) {
+          const mode = document.getElementById(`${prefix}-mode`);
+          const manual = document.getElementById(`${prefix}-manual`);
+          const update = () => { manual.hidden = mode.value !== 'manual'; };
+          mode?.addEventListener('change', update);
+          if (mode) update();
+        }
+        const file = document.getElementById('world-import-file');
+        file?.addEventListener('change', async () => {
+          for (const kind of ['races', 'classes']) document.getElementById(`world-import-bundled-${kind}`).replaceChildren();
+          if (!file.files.length) return;
+          const data = new FormData();
+          data.append('csrf_token', document.querySelector('#world-import-form [name=csrf_token]').value);
+          data.append('world_file', file.files[0]);
+          try {
+            const response = await fetch('{{ url_for('station.preview_mud_world') }}', {method: 'POST', body: data});
+            const result = await response.json();
+            if (!response.ok) throw new Error(result.error || 'Could not preview archive.');
+            for (const kind of ['races', 'classes']) {
+              const container = document.getElementById(`world-import-bundled-${kind}`);
+              for (const origin of result.origins[kind]) {
+                const label = document.createElement('label');
+                label.className = 'switch';
+                const box = document.createElement('input');
+                box.type = 'checkbox'; box.name = kind; box.value = origin.key; box.checked = true;
+                label.append(box, document.createTextNode(` ${origin.name} (bundled)`));
+                container.append(label);
+              }
+            }
+          } catch (error) {
+            const note = document.createElement('small'); note.textContent = error.message;
+            document.getElementById('world-import-bundled-races').append(note);
+          }
+        });
+      })();
+    </script>
   </section>
   <section id="dungeon-themes" aria-labelledby="dungeon-themes-heading">
     <h3 id="dungeon-themes-heading">Dungeon Themes</h3>

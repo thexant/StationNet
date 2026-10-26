@@ -8,7 +8,7 @@ import zipfile
 
 import pytest
 
-from stationnet import create_app, mud, mud_worlds
+from stationnet import create_app, character_creation, mud, mud_worlds
 from stationnet.db import get_db
 
 
@@ -176,6 +176,112 @@ def test_non_sysop_cannot_install_or_switch(tmp_path):
         assert not (tmp_path / "mud_worlds" / "harbor.zip").exists()
         assert client.post("/sysop/settings/mud-worlds/activate", data={
             "csrf_token": "test-token", "world_id": "stationnet"}).status_code == 302
+    finally:
+        coordinator = app.extensions["broadcast_coordinator"]
+        coordinator._closed = True
+        coordinator._timer.cancel()
+
+
+def test_bundled_origins_import_modes_export_and_reinstall(tmp_path):
+    app = create_app({"TESTING": True, "DATA_DIR": str(tmp_path)})
+    try:
+        with app.app_context():
+            db = get_db()
+            db.execute("INSERT INTO station(name,description,callsign,mud_enabled,mud_traditional_enabled) "
+                       "VALUES('Test','Test','TST',1,1)")
+            sysop = db.execute("INSERT INTO users(username,callsign,password_hash,is_admin) "
+                               "VALUES('sysop','SYS','unused',1)").lastrowid
+            db.commit()
+        client = _client(app, sysop)
+        document = mud_worlds.read_package(_archive())
+        templates = Path(character_creation.__file__).with_name("mud_origin_templates")
+        document["origins"] = {
+            "races": [json.loads((templates / "race.json").read_text(encoding="utf-8"))],
+            "classes": [json.loads((templates / "class.json").read_text(encoding="utf-8"))],
+        }
+        with app.app_context():
+            db = get_db()
+            character_creation.import_origin(db, "races", json.dumps(
+                document["origins"]["races"][0]).encode())
+            db.commit()
+        payload = mud_worlds.package_bytes(document)
+        race_key = mud_worlds.bundled_key("harbor", "races", "riverfolk")
+        class_key = mud_worlds.bundled_key("harbor", "classes", "pathfinder")
+        preview = client.post("/sysop/settings/mud-worlds/preview", data={
+            "csrf_token": "test-token", "world_file": (BytesIO(payload), "harbor.zip")})
+        assert preview.json["origins"]["races"][0]["key"] == race_key
+        invalid = json.loads(json.dumps(document))
+        invalid["origins"]["classes"][0]["skill"] = "unknown"
+        rejected = client.post("/sysop/settings/mud-worlds/import", data={
+            "csrf_token": "test-token", "world_file": (
+                BytesIO(mud_worlds.package_bytes(invalid)), "invalid.zip")},
+            follow_redirects=True)
+        assert b"Invalid bundled class" in rejected.data
+        with app.app_context():
+            assert get_db().execute("SELECT 1 FROM mud_world_packages WHERE id='harbor'").fetchone() is None
+            assert not (tmp_path / "mud_worlds" / "harbor.zip").exists()
+        imported = client.post("/sysop/settings/mud-worlds/import", data={
+            "csrf_token": "test-token", "world_file": (BytesIO(payload), "harbor.zip")},
+            follow_redirects=True)
+        assert b"Imported world Harbor World" in imported.data
+        with app.app_context():
+            db = get_db()
+            assert db.execute("SELECT id FROM mud_world_packages WHERE active=1").fetchone()[0] == "stationnet"
+            assert db.execute("SELECT enabled,installed FROM mud_origin_definitions "
+                              "WHERE kind='races' AND key=?", (race_key,)).fetchone()[:] == (0, 1)
+            assert race_key not in {item["key"] for item in character_creation.options(db)["races"]}
+        activated = client.post("/sysop/settings/mud-worlds/activate", data={
+            "csrf_token": "test-token", "world_id": "harbor", "origin_mode": "only"},
+            follow_redirects=True)
+        assert b"Active MUD world changed" in activated.data
+        with app.app_context():
+            db = get_db()
+            assert {item["key"] for item in character_creation.options(db)["races"]} == {race_key}
+            assert {item["key"] for item in character_creation.options(db)["classes"]} == {class_key}
+            exported = mud_worlds.read_package(mud_worlds.export(db, "harbor"))
+            assert exported["origins"]["races"][0]["key"] == "riverfolk"
+            assert exported["origins"]["classes"][0]["key"] == "pathfinder"
+            assert mud_worlds.export(db, "harbor", origin_keys=set())
+        client.post("/sysop/settings/mud-worlds/activate", data={
+            "csrf_token": "test-token", "world_id": "stationnet", "origin_mode": "manual",
+            "races": ["human"], "classes": ["warrior"]})
+        client.post("/sysop/settings/mud-worlds/activate", data={
+            "csrf_token": "test-token", "world_id": "harbor", "origin_mode": "combine"})
+        with app.app_context():
+            db = get_db()
+            assert {"human", race_key} <= {item["key"] for item in character_creation.options(db)["races"]}
+        client.post("/sysop/settings/mud-worlds/activate", data={
+            "csrf_token": "test-token", "world_id": "harbor", "origin_mode": "manual",
+            "races": ["human"], "classes": [class_key]})
+        with app.app_context():
+            db = get_db()
+            assert {item["key"] for item in character_creation.options(db)["races"]} == {"human"}
+            assert db.execute("SELECT installed FROM mud_origin_definitions WHERE key=?", (race_key,)).fetchone()[0] == 1
+        copied_document = json.loads(json.dumps(document))
+        copied_document["id"] = "harbor-copy"
+        copy_race = mud_worlds.bundled_key("harbor-copy", "races", "riverfolk")
+        copy_class = mud_worlds.bundled_key("harbor-copy", "classes", "pathfinder")
+        imported_copy = client.post("/sysop/settings/mud-worlds/import", data={
+            "csrf_token": "test-token", "origin_mode": "manual",
+            "races": ["human", copy_race], "classes": ["warrior", copy_class],
+            "world_file": (BytesIO(mud_worlds.package_bytes(copied_document)), "copy.zip")},
+            follow_redirects=True)
+        assert b"Imported world Harbor World" in imported_copy.data
+        with app.app_context():
+            db = get_db()
+            assert db.execute("SELECT id FROM mud_world_packages WHERE active=1").fetchone()[0] == "harbor"
+            assert {"human", copy_race} <= {item["key"] for item in character_creation.options(db)["races"]}
+        client.post("/sysop/settings/mud-worlds/activate", data={
+            "csrf_token": "test-token", "world_id": "stationnet"})
+        client.post("/sysop/settings/mud-worlds/remove", data={
+            "csrf_token": "test-token", "world_id": "harbor", "confirm_remove": "on"})
+        with app.app_context():
+            db = get_db()
+            assert db.execute("SELECT installed FROM mud_origin_definitions WHERE key=?", (race_key,)).fetchone()[0] == 1
+        assert client.post("/sysop/settings/mud-worlds/import", data={
+            "csrf_token": "test-token", "world_file": (BytesIO(payload), "harbor.zip")}).status_code == 302
+        with app.app_context():
+            assert get_db().execute("SELECT COUNT(*) FROM mud_world_origins WHERE world_id='harbor'").fetchone()[0] == 2
     finally:
         coordinator = app.extensions["broadcast_coordinator"]
         coordinator._closed = True

@@ -1,5 +1,6 @@
 """Portable, file-authored traditional MUD maps."""
 from io import BytesIO
+import hashlib
 import json
 from pathlib import Path
 import re
@@ -14,6 +15,7 @@ MAX_FILE_BYTES = 8 * 1024 * 1024
 ID_RE = re.compile(r"^[a-z][a-z0-9-]{0,63}$")
 FILES = {"manifest.json", "rooms.json", "exits.json"}
 CONTENT_FILE = "content.json"
+ORIGINS_FILE = "origins.json"
 # Order follows foreign-key dependencies. Only these authored columns cross
 # the package boundary; player state and generated dungeon data never do.
 CONTENT_TABLES = {
@@ -79,8 +81,8 @@ def read_package(payload):
     try:
         with zipfile.ZipFile(BytesIO(payload)) as archive:
             names = archive.namelist()
-            if set(names) not in (FILES, FILES | {CONTENT_FILE}) or len(names) != len(set(names)):
-                raise WorldError("World ZIP must contain manifest.json, rooms.json, and exits.json at its root, with optional content.json.")
+            if not FILES <= set(names) or set(names) - FILES - {CONTENT_FILE, ORIGINS_FILE} or len(names) != len(set(names)):
+                raise WorldError("World ZIP must contain manifest.json, rooms.json, and exits.json at its root, with optional content.json and origins.json.")
             docs = {}
             for name in names:
                 info = archive.getinfo(name)
@@ -147,8 +149,14 @@ def read_package(payload):
     for table, rows in content.items():
         if not isinstance(rows, list) or len(rows) > 5000 or any(not isinstance(row, dict) for row in rows):
             raise WorldError(f"{table} must be an array of at most 5000 objects.")
+    origins = docs.get(ORIGINS_FILE, {})
+    if not isinstance(origins, dict) or set(origins) - {"races", "classes"}:
+        raise WorldError("origins.json must contain races and/or classes arrays.")
+    for kind, definitions in origins.items():
+        if not isinstance(definitions, list) or len(definitions) > 100 or any(not isinstance(item, dict) for item in definitions):
+            raise WorldError(f"origins.json {kind} must contain at most 100 definition objects.")
     return {"id": world_id, "name": name, "author": author, "start_room": start,
-            "rooms": clean_rooms, "exits": clean_exits, "content": content}
+            "rooms": clean_rooms, "exits": clean_exits, "content": content, "origins": origins}
 
 
 def package_bytes(document):
@@ -166,6 +174,11 @@ def package_bytes(document):
             if len(encoded) > MAX_FILE_BYTES:
                 raise WorldError("content.json is too large to export.")
             archive.writestr(CONTENT_FILE, encoded)
+        if document.get("origins"):
+            encoded = (json.dumps(document["origins"], ensure_ascii=False, indent=2) + "\n").encode("utf-8")
+            if len(encoded) > MAX_FILE_BYTES:
+                raise WorldError("origins.json is too large to export.")
+            archive.writestr(ORIGINS_FILE, encoded)
     payload = stream.getvalue()
     if len(payload) > MAX_ZIP_BYTES:
         raise WorldError("World ZIP is too large to export.")
@@ -287,7 +300,91 @@ def _insert_content(database, document, installation_key):
                               _mapped(maps, "mud_quests", row["id"], "id")))
 
 
-def install(database, payload):
+def bundled_key(world_id, kind, local_key):
+    """A repeatable global key independent of the import order or station."""
+    digest = hashlib.sha256(f"{world_id}:{kind}:{local_key}".encode("utf-8")).hexdigest()[:32]
+    return f"w-{digest}"
+
+
+def _install_origins(database, document):
+    from . import character_creation
+
+    for kind in character_creation.KINDS:
+        seen = set()
+        for source in document["origins"].get(kind, []):
+            local_key = source.get("key")
+            if not isinstance(local_key, str) or not character_creation.KEY_RE.fullmatch(local_key) or local_key in seen:
+                raise WorldError(f"Bundled {kind} need distinct valid local keys.")
+            seen.add(local_key)
+            key = bundled_key(document["id"], kind, local_key)
+            try:
+                definition = character_creation.validate_origin(
+                    kind, {**source, "key": key}, database, check_key=False)
+            except ValueError as error:
+                raise WorldError(f"Invalid bundled {kind[:-1]} {local_key}: {error}") from error
+            existing = database.execute(
+                "SELECT definition_json,installed FROM mud_origin_definitions WHERE kind=? AND key=?",
+                (kind, key),
+            ).fetchone()
+            if existing is not None:
+                if not existing["installed"] or json.loads(existing["definition_json"]) != definition:
+                    raise WorldError(f"Bundled {kind[:-1]} {local_key} conflicts with an installed definition.")
+            else:
+                database.execute(
+                    "INSERT INTO mud_origin_definitions(kind,key,definition_json,imported,installed,enabled) "
+                    "VALUES(?,?,?,1,1,0)",
+                    (kind, key, json.dumps(definition, separators=(",", ":"))),
+                )
+            database.execute(
+                "INSERT INTO mud_world_origins(world_id,kind,origin_key,local_key) VALUES(?,?,?,?)",
+                (document["id"], kind, key, local_key),
+            )
+
+
+def world_origin_keys(database, world_id):
+    return {kind: {row["origin_key"] for row in database.execute(
+        "SELECT origin_key FROM mud_world_origins WHERE world_id=? AND kind=?", (world_id, kind))}
+        for kind in ("races", "classes")}
+
+
+def set_availability(database, world_id, mode="preserve", selected=None):
+    from . import character_creation
+
+    if mode == "preserve":
+        return
+    if mode not in {"only", "combine", "manual"}:
+        raise WorldError("Choose a valid race and class availability mode.")
+    entries = character_creation.catalog(database)
+    available = {kind: {entry["key"] for entry in entries[kind]} for kind in character_creation.KINDS}
+    bundled = world_origin_keys(database, world_id)
+    current = {kind: {entry["key"] for entry in entries[kind] if entry["enabled"]}
+               for kind in character_creation.KINDS}
+    if mode == "only":
+        chosen = bundled
+    elif mode == "combine":
+        chosen = {kind: current[kind] | bundled[kind] for kind in character_creation.KINDS}
+    else:
+        chosen = {kind: set((selected or {}).get(kind, ())) for kind in character_creation.KINDS}
+        if any(chosen[kind] - available[kind] for kind in character_creation.KINDS):
+            raise WorldError("Choose only installed races and classes.")
+    station = database.execute(
+        "SELECT mud_enabled,mud_traditional_enabled,mud_procedural_enabled FROM station LIMIT 1").fetchone()
+    if station and any(station) and any(not chosen[kind] for kind in character_creation.KINDS):
+        raise WorldError("Enable at least one race and one class while a MUD mode is enabled.")
+    for kind in character_creation.KINDS:
+        for entry in entries[kind]:
+            enabled = int(entry["key"] in chosen[kind])
+            if entry["imported"]:
+                database.execute("UPDATE mud_origin_definitions SET enabled=? WHERE kind=? AND key=?",
+                                 (enabled, kind, entry["key"]))
+            else:
+                database.execute(
+                    "INSERT INTO mud_origin_definitions(kind,key,enabled) VALUES(?,?,?) "
+                    "ON CONFLICT(kind,key) DO UPDATE SET enabled=excluded.enabled",
+                    (kind, entry["key"], enabled))
+
+
+def install(database, payload, *, origin_mode="preserve", selected=None):
     document = read_package(payload)
     world_id = document["id"]
     if database.execute("SELECT 1 FROM mud_world_packages WHERE id=?", (world_id,)).fetchone():
@@ -310,6 +407,8 @@ def install(database, payload):
                              (f"world:{world_id}:{installation_key}:exit:{ordinal}", prefix + item["from"],
                               prefix + item["to"], item["name"], item["direction"]))
         _insert_content(database, document, installation_key)
+        _install_origins(database, document)
+        set_availability(database, world_id, origin_mode, selected)
         with destination.open("xb") as target:
             created = True
             target.write(payload)
@@ -415,7 +514,7 @@ def _export_content(database, world_id, room_map):
     return content
 
 
-def export(database, world_id):
+def export(database, world_id, *, origin_keys=None):
     world = database.execute("SELECT * FROM mud_world_packages WHERE id=?", (world_id,)).fetchone()
     if world is None:
         raise WorldError("World was not found.")
@@ -439,16 +538,33 @@ def export(database, world_id):
                            "name": row["name"], "direction": row["direction"]}
                           for row in exits if row["to_room_id"] in ids],
                 "content": _export_content(database, world_id, ids)}
+    from . import character_creation
+    entries = character_creation.catalog(database)
+    installed = {(kind, entry["key"]): entry for kind in character_creation.KINDS
+                 for entry in entries[kind] if entry["imported"]}
+    associations = {(row["kind"], row["origin_key"]): row["local_key"] for row in database.execute(
+        "SELECT kind,origin_key,local_key FROM mud_world_origins WHERE world_id=?", (world_id,))}
+    chosen = set(associations) if origin_keys is None else set(origin_keys)
+    if chosen - set(installed):
+        raise WorldError("Choose only installed custom races and classes to export.")
+    origins = {kind: [] for kind in character_creation.KINDS}
+    for kind, key in sorted(chosen):
+        definition = dict(installed[(kind, key)]["definition"])
+        definition["key"] = associations.get((kind, key), key)
+        origins[kind].append(definition)
+    if any(origins.values()):
+        document["origins"] = origins
     return package_bytes(document)
 
 
-def activate(database, world_id):
+def activate(database, world_id, *, origin_mode="preserve", selected=None):
     from . import mud
     with database:
         database.execute("BEGIN IMMEDIATE")
         world = database.execute("SELECT * FROM mud_world_packages WHERE id=?", (world_id,)).fetchone()
         if world is None:
             raise WorldError("World was not found.")
+        set_availability(database, world_id, origin_mode, selected)
         if world["active"]:
             return False
         start = database.execute("SELECT id,name FROM mud_world_rooms WHERE id=? AND world_id=?",
