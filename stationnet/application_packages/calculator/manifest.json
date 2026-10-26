@@ -1,13 +1,16 @@
 {
   "package_format": 1,
-  "slug": "calculator",
+  "slug": "calculator-v2",
   "name": "Calculator",
-  "description": "Standard and scientific calculator with memory, history, keyboard and touch input.",
+  "description": "GUI calculator with standard/scientific keypads, memory, history, and touch/keyboard controls.",
   "author": "StationNet Core",
-  "version": "1.0.0",
+  "version": "2.1.1",
   "category": "Utilities",
-  "entrypoint": "src/main.js",
-  "platforms": ["desktop", "touch"],
+  "entrypoint": "main.js",
+  "platforms": [
+    "desktop",
+    "touch"
+  ],
   "required_inputs": [],
   "preferred_presentation": "standard"
 }

@@ -45,8 +45,8 @@ Save as `pathfinder.json` and import as a class:
 
 Starter equipment is placed in the character's inventory; the player equips
 it with `/equip <item>`. For firearms, ammunition, consumables, and combat
-effects, define items in a [traditional world](../mud_world_templates/README.md)
-or [dungeon theme](../dungeon_templates/README.md).
+effects, define items in a [traditional world](../mud_world_templates/README_CUSTOM_WORLDS.md)
+or [dungeon theme](../dungeon_templates/README_DUNGEON_THEMES.md).
 
 ## Fields and validation
 

@@ -79,7 +79,7 @@ def test_world_lifecycle_and_player_relocation(tmp_path):
             mud._set_player_location(db, explorer, "procedural", "portal", mud.PORTAL_ROOM_ID)
             db.commit()
         client = _client(app, sysop)
-        assert (tmp_path / "mud_worlds" / "README.md").exists()
+        assert (tmp_path / "mud_worlds" / "README_CUSTOM_WORLDS.md").exists()
         template = client.get("/sysop/settings/mud-worlds/template")
         assert template.status_code == 200
         assert mud_worlds.read_package(template.data)["start_room"] == "start"

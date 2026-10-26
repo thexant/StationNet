@@ -60,7 +60,7 @@ def test_sysop_import_is_immediately_playable(data_dir):
         mud._set_player_location(db, player, "procedural", "portal", mud.PORTAL_ROOM_ID)
         db.commit()
         assert "custom-cavern" not in dungeons.discover_templates()
-    assert (tmp_path / "dungeons" / "README.md").is_file()
+    assert (tmp_path / "dungeons" / "README_DUNGEON_THEMES.md").is_file()
     assert (tmp_path / "dungeons" / "_template.json").is_file()
 
     client = app.test_client()

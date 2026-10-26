@@ -48,11 +48,11 @@ a:hover { color: var(--magenta); }
 .station-shell { width: min(940px, 100%); min-height: 100vh; margin: 0 auto; padding: .8rem 1.1rem 1rem; display: grid; grid-template-rows: auto auto 1fr auto auto; }
 .wiki-page .station-shell { width: min(1280px, 100%); }
 .system-line { display: flex; justify-content: space-between; gap: 1rem; color: var(--grey); font-family: "Courier New", monospace; font-size: .72rem; }
-.station-brand { display: grid; justify-items: center; margin: 1.5rem 0 1.2rem; color: var(--cyan); text-decoration: none; }
+.station-brand { display: grid; justify-items: center; width: 100%; min-width: 0; margin: 1.5rem 0 1.2rem; color: var(--cyan); text-decoration: none; }
 .station-brand:hover { color: var(--cyan); }
 .masthead-row { display: grid; grid-template-columns: auto minmax(0,1fr) auto; align-items: center; gap: clamp(.4rem,2vw,1.25rem); width: 100%; }
 .masthead-icon { display: block; width: clamp(2.5rem,10vw,8rem); height: clamp(2.5rem,10vw,8rem); object-fit: cover; }
-.ansi-logo { max-width: 100%; margin: 0; overflow-x: auto; color: var(--masthead-color); font-family: var(--mono); font-size: clamp(.4rem, 1.55vw, .88rem); font-weight: 700; line-height: 1.08; letter-spacing: .02em; text-shadow: .13em .1em 0 var(--masthead-shadow); white-space: pre; }
+.ansi-logo { justify-self: center; width: max-content; max-width: 100%; margin: 0; overflow-x: auto; color: var(--masthead-color); font-family: var(--mono); font-size: clamp(.4rem, 1.55vw, .88rem); font-weight: 700; line-height: 1.08; letter-spacing: .02em; text-align: center; text-shadow: .13em .1em 0 var(--masthead-shadow); white-space: pre; }
 .banner-color-controls { display: flex; gap: .5rem; align-items: center; }
 .banner-color-controls select { flex: 1; }
 .banner-color-controls input[type="color"] { flex: 0 0 3rem; min-height: 2.25rem; padding: .15rem; }

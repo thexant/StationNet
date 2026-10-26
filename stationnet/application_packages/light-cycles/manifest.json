@@ -2,12 +2,15 @@
   "package_format": 1,
   "slug": "light-cycles",
   "name": "Light Cycles",
-  "description": "TRON-style light cycle arena. Steer with WASD, trap up to 8 AI rivals, four difficulty levels.",
+  "description": "TRON-style light cycle battles against up to 8 rivals, with swipe/D-pad steering and a dark electronic soundtrack.",
   "author": "StationNet Core",
-  "version": "1.0.0",
+  "version": "1.2.0",
   "category": "Games",
   "entrypoint": "main.js",
-  "platforms": ["desktop"],
-  "required_inputs": ["keyboard"],
+  "platforms": [
+    "desktop",
+    "touch"
+  ],
+  "required_inputs": [],
   "preferred_presentation": "standard"
 }

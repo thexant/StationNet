@@ -1,4 +1,5 @@
 // LIGHT CYCLES - TRON-style arena for StationNet.
+// v1.2: responsive touch steering, on-screen gamepad, dark electronic chase score.
 // Trails live in an indexed framebuffer (1 cell = 4px); bikes/HUD are canvas commands.
 StationNet.start(async (ui) => {
   const W = 160, H = 100, CS = 4, TOP = 22, CW = W * CS, CH = H * CS + TOP;
@@ -12,14 +13,45 @@ StationNet.start(async (ui) => {
     Hard:   { speed: 32, mult: 3, look: 14 },
     Insane: { speed: 36, mult: 5, look: 20 },
   };
-  const cfg = { opp: 3, level: "Medium" };
+  const cfg = { opp: 3, level: "Medium", music: true };
   try {
     const s = await ui.storage.get("cfg");
-    if (s && s.opp >= 1 && s.opp <= 8 && LEVELS[s.level]) { cfg.opp = s.opp; cfg.level = s.level; }
+    if (s && typeof s === "object") {
+      if (s.opp >= 1 && s.opp <= 8 && LEVELS[s.level]) { cfg.opp = s.opp; cfg.level = s.level; }
+      if (typeof s.music === "boolean") cfg.music = s.music;
+    }
   } catch (e) { /* defaults */ }
 
   // ---------- sound ----------
   const beep = (f, ms, w = "square", v = 0.08) => ui.sound.playTone(f, ms, { waveform: w, volume: v });
+  // Original 30-second dark electronic pursuit loop. Local and fully offline.
+  // Sample voices allow music to be stopped without silencing crash/turn sounds.
+  let musicSample = null, musicVoice = null;
+  try { musicSample = await ui.sound.load("assets/grid_pursuit.wav"); }
+  catch (e) { /* The game remains playable if this asset cannot be decoded. */ }
+  function stopMusic() {
+    if (musicVoice !== null) {
+      try { ui.sound.stopSample(musicVoice); } catch (e) { /* already ended */ }
+      musicVoice = null;
+    }
+  }
+  function playMusic() {
+    if (!cfg.music || !musicSample || musicVoice !== null || paused || mode === "menu") return;
+    try { musicVoice = ui.sound.playSample(musicSample, { loop: true, volume: 0.34 }); }
+    catch (e) { musicVoice = null; }
+  }
+  function toggleMusic() {
+    cfg.music = !cfg.music;
+    save();
+    if (cfg.music) playMusic(); else stopMusic();
+    if (mode === "menu") ui.update("menu-music", musicButton());
+    else ui.update("game-help", gameHelp());
+  }
+  function setPaused(value) {
+    if (mode !== "count" && mode !== "play") return;
+    paused = value;
+    if (paused) stopMusic(); else playMusic();
+  }
 
   // ---------- state ----------
   const grid = new Uint8Array(W * H);
@@ -37,15 +69,69 @@ StationNet.start(async (ui) => {
 
   let mode = "menu", bikes = [], fx = [], acc = 0, cd = 0, lastCd = 0;
   let result = null, endTimer = 0, score = 0, paused = false, dirty = true;
+  const touchPointers = new Map(), directedPointers = new Set();
+  const padActions = [
+    { label: "Pause", code: "KeyP" },
+    { label: "Next", code: "Space" },
+    { label: "Menu", code: "KeyM" },
+    { label: "Music", code: "KeyN" },
+  ];
+  const arenaOptions = { id: "field", label: "Light cycle arena: swipe to steer", touchLayout: "gamepad", onPointer: arenaPointer };
+  const directionNames = { up: 0, right: 1, down: 2, left: 3 };
+
+  function steer(nd) {
+    const p = bikes[0];
+    if ((mode !== "count" && mode !== "play") || !p || !p.alive || paused || nd === undefined) return false;
+    const last = p.q.length ? p.q[p.q.length - 1] : p.d;
+    // Keep the original buffered turns and no-instant-reverse rule intact.
+    if (nd === last || nd === (last + 2) % 4 || p.q.length >= 3) return false;
+    p.q.push(nd);
+    beep(700, 20, "square", 0.025);
+    return true;
+  }
+  function arenaPointer(event) {
+    const id = event.pointerId;
+    if (event.phase === "start") {
+      // Direct movement detects a finger swipe before its end/gesture callback.
+      if (event.pointerType === "touch") touchPointers.set(id, { x: event.x, y: event.y });
+      directedPointers.delete(id);
+      return;
+    }
+    if (event.phase === "move" && event.pointerType === "touch") {
+      const origin = touchPointers.get(id);
+      if (!origin || directedPointers.has(id)) return;
+      const dx = event.x - origin.x, dy = event.y - origin.y;
+      // Logical coordinates: 24 pixels gives a deliberate mobile swipe.
+      if (Math.max(Math.abs(dx), Math.abs(dy)) < 24) return;
+      directedPointers.add(id);
+      steer(Math.abs(dx) > Math.abs(dy) ? (dx > 0 ? 1 : 3) : (dy > 0 ? 2 : 0));
+      return;
+    }
+    if (event.phase === "end" || event.phase === "cancel") {
+      touchPointers.delete(id);
+      // Retain direction flag through a possible subsequent swipe gesture.
+      return;
+    }
+    if (event.phase !== "gesture" || event.gesture !== "swipe" || directedPointers.has(id)) return;
+    const direction = String(event.direction || "").toLowerCase().replace(/^arrow/, "");
+    let nd = directionNames[direction];
+    if (nd === undefined && Number.isFinite(event.dx) && Number.isFinite(event.dy)) {
+      if (Math.max(Math.abs(event.dx), Math.abs(event.dy)) < 14) return;
+      nd = Math.abs(event.dx) > Math.abs(event.dy) ? (event.dx > 0 ? 1 : 3) : (event.dy > 0 ? 2 : 0);
+    }
+    if (nd !== undefined) { directedPointers.add(id); steer(nd); }
+  }
 
   // ---------- menu ----------
   const cfgText = () => ui.text(`Opponents: ${cfg.opp}    Difficulty: ${cfg.level}`, { id: "cfg" });
-  const save = () => { try { ui.storage.set("cfg", cfg); } catch (e) { /* ignore */ } };
+  const save = () => { try { Promise.resolve(ui.storage.set("cfg", cfg)).catch(() => {}); } catch (e) { /* ignore */ } };
+  const musicButton = () => ui.button(`MUSIC: ${cfg.music ? "ON" : "OFF"}`, toggleMusic, { id: "menu-music" });
+  const gameHelp = () => ui.text(`Swipe / D-pad or WASD / arrows to steer  |  P pause  |  M menu  |  Space next  |  N music (${cfg.music ? "ON" : "OFF"})`, { id: "game-help" });
   function showMenu() {
-    mode = "menu"; ui.sound.stop();
+    mode = "menu"; stopMusic(); ui.sound.stop();
     ui.render(
       ui.title("LIGHT CYCLES"),
-      ui.text("Steer with W A S D (or arrow keys). Don't hit a wall or any light trail. Last rider standing wins."),
+      ui.text("Steer using WASD, arrow keys, swipes on the arena, or the touch D-pad. Avoid walls and trails. Last rider standing wins."),
       ui.menu("Opponents (1-8)", ["1", "2", "3", "4", "5", "6", "7", "8"], ({ value }) => {
         cfg.opp = Number(value); ui.update("cfg", cfgText()); save();
       }),
@@ -53,14 +139,15 @@ StationNet.start(async (ui) => {
         cfg.level = value; ui.update("cfg", cfgText()); save();
       }),
       cfgText(),
-      ui.button("START (Enter)", startGame)
+      musicButton(),
+      ui.button("START (Enter / tap)", startGame)
     );
   }
   function startGame() {
     score = 0;
     ui.render(
-      ui.canvas(CW, CH, [], { id: "field", label: "Light cycle arena" }),
-      ui.text("W A S D / arrows steer  |  P pause  |  M menu  |  Space: next round")
+      ui.canvas(CW, CH, [], { ...arenaOptions, controls: padActions }),
+      gameHelp()
     );
     newRound();
   }
@@ -69,6 +156,7 @@ StationNet.start(async (ui) => {
   function mark(b) { const k = b.y * W + b.x; grid[k] = b.id + 1; fb.pixels[k] = b.id + 1; dirty = true; }
   function newRound() {
     grid.fill(0); fb.clear(0); fx = []; acc = 0; endTimer = 0; paused = false; result = null;
+    touchPointers.clear(); directedPointers.clear();
     const n = cfg.opp + 1; bikes = [];
     for (let i = 0; i < n; i++) {
       const a = Math.PI / 2 + (2 * Math.PI * i) / n;
@@ -79,6 +167,7 @@ StationNet.start(async (ui) => {
       bikes.push(b); mark(b);
     }
     mode = "count"; cd = 3; lastCd = 4;
+    playMusic();
   }
 
   function kill(b) {
@@ -181,16 +270,15 @@ StationNet.start(async (ui) => {
   // ---------- input ----------
   ui.onKey(({ code, phase, repeat }) => {
     if (phase !== "down" || repeat) return;
+    if (code === "KeyN") { toggleMusic(); return; }
     if (mode === "menu") { if (code === "Enter" || code === "Space") startGame(); return; }
     if (code === "KeyM") { showMenu(); return; }
     if (mode === "over") { if (code === "Space" || code === "Enter") newRound(); return; }
-    if (code === "KeyP") { paused = !paused; return; }
-    const p = bikes[0], nd = KEYS[code];
-    if (!p || !p.alive || nd === undefined || paused) return;
-    const last = p.q.length ? p.q[p.q.length - 1] : p.d;
-    if (nd !== last && nd !== (last + 2) % 4 && p.q.length < 3) { p.q.push(nd); beep(700, 20, "square", 0.025); }
+    if (code === "KeyP" || code === "Enter") { setPaused(!paused); return; }
+    steer(KEYS[code]);
   });
-  ui.onVisibility(({ value }) => { if (value === "hidden" && (mode === "play" || mode === "count")) paused = true; });
+  ui.onVisibility(({ value }) => { if (value === "hidden") setPaused(true); });
+  ui.onCleanup(() => stopMusic());
 
   // ---------- drawing ----------
   const hexA = (a) => Math.max(0, Math.min(255, Math.round(a))).toString(16).padStart(2, "0");
@@ -225,9 +313,10 @@ StationNet.start(async (ui) => {
     else if (result) {
       const m = { win: ["VICTORY", "#3dff6a"], lose: ["DEREZZED", "#ff2a2a"], draw: ["MUTUAL DEREZ", "#ffee00"] }[result];
       cmds.push(txt(CW / 2, mid - 10, m[0], 44, m[1]));
-      if (mode === "over") cmds.push(txt(CW / 2, mid + 30, "SPACE: next round     M: menu", 16, "#ffffff"));
+      if (mode === "over") cmds.push(txt(CW / 2, mid + 30, "NEXT / SPACE: again     MENU / M: exit", 16, "#ffffff"));
     }
-    ui.update("field", ui.canvas(CW, CH, cmds, { id: "field", label: "Light cycle arena" }));
+    // Preserve touch buttons when redrawing; only the canvas bitmap changes.
+    ui.update("field", ui.canvas(CW, CH, cmds, arenaOptions));
   }
 
   ui.animate(({ delta }) => {

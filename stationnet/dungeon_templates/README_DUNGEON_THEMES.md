@@ -387,7 +387,7 @@ Conditions can appear on pools and on individual content choices.
   a theme cannot define new spells. `/spells` lists them, `/cast <spell>
   [enemy]` spends mana, and `/rest` restores mana when no hostile enemy is
   nearby. The built-in spells are `ember`, `venom`, `rend`, `hex`, `mend`,
-  `ward`, and `might`; see the [race and class guide](../mud_origin_templates/README.md)
+  `ward`, and `might`; see the [race and class guide](../mud_origin_templates/README_RACES_CLASSES.md)
   for costs and targets. Intellect improves mana and spell strength. Theme
   items and enemies can apply the same timed effect keys via `properties`.
 - Enemies with `combat` attack when a player enters their room.

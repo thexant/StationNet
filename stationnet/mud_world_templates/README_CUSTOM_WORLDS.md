@@ -12,7 +12,7 @@ exits. `content.json` may have up to 5,000 records in each supported array.
 The ZIP must contain only those three required files and optional
 `content.json`, all at its root. Imports validate references and reject
 duplicate world IDs. A world ZIP does not include race or class choices;
-import those separately with the [origin guide](../mud_origin_templates/README.md).
+import those separately with the [origin guide](../mud_origin_templates/README_RACES_CLASSES.md).
 
 ## 1. Name the world and choose its entry room
 
@@ -95,7 +95,7 @@ implementations. Supported spells are `ember` (8 mana), `venom` (7), `rend`
 an enemy; the last three target the caster. Players use `/spells`,
 `/cast <spell> [enemy]`, and `/rest` to recover mana outside combat when no
 hostile enemy is nearby. Intellect improves mana and spell strength. See the
-[race and class guide](../mud_origin_templates/README.md) for class setup.
+[race and class guide](../mud_origin_templates/README_RACES_CLASSES.md) for class setup.
 
 `content.json` is an object whose keys are authored MUD table names and whose
 values are arrays of records. IDs are **local to the ZIP** and can be short

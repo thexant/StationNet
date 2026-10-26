@@ -55,9 +55,9 @@ def directory():
 def init_app(app):
     target = Path(app.config["DATA_DIR"]) / "mud_worlds"
     target.mkdir(parents=True, exist_ok=True)
-    guide = target / "README.md"
+    guide = target / "README_CUSTOM_WORLDS.md"
     if not guide.exists():
-        guide.write_bytes((Path(__file__).with_name("mud_world_templates") / "README.md").read_bytes())
+        guide.write_bytes((Path(__file__).with_name("mud_world_templates") / "README_CUSTOM_WORLDS.md").read_bytes())
 
 
 def _object(value, label):
