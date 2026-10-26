@@ -119,11 +119,22 @@ def test_shop_storage_completion_death_and_completion(game):
                    "WHERE character_id=? AND track_key=?",
                    (character["id"], character["track_key"]))
         mud._entry_attack(db, user)
-        assert mud._current_room(db, user_id)["id"] == mud.PORTAL_ROOM_ID
+        assert mud._current_room(db, user_id)["id"] == "stationnet:death-summary"
+        summary = mud._room_state(db, user_id)
+        assert "DEATH SUMMARY" in summary["description"]
+        assert "Rooms visited:" in summary["description"]
+        assert "Run loot lost: 2 items" in summary["description"]
+        assert db.execute("SELECT location_type FROM mud_player_locations WHERE user_id=?",
+                          (user_id,)).fetchone()[0] == "dungeon_instance"
         assert db.execute("SELECT 1 FROM mud_item_instances WHERE id=?", (doomed,)).fetchone() is None
         assert db.execute("SELECT 1 FROM mud_item_instances WHERE id=?", (doomed_gear,)).fetchone() is None
         assert db.execute("SELECT 1 FROM mud_item_instances WHERE id=?", (owned,)).fetchone()
+
+        mud._continue_action(db, user, {})
+        assert mud._current_room(db, user_id)["id"] == mud.PORTAL_ROOM_ID
         assert len(mud.hub_state(db, user_id)["storage"]) == 1
+        with pytest.raises(mud.ActionError, match="only available"):
+            mud._continue_action(db, user, {})
 
         third = _launch(db, user)
         reward = mud._grant_item(db, user_id, "stationnet:treasure:gem")
@@ -176,6 +187,51 @@ def test_combat_waits_for_actions_and_consumables_are_spent(game):
         assert mud.character_state(db, user_id)["health"] > 40
         mud._defend_action(db, user, {})
         assert mud._active_expedition(db, user_id) is not None
+
+
+def test_death_summary_persists_and_continue_is_scoped(game):
+    app, user_id = game
+    client = app.test_client()
+    with client.session_transaction() as session:
+        session["user_id"] = user_id
+        session["csrf_token"] = "test-token"
+    assert client.get("/mud").status_code == 200
+
+    def command(value):
+        return client.post("/mud/actions", data={
+            "csrf_token": "test-token", "command": value,
+        })
+
+    assert command("/continue").status_code == 400
+    with app.app_context():
+        db = get_db()
+        user = db.execute("SELECT * FROM users WHERE id=?", (user_id,)).fetchone()
+        run_id = _launch(db, user)
+        enemy = db.execute(
+            "SELECT room_key FROM mud_dungeon_content WHERE instance_id=? "
+            "AND content_type='enemy' LIMIT 1", (run_id,),
+        ).fetchone()
+        mud._set_player_location(db, user_id, "procedural", "dungeon_instance",
+                                 enemy["room_key"], run_id)
+        mud._record_expedition_visit(db, run_id, user_id, enemy["room_key"])
+        character = mud._character_row(db, user_id)
+        db.execute("UPDATE mud_character_progression SET current_health=1 "
+                   "WHERE character_id=? AND track_key=?",
+                   (character["id"], character["track_key"]))
+        mud._entry_attack(db, user)
+        db.commit()
+
+    page = client.get("/mud")
+    assert b"DEATH SUMMARY" in page.data
+    assert b"/continue" in page.data
+    blocked = command("/portal")
+    assert blocked.status_code == 400
+    assert "death summary" in blocked.json["error"]
+    assert blocked.json["room"]["id"] == "stationnet:death-summary"
+    continued = command("/continue")
+    assert continued.status_code == 200
+    assert continued.json["room"]["id"] == mud.PORTAL_ROOM_ID
+    assert command("/continue").status_code == 400
 
 
 def test_room_entry_aggression_and_risky_flee(game, monkeypatch):

@@ -1,7 +1,7 @@
 {% extends 'base.html' %}
 {% block title %}Station MUD{% endblock %}
 {% block content %}
-<section class="mud-shell" data-mud data-action-url="{{ url_for('mud.perform_action') }}" data-updates-url="{{ url_for('mud.updates') }}" data-clear-url="{{ url_for('mud.clear_events') }}" data-cleared-through="{{ cleared_through_id }}" data-disconnect-url="{{ url_for('mud.disconnect') }}" data-csrf="{{ session.csrf_token }}">
+<section class="mud-shell" data-mud data-death-summary="{{ 'true' if room.id == 'stationnet:death-summary' else 'false' }}" data-action-url="{{ url_for('mud.perform_action') }}" data-updates-url="{{ url_for('mud.updates') }}" data-clear-url="{{ url_for('mud.clear_events') }}" data-cleared-through="{{ cleared_through_id }}" data-disconnect-url="{{ url_for('mud.disconnect') }}" data-csrf="{{ session.csrf_token }}">
   {% if character.creation_state == 'legacy' %}<div class="mud-legacy-notice" role="note">Your existing character can be customized once while keeping levels, inventory, quests, and achievements. <a class="button secondary" href="{{ url_for('mud.create_character') }}">CUSTOMIZE CHARACTER</a></div>{% endif %}
   <header class="mud-header">
     <div>

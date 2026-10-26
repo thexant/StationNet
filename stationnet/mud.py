@@ -491,6 +491,10 @@ def _reconcile_player_location(database, user_id):
         "SELECT mode,location_type,location_key,instance_id "
         "FROM mud_player_locations WHERE user_id=?", (user_id,),
     ).fetchone()
+    if (location is not None and modes["procedural"] and
+            database.execute("SELECT 1 FROM mud_death_summaries WHERE user_id=?",
+                             (user_id,)).fetchone() is not None):
+        return location
     valid = False
     if location is not None:
         if location["mode"] == "traditional" and modes["traditional"]:
@@ -568,6 +572,11 @@ def _current_room(database, user_id):
     location = _reconcile_player_location(database, user_id)
     if location is None:
         raise ActionError("The MUD is currently disabled.", 404)
+    if database.execute("SELECT 1 FROM mud_death_summaries WHERE user_id=?",
+                        (user_id,)).fetchone() is not None:
+        return {"id": "stationnet:death-summary", "name": "Expedition Ended",
+                "description": "Your run has ended. Review the results and enter /continue.",
+                "mode": "procedural", "system_managed": True}
     if location["location_type"] == "portal":
         return _portal_room(database)
     if location["location_type"] == "dungeon_instance":
@@ -878,6 +887,14 @@ def _leave_combat(database, user_id, scope_type="room", scope_key=None, defeated
 
 
 def _room_state(database, user_id):
+    death = database.execute(
+        "SELECT summary FROM mud_death_summaries WHERE user_id=?", (user_id,)
+    ).fetchone()
+    if death is not None:
+        return {"id": "stationnet:death-summary", "name": "Expedition Ended",
+                "description": death["summary"], "instructions": "Enter /continue to return to the Dungeon Portals.",
+                "system_managed": True, "mode": "procedural", "exits": [],
+                "occupants": [], "items": [], "npcs": []}
     room = _current_room(database, user_id)
     portal = room["id"] == PORTAL_ROOM_ID
     instance_id = room.get("instance_id")
@@ -1700,6 +1717,28 @@ def _defeat_player(database, user, encounter, npc):
     _leave_combat(database, user["id"], encounter["scope_type"], encounter["scope_key"], True)
     if old_room.get("instance_id"):
         instance_id = old_room["instance_id"]
+        run = database.execute(
+            "SELECT join_code,theme_id,difficulty,room_count FROM mud_procedural_instances "
+            "WHERE id=?", (instance_id,),
+        ).fetchone()
+        participant = database.execute(
+            "SELECT rooms_visited FROM mud_expedition_participants "
+            "WHERE instance_id=? AND user_id=?", (instance_id, user["id"]),
+        ).fetchone()
+        lost_items = database.execute(
+            "SELECT COUNT(*) FROM mud_item_instances WHERE owner_character_id=? "
+            "AND acquired_run_id=?", (character["id"], instance_id),
+        ).fetchone()[0]
+        daily_day = _daily_run_day(database, instance_id)
+        label = f"Dungeon of the Day {daily_day}" if daily_day else "Expedition"
+        summary = (
+            f"DEATH SUMMARY\n{npc['name']} defeated you in {old_room['name']}.\n"
+            f"{label} {run['join_code']} · {run['theme_id']} · difficulty {run['difficulty']}\n"
+            f"Rooms visited: {participant['rooms_visited']}/{run['room_count']}\n"
+            f"Run loot lost: {lost_items} item{'s' if lost_items != 1 else ''}. "
+            "Previously owned items and earned experience remain.\n"
+            "Enter /continue to return to the Dungeon Portals."
+        )
         failed = database.execute(
             "UPDATE mud_expedition_participants SET status='failed',finished_at=CURRENT_TIMESTAMP "
             "WHERE instance_id=? AND user_id=? AND status='active'",
@@ -1714,13 +1753,15 @@ def _defeat_player(database, user, encounter, npc):
                 database, instance_id, user["id"], "failed", participant["rooms_visited"]
             )
         _settle_run_loot(database, user["id"], instance_id, keep=False)
-        _set_player_location(database, user["id"], "procedural", "portal", PORTAL_ROOM_ID)
+        database.execute(
+            "INSERT INTO mud_death_summaries(user_id,instance_id,summary) VALUES(?,?,?) "
+            "ON CONFLICT(user_id) DO UPDATE SET instance_id=excluded.instance_id,"
+            "summary=excluded.summary,created_at=CURRENT_TIMESTAMP",
+            (user["id"], instance_id, summary),
+        )
         _finish_empty_expedition(database, instance_id, "failure")
         return [
-            EventDraft(
-                f"{npc['name']} defeats you. Your expedition ends and you recover in "
-                f"{_portal_room(database)['name']}.", event_type="defeat",
-            ),
+            EventDraft(summary, event_type="defeat"),
             EventDraft(
                 f"{character['display_name']} is defeated by {npc['name']} and leaves the run.",
                 event_type="defeat", audience_type="instance", audience_key=instance_id,
@@ -2334,6 +2375,23 @@ def _portal_action(database, user, parameters):
     return _transition_location(
         database, user, "procedural", "portal", PORTAL_ROOM_ID, "through the portal threshold"
     )
+
+
+def _continue_action(database, user, parameters):
+    if parameters.get("arguments"):
+        raise ActionError("The continue command does not accept arguments.")
+    pending = database.execute(
+        "SELECT 1 FROM mud_death_summaries WHERE user_id=?", (user["id"],)
+    ).fetchone()
+    if pending is None:
+        raise ActionError("/continue is only available on the death summary screen.")
+    database.execute("DELETE FROM mud_death_summaries WHERE user_id=?", (user["id"],))
+    _set_player_location(database, user["id"], "procedural", "portal", PORTAL_ROOM_ID)
+    return [EventDraft(
+        f"You recover in {_portal_room(database)['name']}.\n\n"
+        f"{_describe_room(database, _portal_room(database), user['id'])}",
+        event_type="portal",
+    )]
 
 
 def _world_action(database, user, parameters):
@@ -3108,6 +3166,12 @@ actions.register(ActionDefinition(
     group="NAVIGATION", show_context=False,
 ))
 actions.register(ActionDefinition(
+    key="continue", label="CONTINUE AFTER DEATH",
+    description="Leave the death summary and recover in the portal room.",
+    commands=("continue",), handler=_continue_action,
+    group="NAVIGATION", show_context=False,
+))
+actions.register(ActionDefinition(
     key="world", label="RETURN TO TRADITIONAL WORLD",
     description="Return to your last traditional-world location.",
     commands=("world",), handler=_world_action,
@@ -3365,6 +3429,12 @@ class MudService:
                 )
                 database.commit()
                 return prior["action_key"], [dict(row) for row in events]
+
+            pending_death = database.execute(
+                "SELECT 1 FROM mud_death_summaries WHERE user_id=?", (user["id"],)
+            ).fetchone() is not None
+            if pending_death and action_request.definition.key != "continue":
+                raise ActionError("Enter /continue to leave the death summary screen.")
 
             drafts = action_request.definition.handler(
                 database, user, action_request.parameters

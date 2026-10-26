@@ -42,6 +42,7 @@ for(const mud of document.querySelectorAll("[data-mud]")){
   const quests=mud.querySelector("[data-mud-quests]");
   const questCount=mud.querySelector("[data-mud-quest-count]");
   let busy=false, pollBusy=false;
+  let showingDeath=mud.dataset.deathSummary==="true";
   let clearedThroughId=Number(mud.dataset.clearedThrough)||0;
   let lastId=Math.max(clearedThroughId,...Array.from(events.querySelectorAll("[data-event-id]"),row=>Number(row.dataset.eventId)||0));
 
@@ -56,6 +57,7 @@ for(const mud of document.querySelectorAll("[data-mud]")){
     if(open)roomView.scrollTop=0;
     else if(atLatest())latestButton.classList.remove("is-unread");
   };
+  if(showingDeath)showRoom(true);
   const scrollEventsToLatest=()=>{
     showRoom(false);
     gameScroll.scrollTop=gameScroll.scrollHeight;
@@ -91,6 +93,8 @@ for(const mud of document.querySelectorAll("[data-mud]")){
   };
   const renderRoom=room=>{
     if(!room)return;
+    const death=room.id==="stationnet:death-summary";
+    if(death!==showingDeath){showingDeath=death;showRoom(death)}
     roomName.textContent=room.name||"Unknown Location";
     roomPreview.textContent=room.description||"";
     sceneName.textContent=room.name||"Unknown Location";

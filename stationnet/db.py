@@ -688,6 +688,11 @@ CREATE TABLE IF NOT EXISTS mud_player_locations (
  location_key TEXT NOT NULL,
  instance_id TEXT REFERENCES mud_procedural_instances(id) ON DELETE SET NULL,
  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);
+CREATE TABLE IF NOT EXISTS mud_death_summaries (
+ user_id INTEGER PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+ instance_id TEXT NOT NULL REFERENCES mud_procedural_instances(id) ON DELETE CASCADE,
+ summary TEXT NOT NULL,
+ created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);
 CREATE INDEX IF NOT EXISTS idx_mud_player_location_scope
  ON mud_player_locations(location_type,location_key,user_id);
 CREATE TABLE IF NOT EXISTS mud_portal_settings (
