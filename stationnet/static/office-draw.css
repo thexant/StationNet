@@ -17,3 +17,10 @@
 .draw-stage svg{margin-inline:auto}
 @media(max-width:1050px){.draw-workspace{grid-template-columns:1fr}}
 @media(max-width:700px){.draw-body{grid-template-columns:1fr}.draw-stage{height:60vh;min-height:380px;max-height:620px;padding:12px}}
+
+/* Invert the crosshair against the page and objects underneath it. */
+.draw-stage svg,.draw-stage svg [data-id]:not([data-handle]){cursor:none}
+#draw-cursor{position:fixed;z-index:100;left:0;top:0;width:25px;height:25px;transform:translate(-50%,-50%);mix-blend-mode:difference;pointer-events:none}
+#draw-cursor::before,#draw-cursor::after{content:"";position:absolute;background:#fff}
+#draw-cursor::before{left:0;top:12px;width:25px;height:1px}
+#draw-cursor::after{left:12px;top:0;width:1px;height:25px}

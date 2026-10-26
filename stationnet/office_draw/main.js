@@ -8,7 +8,7 @@ if (app) start();
 
 function start() {
   document.body.classList.add('draw-page');
-  const $ = selector => app.querySelector(selector), svg = $('#draw-canvas'), ns = 'http://www.w3.org/2000/svg';
+  const $ = selector => app.querySelector(selector), svg = $('#draw-canvas'), cursor = $('#draw-cursor'), ns = 'http://www.w3.org/2000/svg';
   const enc = new TextEncoder(), dec = new TextDecoder(), api = app.dataset.api, csrf = app.dataset.csrf;
   const uid = () => crypto.randomUUID(), copy = value => structuredClone(value);
   const clamp = (value, lo, hi) => Math.max(lo, Math.min(hi, value));
@@ -219,7 +219,13 @@ function start() {
   $('#draw-insert-image').onclick = () => $('#draw-image-file').click(); $('#draw-image-file').onchange = event => { const file = event.target.files[0]; event.target.value = ''; if (!file) return;
     if (!/^image\/(png|jpeg|webp)$/.test(file.type) || file.size > 6 * 1024 * 1024) return message('Choose a PNG, JPEG, or WebP image no larger than 6 MB.');
     const reader = new FileReader(); reader.onload = () => change(() => { const o = newObject('image', { x: 50, y: 50 }); o.src = reader.result; o.w = 240; o.h = 180; drawing.objects.push(o); selected = new Set([o.id]); }); reader.onerror = () => message('Could not read image.'); reader.readAsDataURL(file); };
-  svg.onpointerdown = dragStart; svg.onpointermove = dragMove; svg.onpointerup = dragEnd; svg.onpointercancel = dragEnd;
+  function updateCursor(event) {
+    const rect = svg.getBoundingClientRect();
+    cursor.hidden = (event.pointerType !== 'mouse' && event.pointerType !== 'pen') || !!event.target.closest('[data-handle]') ||
+      event.clientX < rect.left || event.clientX > rect.right || event.clientY < rect.top || event.clientY > rect.bottom;
+    if (!cursor.hidden) { cursor.style.left = `${event.clientX}px`; cursor.style.top = `${event.clientY}px`; }
+  }
+  svg.onpointerdown = dragStart; svg.onpointerenter = updateCursor; svg.onpointermove = event => { updateCursor(event); dragMove(event); }; svg.onpointerleave = () => { cursor.hidden = true; }; svg.onpointerup = dragEnd; svg.onpointercancel = event => { cursor.hidden = true; dragEnd(event); };
   svg.ondblclick = event => { const target = event.target.closest('[data-id]'), o = target && drawing.objects.find(item => item.id === target.dataset.id); if (o?.type === 'text') { selected = new Set([o.id]); editText(); } };
   document.addEventListener('keydown', event => { if ($('#draw-workspace').hidden) return;
     if (event.ctrlKey && event.key.toLowerCase() === 's') { event.preventDefault(); save(); return; }
