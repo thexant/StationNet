@@ -142,7 +142,7 @@
             <strong>CARRIED</strong>
             <div data-mud-carried>{% for item in inventory.inventory %}<span>{{ item.display_name }}{% if item.rounds_remaining is defined %} · {{ item.rounds_remaining }} rounds{% endif %}{% if item.acquired_run_id %} · RUN LOOT{% endif %}</span>{% else %}<span class="muted">nothing carried</span>{% endfor %}</div>
             <strong>EQUIPPED</strong>
-            <div data-mud-equipped>{% for item in inventory.equipment %}<span>{{ item.equipped_slot|replace('_',' ') }}: {{ item.display_name }}{% if item.loaded_rounds is defined %} · {{ item.loaded_rounds }}/{{ item.magazine_size }} loaded{% endif %}{% if item.acquired_run_id %} · RUN LOOT{% endif %}</span>{% else %}<span class="muted">nothing equipped</span>{% endfor %}</div>
+            <div data-mud-equipped>{% for item in inventory.equipment %}<span>{{ item.equipped_slot|replace('_',' ') }}: {{ item.display_name }}{% if not item.requirements_met %} · REQUIREMENTS UNMET{% endif %}{% if item.loaded_rounds is defined %} · {{ item.loaded_rounds }}/{{ item.magazine_size }} loaded{% endif %}{% if item.acquired_run_id %} · RUN LOOT{% endif %}</span>{% else %}<span class="muted">nothing equipped</span>{% endfor %}</div>
             <small>Use /inventory to list items, then /look, /equip, /use, or /drop.</small>
           </div>
         </div>

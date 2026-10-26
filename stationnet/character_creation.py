@@ -214,20 +214,25 @@ def complete(database, user_id, payload, possession_mode="traditional"):
     if collision:
         raise ValueError("That character name is already in use.")
     health_bonus = (attributes["vitality"] - 10) * 5
+    mana_bonus = (attributes["intellect"] - 10) * 3
     for track in ("shared", "traditional", "procedural"):
         progression = database.execute(
-            "SELECT current_health,maximum_health FROM mud_character_progression "
+            "SELECT current_health,maximum_health,current_mana,maximum_mana FROM mud_character_progression "
             "WHERE character_id=? AND track_key=?", (row["id"], track),
         ).fetchone()
         if progression is None:
             continue
         maximum = max(1, progression["maximum_health"] + health_bonus)
         current = min(maximum, max(0, progression["current_health"] + health_bonus))
+        maximum_mana = max(1, progression["maximum_mana"] + mana_bonus)
+        current_mana = min(maximum_mana, max(0, progression["current_mana"] + mana_bonus))
         database.execute(
             "UPDATE mud_character_progression SET strength=?,agility=?,intellect=?,vitality=?,"
-            "maximum_health=?,current_health=?,updated_at=CURRENT_TIMESTAMP "
+            "maximum_health=?,current_health=?,maximum_mana=?,current_mana=?,"
+            "updated_at=CURRENT_TIMESTAMP "
             "WHERE character_id=? AND track_key=?",
-            (*[attributes[key] for key in ATTRIBUTES], maximum, current, row["id"], track),
+            (*[attributes[key] for key in ATTRIBUTES], maximum, current,
+             maximum_mana, current_mana, row["id"], track),
         )
     for skill in skills:
         database.execute(

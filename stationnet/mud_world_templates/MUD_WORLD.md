@@ -93,6 +93,15 @@ references use those local IDs. Rooms use
 the IDs from `rooms.json`. StationNet gives every imported record a unique
 internal ID, so two worlds may both have an item called `lantern`.
 
+Equipment can declare minimum character attributes in `properties_json`, for
+example `{"attack_bonus": 4, "requirements": {"strength": 14}}`. Players can
+inspect these requirements and must meet all of them before equipping the item.
+Supported attributes are `strength`, `agility`, `intellect`, and `vitality`, with
+minimum values from 1 to 30. Existing equipment without requirements remains
+usable by all characters. Gear becomes inactive if a character no longer meets
+its requirements on the current progression track. Strength improves equipped melee weapon bonuses,
+Agility improves firearm bonuses, and Vitality improves equipped armor bonuses.
+
 ```json
 {
   "mud_item_definitions": [

@@ -282,15 +282,22 @@ def award_experience(database, user_id, amount, track_key=None):
         raise ValueError("Experience total exceeds the supported range.")
     level = level_for_experience(experience)
     levels_gained = level - before["level"]
-    maximum_health = before["maximum_health"] + levels_gained * HEALTH_PER_LEVEL
+    health_per_level = max(1, HEALTH_PER_LEVEL + (before["attributes"]["vitality"] - 10) // 2)
+    mana_per_level = max(1, 2 + (before["attributes"]["intellect"] - 10) // 2)
+    health_gain = levels_gained * health_per_level
+    mana_gain = levels_gained * mana_per_level
+    maximum_health = before["maximum_health"] + health_gain
     current_health = min(
-        maximum_health, before["health"] + levels_gained * HEALTH_PER_LEVEL
+        maximum_health, before["health"] + health_gain
     )
+    maximum_mana = before["maximum_mana"] + mana_gain
+    current_mana = min(maximum_mana, before["mana"] + mana_gain)
     database.execute(
         "UPDATE mud_character_progression SET experience=?,level=?,current_health=?,"
-        "maximum_health=?,updated_at=CURRENT_TIMESTAMP "
+        "maximum_health=?,current_mana=?,maximum_mana=?,updated_at=CURRENT_TIMESTAMP "
         "WHERE character_id=? AND track_key=?",
-        (experience, level, current_health, maximum_health, before["id"], resolved_track),
+        (experience, level, current_health, maximum_health, current_mana, maximum_mana,
+         before["id"], resolved_track),
     )
     return {
         "amount": amount,
@@ -785,12 +792,31 @@ def _integer_property(properties, *names):
     return 0
 
 
+def _item_requirements(properties):
+    requirements = properties.get("requirements", {})
+    if (not isinstance(requirements, dict) or any(
+        key not in character_creation.ATTRIBUTES or type(value) is not int or not 1 <= value <= 30
+        for key, value in requirements.items()
+    )):
+        raise ValueError("requirements must map attributes to minimum values from 1 to 30")
+    return requirements
+
+
+def _meets_item_requirements(properties, character):
+    try:
+        return all(character[key] >= value for key, value in
+                   _item_requirements(properties).items())
+    except ValueError:
+        return False
+
+
 def _equipment_combat_totals(database, character_id=None, npc_definition_id=None):
     if character_id is not None:
         owner = database.execute(
             "SELECT user_id FROM mud_characters WHERE id=?", (character_id,)
         ).fetchone()
         loadout = _inventory_context(database, owner["user_id"])["loadout"]
+        character = _character_row(database, owner["user_id"])
         rows = database.execute(
             "SELECT d.properties_json FROM mud_character_equipment AS e "
             "JOIN mud_item_instances AS i ON i.id=e.item_instance_id "
@@ -807,10 +833,17 @@ def _equipment_combat_totals(database, character_id=None, npc_definition_id=None
     attack = defense = 0
     for row in rows:
         properties = _json_properties(row["properties_json"])
+        if character_id is not None and not _meets_item_requirements(properties, character):
+            continue
         if character_id is None or not mud_firearms.is_firearm(properties):
             attack += max(0, _integer_property(properties, "damage", "attack", "attack_bonus"))
         defense += max(0, _integer_property(properties, "armor", "defense", "defense_bonus"))
     return {"attack": attack, "defense": defense}
+
+
+def _equipment_stat_bonus(gear, attribute, kind):
+    """Training with a stat lets a character draw more from equipped gear."""
+    return min(gear[kind], max(0, (attribute - 10) // 3))
 
 
 def _encounter_row(database, npc, create=True):
@@ -1068,10 +1101,11 @@ def _remaining_ammo(item):
 
 
 def _equipped_firearm(database, user_id):
+    character = _character_row(database, user_id)
     for item in _inventory_rows(database, user_id, equipped=True):
         if item["equipped_slot"] in ("main_hand", "off_hand") and mud_firearms.is_firearm(
             _json_properties(item["properties_json"])
-        ):
+        ) and _meets_item_requirements(_json_properties(item["properties_json"]), character):
             return item
     return None
 
@@ -1208,12 +1242,15 @@ def _visible_container(database, user_id, room, item_id):
 
 def inventory_state(database, user_id):
     context = _inventory_context(database, user_id)
+    character = _character_row(database, user_id)
     inventory = [dict(row) for row in _inventory_rows(database, user_id)]
     equipment = [dict(row) for row in _inventory_rows(database, user_id, equipped=True)]
     for items in (inventory, equipment):
         for item, label in _numbered_items(items):
             item["display_name"] = label
             properties = _json_properties(item["properties_json"])
+            if item["equipped_slot"]:
+                item["requirements_met"] = _meets_item_requirements(properties, character)
             if mud_firearms.is_firearm(properties):
                 item["loaded_rounds"] = _loaded_rounds(item)
                 item["magazine_size"] = properties["magazine_size"]
@@ -1235,6 +1272,7 @@ def _inventory_action(database, user, parameters):
         return "\n".join(
             f"  - {label}" +
             (f" ({item['equipped_slot'].replace('_', ' ')})" if equipped else "") +
+            (" [requirements unmet]" if equipped and not item["requirements_met"] else "") +
             (f" [{item['loaded_rounds']}/{item['magazine_size']} loaded]" if "loaded_rounds" in item else
              f" [{item['rounds_remaining']} rounds]" if "rounds_remaining" in item else "") +
             (" [run loot]" if item["acquired_run_id"] else "")
@@ -1591,6 +1629,14 @@ def _describe_item(database, row, user_id=None):
     body = f"{row['name']}\n{row['description']}\nType: {row['item_type']}"
     if row["definition_slot"]:
         body += f"\nEquipment slot: {row['definition_slot'].replace('_', ' ')}"
+        try:
+            requirements = _item_requirements(_json_properties(row["properties_json"]))
+        except ValueError:
+            requirements = {}
+        if requirements:
+            body += "\nRequires: " + ", ".join(
+                f"{key.title()} {value}" for key, value in requirements.items()
+            )
     if _is_container(row):
         contents = _container_rows(database, row["id"], user_id)
         if row["is_open"]:
@@ -1821,9 +1867,11 @@ def _enemy_turn(database, user, defending=False, chosen=None):
     damage = 0 if npc_reloading else max(1, npc["combat_attack"] + (2 if npc_firearm else 0) + enemy_gear["attack"]
                  + mud_effects.modifier(database, "encounter", encounter["id"], "attack")
                  - (character["vitality"] // 10 + character["agility"] // 5
-                    + player_gear["defense"] + effects["defense"]))
+                    + player_gear["defense"]
+                    + _equipment_stat_bonus(player_gear, character["vitality"], "defense")
+                    + effects["defense"]))
     if defending:
-        damage = max(0, damage // 3)
+        damage = max(0, (damage - max(0, (character["vitality"] - 10) // 2)) // 3)
     damage += sum(amount for _, amount in mud_effects.tick(database, "character", character["id"]))
     _practice_effect(database, character["id"], "defense")
     health = max(0, character["current_health"] - damage)
@@ -1986,13 +2034,16 @@ def _attack_action(database, user, parameters):
     effects = _character_effects(database, character["id"])
     surprise = _is_hidden(database, user["id"])
     _set_hidden(database, user["id"], False)
+    firearm_attack = (max(0, _integer_property(_json_properties(firearm["properties_json"]),
+                                                "damage", "attack", "attack_bonus")) if firearm else 0)
+    weapon_attack = firearm_attack if firearm else player_gear["attack"]
+    weapon_stat = character["agility"] if firearm else character["strength"]
     damage = (max(1, spell_damage + character["intellect"] // 3
                   - (npc["combat_defense"] + enemy_gear["defense"]
                      + mud_effects.modifier(database, "encounter", encounter["id"], "defense")) // 2)
               if spell_damage is not None else
-               max(1, (6 if firearm else 4) + (character["agility"] if firearm else character["strength"]) // 2
-                   + (max(0, _integer_property(_json_properties(firearm["properties_json"]),
-                                               "damage", "attack", "attack_bonus")) if firearm else player_gear["attack"])
+               max(1, (6 if firearm else 4) + weapon_stat // 2
+                   + weapon_attack + _equipment_stat_bonus({"attack": weapon_attack}, weapon_stat, "attack")
                   + effects["attack"] - (npc["combat_defense"] + enemy_gear["defense"]
                      + mud_effects.modifier(database, "encounter", encounter["id"], "defense")) // 2))
     if surprise:
@@ -2030,6 +2081,8 @@ def _attack_action(database, user, parameters):
         applications = parameters.get("_spell_effects") if spell_damage is not None else []
         if spell_damage is None:
             for equipped in ([firearm] if firearm else _inventory_rows(database, user["id"], True)):
+                if not _meets_item_requirements(_json_properties(equipped["properties_json"]), character):
+                    continue
                 if not firearm and mud_firearms.is_firearm(_json_properties(equipped["properties_json"])):
                     continue
                 applications += _effect_specs(_json_properties(equipped["properties_json"]), "on_hit_effects")
@@ -2357,6 +2410,14 @@ def _equip_action(database, user, parameters):
     if item["item_type"] != "equipment" or not item["definition_slot"]:
         raise ActionError("That item cannot be equipped.")
     character = _character_row(database, user["id"])
+    try:
+        requirements = _item_requirements(_json_properties(item["properties_json"]))
+    except ValueError as problem:
+        raise ActionError(f"{item['name']} has invalid equipment requirements.") from problem
+    missing = [f"{key.title()} {value}" for key, value in requirements.items()
+               if character[key] < value]
+    if missing:
+        raise ActionError(f"{item['name']} requires {', '.join(missing)}.")
     slot = item["definition_slot"]
     loadout = _inventory_context(database, user["id"])["loadout"]
     database.execute(
@@ -4196,6 +4257,7 @@ def builder():
         item["use_message"] = properties.get("use_message", "")
         item["on_use_effects_json"] = json.dumps(properties.get("on_use_effects", []))
         item["on_hit_effects_json"] = json.dumps(properties.get("on_hit_effects", []))
+        item["requirements_json"] = json.dumps(properties.get("requirements", {}))
         definitions.append(item)
     items_by_room = {room["id"]: [] for room in rooms}
     for row in database.execute("SELECT i.id,i.room_id,d.name,d.item_type FROM mud_item_instances i JOIN mud_item_definitions d ON d.id=i.definition_id WHERE i.room_id IS NOT NULL ORDER BY d.name COLLATE NOCASE"):
@@ -4301,6 +4363,15 @@ def _item_definition_fields():
     if attack_bonus is None or defense_bonus is None or not 0 <= attack_bonus <= 100000 or not 0 <= defense_bonus <= 100000:
         return None, "Combat bonuses must be between 0 and 100,000."
     properties = {}
+    try:
+        requirements = json.loads(request.form.get("requirements", "{}") or "{}")
+        _item_requirements({"requirements": requirements})
+    except (ValueError, json.JSONDecodeError) as problem:
+        return None, f"Invalid equipment requirements: {problem}"
+    if requirements and item_type != "equipment":
+        return None, "Attribute requirements apply only to equipment."
+    if requirements:
+        properties["requirements"] = requirements
     if use_message: properties["use_message"] = use_message
     if attack_bonus: properties["attack_bonus"] = attack_bonus
     if defense_bonus: properties["defense_bonus"] = defense_bonus

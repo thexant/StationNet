@@ -2,10 +2,10 @@
   "id": "generic-fantasy",
   "point_buy": {"base": 8, "points": 12, "minimum": 8, "maximum": 14},
   "attribute_descriptions": {
-    "strength": "Melee damage: +1 for every 2 points.",
-    "agility": "Evasion: reduces incoming damage by 1 for every 5 points.",
-    "intellect": "Learning: adds 1% experience per point above 8.",
-    "vitality": "Health: 5 maximum HP per point above 8; also reduces incoming damage."
+    "strength": "Raises melee damage and improves the bonus from equipped weapons.",
+    "agility": "Improves firearm damage, hiding, fleeing, evasion, and firearm bonuses.",
+    "intellect": "Raises spell damage, healing, starting mana, mana gained on level up, and experience earned.",
+    "vitality": "Raises starting health, health gained on level up, armor effectiveness, and guarding."
   },
   "races": [
     {"key": "human", "name": "Human", "description": "Adaptable people from every corner of the world.", "traits": "Versatile learner", "attributes": {"intellect": 1}, "effects": {"experience_percent": 2}},
