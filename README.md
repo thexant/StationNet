@@ -124,6 +124,8 @@ The native MUD's traditional world and procedural mode can be enabled independen
 
 Character option files define `point_buy`, `attribute_descriptions`, `races`, `classes`, `skills`, and `starting_skill_choices`. Races and classes can modify the four existing attributes and grant `attack`, `defense`, or `experience_percent` effects. Classes may name one favored skill and grant equipment using existing item slots. Skills use those same effect keys plus an optional `per_rank` multiplier. Choose option keys before players create characters; saved characters keep those keys and their attribute values if a world configuration changes later. Starter gear is placed in inventory for the character's current mode and can be equipped with `/equip <item>`.
 
+SYSOP Settings > MUD service also accepts individual race and class JSON files. Download the templates there or read [the origin format](stationnet/mud_origin_templates/README.md). Imported choices are available to both MUD modes immediately. SYSOPs can enable or disable built-in and imported choices and remove imported ones; at least one race and one class must stay enabled while either MUD mode is on. Players see every enabled choice in the same character creation list, and existing characters retain their origin abilities after a choice is disabled or removed.
+
 ## Tests and layout
 
 ```powershell

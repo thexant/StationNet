@@ -12,7 +12,7 @@ from PIL import Image, ImageOps, UnidentifiedImageError
 from .auth import admin_required, invitation_digest
 from .ansi import available_header_fonts, is_available_header_font, station_banner
 from .db import get_db
-from . import dungeons, mud_worlds
+from . import character_creation, dungeons, mud_worlds
 from . import themes
 from .markdown import render_markdown
 from .radio import (can_host_broadcast, effective_access, format_frequency,
@@ -447,6 +447,12 @@ def mud_settings():
     if not 1 <= len(portal_description) <= 2000:
         flash("Portal room description must be between 1 and 2000 characters.", "error")
         return redirect(url_for("station.settings") + "#mud-service")
+    if traditional or procedural:
+        try:
+            character_creation.require_available(database)
+        except ValueError as error:
+            flash(str(error), "error")
+            return redirect(url_for("station.settings") + "#mud-origins")
     database.execute(
         "UPDATE station SET mud_enabled=?,mud_traditional_enabled=?,"
         "mud_procedural_enabled=? WHERE id=1",
@@ -471,6 +477,124 @@ def mud_settings():
               ("procedural", procedural)) if state]
     flash(f"MUD modes updated: {', '.join(labels) if labels else 'fully disabled'}.", "success")
     return redirect(url_for("station.settings") + "#mud-service")
+
+
+@bp.post("/sysop/settings/mud-origins/<kind>/import")
+@admin_required
+def import_mud_origin(kind):
+    validate_csrf()
+    if kind not in character_creation.KINDS:
+        abort(404)
+    destination = url_for("station.settings") + "#mud-origins"
+    uploaded = request.files.get("origin_file")
+    if uploaded is None or not uploaded.filename or not uploaded.filename.lower().endswith(".json"):
+        flash("Choose a race or class JSON file to import.", "error")
+        return redirect(destination)
+    database = get_db()
+    try:
+        definition = character_creation.import_origin(
+            database, kind, uploaded.read(character_creation.MAX_ORIGIN_BYTES + 1))
+        database.commit()
+    except (ValueError, sqlite3.Error) as error:
+        database.rollback()
+        flash(f"Import failed: {error}", "error")
+    else:
+        flash(f"Imported {character_creation.KIND_NAMES[kind]} {definition['name']}.", "success")
+    return redirect(destination)
+
+
+@bp.get("/sysop/settings/mud-origins/<kind>/template")
+@admin_required
+def download_mud_origin_template(kind):
+    if kind not in character_creation.KINDS:
+        abort(404)
+    return send_file(
+        Path(__file__).with_name("mud_origin_templates") / f"{character_creation.KIND_NAMES[kind]}.json",
+        as_attachment=True, download_name=f"mud-{character_creation.KIND_NAMES[kind]}-template.json",
+        mimetype="application/json",
+    )
+
+
+@bp.post("/sysop/settings/mud-origins/availability")
+@admin_required
+def mud_origin_availability():
+    validate_csrf()
+    database = get_db()
+    destination = url_for("station.settings") + "#mud-origins"
+    entries = character_creation.catalog(database)
+    selected = {kind: set(request.form.getlist(kind)) for kind in character_creation.KINDS}
+    if any(selected[kind] - {entry["key"] for entry in entries[kind]}
+           for kind in character_creation.KINDS):
+        flash("Choose only listed races and classes.", "error")
+        return redirect(destination)
+    if (g.station["mud_enabled"] or g.station["mud_traditional_enabled"] or
+            g.station["mud_procedural_enabled"]) and any(
+                not selected[kind] for kind in character_creation.KINDS):
+        flash("Enable at least one race and one class while a MUD mode is enabled.", "error")
+        return redirect(destination)
+    try:
+        for kind in character_creation.KINDS:
+            for entry in entries[kind]:
+                enabled = int(entry["key"] in selected[kind])
+                if entry["imported"]:
+                    database.execute(
+                        "UPDATE mud_origin_definitions SET enabled=? WHERE kind=? AND key=?",
+                        (enabled, kind, entry["key"]),
+                    )
+                else:
+                    database.execute(
+                        "INSERT INTO mud_origin_definitions(kind,key,enabled) VALUES(?,?,?) "
+                        "ON CONFLICT(kind,key) DO UPDATE SET enabled=excluded.enabled",
+                        (kind, entry["key"], enabled),
+                    )
+        database.commit()
+    except sqlite3.Error:
+        database.rollback()
+        flash("Could not save race and class availability.", "error")
+    else:
+        flash("Race and class availability updated.", "success")
+    return redirect(destination)
+
+
+@bp.post("/sysop/settings/mud-origins/<kind>/remove")
+@admin_required
+def remove_mud_origin(kind):
+    validate_csrf()
+    if kind not in character_creation.KINDS:
+        abort(404)
+    destination = url_for("station.settings") + "#mud-origins"
+    if request.form.get("confirm_remove") != "on":
+        flash("Confirm removal of the selected race or class.", "error")
+        return redirect(destination)
+    key = request.form.get("key", "")
+    database = get_db()
+    entry = next((item for item in character_creation.catalog(database)[kind]
+                  if item["key"] == key and item["imported"]), None)
+    if entry is None:
+        flash("Select an imported race or class to remove.", "error")
+        return redirect(destination)
+    column = "race_key" if kind == "races" else "class_key"
+    try:
+        used = database.execute(
+            f"SELECT 1 FROM mud_characters WHERE {column}=? LIMIT 1", (key,)
+        ).fetchone()
+        if used:
+            database.execute(
+                "UPDATE mud_origin_definitions SET installed=0,enabled=0 WHERE kind=? AND key=?",
+                (kind, key),
+            )
+        else:
+            database.execute("DELETE FROM mud_origin_definitions WHERE kind=? AND key=?", (kind, key))
+        if (g.station["mud_enabled"] or g.station["mud_traditional_enabled"] or
+                g.station["mud_procedural_enabled"]):
+            character_creation.require_available(database)
+        database.commit()
+    except (ValueError, sqlite3.Error) as error:
+        database.rollback()
+        flash(str(error), "error")
+    else:
+        flash(f"Removed {character_creation.KIND_NAMES[kind]} {entry['definition']['name']}.", "success")
+    return redirect(destination)
 
 
 @bp.post("/sysop/settings/mud-worlds/import")
@@ -970,6 +1094,7 @@ def settings():
     mud_world_list = database.execute(
         "SELECT id,name,author,imported,active FROM mud_world_packages ORDER BY active DESC,name COLLATE NOCASE"
     ).fetchall()
+    mud_origins = character_creation.catalog(database)
     mud_daily_settings_row = database.execute(
         "SELECT * FROM mud_daily_dungeon_settings WHERE id=1"
     ).fetchone()
@@ -1013,6 +1138,7 @@ def settings():
                            mud_portal=mud_portal,
                            mud_crossover=mud_crossover,
                            mud_world_list=mud_world_list,
+                           mud_origins=mud_origins,
                            mud_daily_settings=mud_daily_settings_row,
                            mud_daily_themes=mud_daily_themes,
                            configured_daily_themes=configured_daily_themes,

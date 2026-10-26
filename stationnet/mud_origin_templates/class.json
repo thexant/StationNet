@@ -1,0 +1,20 @@
+{
+  "key": "pathfinder",
+  "name": "Pathfinder",
+  "description": "A guide practiced at crossing uncertain ground.",
+  "traits": "Trail craft",
+  "attributes": {"agility": 1},
+  "effects": {"defense": 1},
+  "spells": ["ward"],
+  "skill": "guard",
+  "equipment": [
+    {
+      "key": "trail-knife",
+      "name": "Trail Knife",
+      "description": "A short, sturdy knife carried on the trail.",
+      "slot": "main_hand",
+      "attack": 1,
+      "defense": 0
+    }
+  ]
+}

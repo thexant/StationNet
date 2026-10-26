@@ -221,7 +221,7 @@ def character_state(database, user_id, track_key=None):
     origin = database.execute(
         "SELECT creation_state,race_key,class_key FROM mud_characters WHERE id=?", (row["id"],)
     ).fetchone()
-    config = character_creation.options()
+    config = character_creation.options(database, include_inactive=True, include_removed=True)
     race = next((item for item in config["races"] if item["key"] == origin["race_key"]), None)
     archetype = next((item for item in config["classes"] if item["key"] == origin["class_key"]), None)
     skills = [dict(skill) for skill in database.execute(
@@ -304,7 +304,7 @@ def _origin_options(database, character_id):
     row = database.execute(
         "SELECT race_key,class_key FROM mud_characters WHERE id=?", (character_id,)
     ).fetchone()
-    config = character_creation.options()
+    config = character_creation.options(database, include_inactive=True, include_removed=True)
     return tuple(next((item for item in config[group] if item["key"] == row[key]), None)
                  for group, key in (("races", "race_key"), ("classes", "class_key")))
 

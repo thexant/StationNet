@@ -43,6 +43,15 @@ CREATE TABLE IF NOT EXISTS station (
  events_create_permission TEXT NOT NULL DEFAULT 'sysops' CHECK(events_create_permission IN ('sysops','groups','members')),
  videos_mode TEXT NOT NULL DEFAULT 'community' CHECK(videos_mode IN ('community','curated')),
  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);
+CREATE TABLE IF NOT EXISTS mud_origin_definitions (
+ kind TEXT NOT NULL CHECK(kind IN ('races','classes')),
+ key TEXT NOT NULL,
+ definition_json TEXT,
+ imported INTEGER NOT NULL DEFAULT 0 CHECK(imported IN (0,1)),
+ installed INTEGER NOT NULL DEFAULT 1 CHECK(installed IN (0,1)),
+ enabled INTEGER NOT NULL DEFAULT 1 CHECK(enabled IN (0,1)),
+ PRIMARY KEY(kind,key),
+ CHECK(imported=1 OR definition_json IS NULL));
 CREATE TABLE IF NOT EXISTS users (
  id INTEGER PRIMARY KEY AUTOINCREMENT, username TEXT NOT NULL COLLATE NOCASE UNIQUE,
  callsign TEXT NOT NULL COLLATE NOCASE UNIQUE, password_hash TEXT NOT NULL,

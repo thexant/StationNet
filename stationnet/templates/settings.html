@@ -326,6 +326,39 @@
     <label>Portal room description<textarea name="mud_portal_description" maxlength="2000" required>{{ mud_portal.description }}</textarea><small>The gameplay explanation and gateway controls are system-managed and cannot be edited here or in the world builder.</small></label>
     <button>SAVE MUD MODES</button>
   </form>
+  <section id="mud-origins" aria-labelledby="mud-origins-heading">
+    <h3 id="mud-origins-heading">Races and Classes</h3>
+    <p class="muted">Import a JSON definition for a new race or class. Enabled choices appear in character creation for both MUD modes. Existing characters keep their abilities if a choice is disabled or removed.</p>
+    <form method="post" action="{{ url_for('station.mud_origin_availability') }}" class="form-grid">
+      <input type="hidden" name="csrf_token" value="{{ session.csrf_token }}">
+      {% for kind in ('races', 'classes') %}
+      <div class="divider">{{ kind|upper }}</div>
+      {% for entry in mud_origins[kind] %}
+      <label class="switch"><input type="checkbox" name="{{ kind }}" value="{{ entry.key }}" {% if entry.enabled %}checked{% endif %}> {{ entry.definition.name }}{% if entry.imported %} (imported){% endif %}</label>
+      {% endfor %}
+      {% endfor %}
+      <small>At least one race and one class must remain enabled while either MUD mode is on.</small>
+      <button>SAVE RACES AND CLASSES</button>
+    </form>
+    {% for kind in ('races', 'classes') %}
+    {% set singular = 'race' if kind == 'races' else 'class' %}
+    <h4>{{ kind|title }}</h4>
+    <p><a href="{{ url_for('station.download_mud_origin_template', kind=kind) }}">DOWNLOAD {{ singular|upper }} TEMPLATE</a></p>
+    <form method="post" action="{{ url_for('station.import_mud_origin', kind=kind) }}" enctype="multipart/form-data" class="form-grid">
+      <input type="hidden" name="csrf_token" value="{{ session.csrf_token }}">
+      <label>{{ singular|title }} JSON<input type="file" name="origin_file" accept=".json,application/json" required></label>
+      <button>IMPORT {{ singular|upper }}</button>
+    </form>
+    {% if mud_origins[kind]|selectattr('imported')|list %}
+    <form method="post" action="{{ url_for('station.remove_mud_origin', kind=kind) }}" class="form-grid">
+      <input type="hidden" name="csrf_token" value="{{ session.csrf_token }}">
+      <label>Remove imported {{ singular }}<select name="key" required><option value="">Select {{ singular }}</option>{% for entry in mud_origins[kind] if entry.imported %}<option value="{{ entry.key }}">{{ entry.definition.name }}</option>{% endfor %}</select></label>
+      <label class="switch"><input type="checkbox" name="confirm_remove" required> Confirm removal</label>
+      <button class="secondary">REMOVE {{ singular|upper }}</button>
+    </form>
+    {% endif %}
+    {% endfor %}
+  </section>
   <section id="mud-worlds" aria-labelledby="mud-worlds-heading">
     <h3 id="mud-worlds-heading">Traditional Worlds</h3>
     <p class="muted">Build a world from files and import its ZIP, or export the current builder world. World files live in <code>data/mud_worlds/</code>. See the world creation README there for the format.</p>
