@@ -365,7 +365,7 @@ def _help_action(_database, _user, parameters):
         "/go <exit> (or /move, /walk) — travel through an exit\n"
         "/get <item> [from <container>], /drop <item>, /open <container>\n"
         "/put <item> in <container>, /equip <item>, /unequip <item>, /use <item>\n"
-        "/combat, /attack <enemy>, /defend, /flee - turn-based combat\n"
+        "/combat, /hide, /attack <enemy>, /defend, /flee - turn-based combat\n"
         "/talk <npc>, /respond <number or response> — converse with an NPC\n"
         "/quests, /quest accept <name> — view or accept available quests\n"
         "/north, /south, /east, /west, /up, /down, /in, /out — direction shortcuts\n"
@@ -462,6 +462,8 @@ def _start_room(database):
 def _set_player_location(database, user_id, mode, location_type, location_key,
                          instance_id=None):
     """Move shared identity state without making system locations world rooms."""
+    if location_type == "portal":
+        database.execute("DELETE FROM mud_player_stealth WHERE user_id=?", (user_id,))
     room_id = location_key if location_type == "world_room" else None
     if location_type == "world_room":
         database.execute(
@@ -852,7 +854,8 @@ def combat_state(database, user_id):
             "attack": npc["combat_attack"], "defense": npc["combat_defense"],
         })
     return {"scope_type": "instance" if room.get("instance_id") else "room",
-            "scope_key": room.get("instance_id") or room["id"], "enemies": enemies}
+            "scope_key": room.get("instance_id") or room["id"], "enemies": enemies,
+            "hidden": _is_hidden(database, user_id)}
 
 
 def _leave_combat(database, user_id, scope_type="room", scope_key=None, defeated=False):
@@ -1651,11 +1654,56 @@ def _active_hostiles(database, room):
     return enemies
 
 
+def _is_hidden(database, user_id):
+    row = database.execute(
+        "SELECT hidden FROM mud_player_stealth WHERE user_id=?", (user_id,)
+    ).fetchone()
+    return bool(row and row["hidden"])
+
+
+def _set_hidden(database, user_id, hidden):
+    database.execute(
+        "INSERT INTO mud_player_stealth(user_id,hidden) VALUES(?,?) "
+        "ON CONFLICT(user_id) DO UPDATE SET hidden=excluded.hidden",
+        (user_id, int(hidden)),
+    )
+
+
+def _stealth_chance(agility, detection):
+    """Agility helps hiding; enemy defense doubles as awareness."""
+    return max(15, min(90, 55 + 5 * (agility - 10) - 4 * (detection - 5)))
+
+
+def _hide_action(database, user, parameters):
+    if parameters.get("arguments"):
+        raise ActionError("The hide command does not accept arguments.")
+    room = _current_room(database, user["id"])
+    if room["id"] in {PORTAL_ROOM_ID, "stationnet:death-summary"}:
+        raise ActionError("You cannot hide here.")
+    if _is_hidden(database, user["id"]):
+        raise ActionError("You are already hidden.")
+    character = _character_row(database, user["id"])
+    enemies = _active_hostiles(database, room)
+    if any(database.execute(
+        "SELECT 1 FROM mud_combat_participants WHERE encounter_id=? "
+        "AND character_id=? AND left_at IS NULL LIMIT 1",
+        (encounter["id"], character["id"]),
+    ).fetchone() for _, encounter in enemies):
+        raise ActionError("You cannot hide while fighting. Flee first.")
+    detection = max((npc["combat_defense"] for npc, _ in enemies), default=5)
+    if secrets.randbelow(100) >= _stealth_chance(character["agility"], detection):
+        drafts = [EventDraft("You try to hide, but are spotted.", event_type="combat")]
+        return drafts + (_enemy_turn(database, user) if enemies else [])
+    _set_hidden(database, user["id"], True)
+    return [EventDraft("You slip into hiding.", event_type="combat")]
+
+
 def _enemy_turn(database, user, defending=False, chosen=None):
     room = _current_room(database, user["id"])
     enemies = _active_hostiles(database, room)
     if not enemies:
         return []
+    _set_hidden(database, user["id"], False)
     npc, encounter = next(
         ((npc, encounter) for npc, encounter in enemies if chosen == npc["id"]), enemies[0]
     )
@@ -1702,11 +1750,21 @@ def _entry_attack(database, user):
     enemies = _active_hostiles(database, room)
     if not enemies:
         return []
-    return [EventDraft(f"{enemies[0][0]['name']} notices you and attacks!", event_type="combat")] + \
+    if _is_hidden(database, user["id"]):
+        character = _character_row(database, user["id"])
+        detection = max(npc["combat_defense"] for npc, _ in enemies)
+        if secrets.randbelow(100) < _stealth_chance(character["agility"], detection):
+            return [EventDraft("You pass the enemies unnoticed.", event_type="combat")]
+        _set_hidden(database, user["id"], False)
+        noticed = [EventDraft("An enemy spots you!", event_type="combat")]
+    else:
+        noticed = []
+    return noticed + [EventDraft(f"{enemies[0][0]['name']} notices you and attacks!", event_type="combat")] + \
         _enemy_turn(database, user, chosen=enemies[0][0]["id"])
 
 
 def _defeat_player(database, user, encounter, npc):
+    _set_hidden(database, user["id"], False)
     character = _character_row(database, user["id"])
     old_room = _current_room(database, user["id"])
     database.execute(
@@ -1808,8 +1866,12 @@ def _attack_action(database, user, parameters):
     player_gear = _equipment_combat_totals(database, character_id=character["id"])
     enemy_gear = _equipment_combat_totals(database, npc_definition_id=npc["definition_id"])
     effects = _character_effects(database, character["id"])
+    surprise = _is_hidden(database, user["id"])
+    _set_hidden(database, user["id"], False)
     damage = max(1, 4 + character["strength"] // 2 + player_gear["attack"]
                  + effects["attack"] - (npc["combat_defense"] + enemy_gear["defense"]) // 2)
+    if surprise:
+        damage += max(2, character["agility"] // 2)
     _practice_effect(database, character["id"], "attack")
     remaining = max(0, encounter["current_health"] - damage)
     database.execute(
@@ -1828,7 +1890,7 @@ def _attack_action(database, user, parameters):
     audience_type = "instance" if room.get("instance_id") else "room"
     audience_key = room.get("instance_id") or room["id"]
     drafts = [EventDraft(
-        f"{character['display_name']} attacks {display_name} for {damage} damage "
+        f"{character['display_name']} {'surprises' if surprise else 'attacks'} {display_name} for {damage} damage "
         f"({remaining}/{encounter['maximum_health']} health).",
         event_type="combat", audience_type=audience_type, audience_key=audience_key,
         recipient_ids=tuple(sorted(recipients)),
@@ -1910,6 +1972,8 @@ def _combat_action(database, user, parameters):
             f"{enemy['health']}/{enemy['maximum_health']} health"
             for enemy in state["enemies"]
         )
+    if state["hidden"]:
+        body = "You are hidden.\n" + body
     return [EventDraft(body, event_type="combat")]
 
 
@@ -3011,7 +3075,7 @@ def _go_action(database, user, parameters):
     ):
         return _portal_action(database, user, {})
     instance_id = room.get("instance_id") if isinstance(room, dict) else None
-    if _active_hostiles(database, room):
+    if _active_hostiles(database, room) and not _is_hidden(database, user["id"]):
         raise ActionError("A hostile enemy blocks your route. Fight or attempt to flee.", 409)
     if exit_id:
         matches = [item for item in _room_exits(database, room["id"], instance_id)
@@ -3089,6 +3153,7 @@ def _say_action(database, user, parameters):
     recipients = set(_occupant_ids(database, room["id"], instance_id=instance_id))
     recipients.add(user["id"])
     character = character_state(database, user["id"])
+    _set_hidden(database, user["id"], False)
     return [EventDraft(
         f"{character['name']}: {body}", event_type="chat",
         audience_type="instance" if instance_id else "room",
@@ -3144,6 +3209,7 @@ actions.register(ActionDefinition(key="talk", label="TALK", description="Talk to
 actions.register(ActionDefinition(key="respond", label="RESPOND", description="Choose a response in your current NPC conversation.", commands=("respond", "reply"), handler=_respond_action, group="DIALOGUE", show_context=False))
 actions.register(ActionDefinition(key="quests", label="VIEW QUESTS", description="View your active quest objectives and progress.", commands=("quests", "quest", "objectives"), handler=_quests_action, group="QUESTS"))
 actions.register(ActionDefinition(key="combat", label="COMBAT STATUS", description="View hostile enemies and encounter status.", commands=("combat",), handler=_combat_action, group="COMBAT"))
+actions.register(ActionDefinition(key="hide", label="HIDE", description="Hide from enemies using Agility against their awareness; your next attack gains surprise damage.", commands=("hide",), handler=_hide_action, group="COMBAT", show_context=False))
 actions.register(ActionDefinition(key="attack", label="ATTACK", description="Attack a hostile enemy and resolve one combat round.", commands=("attack", "hit"), handler=_attack_action, group="COMBAT", show_context=False))
 actions.register(ActionDefinition(key="defend", label="DEFEND", description="Brace to reduce the next enemy attack.", commands=("defend", "guard"), handler=_defend_action, group="COMBAT", show_context=False))
 actions.register(ActionDefinition(key="flee", label="FLEE", description="Attempt a risky escape from combat.", commands=("flee",), handler=_flee_action, group="COMBAT", show_context=False))

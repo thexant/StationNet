@@ -275,6 +275,81 @@ def test_room_entry_aggression_and_risky_flee(game, monkeypatch):
                           (loot,)).fetchone()[0] == run_id
 
 
+def test_hiding_detection_and_surprise_attack(game, monkeypatch):
+    app, user_id = game
+    with app.app_context():
+        db = get_db()
+        user = db.execute("SELECT * FROM users WHERE id=?", (user_id,)).fetchone()
+        run_id = _launch(db, user)
+        entrance = mud._current_room(db, user_id)
+        exit_row = mud._room_exits(db, entrance["id"], run_id)[0]
+        enemy = db.execute(
+            "SELECT id FROM mud_dungeon_content WHERE instance_id=? "
+            "AND content_type='enemy' LIMIT 1", (run_id,),
+        ).fetchone()
+        db.execute("UPDATE mud_dungeon_content SET room_key=? WHERE id=?",
+                   (exit_row["to_room_id"], enemy["id"]))
+
+        monkeypatch.setattr(mud.secrets, "randbelow", lambda _limit: 0)
+        assert "hiding" in mud._hide_action(db, user, {})[0].body
+        assert mud.combat_state(db, user_id)["hidden"]
+        db.commit()
+        assert mud._is_hidden(db, user_id)
+        health = mud.character_state(db, user_id)["health"]
+        movement = mud._go_action(db, user, {"exit_id": exit_row["id"]})
+        assert any("unnoticed" in event.body for event in movement)
+        assert mud.character_state(db, user_id)["health"] == health
+        assert mud._is_hidden(db, user_id)
+
+        npc = mud._room_npc_rows(db, exit_row["to_room_id"], run_id)[0]
+        encounter = mud._encounter_row(db, npc)
+        character = mud._character_row(db, user_id)
+        player_gear = mud._equipment_combat_totals(db, character_id=character["id"])
+        enemy_gear = mud._equipment_combat_totals(db, npc_definition_id=npc["definition_id"])
+        effects = mud._character_effects(db, character["id"])
+        base = max(1, 4 + character["strength"] // 2 + player_gear["attack"]
+                   + effects["attack"] - (npc["combat_defense"] + enemy_gear["defense"]) // 2)
+        result = mud._attack_action(db, user, {"arguments": [npc["id"]]})
+        assert "surprises" in result[0].body
+        assert encounter["current_health"] - db.execute(
+            "SELECT current_health FROM mud_combat_encounters WHERE id=?",
+            (encounter["id"],),
+        ).fetchone()[0] == min(encounter["current_health"],
+                              base + max(2, character["agility"] // 2))
+        assert not mud._is_hidden(db, user_id)
+        if db.execute("SELECT status FROM mud_combat_encounters WHERE id=?",
+                      (encounter["id"],)).fetchone()[0] != "defeated":
+            followup = mud._attack_action(db, user, {"arguments": [npc["id"]]})
+            assert "surprises" not in followup[0].body
+
+
+def test_failed_hiding_and_enemy_detection(game, monkeypatch):
+    assert mud._stealth_chance(14, 5) > mud._stealth_chance(8, 5)
+    assert mud._stealth_chance(10, 9) < mud._stealth_chance(10, 3)
+    app, user_id = game
+    with app.app_context():
+        db = get_db()
+        user = db.execute("SELECT * FROM users WHERE id=?", (user_id,)).fetchone()
+        run_id = _launch(db, user)
+        entrance = mud._current_room(db, user_id)
+        exit_row = mud._room_exits(db, entrance["id"], run_id)[0]
+        enemy = db.execute(
+            "SELECT id FROM mud_dungeon_content WHERE instance_id=? "
+            "AND content_type='enemy' LIMIT 1", (run_id,),
+        ).fetchone()
+        db.execute("UPDATE mud_dungeon_content SET room_key=? WHERE id=?",
+                   (exit_row["to_room_id"], enemy["id"]))
+        monkeypatch.setattr(mud.secrets, "randbelow", lambda _limit: 99)
+        assert "spotted" in mud._hide_action(db, user, {})[0].body
+        assert not mud._is_hidden(db, user_id)
+        mud._set_hidden(db, user_id, True)
+        result = mud._go_action(db, user, {"exit_id": exit_row["id"]})
+        assert any("spots you" in event.body for event in result)
+        assert not mud._is_hidden(db, user_id)
+        with pytest.raises(mud.ActionError, match="while fighting"):
+            mud._hide_action(db, user, {})
+
+
 def test_hub_console_commands_and_idempotent_purchase(game):
     app, user_id = game
     client = app.test_client()

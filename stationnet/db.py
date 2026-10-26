@@ -688,6 +688,9 @@ CREATE TABLE IF NOT EXISTS mud_player_locations (
  location_key TEXT NOT NULL,
  instance_id TEXT REFERENCES mud_procedural_instances(id) ON DELETE SET NULL,
  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);
+CREATE TABLE IF NOT EXISTS mud_player_stealth (
+ user_id INTEGER PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+ hidden INTEGER NOT NULL DEFAULT 0 CHECK(hidden IN (0,1)));
 CREATE TABLE IF NOT EXISTS mud_death_summaries (
  user_id INTEGER PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
  instance_id TEXT NOT NULL REFERENCES mud_procedural_instances(id) ON DELETE CASCADE,
