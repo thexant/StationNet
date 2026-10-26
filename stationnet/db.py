@@ -40,6 +40,9 @@ CREATE TABLE IF NOT EXISTS station (
  user_feeds_enabled INTEGER NOT NULL DEFAULT 1 CHECK(user_feeds_enabled IN (0,1)),
  kiwix_enabled INTEGER NOT NULL DEFAULT 0 CHECK(kiwix_enabled IN (0,1)),
  videos_enabled INTEGER NOT NULL DEFAULT 0 CHECK(videos_enabled IN (0,1)),
+ library_enabled INTEGER NOT NULL DEFAULT 0 CHECK(library_enabled IN (0,1)),
+ library_mode TEXT NOT NULL DEFAULT 'community' CHECK(library_mode IN ('community','curated')),
+ library_default_quota_mb INTEGER NOT NULL DEFAULT 512,
  imageboard_enabled INTEGER NOT NULL DEFAULT 0 CHECK(imageboard_enabled IN (0,1)),
  events_enabled INTEGER NOT NULL DEFAULT 0 CHECK(events_enabled IN (0,1)),
  office_enabled INTEGER NOT NULL DEFAULT 0 CHECK(office_enabled IN (0,1)),
@@ -63,6 +66,7 @@ CREATE TABLE IF NOT EXISTS users (
  tagline TEXT NOT NULL DEFAULT '', about TEXT NOT NULL DEFAULT '', birthday TEXT,
  gender TEXT NOT NULL DEFAULT '', last_seen TEXT, connection_id TEXT,
  radio_quota_mb INTEGER, videos_quota_mb INTEGER, profile_photo_filename TEXT,
+ library_quota_mb INTEGER,
  site_theme TEXT, masthead_theme TEXT,
  station_midi_enabled INTEGER NOT NULL DEFAULT 0 CHECK(station_midi_enabled IN (0,1)));
 CREATE TABLE IF NOT EXISTS account_deletion_files (
@@ -209,7 +213,7 @@ CREATE TABLE IF NOT EXISTS moderation_audit (
 CREATE INDEX IF NOT EXISTS idx_moderation_audit_user ON moderation_audit(user_id,id);
 CREATE TABLE IF NOT EXISTS moderation_reports (
  id INTEGER PRIMARY KEY AUTOINCREMENT, reporter_id INTEGER NOT NULL REFERENCES users(id),
- target_type TEXT NOT NULL CHECK(target_type IN ('user','chat','bulletin','file','feed_post','feed_comment','imageboard_thread','imageboard_reply')),
+ target_type TEXT NOT NULL CHECK(target_type IN ('user','chat','bulletin','file','feed_post','feed_comment','imageboard_thread','imageboard_reply','library_book')),
  target_id INTEGER NOT NULL, subject_user_id INTEGER REFERENCES users(id),
  reason TEXT NOT NULL, created_at TEXT NOT NULL,
  status TEXT NOT NULL DEFAULT 'open' CHECK(status IN ('open','resolved','dismissed')),
@@ -252,6 +256,29 @@ CREATE TABLE IF NOT EXISTS video_comments (
  author_id INTEGER NOT NULL REFERENCES users(id) ON DELETE RESTRICT,
  body TEXT NOT NULL, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);
 CREATE INDEX IF NOT EXISTS idx_video_comments_video ON video_comments(video_id,id);
+CREATE TABLE IF NOT EXISTS library_books (
+ id INTEGER PRIMARY KEY AUTOINCREMENT,
+ uploader_id INTEGER NOT NULL REFERENCES users(id) ON DELETE RESTRICT,
+ station_post INTEGER NOT NULL DEFAULT 0 CHECK(station_post IN (0,1)),
+ title TEXT NOT NULL, author TEXT NOT NULL DEFAULT '', description TEXT NOT NULL DEFAULT '',
+ language TEXT NOT NULL DEFAULT '', publisher TEXT NOT NULL DEFAULT '', identifier TEXT NOT NULL DEFAULT '',
+ stored_name TEXT NOT NULL UNIQUE, original_name TEXT NOT NULL,
+ size_bytes INTEGER NOT NULL, cover_path TEXT NOT NULL DEFAULT '',
+ created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);
+CREATE INDEX IF NOT EXISTS idx_library_books_created ON library_books(id DESC);
+CREATE TABLE IF NOT EXISTS library_progress (
+ book_id INTEGER NOT NULL REFERENCES library_books(id) ON DELETE CASCADE,
+ user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+ chapter INTEGER NOT NULL DEFAULT 0, fraction REAL NOT NULL DEFAULT 0,
+ text_size INTEGER NOT NULL DEFAULT 100, updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+ PRIMARY KEY(book_id,user_id));
+CREATE TABLE IF NOT EXISTS library_bookmarks (
+ id INTEGER PRIMARY KEY AUTOINCREMENT,
+ book_id INTEGER NOT NULL REFERENCES library_books(id) ON DELETE CASCADE,
+ user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+ chapter INTEGER NOT NULL, fraction REAL NOT NULL DEFAULT 0,
+ label TEXT NOT NULL DEFAULT '', created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);
+CREATE INDEX IF NOT EXISTS idx_library_bookmarks_user ON library_bookmarks(user_id,book_id,id DESC);
 CREATE TABLE IF NOT EXISTS announcements (
  id INTEGER PRIMARY KEY AUTOINCREMENT,
  author_id INTEGER NOT NULL REFERENCES users(id) ON DELETE RESTRICT,
@@ -1147,6 +1174,7 @@ def init_db():
     _migrate_kiwix(database)
     _migrate_videos(database)
     _migrate_imageboard(database)
+    _migrate_library(database)
     _migrate_registration_policy(database)
     _migrate_community_fields(database)
     _migrate_mail_threads(database)
@@ -1600,6 +1628,39 @@ def _migrate_videos(database):
     user_columns = {row["name"] for row in database.execute("PRAGMA table_info(users)")}
     if "videos_quota_mb" not in user_columns:
         database.execute("ALTER TABLE users ADD COLUMN videos_quota_mb INTEGER")
+
+
+def _migrate_library(database):
+    columns = {row["name"] for row in database.execute("PRAGMA table_info(station)")}
+    for name, definition in (("library_enabled", "INTEGER NOT NULL DEFAULT 0"),
+                             ("library_mode", "TEXT NOT NULL DEFAULT 'community'"),
+                             ("library_default_quota_mb", "INTEGER NOT NULL DEFAULT 512")):
+        if name not in columns:
+            database.execute(f"ALTER TABLE station ADD COLUMN {name} {definition}")
+    user_columns = {row["name"] for row in database.execute("PRAGMA table_info(users)")}
+    if "library_quota_mb" not in user_columns:
+        database.execute("ALTER TABLE users ADD COLUMN library_quota_mb INTEGER")
+    sql = database.execute(
+        "SELECT sql FROM sqlite_master WHERE type='table' AND name='moderation_reports'"
+    ).fetchone()[0]
+    if "'library_book'" not in sql:
+        database.execute("ALTER TABLE moderation_reports RENAME TO moderation_reports_old")
+        database.execute("""CREATE TABLE moderation_reports (
+         id INTEGER PRIMARY KEY AUTOINCREMENT,
+         reporter_id INTEGER NOT NULL REFERENCES users(id),
+         target_type TEXT NOT NULL CHECK(target_type IN
+           ('user','chat','bulletin','file','feed_post','feed_comment',
+            'imageboard_thread','imageboard_reply','library_book')),
+         target_id INTEGER NOT NULL, subject_user_id INTEGER REFERENCES users(id),
+         reason TEXT NOT NULL, created_at TEXT NOT NULL,
+         status TEXT NOT NULL DEFAULT 'open' CHECK(status IN ('open','resolved','dismissed')),
+         resolver_id INTEGER REFERENCES users(id), resolution_note TEXT NOT NULL DEFAULT '',
+         resolved_at TEXT)""")
+        database.execute("INSERT INTO moderation_reports SELECT * FROM moderation_reports_old")
+        database.execute("DROP TABLE moderation_reports_old")
+        database.execute("CREATE INDEX idx_moderation_reports_queue ON moderation_reports(status,id)")
+        database.execute("CREATE UNIQUE INDEX idx_moderation_reports_open_unique "
+                         "ON moderation_reports(reporter_id,target_type,target_id) WHERE status='open'")
 
 
 def _migrate_kiwix(database):

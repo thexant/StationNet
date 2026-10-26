@@ -1038,6 +1038,25 @@ def save_videos_user_quota(user_id):
             flash("User videos quota updated.", "success")
     return redirect(url_for("station.settings") + "#videos-service")
 
+@bp.post("/sysop/library/users/<int:user_id>/quota")
+@admin_required
+def save_library_user_quota(user_id):
+    validate_csrf()
+    database = get_db()
+    if database.execute("SELECT 1 FROM users WHERE id=?", (user_id,)).fetchone() is None:
+        flash("User not found.", "error")
+    else:
+        raw = request.form.get("library_quota_mb", "").strip()
+        quota = int(raw) if raw.isdigit() else None
+        if raw and (quota is None or not 1 <= quota <= 10240):
+            flash("User library quota must be blank or between 1 and 10240 MB.", "error")
+        else:
+            database.execute("UPDATE users SET library_quota_mb=? WHERE id=?", (quota, user_id))
+            database.commit()
+            flash("User library quota updated.", "success")
+    return redirect(url_for("station.settings") + "#library-service")
+
+
 @bp.route("/sysop/settings", methods=("GET", "POST"))
 @admin_required
 def settings():
@@ -1138,6 +1157,21 @@ def settings():
                 database.commit()
                 flash("Videos settings updated.", "success")
             return redirect(url_for("station.settings") + "#videos-service")
+        if request.form.get("settings_section") == "library":
+            mode = request.form.get("library_mode")
+            quota = request.form.get("library_default_quota_mb", type=int)
+            if mode not in {"community", "curated"}:
+                flash("Select a valid library mode.", "error")
+            elif quota is None or not 1 <= quota <= 10240:
+                flash("Default library quota must be between 1 and 10240 MB.", "error")
+            else:
+                database = get_db()
+                database.execute("UPDATE station SET library_enabled=?,library_mode=?,"
+                                 "library_default_quota_mb=? WHERE id=1",
+                                 (request.form.get("library_enabled") == "on", mode, quota))
+                database.commit()
+                flash("Library settings updated.", "success")
+            return redirect(url_for("station.settings") + "#library-service")
         name = request.form.get("name", "").strip()
         description = request.form.get("description", "").strip()
         landing_message = request.form.get(
@@ -1238,7 +1272,7 @@ def settings():
         "LEFT JOIN radio_bands b ON b.id=r.band_id ORDER BY r.group_id,r.id"
     ).fetchall()
     users = database.execute(
-        "SELECT id,username,callsign,radio_quota_mb,videos_quota_mb FROM users ORDER BY username COLLATE NOCASE"
+        "SELECT id,username,callsign,radio_quota_mb,videos_quota_mb,library_quota_mb FROM users ORDER BY username COLLATE NOCASE"
     ).fetchall()
     assignments = {row["user_id"]: row for row in database.execute(
         "SELECT a.*,u.callsign FROM radio_broadcast_assignments a JOIN users u ON u.id=a.user_id"

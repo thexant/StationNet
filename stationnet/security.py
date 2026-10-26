@@ -29,7 +29,8 @@ def ensure_csrf_token():
     return session["csrf_token"]
 
 def validate_csrf():
-    if not session.get("csrf_token") or not hmac.compare_digest(request.form.get("csrf_token", ""), session["csrf_token"]):
+    token = request.form.get("csrf_token", "") or request.headers.get("X-CSRF-Token", "")
+    if not session.get("csrf_token") or not hmac.compare_digest(token, session["csrf_token"]):
         abort(400, "Invalid or expired form token")
 
 def valid_username(value): return bool(USERNAME_RE.fullmatch(value))

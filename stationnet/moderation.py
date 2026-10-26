@@ -166,6 +166,7 @@ def resolve_report(report_id):
     if report is None: abort(404)
     if report["target_type"] in {"feed_post", "feed_comment"} and not g.station["user_feeds_enabled"]: abort(404)
     if report["target_type"] in {"imageboard_thread", "imageboard_reply"} and not g.station["imageboard_enabled"]: abort(404)
+    if report["target_type"] == "library_book" and not g.station["library_enabled"]: abort(404)
     database.execute("UPDATE moderation_reports SET status=?,resolution_note=?,resolver_id=?,resolved_at=? WHERE id=?",
                      (status, note, g.user["id"], utc_now(), report_id))
     audit(database, g.user["id"], report["subject_user_id"], f"report_{status}", note,
@@ -223,9 +224,10 @@ def create_report():
         target_type, _, raw_id = request.form["target"].partition(":")
         target_id = int(raw_id) if raw_id.isdecimal() else None
     reason = request.form.get("reason", "").strip()[:500]
-    if target_type not in {"user", "chat", "bulletin", "file", "feed_post", "feed_comment", "imageboard_thread", "imageboard_reply"} or not target_id or len(reason) < 10: abort(400)
+    if target_type not in {"user", "chat", "bulletin", "file", "feed_post", "feed_comment", "imageboard_thread", "imageboard_reply", "library_book"} or not target_id or len(reason) < 10: abort(400)
     if target_type in {"feed_post", "feed_comment"} and not g.station["user_feeds_enabled"]: abort(404)
     if target_type in {"imageboard_thread", "imageboard_reply"} and not g.station["imageboard_enabled"]: abort(404)
+    if target_type == "library_book" and not g.station["library_enabled"]: abort(404)
     database = get_db()
     if target_type == "user":
         target = database.execute("SELECT id subject FROM users WHERE id=?", (target_id,)).fetchone()
@@ -235,7 +237,8 @@ def create_report():
                         "feed_post": ("user_feed_posts", "owner_id"),
                         "feed_comment": ("user_feed_comments", "author_id"),
                         "imageboard_thread": ("imageboard_threads", "author_id"),
-                        "imageboard_reply": ("imageboard_replies", "author_id")}[target_type]
+                        "imageboard_reply": ("imageboard_replies", "author_id"),
+                        "library_book": ("library_books", "uploader_id")}[target_type]
         target = database.execute(f"SELECT {owner} subject FROM {table} WHERE id=?", (target_id,)).fetchone()
     if target is None: abort(404)
     if target["subject"] == g.user["id"]: abort(400, "You cannot report yourself.")

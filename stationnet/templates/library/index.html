@@ -1,0 +1,12 @@
+{% extends 'base.html' %}
+{% block title %}Library{% endblock %}
+{% block content %}
+<header class="board-head"><div><p class="eyebrow">STATION BOOKS</p><h1>Library</h1></div>{% if g.user and g.station.library_mode == 'community' %}<a class="button" href="{{ url_for('library.upload') }}">UPLOAD EPUB +</a>{% endif %}</header>
+<form method="get" action="{{ url_for('library.index') }}" class="video-search"><label>Search titles, authors, and descriptions<input type="search" name="q" value="{{ query }}" maxlength="100"></label><button>SEARCH</button>{% if query %}<a href="{{ url_for('library.index') }}">CLEAR</a>{% endif %}</form>
+<section class="library-grid" aria-label="Books">
+{% for book in books %}
+<article class="terminal-card library-card"><a href="{{ url_for('library.view',book_id=book.id) }}">{% if book.cover_path %}<img src="{{ url_for('library.cover',book_id=book.id) }}" alt="Cover of {{ book.title }}" loading="lazy">{% else %}<span class="library-cover-placeholder" aria-hidden="true">BOOK</span>{% endif %}<h2>{{ book.title }}</h2></a><p>{{ book.author or 'Unknown author' }}</p>{% if g.station.library_mode == 'community' %}<small>{{ g.station.name if book.station_post else book.username }}</small>{% endif %}</article>
+{% else %}<div class="empty-state"><h2>No books found.</h2></div>{% endfor %}
+</section>
+{% if pages > 1 %}<nav class="subnav" aria-label="Library pages">{% if page > 1 %}<a href="{{ url_for('library.index',q=query,page=page-1) }}">PREVIOUS</a>{% endif %}<span>PAGE {{ page }} OF {{ pages }}</span>{% if page < pages %}<a href="{{ url_for('library.index',q=query,page=page+1) }}">NEXT</a>{% endif %}</nav>{% endif %}
+{% endblock %}

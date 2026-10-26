@@ -22,6 +22,9 @@
   {% if g.station.videos_enabled %}
     {% set services = services + [('videos.index', 'VIDEOS', 'WATCH STATION VIDEOS')] %}
   {% endif %}
+  {% if g.station.library_enabled %}
+    {% set services = services + [('library.index', 'LIBRARY', 'READ STATION BOOKS')] %}
+  {% endif %}
   {% if g.user %}
     {% set services = services + [
       ('chat.station_chat', 'STATION CHAT', 'LIVE STATION CHAT'),

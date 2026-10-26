@@ -70,6 +70,10 @@ def delete_account(user_id):
         collect(data / "videos" / "station", "SELECT stored_name FROM videos WHERE uploader_id=? AND station_post=1")
         collect(data / "videos" / "users" / str(user_id),
                 "SELECT stored_name FROM videos WHERE uploader_id=? AND station_post=0")
+        collect(data / "library" / "station",
+                "SELECT stored_name FROM library_books WHERE uploader_id=? AND station_post=1")
+        collect(data / "library" / "users" / str(user_id),
+                "SELECT stored_name FROM library_books WHERE uploader_id=? AND station_post=0")
         collect(data / "radio_audio" / str(user_id),
                 "SELECT stored_name FROM radio_audio_files WHERE owner_id=?")
         collect(data / "radio_content" / str(user_id),
@@ -101,6 +105,9 @@ def delete_account(user_id):
         database.execute("DELETE FROM mail WHERE sender_id=? OR recipient_id=?", (user_id, user_id))
         database.execute("DELETE FROM video_comments WHERE author_id=?", (user_id,))
         database.execute("DELETE FROM videos WHERE uploader_id=?", (user_id,))
+        database.execute("DELETE FROM library_bookmarks WHERE user_id=?", (user_id,))
+        database.execute("DELETE FROM library_progress WHERE user_id=?", (user_id,))
+        database.execute("DELETE FROM library_books WHERE uploader_id=?", (user_id,))
         database.execute("DELETE FROM archive_files WHERE uploader_id=?", (user_id,))
         database.execute("DELETE FROM user_feed_comments WHERE author_id=?", (user_id,))
         database.execute("DELETE FROM posts WHERE author_id=?", (user_id,))

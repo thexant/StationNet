@@ -1,0 +1,7 @@
+{% extends 'base.html' %}
+{% block title %}Upload EPUB{% endblock %}
+{% block content %}
+<p><a href="{{ url_for('library.index') }}">RETURN TO LIBRARY</a></p>
+<section class="narrow terminal-card"><p class="eyebrow">LIBRARY / UPLOAD</p><h1>Upload a book</h1><p>Title, author, description, and cover are read from the EPUB.</p>
+<form method="post" enctype="multipart/form-data" class="form-grid"><input type="hidden" name="csrf_token" value="{{ session.csrf_token }}"><label>EPUB book (up to 50 MB)<input type="file" name="file" accept=".epub,application/epub+zip" required></label><button>UPLOAD BOOK</button></form></section>
+{% endblock %}
