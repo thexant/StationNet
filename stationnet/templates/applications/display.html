@@ -4,7 +4,8 @@
 <section class="application-display" aria-labelledby="application-title"
   data-app-platforms='{{ application.platforms|list|tojson }}'
   data-app-inputs='{{ application.required_inputs|list|tojson }}'
-  data-app-presentation="{{ application.preferred_presentation }}">
+  data-app-presentation="{{ application.preferred_presentation }}"
+  data-app-fullscreen-target="{{ application.fullscreen_target }}">
   <header class="application-display-header">
     <div>
       <p class="eyebrow">STATION APPLICATION DISPLAY / {{ application.category|upper }}</p>
@@ -42,7 +43,7 @@
       title="{{ application.name }} isolated runtime"
       aria-hidden="true" tabindex="-1"
       sandbox="allow-scripts"
-      data-runtime-src="{{ url_for('applications.runtime', slug=application.slug, v='fullscreen-1') }}"
+      data-runtime-src="{{ url_for('applications.runtime', slug=application.slug, v='fullscreen-2') }}"
       src="about:blank"></iframe>
     {% else %}
     <div class="application-status">PROGRAM STATUS / PLACEHOLDER</div>
@@ -65,5 +66,5 @@
   <a class="button application-return" href="{{ url_for('applications.index') }}">&lt; RETURN TO PROGRAM MANAGER</a>
 </section>
 {% if application.runnable %}<button type="button" class="application-immersive-exit" data-app-immersive-exit hidden aria-label="Exit immersive application mode">EXIT IMMERSIVE</button>{% endif %}
-{% if application.runnable %}<script src="{{ url_for('static', filename='application_host.js', v='fullscreen-1') }}" defer></script>{% endif %}
+{% if application.runnable %}<script src="{{ url_for('static', filename='application_host.js', v='fullscreen-2') }}" defer></script>{% endif %}
 {% endblock %}

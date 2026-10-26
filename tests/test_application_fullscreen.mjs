@@ -22,11 +22,15 @@ class Element {
   querySelectorAll() { return []; }
 }
 
-function makeHost({ touch = false, supported = true } = {}) {
+function makeHost({ touch = false, supported = true, canvas = false } = {}) {
   const sent = [], windowListeners = new Map(), documentListeners = new Map();
   const frame = new Element(); frame.dataset.runtimeSrc = "about:blank";
   frame.contentWindow = { postMessage(message) { sent.push(message); } };
   const surface = new Element(); surface.clientWidth = touch ? 390 : 1280; surface.clientHeight = touch ? 844 : 800;
+  if (canvas) {
+    const wrap = new Element(), bitmap = new Element(); bitmap.parentElement = wrap;
+    surface.querySelector = selector => selector === ".app-canvas-wrap > .app-canvas" ? bitmap : null;
+  }
   const display = new Element(); display.dataset.appPlatforms = '["desktop","touch"]'; display.dataset.appInputs = "[]";
   const status = new Element(), fullscreenButton = new Element(), fullscreenExit = new Element();
   const immersiveButton = new Element(), immersiveExit = new Element();
@@ -86,6 +90,16 @@ assert.equal(desktop.document.fullscreenElement, null);
 assert.equal(desktop.body.classList.contains("application-immersive"), true);
 assert.equal(desktop.fullscreenButton["aria-pressed"], "false");
 
+const canvasHost = makeHost({ canvas: true });
+canvasHost.display.dataset.appFullscreenTarget = "canvas";
+canvasHost.fullscreenButton.click();
+await Promise.resolve();
+assert.equal(canvasHost.display.dataset.fullscreenTarget, "canvas");
+canvasHost.fullscreenExit.click();
+await Promise.resolve();
+assert.equal(canvasHost.display.dataset.fullscreenTarget, undefined);
+assert.equal(canvasHost.body.classList.contains("application-immersive"), false);
+
 const mobile = makeHost({ touch: true });
 mobile.send({ type: "capability", operation: "presentation-request-fullscreen", request: "request-1" });
 assert.equal(mobile.calls, 0, "an app message cannot spend browser user activation");
@@ -132,6 +146,7 @@ const changes = [];
 ui.presentation.onChange((mode, viewport) => changes.push([mode, viewport]));
 const request = ui.presentation.requestFullscreen();
 assert.equal(messages.at(-1).operation, "presentation-request-fullscreen");
+assert.equal(messages.at(-1).target, undefined);
 listeners.get("message")({ data: { protocol, type: "presentation-event", mode: "immersive", fullscreen: true,
   viewport: { width: 390, height: 700, orientation: "portrait" } } });
 await Promise.resolve();
@@ -140,6 +155,11 @@ assert.equal(changes.at(-1)[0], "immersive");
 assert.equal(changes.at(-1)[1].width, 390);
 listeners.get("message")({ data: { protocol, type: "capability-result", request: messages.at(-1).request, ok: true, value: true } });
 await request;
+const targeted = ui.presentation.requestFullscreen({ target: "canvas" });
+assert.equal(messages.at(-1).target, "canvas");
+listeners.get("message")({ data: { protocol, type: "capability-result", request: messages.at(-1).request, ok: true, value: true } });
+await targeted;
+assert.throws(() => ui.presentation.requestFullscreen({ target: "invalid" }), /Fullscreen target/);
 const exit = ui.presentation.exitFullscreen();
 assert.equal(messages.at(-1).operation, "presentation-exit-fullscreen");
 listeners.get("message")({ data: { protocol, type: "capability-result", request: messages.at(-1).request, ok: true, value: true } });

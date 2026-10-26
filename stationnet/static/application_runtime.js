@@ -1078,7 +1078,12 @@
     presentation: Object.freeze({
       enterImmersive() { return capability("presentation-enter-immersive", {}); },
       exitImmersive() { return capability("presentation-exit-immersive", {}); },
-      requestFullscreen() { return capability("presentation-request-fullscreen", {}); },
+      requestFullscreen(settings) {
+        const opts = options(settings);
+        if (opts.target !== undefined && !["application", "canvas"].includes(opts.target))
+          throw new TypeError("Fullscreen target must be 'application' or 'canvas'");
+        return capability("presentation-request-fullscreen", { target: opts.target });
+      },
       exitFullscreen() { return capability("presentation-exit-fullscreen", {}); },
       get mode() { return presentationMode; },
       get fullscreen() { return presentationFullscreen; },

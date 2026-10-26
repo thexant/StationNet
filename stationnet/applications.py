@@ -46,6 +46,7 @@ MANIFEST_PERMISSIONS = frozenset({"multiplayer"})
 MANIFEST_PLATFORMS = frozenset({"desktop", "touch"})
 MANIFEST_INPUTS = frozenset({"keyboard", "pointer", "fine-pointer", "touch", "pointer-lock", "gamepad"})
 PRESENTATION_MODES = frozenset({"standard", "immersive"})
+FULLSCREEN_TARGETS = frozenset({"application", "canvas"})
 
 
 class PackageError(ValueError):
@@ -67,6 +68,7 @@ class Application:
     platforms: tuple[str, ...] = ("desktop", "touch")
     required_inputs: tuple[str, ...] = ()
     preferred_presentation: str = "standard"
+    fullscreen_target: str = "application"
     launch_endpoint: str | None = None
 
     @property
@@ -160,6 +162,8 @@ def _validate_metadata(application: Application) -> None:
         raise ValueError(f"Invalid input requirements: {application.slug}")
     if application.preferred_presentation not in PRESENTATION_MODES:
         raise ValueError(f"Invalid preferred presentation: {application.slug}")
+    if application.fullscreen_target not in FULLSCREEN_TARGETS:
+        raise ValueError(f"Invalid fullscreen target: {application.slug}")
 
 
 def _manifest_capabilities(data: dict, error_type=ValueError):
@@ -177,7 +181,10 @@ def _manifest_capabilities(data: dict, error_type=ValueError):
     presentation = data.get("preferred_presentation", "standard")
     if not isinstance(presentation, str):
         raise error_type("Manifest preferred_presentation must be text.")
-    return tuple(platforms), tuple(required_inputs), presentation
+    fullscreen_target = data.get("fullscreen_target", "application")
+    if not isinstance(fullscreen_target, str) or fullscreen_target not in FULLSCREEN_TARGETS:
+        raise error_type("Manifest fullscreen_target must be 'application' or 'canvas'.")
+    return tuple(platforms), tuple(required_inputs), presentation, fullscreen_target
 
 
 def register(application: Application) -> None:
@@ -239,7 +246,7 @@ def catalog() -> tuple[Application, ...]:
         if row["slug"] in bundled_slugs:
             continue
         capabilities = json.loads(row["capabilities_json"] or "{}")
-        platforms, required_inputs, presentation = _manifest_capabilities(capabilities)
+        platforms, required_inputs, presentation, fullscreen_target = _manifest_capabilities(capabilities)
         applications.append(Application(
             slug=row["slug"], name=row["name"], description=row["description"],
             author=row["author"], version=row["version"], category=row["category"],
@@ -247,7 +254,7 @@ def catalog() -> tuple[Application, ...]:
             enabled=states.get(row["slug"], True),
             permissions=tuple(json.loads(row["permissions_json"] or "[]")),
             platforms=platforms, required_inputs=required_inputs,
-            preferred_presentation=presentation,
+            preferred_presentation=presentation, fullscreen_target=fullscreen_target,
         ))
     return tuple(applications)
 
@@ -268,14 +275,14 @@ def _load_package(folder: str) -> Application:
     permissions = data.get("permissions", [])
     if not isinstance(permissions, list) or any(not isinstance(item, str) for item in permissions):
         raise ValueError(f"Invalid application manifest: {manifest_path}")
-    platforms, required_inputs, presentation = _manifest_capabilities(data)
+    platforms, required_inputs, presentation, fullscreen_target = _manifest_capabilities(data)
     application = Application(
         slug=data["slug"], name=data["name"], description=data["description"],
         author=data["author"], version=data["version"], category=data["category"],
         entrypoint=f"{folder}/{data['entrypoint']}",
         permissions=tuple(permissions),
         platforms=platforms, required_inputs=required_inputs,
-        preferred_presentation=presentation,
+        preferred_presentation=presentation, fullscreen_target=fullscreen_target,
     )
     _validate_metadata(application)
     return application
@@ -380,14 +387,14 @@ def validate_package(package_bytes: bytes) -> tuple[Application, dict[str, bytes
         permissions = manifest.get("permissions", [])
         if not isinstance(permissions, list) or any(not isinstance(item, str) for item in permissions):
             raise PackageError("Manifest permissions must be an array of supported permission names.")
-        platforms, required_inputs, presentation = _manifest_capabilities(manifest, PackageError)
+        platforms, required_inputs, presentation, fullscreen_target = _manifest_capabilities(manifest, PackageError)
         application = Application(
             slug=manifest["slug"], name=manifest["name"],
             description=manifest["description"], author=manifest["author"],
             version=manifest["version"], category=manifest["category"],
             entrypoint=entrypoint, builtin=False, permissions=tuple(permissions),
             platforms=platforms, required_inputs=required_inputs,
-            preferred_presentation=presentation,
+            preferred_presentation=presentation, fullscreen_target=fullscreen_target,
         )
         try:
             _validate_metadata(application)
@@ -437,6 +444,7 @@ def install_package(package_bytes: bytes) -> Application:
                  "platforms": application.platforms,
                  "required_inputs": application.required_inputs,
                  "preferred_presentation": application.preferred_presentation,
+                 "fullscreen_target": application.fullscreen_target,
              })),
         )
         database.execute(

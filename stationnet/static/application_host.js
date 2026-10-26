@@ -233,8 +233,9 @@
   let immersive = false;
   let immersiveFocus = null;
   let immersiveScroll = [0, 0];
-  let fullscreenPreviousImmersive = null;
   let fullscreenRequest = null;
+  let fullscreenPreviousFocus = null;
+  let fullscreenPreviousScroll = null;
   let fullscreenExitTime = 0;
   let presentationResizeTimer = null;
   let pointerLockRequest = null;
@@ -1392,8 +1393,8 @@
         let pinch = null;
         const point = (event, phase, extra = {}) => {
           const bounds = canvas.getBoundingClientRect();
-          const x = (event.clientX - bounds.left) * Number(canvas.dataset.logicalWidth) / Math.max(1, bounds.width);
-          const y = (event.clientY - bounds.top) * Number(canvas.dataset.logicalHeight) / Math.max(1, bounds.height);
+          const x = (event.clientX - bounds.left - canvas.clientLeft) * Number(canvas.dataset.logicalWidth) / Math.max(1, canvas.clientWidth);
+          const y = (event.clientY - bounds.top - canvas.clientTop) * Number(canvas.dataset.logicalHeight) / Math.max(1, canvas.clientHeight);
           interact(canvas.dataset.canvasAction, { x, y, phase, pointerId: event.pointerId,
             pointerType: event.pointerType || "mouse", pointers: active.size,
             shiftKey: Boolean(event.shiftKey), ctrlKey: Boolean(event.ctrlKey), metaKey: Boolean(event.metaKey), ...extra });
@@ -1487,7 +1488,7 @@
     };
     if (message.mode === "remove") {
       const target = targetComponent();
-      if (target) { closeDialogs(target); releaseCanvasPointers(target, true); const overlay = target.querySelector(".app-canvas-controls"); if (overlay) releaseGamepadOverlay(overlay); target.remove(); }
+      if (target) { closeDialogs(target); releaseCanvasPointers(target, true); const overlay = target.querySelector(".app-canvas-controls"); if (overlay) releaseGamepadOverlay(overlay); target.remove(); syncFullscreenCanvas(); }
       return;
     }
     if (message.mode === "update") {
@@ -1505,8 +1506,10 @@
           target.dataset.touchLayout = components[0].touchLayout === "gamepad" || components[0].touchLayout?.type === "gamepad" ? "gamepad" : "";
         }
         if (components[0].controls !== undefined) target.touchControls = components[0].controls;
-        if (components[0].controls !== undefined || target.touchLayoutSignature !== oldTouchLayout)
+        if (components[0].controls !== undefined || target.touchLayoutSignature !== oldTouchLayout) {
           drawCanvasControls(target, target.touchControls, target.touchLayout);
+          syncFullscreenCanvas();
+        }
         return;
       }
       const replacement = renderComponent(components[0]);
@@ -1515,7 +1518,7 @@
         releaseCanvasPointers(target, true);
         const overlay = target.querySelector(".app-canvas-controls"); if (overlay) releaseGamepadOverlay(overlay);
         target.replaceWith(replacement);
-        activateDialogs();
+        activateDialogs(); syncFullscreenCanvas();
       }
       return;
     }
@@ -1527,7 +1530,7 @@
     const budget = { remaining: LIMITS.components };
     components.forEach((component) => { const node = renderComponent(component, 0, budget); if (node) fragment.append(node); });
     if (message.mode !== "append") { closeDialogs(surface); surface.replaceChildren(); }
-    surface.append(fragment); activateDialogs(); status.textContent = "PROGRAM STATUS / RUNNING";
+    surface.append(fragment); activateDialogs(); syncFullscreenCanvas(); status.textContent = "PROGRAM STATUS / RUNNING";
   }
 
   function allowedEvent() {
@@ -1710,7 +1713,29 @@
   function fullscreenSupported() {
     return Boolean(document.fullscreenEnabled && typeof display?.requestFullscreen === "function");
   }
-  async function enterFullscreen(request = null) {
+  function fullscreenTarget(value) {
+    const target = value || display?.dataset.appFullscreenTarget || "application";
+    if (!["application", "canvas"].includes(target)) throw new Error("Invalid fullscreen target");
+    if (target === "canvas") {
+      const canvas = surface.querySelector(".app-canvas-wrap > .app-canvas");
+      if (!canvas) throw new Error("Canvas fullscreen requires a rendered canvas");
+      if (canvas.parentElement.querySelector(".app-canvas-gamepad"))
+        throw new Error("Touch gamepad controls require application fullscreen");
+    }
+    return target;
+  }
+  function syncFullscreenCanvas() {
+    surface.querySelectorAll("[data-fullscreen-canvas]").forEach(node => { delete node.dataset.fullscreenCanvas; });
+    surface.querySelectorAll("[data-fullscreen-canvas-path]").forEach(node => { delete node.dataset.fullscreenCanvasPath; });
+    if (display?.dataset.fullscreenTarget !== "canvas") return;
+    const canvas = surface.querySelector(".app-canvas-wrap > .app-canvas");
+    if (canvas && !canvas.parentElement.querySelector(".app-canvas-gamepad")) {
+      canvas.parentElement.dataset.fullscreenCanvas = "";
+      for (let ancestor = canvas.parentElement.parentElement; ancestor && ancestor !== surface; ancestor = ancestor.parentElement)
+        ancestor.dataset.fullscreenCanvasPath = "";
+    } else { display.dataset.fullscreenTarget = "application"; reportPresentation(); }
+  }
+  async function enterFullscreen(request = null, target = null) {
     if (closed) throw new Error("Application terminated");
     if (!fullscreenSupported()) throw new Error("Browser fullscreen is unavailable on this device");
     if (document.fullscreenElement === display) {
@@ -1719,15 +1744,24 @@
     }
     if (document.fullscreenElement) throw new Error("Another element is already fullscreen");
     if (fullscreenRequest && fullscreenRequest !== request) throw new Error("A fullscreen request is already pending");
+    let selectedTarget;
+    try { selectedTarget = fullscreenTarget(target); }
+    catch (error) { dismissFullscreenPrompt(error); throw error; }
     fullscreenRequest = request;
-    fullscreenPreviousImmersive = immersive;
+    fullscreenPreviousFocus = document.activeElement;
+    fullscreenPreviousScroll = [surface.scrollLeft, surface.scrollTop];
+    display.dataset.fullscreenTarget = selectedTarget;
+    syncFullscreenCanvas();
     try {
       await display.requestFullscreen();
       if (document.fullscreenElement !== display) throw new Error("The browser did not enter fullscreen");
       if (fullscreenRequest) capabilityResult(fullscreenRequest, true, true);
       fullscreenRequest = null;
     } catch (error) {
-      fullscreenPreviousImmersive = null;
+      delete display.dataset.fullscreenTarget;
+      syncFullscreenCanvas();
+      fullscreenPreviousFocus = null;
+      fullscreenPreviousScroll = null;
       dismissFullscreenPrompt(error);
       throw error;
     }
@@ -1743,6 +1777,9 @@
     if (document.fullscreenElement === display) {
       capabilityResult(message.request, true, true); return;
     }
+    let target;
+    try { target = fullscreenTarget(message.target); }
+    catch (error) { capabilityResult(message.request, false, false, error); return; }
     dismissFullscreenPrompt(new Error("A newer fullscreen request replaced this one"));
     fullscreenRequest = message.request;
     const prompt = document.createElement("div");
@@ -1751,7 +1788,7 @@
     copy.textContent = "This application wants to use the whole screen. Press Escape or Exit Fullscreen to return.";
     const accept = document.createElement("button"); accept.type = "button"; accept.textContent = "ENTER FULLSCREEN";
     const cancel = document.createElement("button"); cancel.type = "button"; cancel.className = "secondary"; cancel.textContent = "CANCEL";
-    accept.addEventListener("click", () => { prompt.remove(); enterFullscreen(message.request).catch(() => {}); });
+    accept.addEventListener("click", () => { prompt.remove(); enterFullscreen(message.request, target).catch(() => {}); });
     cancel.addEventListener("click", () => dismissFullscreenPrompt(new Error("Fullscreen request was cancelled")));
     prompt.append(copy, accept, cancel);
     display.insertBefore(prompt, display.querySelector(".application-viewport"));
@@ -1765,16 +1802,25 @@
     }
     if (fullscreenExit) fullscreenExit.hidden = !active;
     if (active) {
-      if (fullscreenPreviousImmersive === null) fullscreenPreviousImmersive = immersive;
-      setImmersive(true, false);
+      surface.scrollLeft = 0;
+      surface.scrollTop = 0;
       if (fullscreenRequest) capabilityResult(fullscreenRequest, true, true);
       fullscreenRequest = null;
       dismissFullscreenPrompt();
-      surface.focus({ preventScroll: true });
-    } else if (fullscreenPreviousImmersive !== null) {
+      if (display.dataset.fullscreenTarget === "canvas")
+        surface.querySelector(".app-canvas-wrap > .app-canvas")?.focus({ preventScroll: true });
+      else surface.focus({ preventScroll: true });
+    } else {
       fullscreenExitTime = Date.now();
-      setImmersive(fullscreenPreviousImmersive, false);
-      fullscreenPreviousImmersive = null;
+      delete display.dataset.fullscreenTarget;
+      syncFullscreenCanvas();
+      if (fullscreenPreviousScroll) {
+        [surface.scrollLeft, surface.scrollTop] = fullscreenPreviousScroll;
+        fullscreenPreviousScroll = null;
+      }
+      if (fullscreenPreviousFocus instanceof HTMLElement && fullscreenPreviousFocus.isConnected)
+        fullscreenPreviousFocus.focus({ preventScroll: true });
+      fullscreenPreviousFocus = null;
     }
     reportPresentation();
     schedulePresentationReport();
@@ -2083,7 +2129,8 @@
     dismissFullscreenPrompt(new Error("Application terminated"));
     if (document.pointerLockElement === surface) document.exitPointerLock();
     if (document.fullscreenElement === display) leaveFullscreen().catch(() => {});
-    fullscreenPreviousImmersive = null;
+    delete display.dataset.fullscreenTarget;
+    syncFullscreenCanvas();
     clearTimeout(presentationResizeTimer);
     setImmersive(false);
     if (frame.contentWindow) frame.contentWindow.postMessage({ protocol: PROTOCOL, type: "terminate" }, "*");

@@ -52,7 +52,7 @@ a:hover { color: var(--magenta); }
 .station-brand:hover { color: var(--cyan); }
 .masthead-row { display: grid; grid-template-columns: auto minmax(0,1fr) auto; align-items: center; gap: clamp(.4rem,2vw,1.25rem); width: 100%; }
 .masthead-icon { display: block; width: clamp(2.5rem,10vw,8rem); height: clamp(2.5rem,10vw,8rem); object-fit: cover; }
-.ansi-logo { justify-self: center; width: max-content; max-width: 100%; margin: 0; overflow-x: auto; color: var(--masthead-color); font-family: var(--mono); font-size: clamp(.4rem, 1.55vw, .88rem); font-weight: 700; line-height: 1.08; letter-spacing: .02em; text-align: center; text-shadow: .13em .1em 0 var(--masthead-shadow); white-space: pre; }
+.ansi-logo { justify-self: center; width: max-content; max-width: 100%; margin: 0; overflow-x: auto; color: var(--masthead-color); font-family: var(--mono); font-size: clamp(.4rem, 1.55vw, .88rem); font-weight: 700; line-height: 1.08; letter-spacing: .02em; text-align: left; text-shadow: .13em .1em 0 var(--masthead-shadow); white-space: pre; }
 .banner-color-controls { display: flex; gap: .5rem; align-items: center; }
 .banner-color-controls select { flex: 1; }
 .banner-color-controls input[type="color"] { flex: 0 0 3rem; min-height: 2.25rem; padding: .15rem; }
@@ -644,22 +644,6 @@ body.application-immersive .app-canvas-controls.app-canvas-gamepad { width: 100%
 .application-immersive-exit[hidden] { display: none; }
 .application-fullscreen-exit { position: fixed; top: max(.65rem, env(safe-area-inset-top)); right: max(.65rem, env(safe-area-inset-right)); z-index: 50; color: #000; border-color: var(--amber); background: var(--amber); }
 .application-fullscreen-exit[hidden] { display: none; }
-.application-display:fullscreen { display: flex; flex-direction: column; width: 100vw; height: 100dvh; min-height: 0; border: 0; overflow: hidden; background: var(--black); }
-.application-display:fullscreen .application-display-header,
-.application-display:fullscreen .application-compatibility,
-.application-display:fullscreen .application-status,
-.application-display:fullscreen .application-return { display: none; }
-.application-display:fullscreen .application-viewport { display: flex; flex: 1 1 auto; flex-direction: column; min-height: 0; margin: 0; border: 0; }
-.application-display:fullscreen .application-surface { display: grid; flex: 1 1 auto; align-content: center; justify-items: center; width: 100%; min-height: 0; overflow: auto; box-sizing: border-box; padding: max(.65rem, env(safe-area-inset-top)) max(.65rem, env(safe-area-inset-right)) max(.65rem, env(safe-area-inset-bottom)) max(.65rem, env(safe-area-inset-left)); }
-.application-display:fullscreen .app-canvas-wrap { --app-fullscreen-reserve: 3.5rem; width: min(100%, calc(max(6rem, calc(100dvh - var(--app-fullscreen-reserve))) * var(--app-canvas-ratio, 1))); max-width: none; justify-self: center; }
-.application-display:fullscreen .app-canvas-wrap:has(> .app-canvas-gamepad) { --app-fullscreen-reserve: clamp(10rem, 27dvh, 16rem); }
-.application-display:fullscreen .app-canvas { width: 100%; max-height: none; box-sizing: border-box; }
-.application-display:fullscreen .app-canvas-controls.app-canvas-gamepad { width: 100%; }
-body.application-immersive .application-display:fullscreen .application-surface { width: 100%; }
-body.application-immersive .application-display:fullscreen .app-canvas-wrap { --app-canvas-height: auto; width: min(100%, calc(max(6rem, calc(100dvh - var(--app-fullscreen-reserve))) * var(--app-canvas-ratio, 1))); }
-body.application-immersive .application-display:fullscreen .app-canvas { max-height: none; }
-body.application-immersive:has(.application-display:fullscreen) .application-immersive-exit { display: none; }
-
 body.application-immersive { overflow: hidden; }
 body.application-immersive .station-shell { width: 100%; height: 100dvh; padding: 0; grid-template-rows: 1fr; }
 body.application-immersive .station-header,
@@ -681,6 +665,26 @@ body.application-immersive .application-return { display: none; }
 body.application-immersive .app-canvas-wrap { --app-canvas-reserve: 17rem; --app-canvas-height: max(8rem, calc(100dvh - var(--app-canvas-reserve))); justify-self: center; width: min(100%, calc(var(--app-canvas-height) * var(--app-canvas-ratio, 1))); }
 body.application-immersive .app-canvas-wrap:has(> .app-canvas-gamepad) { --app-canvas-reserve: 21rem; }
 body.application-immersive .app-canvas { width: 100%; max-height: var(--app-canvas-height); }
+
+/* Browser fullscreen has its own layout, independent of immersive mode. */
+.application-display:fullscreen { --app-fullscreen-top: max(3.5rem, env(safe-area-inset-top)); display: flex; flex-direction: column; box-sizing: border-box; width: 100%; height: 100%; min-height: 0; border: 0; overflow: hidden; background: var(--black); }
+.application-display:fullscreen .application-display-header,
+.application-display:fullscreen .application-compatibility,
+.application-display:fullscreen .application-launch-warning,
+.application-display:fullscreen .application-status,
+.application-display:fullscreen .application-return { display: none; }
+.application-display:fullscreen .application-viewport { display: flex; flex: 1 1 0; flex-direction: column; min-width: 0; min-height: 0; margin: 0; border: 0; }
+.application-display:fullscreen .application-surface { display: grid; flex: 1 1 0; align-content: start; justify-items: stretch; box-sizing: border-box; width: 100%; min-width: 0; min-height: 0; margin: 0; overflow: auto; overscroll-behavior: contain; padding: var(--app-fullscreen-top) max(.65rem, env(safe-area-inset-right)) max(.65rem, env(safe-area-inset-bottom)) max(.65rem, env(safe-area-inset-left)); }
+.application-display:fullscreen .app-canvas-wrap { --app-canvas-height: auto; width: min(100%, calc(70dvh * var(--app-canvas-ratio, 1))); max-width: none; }
+.application-display:fullscreen .app-canvas { width: 100%; max-height: none; box-sizing: border-box; }
+.application-display:fullscreen .app-canvas-controls.app-canvas-gamepad { width: 100%; }
+.application-display:fullscreen[data-fullscreen-target="canvas"] .application-surface { display: flex; align-items: center; justify-content: center; overflow: hidden; }
+.application-display:fullscreen[data-fullscreen-target="canvas"] .application-surface > :not([data-fullscreen-canvas]):not([data-fullscreen-canvas-path]),
+.application-display:fullscreen[data-fullscreen-target="canvas"] [data-fullscreen-canvas-path] > :not([data-fullscreen-canvas]):not([data-fullscreen-canvas-path]) { display: none; }
+.application-display:fullscreen[data-fullscreen-target="canvas"] [data-fullscreen-canvas-path] { display: flex; flex: 1 1 auto; align-items: center; justify-content: center; box-sizing: border-box; width: 100%; height: 100%; min-width: 0; min-height: 0; }
+.application-display:fullscreen[data-fullscreen-target="canvas"] [data-fullscreen-canvas] { flex: 0 1 auto; width: min(100%, calc((100dvh - var(--app-fullscreen-top) - max(.65rem, env(safe-area-inset-bottom))) * var(--app-canvas-ratio, 1))); }
+.application-display:fullscreen[data-fullscreen-target="canvas"] [data-fullscreen-canvas] > .app-canvas { width: 100%; }
+body:has(.application-display:fullscreen) :is(.station-header,.flash-stack,.radio-player,.statusbar,.application-immersive-exit) { display: none; }
 
 .live-chat { width: min(820px,100%); }
 .chat-log { height: min(52vh,30rem); margin: 1rem 0; padding: .7rem; overflow-y: auto; border: 1px solid var(--green-dim); background: var(--surface-field); }

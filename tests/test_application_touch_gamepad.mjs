@@ -143,6 +143,12 @@ mouse.fire("pointerdown", { pointerId: 9, pointerType: "mouse", clientX: 12, cli
 mouse.fire("pointerup", { pointerId: 9, pointerType: "mouse", clientX: 12, clientY: 16 });
 assert.deepEqual(desktop.sent.filter(item => item.action === "mouse").map(item => item.phase),
   ["move", "start", "end", "gesture"]);
+mouse.clientLeft = 1; mouse.clientTop = 1; mouse.clientWidth = 638; mouse.clientHeight = 398;
+mouse.getBoundingClientRect = () => ({ left: 10, top: 20, width: 640, height: 400 });
+mouse.fire("pointermove", { pointerId: 9, pointerType: "mouse", clientX: 330, clientY: 220, buttons: 0 });
+const scaledPoint = desktop.sent.filter(item => item.action === "mouse").at(-1);
+assert.equal(scaledPoint.x, 160);
+assert.equal(scaledPoint.y, 100);
 
 const capped = makeHost(true);
 capped.send({ type: "render", mode: "replace", components: Array.from({ length: 17 }, () =>

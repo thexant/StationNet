@@ -37,7 +37,8 @@ not become web URLs or grant DOM, filesystem, or network access.
   "entrypoint": "src/main.js",
   "platforms": ["desktop", "touch"],
   "required_inputs": [],
-  "preferred_presentation": "standard"
+  "preferred_presentation": "standard",
+  "fullscreen_target": "application"
 }
 ```
 
@@ -48,7 +49,7 @@ StationNet currently supports package format `1` and does
 not resolve dependencies or perform automatic updates. Existing packages can
 keep `"entrypoint": "main.js"` unchanged.
 
-The final three fields are optional, so existing packages remain universal and
+The final four fields are optional, so existing packages remain universal and
 use the normal StationNet layout. `platforms` may be `"universal"`,
 `["desktop"]`, `["touch"]`, or `["desktop", "touch"]`. Input requirements may
 contain `keyboard`, `pointer`, `fine-pointer`, `touch`, `pointer-lock`, and `gamepad`.
@@ -62,6 +63,13 @@ maximizes the app inside the existing StationNet tab; it is independent of
 pointer lock and browser fullscreen. Users can always leave it with the visible
 **Exit immersive** control or Escape (after Escape has first released pointer
 lock, when active).
+
+`fullscreen_target` is `"application"` (the default) or `"canvas"`. Choose
+`application` when the program has menus, toolbars, buttons, touch gamepad
+controls, or other interface elements outside its canvas. It shows the entire
+program in a scrollable fullscreen viewport. Choose `canvas` only when the
+canvas itself contains the complete interactive program and its controls; it
+fits the rendered canvas within the screen at its original aspect ratio.
 
 ## Create a package
 
@@ -242,8 +250,11 @@ StationNet application layout. `ui.presentation.mode` reports `standard` or
 `immersive`, and `onChange(handler)` observes changes made by either the app or
 the user-facing controls.
 
-The toolbar's **Fullscreen** button enters browser fullscreen. Applications can
-also call `await ui.presentation.requestFullscreen()`: StationNet shows a trusted
+The toolbar's **Fullscreen** button enters browser fullscreen using the manifest's
+`fullscreen_target`. Applications can also call
+`await ui.presentation.requestFullscreen({ target: "canvas" })` or use
+`{ target: "application" }` to override the manifest for that request. Omitting
+the argument uses the manifest target. StationNet shows a trusted
 **Enter Fullscreen** prompt, and the browser request runs only when the user
 presses that button. The promise resolves after entry and rejects on cancellation,
 denial, or unsupported devices. `await ui.presentation.exitFullscreen()` leaves
@@ -257,9 +268,11 @@ and the running application keeps its state. `enterImmersive()` and
 as its first argument. Its second argument has `width`, `height`, `orientation`,
 `mode`, and `fullscreen`, matching `await ui.display.viewport()`. It fires when
 the mode or fullscreen state changes and when the available space or orientation
-changes. Both dimensions are available CSS pixels. Canvas bitmaps scale and
-center with their original aspect ratio; pointer events still use the canvas's
-logical coordinates. Touch gamepad controls remain below the canvas in fullscreen.
+changes. Both dimensions are available CSS pixels. In canvas fullscreen, the
+canvas scales and centers with its original aspect ratio; pointer events still
+use the canvas's logical coordinates. Application fullscreen keeps all controls
+available and scrolls vertically when its interface is taller than the screen.
+Touch gamepad controls belong in application fullscreen.
 
 ```js
 StationNet.start((ui) => {

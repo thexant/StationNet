@@ -8,7 +8,7 @@
   <link rel="icon" type="image/png" href="{{ url_for('pwa.icon', size=192) }}">
   <link rel="apple-touch-icon" href="{{ url_for('pwa.icon', size=192) }}">
   <title>{% block title %}StationNet{% endblock %}{% if g.station %} :: {{ g.station.name }}{% endif %}</title>
-  <link rel="stylesheet" href="{{ url_for('static',filename='station.css',v='masthead-center-1') }}">
+  <link rel="stylesheet" href="{{ url_for('static',filename='station.css',v='fullscreen-layout-3') }}">
   <link rel="stylesheet" href="{{ url_for('station.masthead_css') }}">
   <script src="{{ url_for('static',filename='station.js',v='click-nav-1') }}" defer></script>
   <script src="{{ url_for('static',filename='pwa.js',v='1') }}" defer></script>
