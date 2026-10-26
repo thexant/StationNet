@@ -4,6 +4,7 @@ import binascii
 import hmac
 import json
 import secrets
+import sqlite3
 
 from flask import Blueprint, abort, g, jsonify, render_template, request, session
 
@@ -72,6 +73,77 @@ def sheets():
 @login_required
 def presentations():
     return render_template("office/presentations.html")
+
+
+@bp.get("/agenda")
+@login_required
+def agenda():
+    return render_template("office/agenda.html")
+
+
+@bp.get("/agenda/api")
+@login_required
+def agenda_get():
+    row = get_db().execute(
+        "SELECT envelope,revision,created_at,updated_at FROM office_agendas WHERE owner_id=?",
+        (g.user["id"],),
+    ).fetchone()
+    if row is None:
+        return jsonify(agenda=None)
+    return jsonify(agenda={
+        "envelope": json.loads(row["envelope"]), "revision": row["revision"],
+        "created_at": row["created_at"], "updated_at": row["updated_at"],
+    })
+
+
+@bp.post("/agenda/api")
+@login_required
+def agenda_create():
+    failure = _csrf()
+    if failure:
+        return failure
+    envelope = _envelope(MAX_SHEET_ENVELOPE_BYTES)
+    if envelope is None:
+        return jsonify(error="Invalid encrypted agenda."), 400
+    database = get_db()
+    try:
+        database.execute(
+            "INSERT INTO office_agendas(owner_id,envelope) VALUES(?,?)",
+            (g.user["id"], envelope),
+        )
+        database.commit()
+    except sqlite3.IntegrityError:
+        return jsonify(error="Revision conflict. This agenda was created in another tab or device.", revision=1), 409
+    return jsonify(revision=1), 201
+
+
+@bp.put("/agenda/api")
+@login_required
+def agenda_update():
+    failure = _csrf()
+    if failure:
+        return failure
+    payload = request.get_json(silent=True) or {}
+    envelope = _envelope(MAX_SHEET_ENVELOPE_BYTES)
+    revision = payload.get("revision")
+    if envelope is None or type(revision) is not int or revision < 1:
+        return jsonify(error="Invalid encrypted agenda or revision."), 400
+    database = get_db()
+    cursor = database.execute(
+        "UPDATE office_agendas SET envelope=?,revision=revision+1,updated_at=CURRENT_TIMESTAMP "
+        "WHERE owner_id=? AND revision=?",
+        (envelope, g.user["id"], revision),
+    )
+    if cursor.rowcount:
+        database.commit()
+        return jsonify(revision=revision + 1)
+    row = database.execute(
+        "SELECT revision FROM office_agendas WHERE owner_id=?", (g.user["id"],)
+    ).fetchone()
+    if row is None:
+        return jsonify(error="Agenda no longer exists."), 404
+    return jsonify(error="Revision conflict. This agenda changed in another tab or device.",
+                   revision=row["revision"]), 409
 
 
 @bp.post("/documents/api/vault")

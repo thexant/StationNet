@@ -90,7 +90,8 @@ def test_office_programs_remain_available_without_navigation_links(tmp_path):
     assert b'data-program-filter="Office"' in programs
     for slug, destination in (("office-sheets", "/office/sheets"),
                               ("office-documents", "/office/documents"),
-                              ("office-presentations", "/office/presentations")):
+                              ("office-presentations", "/office/presentations"),
+                              ("office-agenda", "/office/agenda")):
         assert programs.count(f'data-program-row data-slug="{slug}"'.encode()) == 1
         response = client.get(f"/games-apps/{slug}")
         assert response.status_code == 302
@@ -295,3 +296,43 @@ def test_presentations_are_owner_scoped_encrypted_and_revision_checked(tmp_path)
             "SELECT envelope FROM office_presentations WHERE id=?", (presentation_id,)
         ).fetchone()
         assert "opaque encrypted slide payload tag" not in row["envelope"]
+
+
+def test_agenda_uses_shared_vault_and_owner_scoped_encrypted_store(tmp_path):
+    app, sysop_id = _configured_app(tmp_path)
+    with app.app_context():
+        database = get_db()
+        database.execute("UPDATE station SET office_enabled=1 WHERE id=1")
+        member_id = database.execute(
+            "INSERT INTO users(username,callsign,password_hash) VALUES(?,?,?)",
+            ("planner", "PLN-1", "unused"),
+        ).lastrowid
+        database.commit()
+    owner, other = app.test_client(), app.test_client()
+    _sign_in(owner, member_id)
+    _sign_in(other, sysop_id)
+    assert b"AGENDA" in owner.get("/office").data
+    assert b"OFFICE Password" in owner.get("/office/agenda").data
+    salt = owner.post("/office/documents/api/vault", headers={"X-CSRF-Token": "test-token"}).json
+    assert owner.post("/office/documents/api/vault", headers={"X-CSRF-Token": "test-token"}).json == salt
+    assert owner.get("/office/agenda/api").json == {"agenda": None}
+    envelope = {
+        "v": 1,
+        "iv": base64.b64encode(b"twelve-bytes").decode(),
+        "data": base64.b64encode(b"opaque agenda ciphertext tag").decode(),
+    }
+    assert owner.post("/office/agenda/api", json={"envelope": envelope}).status_code == 400
+    assert owner.post("/office/agenda/api", json={"envelope": {"v": 1}}, headers={"X-CSRF-Token": "test-token"}).status_code == 400
+    created = owner.post("/office/agenda/api", json={"envelope": envelope}, headers={"X-CSRF-Token": "test-token"})
+    assert created.status_code == 201 and created.json["revision"] == 1
+    assert owner.post("/office/agenda/api", json={"envelope": envelope}, headers={"X-CSRF-Token": "test-token"}).status_code == 409
+    assert owner.get("/office/agenda/api").json["agenda"]["envelope"] == envelope
+    assert other.get("/office/agenda/api").json == {"agenda": None}
+    assert owner.put("/office/agenda/api", json={"envelope": envelope, "revision": 1}).status_code == 400
+    assert other.put("/office/agenda/api", json={"envelope": envelope, "revision": 1}, headers={"X-CSRF-Token": "test-token"}).status_code == 404
+    updated = owner.put("/office/agenda/api", json={"envelope": envelope, "revision": 1}, headers={"X-CSRF-Token": "test-token"})
+    assert updated.json["revision"] == 2
+    assert owner.put("/office/agenda/api", json={"envelope": envelope, "revision": 1}, headers={"X-CSRF-Token": "test-token"}).status_code == 409
+    with app.app_context():
+        row = get_db().execute("SELECT envelope FROM office_agendas WHERE owner_id=?", (member_id,)).fetchone()
+        assert "opaque agenda ciphertext tag" not in row["envelope"]

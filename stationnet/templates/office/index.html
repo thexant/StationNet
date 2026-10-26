@@ -5,7 +5,7 @@
 <section class="terminal-card">
   <p class="eyebrow">STATIONNET OFFICE</p>
   <h1>Office</h1>
-  <p>Choose an Office program. Unlock once per browser tab to use all three.</p>
+  <p>Choose an Office program. Unlock once per browser tab to use the suite.</p>
 </section>
 <section class="office-programs" aria-label="Office programs">
   <a class="terminal-card office-program" href="{{ url_for('office.documents') }}">
@@ -22,6 +22,11 @@
     <h2>PRESENTATIONS</h2>
     <p>Create, present, import, and export private slide decks.</p>
     <span>OPEN PRESENTATIONS →</span>
+  </a>
+  <a class="terminal-card office-program" href="{{ url_for('office.agenda') }}">
+    <h2>AGENDA</h2>
+    <p>Plan your days, track tasks, and keep contacts together.</p>
+    <span>OPEN AGENDA →</span>
   </a>
 </section>
 {% endblock %}

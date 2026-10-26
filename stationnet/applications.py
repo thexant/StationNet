@@ -83,6 +83,8 @@ OFFICE_PROGRAMS = (
                 "StationNet", "1", OFFICE_CATEGORY, launch_endpoint="office.documents"),
     Application("office-presentations", "Presentations", "Create and edit private presentations.",
                 "StationNet", "1", OFFICE_CATEGORY, launch_endpoint="office.presentations"),
+    Application("office-agenda", "Agenda", "Plan calendars, tasks, and contacts privately.",
+                "StationNet", "1", OFFICE_CATEGORY, launch_endpoint="office.agenda"),
 )
 
 

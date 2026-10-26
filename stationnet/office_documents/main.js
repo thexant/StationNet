@@ -268,7 +268,8 @@ function initialize() {
       const result = await requestJson(api);
       const sheets = await requestJson(app.dataset.sheetsApi);
       const presentations = await requestJson(app.dataset.presentationsApi);
-      if (!result.documents.length && !sheets.sheets.length && !presentations.presentations.length) {
+      const agenda = await requestJson(app.dataset.agendaApi);
+      if (!result.documents.length && !sheets.sheets.length && !presentations.presentations.length && !agenda.agenda) {
         const confirmRow = $('#document-confirm-row');
         if (confirmRow.hidden) {
           confirmRow.hidden = false;
@@ -283,6 +284,7 @@ function initialize() {
       if (result.documents.length) decrypt(result.documents[0].envelope);
       else if (sheets.sheets.length) decrypt(sheets.sheets[0].envelope);
       else if (presentations.presentations.length) decrypt(presentations.presentations[0].envelope);
+      else if (agenda.agenda) decrypt(agenda.agenda.envelope);
       rememberOfficeKey(key, csrf);
       $('#document-passphrase').value = '';
       $('#document-passphrase-confirm').value = '';
