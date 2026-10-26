@@ -8,7 +8,10 @@
       <h1>MUD World Builder</h1>
       <p class="muted">Create rooms and connect them with server-validated exits. Changes are live for players.</p>
     </div>
-    {% if g.station.mud_enabled %}<a class="button secondary" href="{{ url_for('mud.index') }}">OPEN MUD</a>{% endif %}
+    <div class="button-row">
+      <a class="button secondary" href="{{ url_for('mud.builder_export_world') }}">EXPORT WORLD ZIP</a>
+      {% if g.station.mud_enabled %}<a class="button secondary" href="{{ url_for('mud.index') }}">OPEN MUD</a>{% endif %}
+    </div>
   </header>
 
   <nav class="subnav settings-jump-nav" aria-label="World builder sections"><a href="#create-room-heading">ROOMS</a><a href="#create-item-heading">ITEMS</a><a href="#npc-heading">NPCS</a><a href="#quest-heading">QUESTS</a><a href="#builder-rooms">EDIT ROOMS</a></nav>

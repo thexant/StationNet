@@ -326,6 +326,33 @@
     <label>Portal room description<textarea name="mud_portal_description" maxlength="2000" required>{{ mud_portal.description }}</textarea><small>The gameplay explanation and gateway controls are system-managed and cannot be edited here or in the world builder.</small></label>
     <button>SAVE MUD MODES</button>
   </form>
+  <section id="mud-worlds" aria-labelledby="mud-worlds-heading">
+    <h3 id="mud-worlds-heading">Traditional Worlds</h3>
+    <p class="muted">Build a world from files and import its ZIP, or export the current builder world. World files live in <code>data/mud_worlds/</code>. See the world creation README there for the format.</p>
+    <p><a href="{{ url_for('station.download_mud_world_template') }}">DOWNLOAD WORLD TEMPLATE ZIP</a></p>
+    <p><a href="{{ url_for('mud.builder_export_world') }}">EXPORT ACTIVE WORLD ZIP</a></p>
+    <form method="post" action="{{ url_for('station.import_mud_world') }}" enctype="multipart/form-data" class="form-grid">
+      <input type="hidden" name="csrf_token" value="{{ session.csrf_token }}">
+      <label>World ZIP<input type="file" name="world_file" accept=".zip,application/zip" required></label>
+      <button>IMPORT WORLD</button>
+    </form>
+    {% if mud_world_list|length > 1 %}
+    <form method="post" action="{{ url_for('station.activate_mud_world') }}" class="form-grid">
+      <input type="hidden" name="csrf_token" value="{{ session.csrf_token }}">
+      <label>Active world<select name="world_id" required>{% for world in mud_world_list %}<option value="{{ world.id }}" {% if world.active %}selected{% endif %}>{{ world.name }} by {{ world.author }}</option>{% endfor %}</select></label>
+      <small>Players in the traditional world move to the selected world's starting room and receive a notice.</small>
+      <button>SELECT ACTIVE WORLD</button>
+    </form>
+    {% endif %}
+    {% if mud_world_list|selectattr('imported')|list %}
+    <form method="post" action="{{ url_for('station.remove_mud_world') }}" class="form-grid">
+      <input type="hidden" name="csrf_token" value="{{ session.csrf_token }}">
+      <label>Remove custom world<select name="world_id" required><option value="">Select a world</option>{% for world in mud_world_list if world.imported %}<option value="{{ world.id }}">{{ world.name }}{% if world.active %} (active; switch first){% endif %}</option>{% endfor %}</select></label>
+      <label class="switch"><input type="checkbox" name="confirm_remove" required> Confirm world removal</label>
+      <button class="secondary">REMOVE WORLD</button>
+    </form>
+    {% endif %}
+  </section>
   <section id="dungeon-themes" aria-labelledby="dungeon-themes-heading">
     <h3 id="dungeon-themes-heading">Dungeon Themes</h3>
     <p class="muted">Copy the template in <code>data/dungeons/</code>, set a unique ID, name, and author, then import the JSON file. New runs can use it immediately.</p>

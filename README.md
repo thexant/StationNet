@@ -2,6 +2,8 @@
 
 StationNet is a self-hosted, browser-accessible communications station inspired by BBS software, monochrome terminals, early computer networks, and amateur radio. It provides local station setup, accounts, a responsive terminal workspace, community services, an optional native MUD with persistent rooms and navigation, and an ephemeral shared radio with configurable bands, live Morse/CW keying, simplified SSTV picture transmissions, and half-duplex WebRTC voice. It requires no Docker, domain, cloud account, or external database.
 
+Traditional MUD worlds can be shared as ZIP files in `data/mud_worlds/`. SYSOP Settings can import, select, and remove custom worlds; the world builder exports the active world. Packages include rooms, exits, and optional items, NPCs, dialogue, quests, and placements. See the [file-authored world guide](stationnet/mud_world_templates/README.md) for the format and examples.
+
 ## Why this stack
 
 - **Python 3.11+ and Flask** are small, readable, and cross-platform.

@@ -514,6 +514,15 @@ CREATE TABLE IF NOT EXISTS mud_world_rooms (
  is_start INTEGER NOT NULL DEFAULT 0 CHECK(is_start IN (0,1)),
  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);
+CREATE TABLE IF NOT EXISTS mud_world_packages (
+ id TEXT PRIMARY KEY,
+ name TEXT NOT NULL,
+ author TEXT NOT NULL,
+ start_room_id TEXT NOT NULL,
+ imported INTEGER NOT NULL DEFAULT 1 CHECK(imported IN (0,1)),
+ active INTEGER NOT NULL DEFAULT 0 CHECK(active IN (0,1)));
+CREATE UNIQUE INDEX IF NOT EXISTS idx_mud_world_one_active
+ ON mud_world_packages(active) WHERE active=1;
 CREATE UNIQUE INDEX IF NOT EXISTS idx_mud_world_single_start
  ON mud_world_rooms(is_start) WHERE is_start=1;
 CREATE TABLE IF NOT EXISTS mud_world_exits (
@@ -1074,6 +1083,7 @@ def init_db():
     _migrate_mud_character_creation(database)
     _initialize_mud_characters(database)
     _initialize_mud_world(database)
+    _migrate_mud_world_packages(database)
     database.execute("INSERT OR IGNORE INTO mud_portal_settings(id) VALUES(1)")
     database.execute("INSERT OR IGNORE INTO mud_crossover_settings(id) VALUES(1)")
     database.execute(
@@ -1275,6 +1285,27 @@ def _initialize_mud_world(database):
                 "Starting Room",
                 "A quiet, unadorned room waiting for this station's world to take shape.",
             ),
+        )
+
+
+def _migrate_mud_world_packages(database):
+    """Adopt existing builder rooms as the station's editable home world."""
+    columns = {row["name"] for row in database.execute("PRAGMA table_info(mud_world_rooms)")}
+    if "world_id" not in columns:
+        database.execute("ALTER TABLE mud_world_rooms ADD COLUMN world_id TEXT NOT NULL DEFAULT 'stationnet'")
+    for table in ("mud_item_definitions", "mud_npc_definitions", "mud_conversations", "mud_quests"):
+        columns = {row["name"] for row in database.execute(f"PRAGMA table_info({table})")}
+        if "world_id" not in columns:
+            database.execute(f"ALTER TABLE {table} ADD COLUMN world_id TEXT NOT NULL DEFAULT 'stationnet'")
+    start = database.execute("SELECT id FROM mud_world_rooms WHERE is_start=1").fetchone()
+    if start:
+        database.execute(
+            "INSERT OR IGNORE INTO mud_world_packages(id,name,author,start_room_id,imported,active) "
+            "VALUES('stationnet','Station World','Station builders',?,0,1)", (start["id"],)
+        )
+        database.execute(
+            "UPDATE mud_world_packages SET start_room_id=? WHERE id='stationnet' AND active=1",
+            (start["id"],),
         )
 
 

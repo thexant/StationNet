@@ -3,6 +3,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from functools import wraps
 import hashlib
+from io import BytesIO
 import json
 import math
 import re
@@ -12,7 +13,7 @@ import sqlite3
 import uuid
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-from flask import Blueprint, abort, flash, g, jsonify, redirect, render_template, request, session, url_for
+from flask import Blueprint, abort, flash, g, jsonify, redirect, render_template, request, send_file, session, url_for
 
 from .auth import admin_required, login_required
 from .db import get_db
@@ -516,7 +517,11 @@ def _reconcile_player_location(database, user_id):
     valid = False
     if location is not None:
         if location["mode"] == "traditional" and modes["traditional"]:
-            valid = location["location_type"] == "world_room"
+            valid = (location["location_type"] == "world_room" and database.execute(
+                "SELECT 1 FROM mud_world_rooms WHERE id=? "
+                "AND world_id=(SELECT id FROM mud_world_packages WHERE active=1)",
+                (location["location_key"],),
+            ).fetchone() is not None)
         elif location["mode"] == "procedural" and modes["procedural"]:
             valid = location["location_type"] in {"portal", "dungeon_instance"}
             if location["location_type"] == "dungeon_instance":
@@ -536,7 +541,9 @@ def _reconcile_player_location(database, user_id):
         ).fetchone()
         room_id = saved["room_id"] if saved else None
         if room_id is None or database.execute(
-            "SELECT 1 FROM mud_world_rooms WHERE id=?", (room_id,),
+            "SELECT 1 FROM mud_world_rooms WHERE id=? "
+            "AND world_id=(SELECT id FROM mud_world_packages WHERE active=1)",
+            (room_id,),
         ).fetchone() is None:
             room_id = _start_room(database)["id"]
         _set_player_location(database, user_id, "traditional", "world_room", room_id)
@@ -923,8 +930,10 @@ def _describe_room(database, room, viewer_id=None):
     people = ", ".join(item["character_name"] for item in occupants) if occupants else "none"
     items = ", ".join(item["name"] for item in _room_item_rows(database, room["id"], instance_id)) or "none"
     npcs = ", ".join(item["name"] for item in _room_npc_rows(database, room["id"], instance_id)) or "none"
-    instructions = (f"\n\n{room['instructions']}" if room["id"] == PORTAL_ROOM_ID else
-                    f"\n\n{_expedition_status_text(database, viewer_id)}" if instance_id and viewer_id else "")
+    instructions = (
+        f"\n\n{room['instructions']}"
+        if room["id"] == PORTAL_ROOM_ID else ""
+    )
     modes = _mode_settings(database)
     if room["id"] == PORTAL_ROOM_ID and modes["traditional"]:
         routes = "OUT — Traditional World"
@@ -3805,7 +3814,8 @@ def _valid_exit_fields(database, exit_id=None):
     direction = request.form.get("direction", "").strip().casefold() or None
     room_ids = {
         row["id"] for row in database.execute(
-            "SELECT id FROM mud_world_rooms WHERE id IN (?,?)", (from_room_id, to_room_id)
+            "SELECT id FROM mud_world_rooms WHERE id IN (?,?) AND world_id=(SELECT id FROM mud_world_packages WHERE active=1)",
+            (from_room_id, to_room_id)
         )
     }
     if from_room_id not in room_ids or to_room_id not in room_ids:
@@ -3834,6 +3844,7 @@ def builder():
         "FROM mud_world_rooms AS r "
         "LEFT JOIN mud_world_locations AS l ON l.room_id=r.id "
         "LEFT JOIN mud_presence AS p ON p.room_id=r.id "
+        "WHERE r.world_id=(SELECT id FROM mud_world_packages WHERE active=1) "
         "GROUP BY r.id ORDER BY r.is_start DESC,r.name COLLATE NOCASE,r.id"
     ).fetchall()
     rooms = [dict(row) for row in room_rows]
@@ -3853,7 +3864,7 @@ def builder():
     ).fetchall() if g.user["is_admin"] else []
     definitions = []
     for row in database.execute(
-        "SELECT d.* FROM mud_item_definitions AS d WHERE NOT EXISTS "
+        "SELECT d.* FROM mud_item_definitions AS d WHERE d.world_id=(SELECT id FROM mud_world_packages WHERE active=1) AND NOT EXISTS "
         "(SELECT 1 FROM mud_dungeon_managed_definitions AS m WHERE m.definition_id=d.id) "
         "ORDER BY d.name COLLATE NOCASE,d.id"
     ):
@@ -3866,7 +3877,7 @@ def builder():
     for row in database.execute("SELECT i.id,i.room_id,d.name,d.item_type FROM mud_item_instances i JOIN mud_item_definitions d ON d.id=i.definition_id WHERE i.room_id IS NOT NULL ORDER BY d.name COLLATE NOCASE"):
         items_by_room.setdefault(row["room_id"], []).append(dict(row))
     conversations = [dict(row) for row in database.execute(
-        "SELECT c.* FROM mud_conversations AS c WHERE NOT EXISTS "
+        "SELECT c.* FROM mud_conversations AS c WHERE c.world_id=(SELECT id FROM mud_world_packages WHERE active=1) AND NOT EXISTS "
         "(SELECT 1 FROM mud_dungeon_managed_definitions AS m WHERE m.definition_id=c.id) "
         "ORDER BY c.name COLLATE NOCASE,c.id"
     )]
@@ -3883,7 +3894,7 @@ def builder():
         "SELECT d.*,p.maximum_health AS combat_maximum_health,p.attack AS combat_attack,"
         "p.defense AS combat_defense,p.experience_reward,p.respawn_seconds "
         "FROM mud_npc_definitions AS d LEFT JOIN mud_npc_combat_profiles AS p "
-        "ON p.npc_definition_id=d.id WHERE NOT EXISTS "
+        "ON p.npc_definition_id=d.id WHERE d.world_id=(SELECT id FROM mud_world_packages WHERE active=1) AND NOT EXISTS "
         "(SELECT 1 FROM mud_dungeon_managed_definitions AS m WHERE m.definition_id=d.id) "
         "ORDER BY d.name COLLATE NOCASE,d.id"
     )]
@@ -3904,7 +3915,7 @@ def builder():
     ):
         npcs_by_room.setdefault(row["room_id"], []).append(dict(row))
     quests = [dict(row) for row in database.execute(
-        "SELECT * FROM mud_quests ORDER BY name COLLATE NOCASE,id"
+        "SELECT * FROM mud_quests WHERE world_id=(SELECT id FROM mud_world_packages WHERE active=1) ORDER BY name COLLATE NOCASE,id"
     )]
     objectives_by_quest = {item["id"]: [] for item in quests}
     rewards_by_quest = {item["id"]: [] for item in quests}
@@ -3924,6 +3935,23 @@ def builder():
         rewards_by_quest=rewards_by_quest, givers_by_quest=givers_by_quest,
         npc_equipment=npc_equipment, npc_combat_rewards=npc_combat_rewards,
     )
+
+
+@bp.get("/builder/export")
+@builder_required
+def builder_export_world():
+    from . import mud_worlds
+    database = get_db()
+    active = database.execute("SELECT id FROM mud_world_packages WHERE active=1").fetchone()
+    if active is None:
+        abort(404)
+    try:
+        payload = mud_worlds.export(database, active["id"])
+    except mud_worlds.WorldError as error:
+        flash(f"World export failed: {error}", "error")
+        return redirect(url_for("mud.builder"))
+    return send_file(BytesIO(payload), mimetype="application/zip", as_attachment=True,
+                     download_name=f"{active['id']}-world.zip")
 
 
 def _item_definition_fields():
@@ -3982,7 +4010,7 @@ def builder_create_conversation():
     if not 2 <= len(name) <= 80:
         flash("Conversation names must be between 2 and 80 characters.", "error"); return _builder_redirect()
     database = get_db(); conversation_id = f"world:conversation:{uuid.uuid4().hex}"
-    database.execute("INSERT INTO mud_conversations(id,name,created_by) VALUES(?,?,?)", (conversation_id, name, g.user["id"]))
+    database.execute("INSERT INTO mud_conversations(id,name,created_by,world_id) VALUES(?,?,?,(SELECT id FROM mud_world_packages WHERE active=1))", (conversation_id, name, g.user["id"]))
     database.commit(); flash(f"Conversation {name} created.", "success"); return _builder_redirect()
 
 
@@ -4146,7 +4174,7 @@ def builder_create_npc_definition():
     profile, equipment, error = _npc_combat_fields(database)
     if error: flash(error, "error"); return _builder_redirect()
     if fields[2] and database.execute("SELECT 1 FROM mud_conversations WHERE id=?", (fields[2],)).fetchone() is None: flash("Choose an existing conversation.", "error"); return _builder_redirect()
-    npc_id = f"world:npc-definition:{uuid.uuid4().hex}"; database.execute("INSERT INTO mud_npc_definitions(id,name,description,conversation_id,properties_json,behaviors_json,created_by) VALUES(?,?,?,?,?,?,?)", (npc_id, *fields, g.user["id"])); _save_npc_combat(database, npc_id, profile, equipment); database.commit()
+    npc_id = f"world:npc-definition:{uuid.uuid4().hex}"; database.execute("INSERT INTO mud_npc_definitions(id,name,description,conversation_id,properties_json,behaviors_json,created_by,world_id) VALUES(?,?,?,?,?,?,?,(SELECT id FROM mud_world_packages WHERE active=1))", (npc_id, *fields, g.user["id"])); _save_npc_combat(database, npc_id, profile, equipment); database.commit()
     flash(f"NPC definition {fields[0]} created.", "success"); return _builder_redirect()
 
 
@@ -4243,7 +4271,7 @@ def _quest_fields(database, quest_id=None):
 def builder_create_quest():
     validate_csrf(); database = get_db(); fields, error = _quest_fields(database)
     if error: flash(error, "error"); return _builder_redirect()
-    quest_id = f"world:quest:{uuid.uuid4().hex}"; database.execute("INSERT INTO mud_quests(id,name,description,prerequisite_quest_id,created_by) VALUES(?,?,?,?,?)", (quest_id, *fields, g.user["id"])); database.commit(); flash(f"Quest {fields[0]} created.", "success"); return _builder_redirect()
+    quest_id = f"world:quest:{uuid.uuid4().hex}"; database.execute("INSERT INTO mud_quests(id,name,description,prerequisite_quest_id,created_by,world_id) VALUES(?,?,?,?,?,(SELECT id FROM mud_world_packages WHERE active=1))", (quest_id, *fields, g.user["id"])); database.commit(); flash(f"Quest {fields[0]} created.", "success"); return _builder_redirect()
 
 
 @bp.post("/builder/quests/<path:quest_id>")
@@ -4313,7 +4341,7 @@ def builder_create_item_definition():
     validate_csrf(); fields, error = _item_definition_fields()
     if error: flash(error, "error"); return _builder_redirect()
     item_id = f"world:item-definition:{uuid.uuid4().hex}"
-    get_db().execute("INSERT INTO mud_item_definitions(id,name,description,item_type,properties_json,equipment_slot,created_by) VALUES(?,?,?,?,?,?,?)", (item_id, *fields, g.user["id"])); get_db().commit()
+    get_db().execute("INSERT INTO mud_item_definitions(id,name,description,item_type,properties_json,equipment_slot,created_by,world_id) VALUES(?,?,?,?,?,?,?,(SELECT id FROM mud_world_packages WHERE active=1))", (item_id, *fields, g.user["id"])); get_db().commit()
     flash(f"Item definition {fields[0]} created.", "success"); return _builder_redirect()
 
 
@@ -4381,7 +4409,8 @@ def builder_create_room():
     room_id = f"world:room:{uuid.uuid4().hex}"
     database = get_db()
     database.execute(
-        "INSERT INTO mud_world_rooms(id,name,description) VALUES(?,?,?)",
+        "INSERT INTO mud_world_rooms(id,name,description,world_id) "
+        "VALUES(?,?,?,(SELECT id FROM mud_world_packages WHERE active=1))",
         (room_id, name, description),
     )
     database.commit()
@@ -4396,7 +4425,7 @@ def builder_update_room(room_id):
     name, description, error = _valid_room_fields()
     database = get_db()
     room = database.execute(
-        "SELECT id,name FROM mud_world_rooms WHERE id=?", (room_id,)
+        "SELECT id,name FROM mud_world_rooms WHERE id=? AND world_id=(SELECT id FROM mud_world_packages WHERE active=1)", (room_id,)
     ).fetchone()
     if room is None:
         abort(404)
@@ -4427,7 +4456,8 @@ def builder_delete_room(room_id):
     try:
         database.execute("BEGIN IMMEDIATE")
         room = database.execute(
-            "SELECT id,name,is_start FROM mud_world_rooms WHERE id=?", (room_id,)
+            "SELECT id,name,is_start FROM mud_world_rooms WHERE id=? "
+            "AND world_id=(SELECT id FROM mud_world_packages WHERE active=1)", (room_id,)
         ).fetchone()
         if room is None:
             abort(404)
@@ -4501,7 +4531,9 @@ def builder_update_exit(exit_id):
     validate_csrf()
     database = get_db()
     existing = database.execute(
-        "SELECT id,from_room_id FROM mud_world_exits WHERE id=?", (exit_id,)
+        "SELECT e.id,e.from_room_id FROM mud_world_exits e JOIN mud_world_rooms r "
+        "ON r.id=e.from_room_id WHERE e.id=? "
+        "AND r.world_id=(SELECT id FROM mud_world_packages WHERE active=1)", (exit_id,)
     ).fetchone()
     if existing is None:
         abort(404)
@@ -4524,7 +4556,9 @@ def builder_delete_exit(exit_id):
     validate_csrf()
     database = get_db()
     exit_row = database.execute(
-        "SELECT id,name,from_room_id FROM mud_world_exits WHERE id=?", (exit_id,)
+        "SELECT e.id,e.name,e.from_room_id FROM mud_world_exits e JOIN mud_world_rooms r "
+        "ON r.id=e.from_room_id WHERE e.id=? "
+        "AND r.world_id=(SELECT id FROM mud_world_packages WHERE active=1)", (exit_id,)
     ).fetchone()
     if exit_row is None:
         abort(404)
@@ -4546,7 +4580,8 @@ def builder_set_start():
     try:
         database.execute("BEGIN IMMEDIATE")
         room = database.execute(
-            "SELECT id,name FROM mud_world_rooms WHERE id=?", (room_id,)
+            "SELECT id,name FROM mud_world_rooms WHERE id=? "
+            "AND world_id=(SELECT id FROM mud_world_packages WHERE active=1)", (room_id,)
         ).fetchone()
         if room is None:
             flash("Choose an existing room as the starting location.", "error")
@@ -4557,6 +4592,7 @@ def builder_set_start():
             "UPDATE mud_world_rooms SET is_start=1,updated_at=CURRENT_TIMESTAMP WHERE id=?",
             (room_id,),
         )
+        database.execute("UPDATE mud_world_packages SET start_room_id=? WHERE active=1", (room_id,))
         database.execute(
             "UPDATE mud_world_locations SET room_id=?,updated_at=CURRENT_TIMESTAMP WHERE room_id IS NULL",
             (room_id,),

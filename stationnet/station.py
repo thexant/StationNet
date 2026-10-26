@@ -12,7 +12,7 @@ from PIL import Image, ImageOps, UnidentifiedImageError
 from .auth import admin_required, invitation_digest
 from .ansi import available_header_fonts, is_available_header_font, station_banner
 from .db import get_db
-from . import dungeons
+from . import dungeons, mud_worlds
 from . import themes
 from .markdown import render_markdown
 from .radio import (can_host_broadcast, effective_access, format_frequency,
@@ -473,6 +473,62 @@ def mud_settings():
     return redirect(url_for("station.settings") + "#mud-service")
 
 
+@bp.post("/sysop/settings/mud-worlds/import")
+@admin_required
+def import_mud_world():
+    validate_csrf()
+    destination = url_for("station.settings") + "#mud-worlds"
+    uploaded = request.files.get("world_file")
+    if uploaded is None or not uploaded.filename or not uploaded.filename.lower().endswith(".zip"):
+        flash("Choose a world ZIP file to import.", "error")
+        return redirect(destination)
+    try:
+        world = mud_worlds.install(get_db(), uploaded.read(mud_worlds.MAX_ZIP_BYTES + 1))
+    except (mud_worlds.WorldError, sqlite3.Error, OSError) as error:
+        flash(f"World import failed: {error}", "error")
+    else:
+        flash(f"Imported world {world['name']} by {world['author']}.", "success")
+    return redirect(destination)
+
+
+@bp.get("/sysop/settings/mud-worlds/template")
+@admin_required
+def download_mud_world_template():
+    return send_file(BytesIO(mud_worlds.template_bytes()), mimetype="application/zip",
+                     as_attachment=True, download_name="mud-world-template.zip")
+
+
+@bp.post("/sysop/settings/mud-worlds/activate")
+@admin_required
+def activate_mud_world():
+    validate_csrf()
+    destination = url_for("station.settings") + "#mud-worlds"
+    try:
+        changed = mud_worlds.activate(get_db(), request.form.get("world_id", ""))
+    except mud_worlds.WorldError as error:
+        flash(str(error), "error")
+    else:
+        flash("Active MUD world changed." if changed else "That world is already active.", "success")
+    return redirect(destination)
+
+
+@bp.post("/sysop/settings/mud-worlds/remove")
+@admin_required
+def remove_mud_world():
+    validate_csrf()
+    destination = url_for("station.settings") + "#mud-worlds"
+    if request.form.get("confirm_remove") != "on":
+        flash("Confirm world removal first.", "error")
+        return redirect(destination)
+    try:
+        mud_worlds.remove(get_db(), request.form.get("world_id", ""))
+    except mud_worlds.WorldError as error:
+        flash(str(error), "error")
+    else:
+        flash("Custom world removed.", "success")
+    return redirect(destination)
+
+
 @bp.post("/sysop/settings/dungeons/import")
 @admin_required
 def import_dungeon():
@@ -911,6 +967,9 @@ def settings():
     mud_crossover = database.execute(
         "SELECT progression_shared,inventory_shared FROM mud_crossover_settings WHERE id=1"
     ).fetchone()
+    mud_world_list = database.execute(
+        "SELECT id,name,author,imported,active FROM mud_world_packages ORDER BY active DESC,name COLLATE NOCASE"
+    ).fetchall()
     mud_daily_settings_row = database.execute(
         "SELECT * FROM mud_daily_dungeon_settings WHERE id=1"
     ).fetchone()
@@ -953,6 +1012,7 @@ def settings():
                            rules_by_group=rules_by_group, invitations=invitations,
                            mud_portal=mud_portal,
                            mud_crossover=mud_crossover,
+                           mud_world_list=mud_world_list,
                            mud_daily_settings=mud_daily_settings_row,
                            mud_daily_themes=mud_daily_themes,
                            configured_daily_themes=configured_daily_themes,

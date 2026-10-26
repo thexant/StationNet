@@ -4,7 +4,7 @@ import secrets
 from datetime import timedelta
 from pathlib import Path
 from flask import Flask, g, jsonify, redirect, render_template, request, url_for
-from . import announcements, applications, archive, auth, board, broadcast, chat, db, downloads, dungeons, events, feeds, imageboard, kiwix, mail, moderation, mud, office, programs, pwa, radio, station, themes, users, videos
+from . import announcements, applications, archive, auth, board, broadcast, chat, db, downloads, dungeons, events, feeds, imageboard, kiwix, mail, moderation, mud, mud_worlds, office, programs, pwa, radio, station, themes, users, videos
 from .ansi import station_banner
 from .realtime import DirectChatStore
 from .radio import RadioStore
@@ -39,6 +39,7 @@ def create_app(test_config=None):
     db.init_app(app)
     themes.init_app(app)
     dungeons.init_app(app)
+    mud_worlds.init_app(app)
     app.extensions["direct_chat"] = DirectChatStore()
     app.extensions["radio"] = RadioStore()
     app.extensions["hosted_broadcasts"] = broadcast.HostedBroadcastStore(
