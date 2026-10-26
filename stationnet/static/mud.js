@@ -7,7 +7,6 @@ for(const mud of document.querySelectorAll("[data-mud]")){
   const latestButton=mud.querySelector("[data-mud-jump-latest]");
   const roomButton=mud.querySelector("[data-mud-jump-room]");
   const clearButton=mud.querySelector("[data-mud-clear-events]");
-  const actions=mud.querySelector("[data-mud-actions]");
   const form=mud.querySelector("[data-mud-command]");
   const input=form.querySelector("[data-command-input]");
   const error=mud.querySelector("[data-mud-error]");
@@ -90,35 +89,6 @@ for(const mud of document.querySelectorAll("[data-mud]")){
     if(follow&&roomView.hidden)scrollEventsToLatest();
     else latestButton.classList.add("is-unread");
   };
-  const renderActions=available=>{
-    const groups=new Map();
-    for(const action of available||[]){
-      const name=action.group||"ACTIONS";
-      if(!groups.has(name))groups.set(name,[]);
-      groups.get(name).push(action);
-    }
-    actions.replaceChildren();
-    for(const [name,items] of groups){
-      const group=document.createElement("div");
-      group.className="mud-action-group";
-      group.dataset.actionGroup=name;
-      const heading=document.createElement("span");
-      heading.textContent=name;
-      const controls=document.createElement("div");
-      for(const action of items){
-        const button=document.createElement("button");
-        button.type="button";
-        button.className="secondary";
-        button.dataset.mudAction=action.key;
-        button.dataset.mudParameters=JSON.stringify(action.parameters||{});
-        button.title=action.description||"";
-        button.textContent=action.label;
-        controls.append(button);
-      }
-      group.append(heading,controls);
-      actions.append(group);
-    }
-  };
   const renderRoom=room=>{
     if(!room)return;
     roomName.textContent=room.name||"Unknown Location";
@@ -127,8 +97,8 @@ for(const mud of document.querySelectorAll("[data-mud]")){
     roomDescription.textContent=room.description||"";
     if(roomInstructions){roomInstructions.textContent=room.instructions||"";roomInstructions.hidden=!room.instructions}
     roomExits.textContent=(room.exits||[]).map(exit=>exit.direction||exit.name).join(", ")||"none";
-    if(roomItems)roomItems.textContent=(room.items||[]).map(item=>item.name).join(", ")||"none";
-    if(roomNpcs)roomNpcs.textContent=(room.npcs||[]).map(npc=>npc.name).join(", ")||"none";
+    if(roomItems)roomItems.textContent=(room.items||[]).map(item=>item.display_name||item.name).join(", ")||"none";
+    if(roomNpcs)roomNpcs.textContent=(room.npcs||[]).map(npc=>npc.display_name||npc.name).join(", ")||"none";
     occupants.replaceChildren();
     if(!room.occupants?.length){
       const empty=document.createElement("span");
@@ -170,7 +140,7 @@ for(const mud of document.querySelectorAll("[data-mud]")){
       const row=document.createElement("article");
       row.className=`mud-enemy ${enemy.status==="defeated"?"defeated":""}`.trim();
       const heading=document.createElement("span");
-      const name=document.createElement("strong");name.textContent=enemy.name;
+      const name=document.createElement("strong");name.textContent=enemy.display_name||enemy.name;
       const status=document.createElement("small");status.textContent=(enemy.status||"ready").toUpperCase();
       heading.append(name,status);
       const health=document.createElement("progress");health.max=enemy.maximum_health;health.value=enemy.health;
@@ -184,20 +154,13 @@ for(const mud of document.querySelectorAll("[data-mud]")){
     const fill=(node,items,slot)=>{
       node.replaceChildren();
       if(!items?.length){const empty=document.createElement("span");empty.className="muted";empty.textContent=slot?"nothing equipped":"nothing carried";node.append(empty);return}
-      for(const item of items){const button=document.createElement("button");button.type="button";button.className="secondary";button.dataset.mudAction="look";button.dataset.mudParameters=JSON.stringify({target:item.id});button.textContent=`${slot?`${(item.equipped_slot||"equipment").replaceAll("_"," ")}: `:""}${item.name}${item.acquired_run_id?" · RUN LOOT":""}`;node.append(button)}
+      for(const item of items){const label=document.createElement("span");label.textContent=`${slot?`${(item.equipped_slot||"equipment").replaceAll("_"," ")}: `:""}${item.display_name||item.name}${item.acquired_run_id?" · RUN LOOT":""}`;node.append(label)}
     };
     fill(carried,inventory.inventory,false);fill(equipped,inventory.equipment,true);
     if(hubInventory){
       hubInventory.replaceChildren();
       for(const item of [...inventory.inventory,...inventory.equipment]){
-        const row=document.createElement("div");row.className="mud-hub-item";
-        const label=document.createElement("span");label.textContent=item.name;row.append(label);
-        for(const [operation,action] of [["sell","shop"],["deposit","storage"]]){
-          const button=document.createElement("button");button.type="button";button.className="secondary";
-          button.dataset.mudAction=action;button.dataset.mudParameters=JSON.stringify({operation,item_id:item.id});
-          button.textContent=operation.toUpperCase();row.append(button);
-        }
-        hubInventory.append(row);
+        const label=document.createElement("span");label.textContent=item.name;hubInventory.append(label);
       }
       if(!hubInventory.childElementCount)hubInventory.textContent="nothing carried";
     }
@@ -209,15 +172,11 @@ for(const mud of document.querySelectorAll("[data-mud]")){
     hubCoins.textContent=hub.coins;
     hubShop.replaceChildren();
     for(const item of hub.shop||[]){
-      const button=document.createElement("button");button.type="button";button.className="secondary";
-      button.dataset.mudAction="shop";button.dataset.mudParameters=JSON.stringify({operation:"buy",item_id:item.id});
-      button.title=item.description;button.textContent=`BUY ${item.name} · ${item.price}`;hubShop.append(button);
+      const label=document.createElement("span");label.textContent=`${item.name} · ${item.price} coins`;hubShop.append(label);
     }
     hubStored.replaceChildren();
     for(const item of hub.storage||[]){
-      const button=document.createElement("button");button.type="button";button.className="secondary";
-      button.dataset.mudAction="storage";button.dataset.mudParameters=JSON.stringify({operation:"withdraw",item_id:item.id});
-      button.textContent=`WITHDRAW ${item.name}`;hubStored.append(button);
+      const label=document.createElement("span");label.textContent=item.name;hubStored.append(label);
     }
     if(!hubStored.childElementCount)hubStored.textContent="empty";
   };
@@ -240,7 +199,6 @@ for(const mud of document.querySelectorAll("[data-mud]")){
     busy=value;
     form.querySelector("button").disabled=value;
     clearButton.disabled=value;
-    for(const button of actions.querySelectorAll("button"))button.disabled=value;
   };
   const clearEvents=async()=>{
     if(busy)return;
@@ -288,7 +246,6 @@ for(const mud of document.querySelectorAll("[data-mud]")){
       renderHub(payload.hub);
       renderQuests(payload.quests);
       renderCombat(payload.combat);
-      if(payload.actions)renderActions(payload.actions);
       if(!response.ok)throw new Error(payload.error||"Action rejected by the station.");
       for(const event of payload.events||[])appendEvent(event);
       return true;
@@ -312,17 +269,12 @@ for(const mud of document.querySelectorAll("[data-mud]")){
       renderHub(payload.hub);
       renderQuests(payload.quests);
       renderCombat(payload.combat);
-      if(payload.actions)renderActions(payload.actions);
       for(const event of payload.events||[])appendEvent(event);
       if(error.textContent==="LINK RETRYING...")error.textContent="";
     }catch(problem){error.textContent=problem.message||"LINK RETRYING..."}
     finally{pollBusy=false}
   };
 
-  mud.addEventListener("click",event=>{
-    const button=event.target.closest("[data-mud-action]");
-    if(button)dispatch({action:button.dataset.mudAction,parameters:button.dataset.mudParameters||"{}"});
-  });
   roomButton.addEventListener("click",()=>showRoom(roomView.hidden));
   latestButton.addEventListener("click",scrollEventsToLatest);
   clearButton.addEventListener("click",clearEvents);

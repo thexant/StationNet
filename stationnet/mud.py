@@ -88,18 +88,17 @@ class ActionDefinition:
 class ActionRequest:
     definition: ActionDefinition
     parameters: dict = field(default_factory=dict)
-    input_method: str = "context"
+    input_method: str = "command"
     request_id: str = field(default_factory=lambda: uuid.uuid4().hex)
     client_id: str = ""
 
 
 class ActionRegistry:
-    """Maps every UI affordance and command alias to one action definition."""
+    """Maps command aliases to server-authoritative action definitions."""
 
     def __init__(self):
         self._actions = {}
         self._commands = {}
-        self._context_providers = []
 
     def register(self, definition):
         if definition.key in self._actions:
@@ -118,10 +117,6 @@ class ActionRegistry:
     def get(self, key):
         return self._actions.get(key)
 
-    def register_context_provider(self, provider):
-        """Add a future room, inventory, or encounter action contributor."""
-        self._context_providers.append(provider)
-
     def from_command(self, text):
         if len(text) > 500:
             raise ActionError("Commands cannot exceed 500 characters.")
@@ -136,26 +131,6 @@ class ActionRegistry:
             raise ActionError("Unknown command. Use /help to list available commands.")
         definition, prefix_arguments = command
         return definition, {"arguments": [*prefix_arguments, *parts[1:]]}
-
-    def contextual(self, user, database=None):
-        options = [
-            {
-                "key": item.key,
-                "label": item.label,
-                "description": item.description,
-                "group": item.group,
-                "parameters": {},
-            }
-            for item in self._actions.values()
-            if item.show_context and _authorized(item, user)
-        ]
-        for provider in self._context_providers:
-            for option in provider(database, user):
-                definition = self.get(option.get("key"))
-                if definition is not None and _authorized(definition, user):
-                    options.append(option)
-        return options
-
 
 def _authorized(definition, user):
     return definition.permission == "member" or (
@@ -396,11 +371,13 @@ def _help_action(_database, _user, parameters):
         "/north, /south, /east, /west, /up, /down, /in, /out — direction shortcuts\n"
         "/status — check the MUD service\n"
         "/character (or /stats) — view your character and progression\n"
+        "/inventory (or /inv) — list carried and equipped items\n"
         "/portal enters the portal hub; /world returns when available\n"
         "/expedition <theme> [difficulty] [size], /join <code>, /run\n"
         "/daily, /daily enter, /daily join <code> — today's station challenge\n"
         "/shop buy <name>, /shop sell <item>, /storage deposit|withdraw <item> at the hub\n"
-        "/complete at the exit; /retreat at the entrance keeps loot; /abandon loses it\n"
+        "/complete at the exit keeps loot; /abandon loses this run's loot\n"
+        "For duplicate NPC names, use a number: /attack Rat 2.\n"
         "Text without a leading slash is spoken to everyone in your room."
     )]
 
@@ -720,13 +697,38 @@ def _room_npc_rows(database, room_id, instance_id=None):
 
 def _npc_match(rows, target):
     key = " ".join(str(target).casefold().split())
-    matches = [row for row in rows if row["id"] == target or row["definition_id"] == target
-               or " ".join(row["name"].casefold().split()) == key]
+    rows = list(rows)
+    direct = [row for row in rows if row["id"] == target]
+    if direct:
+        return direct[0]
+    matches = [row for row in rows if " ".join(row["name"].casefold().split()) == key]
+    if not matches:
+        numbered = re.fullmatch(r"(.+?)\s+(?:\((\d+)\)|(\d+))", key)
+        if numbered:
+            name, number = numbered.group(1), int(numbered.group(2) or numbered.group(3))
+            matches = [row for row in rows if " ".join(row["name"].casefold().split()) == name]
+            if 1 <= number <= len(matches):
+                return matches[number - 1]
+            raise ActionError(f'No NPC named "{name}" has number {number}.')
+        matches = [row for row in rows if row["definition_id"] == target]
     if not matches:
         raise ActionError(f'You do not see an NPC matching "{target}" here.')
     if len(matches) > 1:
-        raise ActionError(f'More than one NPC matches "{target}". Use an NPC control.')
+        raise ActionError(f'More than one NPC matches "{target}". Use a number, such as "{matches[0]["name"]} 1" or "{matches[0]["name"]} 2".')
     return matches[0]
+
+
+def _numbered_npcs(rows):
+    rows = list(rows)
+    counts = {}
+    for row in rows:
+        key = " ".join(row["name"].casefold().split())
+        counts[key] = counts.get(key, 0) + 1
+    positions = {}
+    for row in rows:
+        key = " ".join(row["name"].casefold().split())
+        positions[key] = positions.get(key, 0) + 1
+        yield row, f"{row['name']} ({positions[key]})" if counts[key] > 1 else row["name"]
 
 
 def _json_properties(raw):
@@ -829,12 +831,13 @@ def _encounter_row(database, npc, create=True):
 def combat_state(database, user_id):
     room = _current_room(database, user_id)
     enemies = []
-    for npc in _room_npc_rows(database, room["id"], room.get("instance_id")):
+    for npc, display_name in _numbered_npcs(_room_npc_rows(database, room["id"], room.get("instance_id"))):
         encounter = _encounter_row(database, npc)
         if encounter is None:
             continue
         enemies.append({
             "id": npc["id"], "definition_id": npc["definition_id"], "name": npc["name"],
+            "display_name": display_name,
             "encounter_id": encounter["id"], "status": encounter["status"],
             "health": encounter["current_health"], "maximum_health": encounter["maximum_health"],
             "attack": npc["combat_attack"], "defense": npc["combat_defense"],
@@ -879,9 +882,10 @@ def _room_state(database, user_id):
     portal = room["id"] == PORTAL_ROOM_ID
     instance_id = room.get("instance_id")
     npcs = []
-    for npc in _room_npc_rows(database, room["id"], instance_id):
+    for npc, display_name in _numbered_npcs(_room_npc_rows(database, room["id"], instance_id)):
         entry = {"id": npc["id"], "definition_id": npc["definition_id"],
-                 "name": npc["name"], "description": npc["description"],
+                 "name": npc["name"], "display_name": display_name,
+                 "description": npc["description"],
                  "hostile": _npc_aggressive(npc)}
         if npc["combat_maximum_health"] is not None:
             encounter = _encounter_row(database, npc)
@@ -917,7 +921,9 @@ def _room_state(database, user_id):
         "mode": "procedural" if portal or instance_id else "traditional",
         "exits": exits,
         "occupants": _room_occupants(database, room["id"], user_id, instance_id),
-        "items": [{"id": item["id"], "name": item["name"], "item_type": item["item_type"]} for item in _room_item_rows(database, room["id"], instance_id)],
+        "items": [{"id": item["id"], "name": item["name"], "display_name": label,
+                   "item_type": item["item_type"]} for item, label in _numbered_items(
+                       _room_item_rows(database, room["id"], instance_id))],
         "npcs": npcs,
     }
 
@@ -928,8 +934,10 @@ def _describe_room(database, room, viewer_id=None):
     routes = ", ".join(_exit_label(item) for item in exits) if exits else "none"
     occupants = _room_occupants(database, room["id"], viewer_id, instance_id) if viewer_id else []
     people = ", ".join(item["character_name"] for item in occupants) if occupants else "none"
-    items = ", ".join(item["name"] for item in _room_item_rows(database, room["id"], instance_id)) or "none"
-    npcs = ", ".join(item["name"] for item in _room_npc_rows(database, room["id"], instance_id)) or "none"
+    items = ", ".join(label for _, label in _numbered_items(
+        _room_item_rows(database, room["id"], instance_id))) or "none"
+    npcs = ", ".join(label for _, label in _numbered_npcs(
+        _room_npc_rows(database, room["id"], instance_id))) or "none"
     instructions = (
         f"\n\n{room['instructions']}"
         if room["id"] == PORTAL_ROOM_ID else ""
@@ -997,13 +1005,38 @@ def _item_state(row):
 
 
 def _item_matches(rows, target):
-    key = " ".join(target.casefold().split())
-    matches = [row for row in rows if " ".join(row["name"].casefold().split()) == key or row["id"] == target]
+    rows = list(rows)
+    key = " ".join(str(target).casefold().split())
+    direct = [row for row in rows if row["id"] == target]
+    if direct:
+        return direct[0]
+    matches = [row for row in rows if " ".join(row["name"].casefold().split()) == key]
+    if not matches:
+        numbered = re.fullmatch(r"(.+?)\s+(?:\((\d+)\)|(\d+))", key)
+        if numbered:
+            name, number = numbered.group(1), int(numbered.group(2) or numbered.group(3))
+            matches = [row for row in rows if " ".join(row["name"].casefold().split()) == name]
+            if 1 <= number <= len(matches):
+                return matches[number - 1]
+            raise ActionError(f'No item named "{name}" has number {number}.')
     if not matches:
         raise ActionError(f'You cannot find "{target}".')
     if len(matches) > 1:
-        raise ActionError(f'More than one item matches "{target}". Use its item control.')
+        raise ActionError(f'More than one item matches "{target}". Use a number, such as "{matches[0]["name"]} 2".')
     return matches[0]
+
+
+def _numbered_items(rows):
+    rows = list(rows)
+    counts = {}
+    for row in rows:
+        key = " ".join(row["name"].casefold().split())
+        counts[key] = counts.get(key, 0) + 1
+    positions = {}
+    for row in rows:
+        key = " ".join(row["name"].casefold().split())
+        positions[key] = positions.get(key, 0) + 1
+        yield row, f"{row['name']} ({positions[key]})" if counts[key] > 1 else row["name"]
 
 
 def _inventory_rows(database, user_id, equipped=False):
@@ -1098,10 +1131,32 @@ def inventory_state(database, user_id):
     context = _inventory_context(database, user_id)
     inventory = [dict(row) for row in _inventory_rows(database, user_id)]
     equipment = [dict(row) for row in _inventory_rows(database, user_id, equipped=True)]
+    for items in (inventory, equipment):
+        for item, label in _numbered_items(items):
+            item["display_name"] = label
     return {
         "inventory": inventory, "equipment": equipment, "slots": EQUIPMENT_SLOTS,
         "mode": context["mode"], "sharing": "shared" if context["shared"] else "independent",
     }
+
+
+def _inventory_action(database, user, parameters):
+    if parameters.get("arguments"):
+        raise ActionError("The inventory command does not accept arguments.")
+    state = inventory_state(database, user["id"])
+    def list_items(items, equipped=False):
+        if not items:
+            return "  none"
+        return "\n".join(
+            f"  - {label}" +
+            (f" ({item['equipped_slot'].replace('_', ' ')})" if equipped else "") +
+            (" [run loot]" if item["acquired_run_id"] else "")
+            for item, label in _numbered_items(items)
+        )
+    scope = "shared across modes" if state["sharing"] == "shared" else f"{state['mode']} mode only"
+    return [EventDraft(
+        f"Inventory ({scope})\nCarried:\n{list_items(state['inventory'])}\n"
+        f"Equipped:\n{list_items(state['equipment'], True)}", event_type="item")]
 
 
 def _grant_item(database, user_id, definition_id, id_prefix="reward:item"):
@@ -1459,27 +1514,27 @@ def _examine_item(database, user, room, target):
         if _is_container(container) and container["is_open"]:
             candidates.extend(_container_rows(database, container["id"], user["id"]))
     key = " ".join(target.casefold().split())
-    matching = [item for item in candidates if item["id"] == target or " ".join(item["name"].casefold().split()) == key]
-    if not matching:
+    numbered = re.fullmatch(r"(.+?)\s+(?:\((\d+)\)|(\d+))", key)
+    name_key = numbered.group(1) if numbered else key
+    if not any(item["id"] == target or " ".join(item["name"].casefold().split()) in {key, name_key}
+               for item in candidates):
         return None
-    if len(matching) > 1:
-        raise ActionError(f'More than one item matches "{target}".')
-    return _describe_item(database, matching[0], user["id"])
+    return _describe_item(database, _item_matches(candidates, target), user["id"])
 
 
 examinations.register(_examine_item)
 
 
 def _examine_npc(_database, _user, room, target):
-    key = " ".join(target.casefold().split())
     instance_id = room.get("instance_id") if isinstance(room, dict) else None
-    matches = [npc for npc in _room_npc_rows(_database, room["id"], instance_id)
-               if npc["id"] == target or " ".join(npc["name"].casefold().split()) == key]
-    if not matches:
+    rows = _room_npc_rows(_database, room["id"], instance_id)
+    key = " ".join(target.casefold().split())
+    numbered = re.fullmatch(r"(.+?)\s+(?:\((\d+)\)|(\d+))", key)
+    name_key = numbered.group(1) if numbered else key
+    if not any(npc["id"] == target or npc["definition_id"] == target or
+               " ".join(npc["name"].casefold().split()) in {key, name_key} for npc in rows):
         return None
-    if len(matches) > 1:
-        raise ActionError(f'More than one NPC matches "{target}".')
-    npc = matches[0]
+    npc = _npc_match(rows, target)
     body = f"{npc['name']}\n{npc['description']}"
     if npc["combat_maximum_health"] is not None:
         encounter = _encounter_row(_database, npc)
@@ -1694,7 +1749,9 @@ def _attack_action(database, user, parameters):
     if not target:
         raise ActionError("Attack what?")
     room = _current_room(database, user["id"])
-    npc = _npc_match(_room_npc_rows(database, room["id"], room.get("instance_id")), target)
+    room_npcs = _room_npc_rows(database, room["id"], room.get("instance_id"))
+    npc = _npc_match(room_npcs, target)
+    display_name = next(label for row, label in _numbered_npcs(room_npcs) if row["id"] == npc["id"])
     if npc["combat_maximum_health"] is None:
         raise ActionError(f"{npc['name']} is not hostile.")
     encounter = _encounter_row(database, npc)
@@ -1730,7 +1787,7 @@ def _attack_action(database, user, parameters):
     audience_type = "instance" if room.get("instance_id") else "room"
     audience_key = room.get("instance_id") or room["id"]
     drafts = [EventDraft(
-        f"{character['display_name']} attacks {npc['name']} for {damage} damage "
+        f"{character['display_name']} attacks {display_name} for {damage} damage "
         f"({remaining}/{encounter['maximum_health']} health).",
         event_type="combat", audience_type=audience_type, audience_key=audience_key,
         recipient_ids=tuple(sorted(recipients)),
@@ -1740,7 +1797,7 @@ def _attack_action(database, user, parameters):
             "SELECT * FROM mud_combat_encounters WHERE id=?", (encounter["id"],),
         ).fetchone()
         drafts.append(EventDraft(
-            f"{npc['name']} is defeated.", event_type="victory", audience_type=audience_type,
+            f"{display_name} is defeated.", event_type="victory", audience_type=audience_type,
             audience_key=audience_key, recipient_ids=tuple(sorted(recipients)),
         ))
         if room.get("instance_id"):
@@ -1776,7 +1833,8 @@ def _flee_action(database, user, _parameters):
     instance_id = room.get("instance_id")
     if instance_id:
         if room["role"] == "entrance":
-            return drafts + _retreat_run(database, user, evaded=True)
+            drafts.append(EventDraft("You reach the entrance, but there is no route out. Find the dungeon exit to secure your loot.", event_type="combat"))
+            return drafts
         exits = _room_exits(database, room["id"], instance_id)
         candidates = [database.execute(
             "SELECT depth FROM mud_dungeon_rooms WHERE instance_id=? AND room_key=?",
@@ -1807,7 +1865,7 @@ def _combat_action(database, user, parameters):
         body = "There are no hostile enemies here."
     else:
         body = "Nearby enemies:\n" + "\n".join(
-            f"- {enemy['name']}: {enemy['status']} · "
+            f"- {enemy['display_name']}: {enemy['status']} · "
             f"{enemy['health']}/{enemy['maximum_health']} health"
             for enemy in state["enemies"]
         )
@@ -1907,7 +1965,7 @@ def _put_action(database, user, parameters):
         raise ActionError("Open that container first.")
     item = _item_matches(_inventory_rows(database, user["id"]), target)
     if item["acquired_run_id"]:
-        raise ActionError("Run loot cannot be put in a container before extraction.")
+        raise ActionError("Run loot cannot be put in a container before completing the dungeon.")
     if item["id"] == container["id"]:
         raise ActionError("An item cannot contain itself.")
     database.execute("DELETE FROM mud_character_equipment WHERE item_instance_id=?", (item["id"],))
@@ -2519,8 +2577,8 @@ def _expedition_status_text(database, user_id):
     return (f"{label} {run['join_code']} · {run['theme_id']} · difficulty "
             f"{run['difficulty']} · {run['rooms_visited']}/{total} rooms visited · "
             f"{active} active explorer{'s' if active != 1 else ''}. "
-            "Reach the exit for the full reward, return to the entrance with /retreat "
-            "to bank loot, or /abandon to lose this run's loot.")
+            "Reach the exit to secure this run's loot and earn the completion reward, "
+            "or /abandon to leave without this run's loot.")
 
 
 def _expedition_action(database, user, parameters):
@@ -2654,32 +2712,6 @@ def _abandon_expedition_action(database, user, parameters):
         f"You abandon {'Dungeon of the Day run' if _daily_run_day(database, run['id']) else 'expedition'} {run['join_code']}. This run's loot is lost; previously owned items and earned experience remain.",
         event_type="expedition",
     )]
-
-
-def _retreat_run(database, user, evaded=False):
-    run = _active_expedition(database, user["id"])
-    room = _current_room(database, user["id"])
-    if run is None or room.get("instance_id") != run["id"] or room.get("role") != "entrance":
-        raise ActionError("Return to the dungeon entrance to extract with your loot.")
-    if not evaded and _active_hostiles(database, room):
-        raise ActionError("A hostile enemy blocks the entrance. Fight or flee.", 409)
-    database.execute(
-        "UPDATE mud_expedition_participants SET status='abandoned',finished_at=CURRENT_TIMESTAMP "
-        "WHERE instance_id=? AND user_id=? AND status='active'", (run["id"], user["id"]),
-    )
-    _record_daily_result(database, run["id"], user["id"], "abandoned", run["rooms_visited"])
-    _settle_run_loot(database, user["id"], run["id"], keep=True)
-    _leave_combat(database, user["id"], "instance", run["id"])
-    _set_player_location(database, user["id"], "procedural", "portal", PORTAL_ROOM_ID)
-    _finish_empty_expedition(database, run["id"], "extracted")
-    return [EventDraft("You return through the entrance with your loot. The completion reward is forfeited.",
-                       event_type="expedition")]
-
-
-def _retreat_action(database, user, parameters):
-    if parameters.get("arguments"):
-        raise ActionError("The retreat command does not accept arguments.")
-    return _retreat_run(database, user)
 
 
 def _complete_expedition_action(database, user, parameters):
@@ -3020,6 +3052,12 @@ actions.register(ActionDefinition(
     group="CHARACTER",
 ))
 actions.register(ActionDefinition(
+    key="inventory", label="VIEW INVENTORY",
+    description="List carried and equipped items.",
+    commands=("inventory", "inv", "i"), handler=_inventory_action,
+    group="CHARACTER", show_context=False,
+))
+actions.register(ActionDefinition(
     key="say", label="SAY",
     description="Speak to the other players in this room.",
     handler=_say_action, show_context=False,
@@ -3112,12 +3150,6 @@ actions.register(ActionDefinition(
     group="EXPEDITIONS", show_context=False,
 ))
 actions.register(ActionDefinition(
-    key="retreat_expedition", label="EXTRACT AT ENTRANCE",
-    description="Return alive with loot from the dungeon entrance, forfeiting completion experience.",
-    commands=("retreat", "extract"), handler=_retreat_action,
-    group="EXPEDITIONS", show_context=False,
-))
-actions.register(ActionDefinition(
     key="complete_expedition", label="COMPLETE EXPEDITION",
     description="Finish the run from its exit and award every active participant.",
     commands=("complete",), handler=_complete_expedition_action,
@@ -3140,206 +3172,6 @@ for alias, direction in {
     "in": "in", "out": "out",
 }.items():
     actions.register_command(alias, actions.get("go"), (direction,))
-
-
-def _navigation_actions(database, user):
-    room = _current_room(database, user["id"])
-    instance_id = room.get("instance_id") if isinstance(room, dict) else None
-    options = [
-        {
-            "key": "go",
-            "label": _exit_label(exit_row),
-            "description": f"Travel to {exit_row['destination_name']}.",
-            "group": "NAVIGATION",
-            "parameters": {"exit_id": exit_row["id"]},
-        }
-        for exit_row in _room_exits(database, room["id"], instance_id)
-    ]
-    modes = _mode_settings(database)
-    if room["id"] == PORTAL_ROOM_ID:
-        options.extend((
-            {"key": "shop", "label": "PORTAL TRADER", "description": "Buy supplies and sell loot.", "group": "HUB", "parameters": {}},
-            {"key": "storage", "label": "PERSONAL STORAGE", "description": "Store equipment and items between runs.", "group": "HUB", "parameters": {}},
-        ))
-        daily_description = _daily_status_text(database, user["id"])
-        options.append(
-            {"key": "dungeon_entrance", "label": "DUNGEON OF THE DAY",
-             "description": daily_description, "group": "DAILY DUNGEON",
-             "parameters": {"kind": "daily"}}
-        )
-        active = _active_expedition(database, user["id"])
-        if active:
-            options.append({"key": "resume_expedition", "label": "RESUME EXPEDITION",
-                            "description": _expedition_status_text(database, user["id"]),
-                            "group": "EXPEDITIONS", "parameters": {}})
-        else:
-            daily = ensure_daily_dungeon(database)
-            if daily["status"] == "ready":
-                options.append({
-                    "key": "daily", "label": "ENTER TODAY'S DUNGEON",
-                    "description": "Start a new isolated daily attempt; party members may join by code.",
-                    "group": "DAILY DUNGEON", "parameters": {"operation": "enter"},
-                })
-            for theme_id, _path, template in _installed_expedition_themes(database):
-                difficulty = template["generation"]["difficulty"]["default"]
-                options.append({
-                    "key": "expedition", "label": f"LAUNCH {template['name'].upper()}",
-                    "description": f"Start at default difficulty {difficulty}.",
-                    "group": "EXPEDITIONS",
-                    "parameters": {"theme_id": theme_id, "difficulty": difficulty},
-                })
-            options.append({"key": "join_expedition", "label": "JOIN BY CODE",
-                            "description": "Use /join <code> to join a cooperative run.",
-                            "group": "EXPEDITIONS", "parameters": {}})
-        if modes["traditional"]:
-            options.append({"key": "world", "label": "OUT — TRADITIONAL WORLD",
-                            "description": "Return to your last traditional-world location.",
-                            "group": "NAVIGATION", "parameters": {}})
-    elif modes["procedural"] and room["id"] == _start_room(database)["id"]:
-        options.append({"key": "portal", "label": "ENTER DUNGEON PORTALS",
-                        "description": "Enter the protected procedural gameplay hub.",
-                        "group": "NAVIGATION", "parameters": {}})
-    if instance_id:
-        options.append({"key": "expedition_status", "label": "RUN STATUS",
-                        "description": _expedition_status_text(database, user["id"]),
-                        "group": "EXPEDITIONS", "parameters": {}})
-        options.append({"key": "abandon_expedition", "label": "ABANDON RUN",
-                        "description": "Leave now and lose all loot acquired during this run.",
-                        "group": "EXPEDITIONS", "parameters": {}})
-        if room.get("role") == "entrance":
-            options.append({"key": "retreat_expedition", "label": "EXTRACT WITH LOOT",
-                            "description": "Return safely with loot; forfeit the completion reward.",
-                            "group": "EXPEDITIONS", "parameters": {}})
-        if room.get("role") == "exit":
-            options.append({"key": "complete_expedition", "label": "COMPLETE RUN",
-                            "description": "Complete the run for all active explorers.",
-                            "group": "EXPEDITIONS", "parameters": {}})
-    return options
-
-
-actions.register_context_provider(_navigation_actions)
-
-
-def _item_actions(database, user):
-    room = _current_room(database, user["id"])
-    instance_id = room.get("instance_id") if isinstance(room, dict) else None
-    options = []
-    for item in _room_item_rows(database, room["id"], instance_id):
-        base = {"item_id": item["id"]}
-        options.extend((
-            {"key": "look", "label": f"EXAMINE {item['name'].upper()}", "description": item["description"], "group": "ITEMS", "parameters": {"target": item["id"]}},
-            {"key": "get", "label": f"PICK UP {item['name'].upper()}", "description": "Pick it up.", "group": "ITEMS", "parameters": base},
-        ))
-        if _is_container(item) and not instance_id: options.append({"key": "open", "label": f"OPEN {item['name'].upper()}", "description": "Open and inspect it.", "group": "ITEMS", "parameters": base})
-        if _is_container(item) and not instance_id and item["is_open"]:
-            for child in _container_rows(database, item["id"], user["id"]):
-                options.append({"key": "get", "label": f"TAKE {child['name'].upper()} FROM {item['name'].upper()}", "description": "Take from the open container.", "group": "ITEMS", "parameters": {"item_id": child["id"], "container_id": item["id"]}})
-    for item in _inventory_rows(database, user["id"]):
-        base = {"item_id": item["id"]}
-        options.extend((
-            {"key": "look", "label": f"EXAMINE {item['name'].upper()}", "description": item["description"], "group": "INVENTORY", "parameters": {"target": item["id"]}},
-            *([] if instance_id or room["id"] == PORTAL_ROOM_ID else [{"key": "drop", "label": f"DROP {item['name'].upper()}", "description": "Leave it here.", "group": "INVENTORY", "parameters": base}]),
-            {"key": "use", "label": f"USE {item['name'].upper()}", "description": "Use it if it has an effect.", "group": "INVENTORY", "parameters": base},
-        ))
-        if item["item_type"] == "equipment" and item["definition_slot"]: options.append({"key": "equip", "label": f"EQUIP {item['name'].upper()}", "description": "Wear or wield it.", "group": "INVENTORY", "parameters": base})
-    for item in _inventory_rows(database, user["id"], True):
-        options.append({"key": "unequip", "label": f"UNEQUIP {item['name'].upper()}", "description": "Return it to inventory.", "group": "EQUIPMENT", "parameters": {"item_id": item["id"]}})
-    return options
-
-
-actions.register_context_provider(_item_actions)
-
-
-def _available_quests(database, user, room_id):
-    character = _character_row(database, user["id"])
-    return database.execute(
-        "SELECT DISTINCT q.id,q.name,q.description FROM mud_quests AS q "
-        "JOIN mud_quest_givers AS g ON g.quest_id=q.id "
-        "JOIN mud_npc_instances AS i ON i.definition_id=g.npc_definition_id "
-        "LEFT JOIN mud_player_quests AS p ON p.quest_id=q.id AND p.character_id=? "
-        "LEFT JOIN mud_player_quests AS prerequisite ON prerequisite.quest_id=q.prerequisite_quest_id "
-        "AND prerequisite.character_id=? AND prerequisite.status='completed' AND prerequisite.rewarded_at IS NOT NULL "
-        "WHERE i.room_id=? AND p.quest_id IS NULL "
-        "AND (q.prerequisite_quest_id IS NULL OR prerequisite.quest_id IS NOT NULL) "
-        "ORDER BY q.name COLLATE NOCASE,q.id",
-        (character["id"], character["id"], room_id),
-    ).fetchall()
-
-
-def _npc_actions(database, user):
-    room = _current_room(database, user["id"])
-    options = []
-    for npc in _room_npc_rows(database, room["id"], room.get("instance_id")):
-        options.append({"key": "look", "label": f"EXAMINE {npc['name'].upper()}",
-                        "description": npc["description"], "group": "NPCS",
-                        "parameters": {"target": npc["id"]}})
-        if npc["conversation_id"]:
-            options.append({"key": "talk", "label": f"TALK TO {npc['name'].upper()}",
-                            "description": f"Start a conversation with {npc['name']}.", "group": "NPCS",
-                            "parameters": {"npc_id": npc["id"]}})
-    character = _character_row(database, user["id"])
-    session_row = database.execute(
-        "SELECT s.node_id,i.id AS npc_id,i.room_id,d.name FROM mud_conversation_sessions AS s "
-        "JOIN mud_npc_instances AS i ON i.id=s.npc_instance_id "
-        "JOIN mud_npc_definitions AS d ON d.id=i.definition_id WHERE s.character_id=?",
-        (character["id"],),
-    ).fetchone()
-    dungeon_session = False
-    if room.get("instance_id"):
-        raw = database.execute(
-            "SELECT s.node_id,s.content_id AS npc_id,c.room_key,c.snapshot_json "
-            "FROM mud_dungeon_conversation_sessions AS s JOIN mud_dungeon_content AS c "
-            "ON c.id=s.content_id WHERE s.character_id=? AND s.instance_id=?",
-            (character["id"], room["instance_id"]),
-        ).fetchone()
-        if raw is not None:
-            snapshot = _json_properties(raw["snapshot_json"])
-            session_row = dict(raw)
-            session_row["room_id"] = session_row["room_key"]
-            session_row["name"] = snapshot.get("name", "NPC")
-            dungeon_session = True
-    if session_row and session_row["room_id"] == room["id"]:
-        _node, responses = _available_dialogue_responses(
-            database, character["id"], session_row["npc_id"], session_row["node_id"],
-            dungeon_session,
-        )
-        for response in responses:
-            options.append({"key": "respond", "label": response["response_text"],
-                            "description": f"Reply to {session_row['name']}.", "group": "DIALOGUE",
-                            "parameters": {"response_id": response["id"]}})
-    for quest in _available_quests(database, user, room["id"]):
-        options.append({"key": "quests", "label": f"ACCEPT: {quest['name'].upper()}",
-                        "description": quest["description"], "group": "QUESTS",
-                        "parameters": {"arguments": ["accept", quest["id"]]}})
-    return options
-
-
-actions.register_context_provider(_npc_actions)
-
-
-def _combat_actions(database, user):
-    room = _current_room(database, user["id"])
-    options = []
-    for npc in _room_npc_rows(database, room["id"], room.get("instance_id")):
-        if npc["combat_maximum_health"] is None:
-            continue
-        encounter = _encounter_row(database, npc)
-        if encounter["status"] in {"ready", "active"}:
-            options.append({
-                "key": "attack", "label": f"ATTACK {npc['name'].upper()}",
-                "description": (f"Fight one round. Enemy health: "
-                                f"{encounter['current_health']}/{encounter['maximum_health']}."),
-                "group": "COMBAT", "parameters": {"npc_id": npc["id"]},
-            })
-    if _active_hostiles(database, room):
-        options.extend((
-            {"key": "defend", "label": "DEFEND", "description": "Reduce damage this turn.", "group": "COMBAT", "parameters": {}},
-            {"key": "flee", "label": "FLEE", "description": "Chance to escape; failure costs a turn.", "group": "COMBAT", "parameters": {}},
-        ))
-    return options
-
-
-actions.register_context_provider(_combat_actions)
 
 
 def _insert_event(database, draft, default_user_id=None, action_id=None):
@@ -3484,10 +3316,11 @@ class MudService:
 
     def normalize(self, form):
         command = form.get("command", "").strip()
-        action_key = form.get("action", "").strip()
         message = form.get("message", "").strip()
-        if sum(bool(value) for value in (command, action_key, message)) != 1:
-            raise ActionError("Submit exactly one message, command, or contextual action.")
+        if form.get("action", "").strip() or form.get("parameters", "").strip():
+            raise ActionError("Use a slash command in the MUD console.")
+        if sum(bool(value) for value in (command, message)) != 1:
+            raise ActionError("Submit exactly one message or command.")
         request_id = form.get("request_id", "").strip() or uuid.uuid4().hex
         if not REQUEST_ID_RE.fullmatch(request_id):
             raise ActionError("Invalid action request identifier.")
@@ -3499,20 +3332,6 @@ class MudService:
         elif command:
             definition, parameters = self.registry.from_command(command)
             method = "command"
-        else:
-            definition = self.registry.get(action_key)
-            if definition is None:
-                raise ActionError("That action is not available.")
-            method = "context"
-            raw_parameters = form.get("parameters", "{}").strip() or "{}"
-            if len(raw_parameters) > 10000:
-                raise ActionError("Action parameters are too large.")
-            try:
-                parameters = json.loads(raw_parameters)
-            except json.JSONDecodeError as problem:
-                raise ActionError("Action parameters are invalid.") from problem
-            if not isinstance(parameters, dict):
-                raise ActionError("Action parameters must be an object.")
         client_id = form.get("client_id", "").strip()
         if client_id and not CLIENT_ID_RE.fullmatch(client_id):
             raise ActionError("Invalid MUD client identifier.")
@@ -3618,7 +3437,6 @@ def index():
     hub = hub_state(database, g.user["id"])
     quests = quest_state(database, g.user["id"])
     combat = combat_state(database, g.user["id"])
-    mud_actions = actions.contextual(g.user, database)
     events = _recent_events(database, g.user["id"])
     cleared_view = database.execute(
         "SELECT cleared_through_id FROM mud_event_views WHERE user_id=?",
@@ -3629,7 +3447,7 @@ def index():
     return render_template(
         "mud/index.html", events=events, cleared_through_id=cleared_through_id,
         activity_cleared=cleared_view is not None,
-        mud_actions=mud_actions, room=room, character=character, inventory=inventory,
+        room=room, character=character, inventory=inventory,
         quests=quests, combat=combat, hub=hub,
     )
 
@@ -3658,7 +3476,6 @@ def updates():
         hub = hub_state(database, g.user["id"])
         quests = quest_state(database, g.user["id"])
         combat = combat_state(database, g.user["id"])
-        available = actions.contextual(g.user, database)
         database.commit()
     except (ActionError, sqlite3.Error) as problem:
         database.rollback()
@@ -3666,7 +3483,7 @@ def updates():
             return jsonify(error=str(problem)), problem.status
         raise
     return jsonify(events=events, room=room, character=character, inventory=inventory,
-                   quests=quests, combat=combat, hub=hub, actions=available)
+                   quests=quests, combat=combat, hub=hub)
 
 
 @bp.post("/clear-events")
@@ -3770,11 +3587,10 @@ def perform_action():
         hub = hub_state(database, g.user["id"])
         quests = quest_state(database, g.user["id"])
         combat = combat_state(database, g.user["id"])
-        available = actions.contextual(g.user, database)
         database.commit()
         return jsonify(
             error=str(problem), room=room, character=character, inventory=inventory,
-            quests=quests, combat=combat, hub=hub, actions=available
+            quests=quests, combat=combat, hub=hub
         ), problem.status
     database = get_db()
     room = _room_state(database, g.user["id"])
@@ -3783,11 +3599,10 @@ def perform_action():
     hub = hub_state(database, g.user["id"])
     quests = quest_state(database, g.user["id"])
     combat = combat_state(database, g.user["id"])
-    available = actions.contextual(g.user, database)
     database.commit()
     return jsonify(
         action=action_key, events=events,
-        actions=available, room=room, character=character, inventory=inventory,
+        room=room, character=character, inventory=inventory,
         quests=quests, combat=combat, hub=hub,
     )
 

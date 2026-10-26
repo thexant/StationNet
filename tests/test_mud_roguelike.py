@@ -54,7 +54,7 @@ def _owned(db, user_id):
     ).fetchall()}
 
 
-def test_shop_storage_extraction_death_and_completion(game):
+def test_shop_storage_completion_death_and_completion(game):
     app, user_id = game
     with app.app_context():
         db = get_db()
@@ -85,7 +85,18 @@ def test_shop_storage_extraction_death_and_completion(game):
         user = db.execute("SELECT * FROM users WHERE id=?", (user_id,)).fetchone()
         assert mud._active_expedition(db, user_id)["id"] == run_id
         assert _owned(db, user_id)["stationnet:treasure:relic"]["acquired_run_id"] == run_id
-        mud._retreat_action(db, user, {})
+        exit_room = db.execute(
+            "SELECT room_key FROM mud_dungeon_rooms WHERE instance_id=? AND role='exit'",
+            (run_id,),
+        ).fetchone()["room_key"]
+        db.execute(
+            "INSERT INTO mud_dungeon_content_state(content_id,status) "
+            "SELECT id,'defeated' FROM mud_dungeon_content WHERE instance_id=? "
+            "AND room_key=? AND content_type='enemy'", (run_id, exit_room),
+        )
+        mud._set_player_location(db, user_id, "procedural", "dungeon_instance", exit_room, run_id)
+        mud._record_expedition_visit(db, run_id, user_id, exit_room)
+        mud._complete_expedition_action(db, user, {})
         assert mud._current_room(db, user_id)["id"] == mud.PORTAL_ROOM_ID
         assert _owned(db, user_id)["stationnet:treasure:relic"]["acquired_run_id"] is None
         mud._shop_action(db, user, {"operation": "sell", "item_id": acquired})
@@ -203,12 +214,12 @@ def test_room_entry_aggression_and_risky_flee(game, monkeypatch):
         loot = mud._grant_item(db, user_id, "stationnet:treasure:relic")
         mud._entry_attack(db, user)
         mud._flee_action(db, user, {})
-        assert mud._current_room(db, user_id)["id"] == mud.PORTAL_ROOM_ID
+        assert mud._current_room(db, user_id)["id"] == entrance["id"]
         assert db.execute("SELECT acquired_run_id FROM mud_item_instances WHERE id=?",
-                          (loot,)).fetchone()[0] is None
+                          (loot,)).fetchone()[0] == run_id
 
 
-def test_hub_http_controls_and_idempotent_purchase(game):
+def test_hub_console_commands_and_idempotent_purchase(game):
     app, user_id = game
     client = app.test_client()
     with client.session_transaction() as session:
@@ -216,12 +227,11 @@ def test_hub_http_controls_and_idempotent_purchase(game):
         session["csrf_token"] = "test-token"
     page = client.get("/mud")
     assert page.status_code == 200
-    assert b"Trader &amp; Storage" in page.data
+    assert b"QUICK ACTIONS" not in page.data
+    assert b"data-mud-action=" not in page.data
     payload = {
         "csrf_token": "test-token", "request_id": "buy-once-1234",
-        "action": "shop", "parameters": json.dumps({
-            "operation": "buy", "item_id": "stationnet:shop:tonic"
-        }),
+        "command": "/shop buy Healing Tonic",
     }
     first = client.post("/mud/actions", data=payload)
     second = client.post("/mud/actions", data=payload)
@@ -229,11 +239,70 @@ def test_hub_http_controls_and_idempotent_purchase(game):
     assert first.json["hub"]["coins"] == second.json["hub"]["coins"] == 6
     assert len(first.json["inventory"]["inventory"]) == 1
     assert len(second.json["inventory"]["inventory"]) == 1
+    listed = client.post("/mud/actions", data={
+        "csrf_token": "test-token", "command": "/inventory",
+    })
+    assert listed.status_code == 200
+    assert "Healing Tonic" in listed.json["events"][0]["body"]
     denied = client.post("/mud/actions", data={
         **payload, "request_id": "buy-twice-1234",
     })
     assert denied.status_code == 400
     assert denied.json["hub"]["coins"] == 6
+    assert client.post("/mud/actions", data={
+        "csrf_token": "test-token", "action": "shop",
+        "parameters": json.dumps({"operation": "buy", "item_id": "stationnet:shop:tonic"}),
+    }).status_code == 400
+
+
+def test_numbered_enemy_commands_and_inventory(game):
+    app, user_id = game
+    with app.app_context():
+        db = get_db()
+        user = db.execute("SELECT * FROM users WHERE id=?", (user_id,)).fetchone()
+        run_id = _launch(db, user)
+        entrance = mud._current_room(db, user_id)
+        owned = mud._grant_item(db, user_id, "stationnet:shop:blade")
+        mud._equip_action(db, user, {"item_id": owned})
+        enemies = db.execute(
+            "SELECT id,snapshot_json FROM mud_dungeon_content WHERE instance_id=? "
+            "AND content_type='enemy' ORDER BY id LIMIT 2", (run_id,),
+        ).fetchall()
+        assert len(enemies) == 2
+        for enemy in enemies:
+            snapshot = json.loads(enemy["snapshot_json"])
+            snapshot["name"] = "Rat"
+            db.execute("UPDATE mud_dungeon_content SET room_key=?,snapshot_json=? WHERE id=?",
+                       (entrance["id"], json.dumps(snapshot), enemy["id"]))
+        room = mud._room_state(db, user_id)
+        assert [npc["display_name"] for npc in room["npcs"]] == ["Rat (1)", "Rat (2)"]
+        assert [enemy["display_name"] for enemy in mud.combat_state(db, user_id)["enemies"]] == ["Rat (1)", "Rat (2)"]
+        assert "Rat" in mud._look_action(db, user, {"arguments": ["Rat", "2"]})[0].body
+        with pytest.raises(mud.ActionError, match="Use a number"):
+            mud._attack_action(db, user, {"arguments": ["Rat"]})
+        with pytest.raises(mud.ActionError, match="number 3"):
+            mud._attack_action(db, user, {"arguments": ["Rat", "3"]})
+        first = mud._encounter_row(db, mud._room_npc_rows(db, entrance["id"], run_id)[0])
+        second = mud._encounter_row(db, mud._room_npc_rows(db, entrance["id"], run_id)[1])
+        definition, parameters = mud.actions.from_command("/attack Rat 2")
+        definition.handler(db, user, parameters)
+        assert db.execute("SELECT current_health FROM mud_combat_encounters WHERE id=?",
+                          (second["id"],)).fetchone()[0] < second["current_health"]
+        assert db.execute("SELECT current_health FROM mud_combat_encounters WHERE id=?",
+                          (first["id"],)).fetchone()[0] == first["current_health"]
+        inventory = mud._inventory_action(db, user, {})[0].body
+        assert "Carried:" in inventory and "Equipped:" in inventory
+        assert "Blade" in inventory
+        first_tonic = mud._grant_item(db, user_id, "stationnet:shop:tonic")
+        second_tonic = mud._grant_item(db, user_id, "stationnet:shop:tonic")
+        inventory = mud._inventory_action(db, user, {})[0].body
+        assert "Healing Tonic (1)" in inventory and "Healing Tonic (2)" in inventory
+        ordered_tonics = [row["id"] for row in mud._inventory_rows(db, user_id)
+                          if row["id"] in {first_tonic, second_tonic}]
+        assert mud._item_matches(mud._inventory_rows(db, user_id), "Healing Tonic 2")["id"] == ordered_tonics[1]
+        for command in ("/retreat", "/extract"):
+            with pytest.raises(mud.ActionError, match="Unknown command"):
+                mud.actions.from_command(command)
 
 
 def test_clear_events_keeps_new_activity_and_survives_reload(game):
