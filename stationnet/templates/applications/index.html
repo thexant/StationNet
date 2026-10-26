@@ -49,6 +49,11 @@
       {% else %}<li class="program-empty">NO PROGRAMS AVAILABLE</li>{% endfor %}
     </ul>
     <p class="program-empty" data-program-no-results hidden>NO MATCHING PROGRAMS</p>
+    <nav class="program-pagination" aria-label="Program pages">
+      <button type="button" class="secondary" data-program-previous disabled>PREVIOUS</button>
+      <span data-program-page-status aria-live="polite"></span>
+      <button type="button" class="secondary" data-program-next disabled>NEXT</button>
+    </nav>
     <p class="program-key-hint">KEYS: ↑ ↓ SELECT / ENTER OPEN</p>
   </section>
 
@@ -77,5 +82,5 @@
     {% else %}<p class="program-empty">NO PROGRAM SELECTED</p>{% endfor %}
   </section>
 </div>
-<script src="{{ url_for('static', filename='program_manager.js', v='1') }}" defer></script>
+<script src="{{ url_for('static', filename='program_manager.js', v='2') }}" defer></script>
 {% endblock %}

@@ -484,6 +484,9 @@ button:focus-visible, .button:focus-visible, a:focus-visible, summary:focus-visi
 .program-list a:hover .program-glyph, .program-list a[aria-current="true"] .program-glyph { color: #00330d; }
 .program-row-meta { flex: none; color: var(--grey); font-size: .6rem; text-align: right; }
 .program-list a:hover .program-row-meta, .program-list a[aria-current="true"] .program-row-meta { color: #00330d; }
+.program-pagination { display: flex; align-items: center; justify-content: space-between; gap: .4rem; padding: .6rem .7rem; border-top: 1px dotted var(--green-dim); }
+.program-pagination button { min-height: 2.4rem; padding: .35rem .5rem; font-size: .62rem; }
+.program-pagination span { color: var(--grey); font-size: .62rem; white-space: nowrap; }
 .program-key-hint { margin: 0; padding: .6rem .7rem; color: var(--grey); border-top: 1px dotted var(--green-dim); font-size: .6rem; }
 .program-empty { margin: 0; padding: .8rem; color: var(--grey); font-size: .7rem; }
 .program-detail { padding: .9rem; }
