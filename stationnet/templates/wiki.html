@@ -36,10 +36,10 @@
     </form>
     {% if article_source %}
       <div class="wiki-location"><a href="{{ url_for('kiwix.index') }}">LIBRARY</a><span aria-hidden="true">/</span><span>{{ (query and 'SEARCH RESULTS') or (books|selectattr('name', 'equalto', active_book)|map(attribute='title')|first)|default(active_book, true) }}</span></div>
-      <div class="wiki-reading" data-wiki-reading data-source="{{ article_source }}" data-kiwix-root="{{ url_for('kiwix.content') }}" data-content-prefix="{{ url_for('kiwix.content') }}content/" data-interactive-prefix="{{ url_for('kiwix.interactive', path='') }}" data-read-prefix="{{ url_for('kiwix.read', path='__path__')|replace('__path__', '') }}" data-theme-css="{{ url_for('static', filename='wiki_article.css', v='themes-3') }}" data-gutenberg-css="{{ url_for('static', filename='wiki_gutenberg.css', v='3') }}">
+      <div class="wiki-reading" data-wiki-reading data-source="{{ article_source }}" data-kiwix-root="{{ url_for('kiwix.content') }}" data-content-prefix="{{ url_for('kiwix.content') }}content/" data-interactive-prefix="{{ url_for('kiwix.interactive', path='') }}" data-read-prefix="{{ url_for('kiwix.read', path='__path__')|replace('__path__', '') }}" data-theme-css="{{ url_for('static', filename='wiki_article.css', v='ifixit-1') }}" data-gutenberg-css="{{ url_for('static', filename='wiki_gutenberg.css', v='3') }}">
         <p class="muted" data-wiki-loading>OPENING PAGE…</p>
       </div>
-      <script src="{{ url_for('static', filename='wiki.js', v='7') }}" defer></script>
+      <script src="{{ url_for('static', filename='wiki.js', v='8') }}" defer></script>
     {% else %}
       <div class="wiki-library">
         {% for book in books %}
@@ -51,7 +51,7 @@
         </a>
         {% else %}<p class="muted">No collections are available yet.</p>{% endfor %}
       </div>
-      <script src="{{ url_for('static', filename='wiki.js', v='7') }}" defer></script>
+      <script src="{{ url_for('static', filename='wiki.js', v='8') }}" defer></script>
     {% endif %}
   {% else %}
   <div class="terminal-card wiki-message">

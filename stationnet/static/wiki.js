@@ -221,6 +221,10 @@
       }
       const container = document.createElement('div');
       container.className = 'wiki-document';
+      const articlePath = new URL(response.url).pathname;
+      const archive = articlePath.startsWith(contentPrefix)
+        ? articlePath.slice(contentPrefix.length).split('/')[0] : '';
+      if (/^ifixit(?:[_-]|$)/i.test(archive)) container.classList.add('wiki-document--ifixit');
       for (const sheet of doc.querySelectorAll('head link[rel~="stylesheet"]')) {
         const url = localAddress(sheet.getAttribute('href'), base);
         if (!url || !url.pathname.startsWith(rootPrefix)) continue;

@@ -64,6 +64,32 @@
 .wiki-document :is(input, select, textarea, button) { max-width: 100%; color: var(--white); background: var(--black); border: 1px solid var(--green-dim); font: inherit; }
 .wiki-document :is(sup, sub) { line-height: 0; }
 .wiki-document [hidden] { display: none !important; }
+/* iFixit archives use a light Chakra theme and put white surfaces on links,
+   labels, and text as well as the usual layout containers. Keep their guide
+   imagery and layout while replacing those surfaces with StationNet colours. */
+.wiki-document--ifixit { color-scheme: dark; }
+.wiki-document--ifixit :is(a, p, span, li, dt, dd, label, small, strong, b, em, ul, ol, form, h1, h2, h3, h4, h5, h6) {
+  background-color: transparent !important;
+}
+.wiki-document--ifixit :is(p, span, li, dt, dd, label) { color: var(--white) !important; }
+.wiki-document--ifixit :is(small, strong, b, em) { color: inherit !important; }
+.wiki-document--ifixit :is(a, a:visited) { color: var(--cyan) !important; }
+.wiki-document--ifixit :is(a:hover, a:focus-visible) { color: var(--magenta) !important; }
+.wiki-document--ifixit .homepage-top svg .cls-2 { fill: var(--white) !important; }
+.wiki-document--ifixit :is(.sub-category, .categoryAnchor, .attachment-link, .guide-container, .step-wrapper, .details-item-container, .tools-and-parts) {
+  color: var(--white) !important;
+  background-color: rgba(var(--theme-rgb), .035) !important;
+  border-color: var(--green-dim) !important;
+}
+.wiki-document--ifixit :is(input, select, textarea, button) {
+  color: var(--white) !important;
+  background: var(--black) !important;
+  border-color: var(--green-dim) !important;
+}
+.wiki-document--ifixit :is(input, select, textarea, button, a):focus-visible {
+  outline: 2px solid var(--cyan) !important;
+  outline-offset: 2px;
+}
 @media (max-width: 700px) {
   .wiki-interactive-frame { height: max(24rem, 68vh); }
   .wiki-document :is(.infobox, .thumb) { float: none !important; margin: 1rem 0; }
