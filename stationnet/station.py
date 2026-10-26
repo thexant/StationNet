@@ -15,6 +15,7 @@ from .db import get_db
 from . import character_creation, dungeons, mud_worlds
 from . import themes
 from .markdown import render_markdown
+from .midi import InvalidMidi, MAX_MIDI_BYTES, inspect_midi
 from .radio import (can_host_broadcast, effective_access, format_frequency,
                     parse_frequency, reconcile_radio_permissions)
 from .security import validate_csrf
@@ -28,6 +29,83 @@ STATION_ICON_SIZE = (128, 128)
 
 def _station_icon_path():
     return Path(current_app.config["DATA_DIR"]) / "station_icon.png"
+
+
+def _station_midi_path():
+    return Path(current_app.config["DATA_DIR"]) / "station_theme.mid"
+
+
+@bp.get("/station-theme.mid")
+def station_midi_theme():
+    if not g.user or not g.station or not g.station["play_station_midi"]:
+        abort(404)
+    path = _station_midi_path()
+    if not path.is_file():
+        abort(404)
+    response = send_file(path, mimetype="audio/midi")
+    response.headers["Cache-Control"] = "no-store"
+    return response
+
+
+@bp.post("/sysop/settings/midi")
+@admin_required
+def upload_station_midi():
+    validate_csrf()
+    uploaded = request.files.get("station_midi")
+    path = _station_midi_path()
+    if uploaded is not None and uploaded.filename:
+        payload = uploaded.read(MAX_MIDI_BYTES + 1)
+        try:
+            inspect_midi(payload)
+        except InvalidMidi as error:
+            flash(str(error), "error")
+            return redirect(url_for("station.settings") + "#station-parameters")
+        temporary = path.with_name(f"station_theme_{secrets.token_hex(8)}.mid")
+        try:
+            temporary.write_bytes(payload)
+            os.replace(temporary, path)
+        finally:
+            temporary.unlink(missing_ok=True)
+    if not path.is_file() and request.form.get("play_station_midi") == "on":
+        flash("Upload a Station MIDI Theme before enabling playback.", "error")
+        return redirect(url_for("station.settings") + "#station-parameters")
+    database = get_db()
+    database.execute(
+        "UPDATE station SET play_station_midi=? WHERE id=1",
+        (int(path.is_file() and request.form.get("play_station_midi") == "on"),),
+    )
+    database.commit()
+    flash("Station MIDI Theme settings saved.", "success")
+    return redirect(url_for("station.settings") + "#station-parameters")
+
+
+@bp.post("/sysop/settings/midi/clear")
+@admin_required
+def clear_station_midi():
+    validate_csrf()
+    get_db().execute("UPDATE station SET play_station_midi=0 WHERE id=1")
+    get_db().commit()
+    _station_midi_path().unlink(missing_ok=True)
+    flash("Station MIDI Theme cleared.", "success")
+    return redirect(url_for("station.settings") + "#station-parameters")
+
+
+@bp.post("/station-theme/preference")
+def station_midi_preference():
+    if not g.user:
+        abort(401)
+    validate_csrf()
+    if not g.station or not g.station["play_station_midi"] or not _station_midi_path().is_file():
+        abort(404)
+    enabled = request.form.get("enabled")
+    if enabled not in {"true", "false"}:
+        return jsonify(error="Expected a boolean enabled value."), 400
+    get_db().execute(
+        "UPDATE users SET station_midi_enabled=? WHERE id=?",
+        (int(enabled == "true"), g.user["id"]),
+    )
+    get_db().commit()
+    return jsonify(enabled=enabled == "true")
 
 
 @bp.get("/station-icon.png")
@@ -1135,6 +1213,7 @@ def settings():
                            site_themes=themes.options("site"), masthead_themes=themes.options("masthead"),
                            custom_themes=themes.custom_themes(),
                            station_icon_exists=_station_icon_path().is_file(),
+                           station_midi_exists=_station_midi_path().is_file(),
                            event_creation_groups=event_creation_groups,
                            bands=bands, groups=groups, users=users,
                            memberships=memberships, effective=effective,

@@ -5,6 +5,7 @@ import shutil
 import uuid
 
 import pytest
+from flask import session
 
 from stationnet import create_app
 from stationnet.db import get_db
@@ -96,8 +97,10 @@ def test_shop_storage_completion_death_and_completion(game):
         )
         mud._set_player_location(db, user_id, "procedural", "dungeon_instance", exit_room, run_id)
         mud._record_expedition_visit(db, run_id, user_id, exit_room)
-        mud._complete_expedition_action(db, user, {})
+        completion = mud._complete_expedition_action(db, user, {})
         assert mud._current_room(db, user_id)["id"] == mud.PORTAL_ROOM_ID
+        assert next(event.body for event in completion if event.event_type == "room") == \
+            mud._look_action(db, user, {})[0].body
         assert _owned(db, user_id)["stationnet:treasure:relic"]["acquired_run_id"] is None
         mud._shop_action(db, user, {"operation": "sell", "item_id": acquired})
         assert mud.hub_state(db, user_id)["coins"] > 6
@@ -250,7 +253,9 @@ def test_room_entry_aggression_and_risky_flee(game, monkeypatch):
         db.execute("UPDATE mud_dungeon_content SET room_key=? WHERE id=?",
                    (exit_row["to_room_id"], enemy["id"]))
         health = mud.character_state(db, user_id)["health"]
-        mud._go_action(db, user, {"exit_id": exit_row["id"]})
+        movement = mud._go_action(db, user, {"exit_id": exit_row["id"]})
+        assert next(event.body for event in movement if event.event_type == "room") == \
+            mud._look_action(db, user, {})[0].body
         assert mud.character_state(db, user_id)["health"] < health
         with pytest.raises(mud.ActionError):
             mud._go_action(db, user, {"arguments": ["out"]})
@@ -263,8 +268,10 @@ def test_room_entry_aggression_and_risky_flee(game, monkeypatch):
         mud._flee_action(db, user, {})
         assert mud._current_room(db, user_id)["id"] == exit_row["to_room_id"]
         monkeypatch.setattr(mud.secrets, "randbelow", lambda _limit: 0)
-        mud._flee_action(db, user, {})
+        escape = mud._flee_action(db, user, {})
         assert mud._current_room(db, user_id)["id"] == entrance["id"]
+        assert next(event.body for event in escape if event.event_type == "room") == \
+            mud._look_action(db, user, {})[0].body
         db.execute("UPDATE mud_dungeon_content SET room_key=? WHERE id=?",
                    (entrance["id"], enemy["id"]))
         loot = mud._grant_item(db, user_id, "stationnet:treasure:relic")
@@ -273,6 +280,39 @@ def test_room_entry_aggression_and_risky_flee(game, monkeypatch):
         assert mud._current_room(db, user_id)["id"] == entrance["id"]
         assert db.execute("SELECT acquired_run_id FROM mud_item_instances WHERE id=?",
                           (loot,)).fetchone()[0] == run_id
+
+
+def test_world_and_portal_entry_persist_look_in_events_log(game):
+    app, user_id = game
+    with app.app_context():
+        db = get_db()
+        db.execute("UPDATE station SET mud_traditional_enabled=1")
+        db.execute("INSERT INTO mud_world_rooms(id,name,description) VALUES(?,?,?)",
+                   ("test:library", "Library", "Rows of old books line the walls."))
+        db.execute("INSERT INTO mud_world_exits(id,from_room_id,to_room_id,name,direction) "
+                   "VALUES(?,?,?,?,?)", ("test:library-exit", mud.START_ROOM_ID,
+                                       "test:library", "Library door", "east"))
+        mud._set_player_location(db, user_id, "traditional", "world_room", mud.START_ROOM_ID)
+        db.execute("UPDATE users SET connection_id=? WHERE id=?", ("test-connection", user_id))
+        user = db.execute("SELECT * FROM users WHERE id=?", (user_id,)).fetchone()
+        db.commit()
+        request = mud.ActionRequest(mud.actions.get("go"), {"exit_id": "test:library-exit"})
+        with app.test_request_context():
+            session["connection_id"] = "test-connection"
+            _, events = mud.service.execute(request, user)
+        room_event = next(event for event in events if event["event_type"] == "room")
+        assert room_event["body"] == mud._look_action(db, user, {})[0].body
+        assert "Rows of old books line the walls." in room_event["body"]
+        assert "Exits:" in room_event["body"]
+        assert any(event["id"] == room_event["id"] for event in mud._events_for_user(db, user_id))
+
+        mud._set_player_location(db, user_id, "traditional", "world_room", mud.START_ROOM_ID)
+        portal_events = mud._portal_action(db, user, {})
+        assert next(event.body for event in portal_events if event.event_type == "room") == \
+            mud._look_action(db, user, {})[0].body
+        world_events = mud._world_action(db, user, {})
+        assert next(event.body for event in world_events if event.event_type == "room") == \
+            mud._look_action(db, user, {})[0].body
 
 
 def test_hiding_detection_and_surprise_attack(game, monkeypatch):
@@ -522,6 +562,8 @@ def test_generated_pickup_cannot_duplicate_and_abandon_loses_it(game):
         assert db.execute(
             "SELECT COUNT(*) FROM mud_item_instances WHERE acquired_run_id=?", (run_id,)
         ).fetchone()[0] == 1
-        mud._abandon_expedition_action(db, user, {})
+        abandonment = mud._abandon_expedition_action(db, user, {})
+        assert next(event.body for event in abandonment if event.event_type == "room") == \
+            mud._look_action(db, user, {})[0].body
         assert db.execute("SELECT 1 FROM mud_item_instances WHERE id=?",
                           (acquired["id"],)).fetchone() is None

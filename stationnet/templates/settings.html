@@ -20,6 +20,23 @@
     </label>
     <div class="button-row"><button>SAVE ICON SETTINGS</button></div>
   </form>
+  <form method="post" action="{{ url_for('station.upload_station_midi') }}" enctype="multipart/form-data" class="form-grid">
+    <input type="hidden" name="csrf_token" value="{{ session.csrf_token }}">
+    <div class="divider">STATION MIDI THEME</div>
+    <label class="switch"><input type="checkbox" name="play_station_midi" {% if g.station.play_station_midi %}checked{% endif %} {% if not station_midi_exists %}disabled{% endif %}> Play Station MIDI</label>
+    <label>Station MIDI Theme
+      <input type="file" name="station_midi" accept=".mid,.midi,audio/midi,audio/x-midi">
+      <small>Standard MIDI type 0 or 1, up to 2 MB. Uploading another theme replaces the current one. Playback is disabled by default.</small>
+    </label>
+    {% if station_midi_exists %}<p>Current Station MIDI Theme is uploaded.</p>{% endif %}
+    <div class="button-row"><button>SAVE MIDI SETTINGS</button></div>
+  </form>
+  {% if station_midi_exists %}
+  <form method="post" action="{{ url_for('station.clear_station_midi') }}">
+    <input type="hidden" name="csrf_token" value="{{ session.csrf_token }}">
+    <button type="submit" class="secondary">CLEAR MIDI THEME</button>
+  </form>
+  {% endif %}
   <form method="post" action="{{ url_for('station.settings') }}" class="form-grid" data-banner-editor data-preview-url="{{ url_for('station.banner_preview') }}">
     <input type="hidden" name="csrf_token" value="{{ session.csrf_token }}">
     <label>Station name

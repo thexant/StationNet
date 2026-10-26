@@ -81,6 +81,9 @@ def create_app(test_config=None):
         auth.load_logged_in_user()
         g.station = db.get_station()
         g.station_icon_exists = (data_dir / "station_icon.png").is_file()
+        midi_path = data_dir / "station_theme.mid"
+        g.station_midi_exists = midi_path.is_file()
+        g.station_midi_version = midi_path.stat().st_mtime_ns if g.station_midi_exists else 0
         g.site_theme, g.masthead_theme = themes.effective(g.station, g.user)
         g.theme_background = themes.palette(g.site_theme)["black"]
         if g.station is not None and g.station["mud_procedural_enabled"]:

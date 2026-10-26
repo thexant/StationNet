@@ -17,6 +17,7 @@ CREATE TABLE IF NOT EXISTS station (
  brand_tagline TEXT NOT NULL DEFAULT 'H7/dS! // YOUR INDEPENDENT COMMUNITY STATION //',
  display_station_icon INTEGER NOT NULL DEFAULT 0 CHECK(display_station_icon IN (0,1)),
  use_station_icon_for_web_app INTEGER NOT NULL DEFAULT 0 CHECK(use_station_icon_for_web_app IN (0,1)),
+ play_station_midi INTEGER NOT NULL DEFAULT 0 CHECK(play_station_midi IN (0,1)),
  header_font TEXT NOT NULL DEFAULT 'small',
  header_font_size INTEGER NOT NULL DEFAULT 100,
  header_text TEXT NOT NULL DEFAULT '',
@@ -60,7 +61,8 @@ CREATE TABLE IF NOT EXISTS users (
  tagline TEXT NOT NULL DEFAULT '', about TEXT NOT NULL DEFAULT '', birthday TEXT,
  gender TEXT NOT NULL DEFAULT '', last_seen TEXT, connection_id TEXT,
  radio_quota_mb INTEGER, videos_quota_mb INTEGER, profile_photo_filename TEXT,
- site_theme TEXT, masthead_theme TEXT);
+ site_theme TEXT, masthead_theme TEXT,
+ station_midi_enabled INTEGER NOT NULL DEFAULT 0 CHECK(station_midi_enabled IN (0,1)));
 CREATE TABLE IF NOT EXISTS office_document_vaults (
  owner_id INTEGER PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
  salt TEXT NOT NULL);
@@ -1101,6 +1103,7 @@ def init_db():
     _migrate_office(database)
     _migrate_mud_dungeon_content_types(database)
     _migrate_station_customization(database)
+    _migrate_station_midi(database)
     _migrate_themes(database)
     _migrate_user_feeds(database)
     _migrate_kiwix(database)
@@ -1647,6 +1650,21 @@ def _migrate_station_customization(database):
             "H7/dS! // YOUR INDEPENDENT COMMUNITY NODE //",
         ),
     )
+
+
+def _migrate_station_midi(database):
+    station_columns = {row["name"] for row in database.execute("PRAGMA table_info(station)")}
+    if "play_station_midi" not in station_columns:
+        database.execute(
+            "ALTER TABLE station ADD COLUMN play_station_midi INTEGER NOT NULL DEFAULT 0 "
+            "CHECK(play_station_midi IN (0,1))"
+        )
+    user_columns = {row["name"] for row in database.execute("PRAGMA table_info(users)")}
+    if "station_midi_enabled" not in user_columns:
+        database.execute(
+            "ALTER TABLE users ADD COLUMN station_midi_enabled INTEGER NOT NULL DEFAULT 0 "
+            "CHECK(station_midi_enabled IN (0,1))"
+        )
 
 
 def _migrate_registration_policy(database):

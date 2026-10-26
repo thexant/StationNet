@@ -2191,14 +2191,15 @@ def _flee_action(database, user, _parameters):
                              chosen["to_room_id"], instance_id)
         _record_expedition_visit(database, instance_id, user["id"], chosen["to_room_id"])
         drafts.append(EventDraft(f"You flee {chosen['direction']}.", event_type="movement"))
-        return drafts + _entry_attack(database, user)
+        return drafts + [_room_entry_event(database, user)] + _entry_attack(database, user)
     exits = _room_exits(database, room["id"])
     if not exits:
         return drafts
     chosen = exits[0]
     _leave_combat(database, user["id"], "room", room["id"])
     _set_player_location(database, user["id"], "traditional", "world_room", chosen["to_room_id"])
-    return drafts + [EventDraft(f"You flee {chosen['direction']}.", event_type="movement")] + \
+    return drafts + [EventDraft(f"You flee {chosen['direction']}.", event_type="movement"),
+                     _room_entry_event(database, user)] + \
         _entry_attack(database, user)
 
 
@@ -2309,6 +2310,10 @@ def _look_action(database, user, parameters):
     room = _current_room(database, user["id"])
     description = examinations.resolve(database, user, room, str(target).strip())
     return [EventDraft(description, event_type="room")]
+
+
+def _room_entry_event(database, user):
+    return _look_action(database, user, {})[0]
 
 
 def _item_target(parameters):
@@ -2771,6 +2776,7 @@ def _transition_location(database, user, destination_mode, destination_type,
             f"You go {route}.",
             event_type="movement",
         ),
+        _room_entry_event(database, user),
         EventDraft(
             f"{character['name']} leaves via {route}.", event_type="departure",
             audience_type="room", audience_key=old_room["id"],
@@ -3192,7 +3198,7 @@ def _abandon_expedition_action(database, user, parameters):
     return [EventDraft(
         f"You abandon {'Dungeon of the Day run' if _daily_run_day(database, run['id']) else 'expedition'} {run['join_code']}. This run's loot is lost; previously owned items and earned experience remain.",
         event_type="expedition",
-    )]
+    ), _room_entry_event(database, user)]
 
 
 def _complete_expedition_action(database, user, parameters):
@@ -3269,7 +3275,10 @@ def _complete_expedition_action(database, user, parameters):
         f"Collected loot is safe, and each explorer earns coins based on difficulty and rooms visited. {reward_text}",
         event_type="reward", audience_type="instance", audience_key=run["id"],
         recipient_ids=recipients,
-    )]
+    )] + [EventDraft(
+        _describe_room(database, _current_room(database, participant["user_id"]), participant["user_id"]),
+        event_type="room", audience_key=str(participant["user_id"]),
+    ) for participant in active]
 
 
 def _expedition_status_action(database, user, parameters):
@@ -3479,6 +3488,7 @@ def _go_action(database, user, parameters):
             f"You go {route}.",
             event_type="movement",
         ),
+        _room_entry_event(database, user),
         EventDraft(
             f"{character['name']} leaves via {route}.",
             event_type="departure", audience_type=audience_type, audience_key=audience_key,

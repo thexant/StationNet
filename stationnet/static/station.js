@@ -51,6 +51,89 @@ sfxToggle?.addEventListener("click",()=>{
   renderSfxToggle();
   if(sfxEnabled)playSfx("click");
 });
+
+const musicToggle=document.querySelector("[data-music-toggle]");
+if(musicToggle){
+  const musicPositionKey=`stationnet.music.position.${musicToggle.dataset.userId}.${musicToggle.dataset.midiVersion}`;
+  const musicKey=`station-theme-${musicToggle.dataset.midiVersion}`;
+  let musicEnabled=musicToggle.dataset.midiEnabled==="true";
+  let radioPowered=sessionStorage.getItem("stationnet.radio.powered")==="true";
+  let musicContext=null,musicEngine=null,musicStarting=null,musicAttempt=0;
+  let savedPosition=Number(sessionStorage.getItem(musicPositionKey))||0;
+  const saveMusicPosition=()=>{
+    if(musicEngine?.key===musicKey)savedPosition=musicEngine.position;
+    try{sessionStorage.setItem(musicPositionKey,String(Math.max(0,savedPosition)))}catch(_){}
+  };
+  const renderMusicToggle=()=>{
+    musicToggle.textContent=`MUSIC: ${musicEnabled?"ON":"OFF"}`;
+    musicToggle.setAttribute("aria-pressed",String(musicEnabled));
+    musicToggle.setAttribute("aria-label",`${musicEnabled?"Disable":"Enable"} station MIDI music`);
+  };
+  const pauseMusic=()=>{
+    musicAttempt++;
+    saveMusicPosition();
+    if(musicStarting)musicEngine?.stop();
+    else musicEngine?.pause();
+  };
+  const startMusic=()=>{
+    if(!musicEnabled||radioPowered||musicStarting)return;
+    const AudioContextClass=window.AudioContext||window.webkitAudioContext;
+    if(!AudioContextClass)return;
+    if(!musicContext)musicContext=new AudioContextClass();
+    if(musicContext.state==="suspended")musicContext.resume().catch(()=>{});
+    if(musicEngine?.key===musicKey){musicEngine.play();return}
+    const attempt=++musicAttempt;
+    musicStarting=(async()=>{
+      const module=await import(`${musicToggle.dataset.midiAssetBase}/engine.js`);
+      if(attempt!==musicAttempt)return;
+      if(!musicEngine)musicEngine=new module.MidiPlaybackEngine(musicContext,musicContext.destination,musicToggle.dataset.midiAssetBase,key=>{
+        if(key!==musicKey||!musicEnabled||radioPowered)return;
+        musicEngine.seek(0);
+        savedPosition=0;
+        try{sessionStorage.setItem(musicPositionKey,"0")}catch(_){}
+        musicEngine.play();
+      });
+      await musicEngine.sync(musicKey,musicToggle.dataset.midiUrl,savedPosition);
+      if(attempt!==musicAttempt||!musicEnabled||radioPowered){musicEngine.pause();return}
+      musicEngine.sequencer.loopCount=-1;
+    })().catch(error=>console.warn("Station MIDI Theme could not play:",error)).finally(()=>{
+      musicStarting=null;
+      if(attempt!==musicAttempt&&musicEnabled&&!radioPowered)startMusic();
+    });
+  };
+  renderMusicToggle();
+  window.addEventListener("stationnet:radio-power",event=>{
+    radioPowered=Boolean(event.detail?.powered);
+    if(radioPowered)pauseMusic();else startMusic();
+  });
+  musicToggle.addEventListener("click",async()=>{
+    musicToggle.disabled=true;
+    const previous=musicEnabled;
+    musicEnabled=!musicEnabled;
+    renderMusicToggle();
+    if(musicEnabled)startMusic();else pauseMusic();
+    try{
+      const data=new FormData();
+      data.set("csrf_token",musicToggle.dataset.midiCsrf);
+      data.set("enabled",String(musicEnabled));
+      const response=await fetch(musicToggle.dataset.midiPreferenceUrl,{
+        method:"POST",credentials:"same-origin",
+        body:data
+      });
+      if(!response.ok)throw new Error(`Preference save failed (${response.status}).`);
+    }catch(error){
+      musicEnabled=previous;
+      renderMusicToggle();
+      if(musicEnabled)startMusic();else pauseMusic();
+      console.warn(error);
+    }finally{musicToggle.disabled=false}
+  });
+  window.addEventListener("pagehide",saveMusicPosition);
+  setInterval(()=>{if(musicEnabled&&!radioPowered)saveMusicPosition()},1000);
+  document.addEventListener("pointerdown",()=>{if(musicEnabled&&!radioPowered&&musicContext?.state==="suspended")musicContext.resume().catch(()=>{})});
+  document.addEventListener("keydown",()=>{if(musicEnabled&&!radioPowered&&musicContext?.state==="suspended")musicContext.resume().catch(()=>{})});
+  if(!document.querySelector("[data-radio-player],[data-radio-console]"))startMusic();
+}
 document.addEventListener("click",event=>{
   if(!(event.target instanceof Element))return;
   const control=event.target.closest('a,button,summary,[role="button"],[role="menuitem"],input[type="button"],input[type="submit"],input[type="reset"],input[type="checkbox"],input[type="radio"],input[type="file"],select,option');
