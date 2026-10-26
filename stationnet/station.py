@@ -51,6 +51,11 @@ def station_midi_theme():
 @admin_required
 def upload_station_midi():
     validate_csrf()
+    volume_text = request.form.get("station_midi_volume", str(g.station["station_midi_volume"]))
+    if not volume_text.isdecimal() or not 0 <= int(volume_text) <= 100:
+        flash("Station MIDI volume must be a whole number from 0 to 100.", "error")
+        return redirect(url_for("station.settings") + "#station-parameters")
+    volume = int(volume_text)
     uploaded = request.files.get("station_midi")
     path = _station_midi_path()
     if uploaded is not None and uploaded.filename:
@@ -71,8 +76,8 @@ def upload_station_midi():
         return redirect(url_for("station.settings") + "#station-parameters")
     database = get_db()
     database.execute(
-        "UPDATE station SET play_station_midi=? WHERE id=1",
-        (int(path.is_file() and request.form.get("play_station_midi") == "on"),),
+        "UPDATE station SET play_station_midi=?,station_midi_volume=? WHERE id=1",
+        (int(path.is_file() and request.form.get("play_station_midi") == "on"), volume),
     )
     database.commit()
     flash("Station MIDI Theme settings saved.", "success")

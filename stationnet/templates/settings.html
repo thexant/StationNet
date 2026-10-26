@@ -24,6 +24,10 @@
     <input type="hidden" name="csrf_token" value="{{ session.csrf_token }}">
     <div class="divider">STATION MIDI THEME</div>
     <label class="switch"><input type="checkbox" name="play_station_midi" {% if g.station.play_station_midi %}checked{% endif %} {% if not station_midi_exists %}disabled{% endif %}> Play Station MIDI</label>
+    <label>Station MIDI volume (%)
+      <input type="number" name="station_midi_volume" min="0" max="100" step="1" required value="{{ g.station.station_midi_volume }}">
+      <small>Sets the station theme volume for listeners. 0 is silent; 100 is full volume.</small>
+    </label>
     <label>Station MIDI Theme
       <input type="file" name="station_midi" accept=".mid,.midi,audio/midi,audio/x-midi">
       <small>Standard MIDI type 0 or 1, up to 2 MB. Uploading another theme replaces the current one. Playback is disabled by default.</small>

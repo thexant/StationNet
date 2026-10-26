@@ -56,6 +56,8 @@ const musicToggle=document.querySelector("[data-music-toggle]");
 if(musicToggle){
   const musicPositionKey=`stationnet.music.position.${musicToggle.dataset.userId}.${musicToggle.dataset.midiVersion}`;
   const musicKey=`station-theme-${musicToggle.dataset.midiVersion}`;
+  const configuredMusicVolume=Number(musicToggle.dataset.midiVolume);
+  const musicVolume=Number.isFinite(configuredMusicVolume)?Math.min(1,Math.max(0,configuredMusicVolume/100)):1;
   let musicEnabled=musicToggle.dataset.midiEnabled==="true";
   let radioPowered=sessionStorage.getItem("stationnet.radio.powered")==="true";
   let musicContext=null,musicEngine=null,musicStarting=null,musicAttempt=0;
@@ -93,7 +95,10 @@ if(musicToggle){
         try{sessionStorage.setItem(musicPositionKey,"0")}catch(_){}
         musicEngine.play();
       });
-      await musicEngine.sync(musicKey,musicToggle.dataset.midiUrl,savedPosition);
+      await musicEngine.initialize();
+      if(attempt!==musicAttempt)return;
+      musicEngine.gain.gain.value=musicVolume;
+      await musicEngine.sync(musicKey,musicToggle.dataset.midiUrl,savedPosition,musicVolume);
       if(attempt!==musicAttempt||!musicEnabled||radioPowered){musicEngine.pause();return}
       musicEngine.sequencer.loopCount=-1;
     })().catch(error=>console.warn("Station MIDI Theme could not play:",error)).finally(()=>{

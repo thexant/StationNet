@@ -18,6 +18,7 @@ CREATE TABLE IF NOT EXISTS station (
  display_station_icon INTEGER NOT NULL DEFAULT 0 CHECK(display_station_icon IN (0,1)),
  use_station_icon_for_web_app INTEGER NOT NULL DEFAULT 0 CHECK(use_station_icon_for_web_app IN (0,1)),
  play_station_midi INTEGER NOT NULL DEFAULT 0 CHECK(play_station_midi IN (0,1)),
+ station_midi_volume INTEGER NOT NULL DEFAULT 100 CHECK(station_midi_volume BETWEEN 0 AND 100),
  header_font TEXT NOT NULL DEFAULT 'small',
  header_font_size INTEGER NOT NULL DEFAULT 100,
  header_text TEXT NOT NULL DEFAULT '',
@@ -1658,6 +1659,11 @@ def _migrate_station_midi(database):
         database.execute(
             "ALTER TABLE station ADD COLUMN play_station_midi INTEGER NOT NULL DEFAULT 0 "
             "CHECK(play_station_midi IN (0,1))"
+        )
+    if "station_midi_volume" not in station_columns:
+        database.execute(
+            "ALTER TABLE station ADD COLUMN station_midi_volume INTEGER NOT NULL DEFAULT 100 "
+            "CHECK(station_midi_volume BETWEEN 0 AND 100)"
         )
     user_columns = {row["name"] for row in database.execute("PRAGMA table_info(users)")}
     if "station_midi_enabled" not in user_columns:
