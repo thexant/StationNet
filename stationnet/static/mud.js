@@ -1,4 +1,5 @@
 "use strict";
+import {commandSuggestions, historyStep} from "./mud_suggestions.mjs";
 
 for(const mud of document.querySelectorAll("[data-mud]")){
   const events=mud.querySelector("[data-mud-events]");
@@ -9,6 +10,12 @@ for(const mud of document.querySelectorAll("[data-mud]")){
   const clearButton=mud.querySelector("[data-mud-clear-events]");
   const form=mud.querySelector("[data-mud-command]");
   const input=form.querySelector("[data-command-input]");
+  const suggestions=form.querySelector("[data-mud-suggestions]");
+  const initialState=JSON.parse(mud.querySelector("[data-mud-initial-state]").textContent);
+  const catalog=initialState.catalog;
+  const suggestionState={room:initialState.room,combat:initialState.combat,inventory:initialState.inventory,hub:initialState.hub};
+  const commandHistory=[];
+  let historyIndex=-1, historyDraft="", activeSuggestion=0, suggestionItems=[];
   const error=mud.querySelector("[data-mud-error]");
   const roomName=mud.querySelector("[data-mud-room-name]");
   const roomPreview=mud.querySelector("[data-mud-room-preview]");
@@ -45,6 +52,53 @@ for(const mud of document.querySelectorAll("[data-mud]")){
   let showingDeath=mud.dataset.deathSummary==="true";
   let clearedThroughId=Number(mud.dataset.clearedThrough)||0;
   let lastId=Math.max(clearedThroughId,...Array.from(events.querySelectorAll("[data-event-id]"),row=>Number(row.dataset.eventId)||0));
+
+  const hideSuggestions=()=>{
+    suggestions.hidden=true;
+    suggestions.replaceChildren();
+    suggestionItems=[];
+    input.setAttribute("aria-expanded","false");
+    input.removeAttribute("aria-activedescendant");
+  };
+  const fillSuggestion=command=>{
+    input.value=command;
+    hideSuggestions();
+    historyIndex=-1;
+    input.focus({preventScroll:true});
+    input.setSelectionRange(command.length,command.length);
+  };
+  const refreshSuggestions=()=>{
+    const next=commandSuggestions(input.value,suggestionState,catalog);
+    if(!suggestions.hidden&&next.length===suggestionItems.length&&
+       next.every((item,index)=>item.command===suggestionItems[index].command&&item.detail===suggestionItems[index].detail))return;
+    suggestionItems=next;
+    suggestions.replaceChildren();
+    if(!suggestionItems.length){hideSuggestions();return}
+    activeSuggestion=Math.min(activeSuggestion,suggestionItems.length-1);
+    suggestionItems.forEach((item,index)=>{
+      const option=document.createElement("button");
+      option.type="button";
+      option.id=`mud-command-option-${index}`;
+      option.className=`mud-suggestion${index===activeSuggestion?" is-active":""}`;
+      option.setAttribute("role","option");
+      option.setAttribute("aria-selected",String(index===activeSuggestion));
+      const command=document.createElement("span");command.textContent=item.command;
+      const detail=document.createElement("small");detail.textContent=item.detail;
+      option.append(command,detail);
+      option.addEventListener("mousedown",event=>event.preventDefault());
+      option.addEventListener("click",()=>fillSuggestion(item.command));
+      suggestions.append(option);
+    });
+    suggestions.hidden=false;
+    input.setAttribute("aria-expanded","true");
+    input.setAttribute("aria-activedescendant",`mud-command-option-${activeSuggestion}`);
+  };
+  const updateSuggestionState=payload=>{
+    for(const key of ["room","combat","inventory","hub"]){
+      if(Object.hasOwn(payload,key))suggestionState[key]=payload[key];
+    }
+    if(!suggestions.hidden)refreshSuggestions();
+  };
 
   const atLatest=()=>gameScroll.scrollHeight-gameScroll.scrollTop-gameScroll.clientHeight<48;
   const showRoom=open=>{
@@ -244,6 +298,7 @@ for(const mud of document.querySelectorAll("[data-mud]")){
       const response=await fetch(mud.dataset.actionUrl,{method:"POST",body:data,headers:{"Accept":"application/json"}});
       if(response.status===401||response.redirected){location.reload();return false}
       const payload=await response.json();
+      updateSuggestionState(payload);
       renderRoom(payload.room);
       renderCharacter(payload.character);
       renderInventory(payload.inventory);
@@ -267,6 +322,7 @@ for(const mud of document.querySelectorAll("[data-mud]")){
       if(response.status===401||response.redirected){location.reload();return}
       const payload=await response.json();
       if(!response.ok)throw new Error(payload.error||"MUD link interrupted.");
+      updateSuggestionState(payload);
       renderRoom(payload.room);
       renderCharacter(payload.character);
       renderInventory(payload.inventory);
@@ -282,14 +338,51 @@ for(const mud of document.querySelectorAll("[data-mud]")){
   roomButton.addEventListener("click",()=>showRoom(roomView.hidden));
   latestButton.addEventListener("click",scrollEventsToLatest);
   clearButton.addEventListener("click",clearEvents);
+  document.addEventListener("pointerdown",event=>{
+    if(event.target!==input&&!suggestions.contains(event.target))hideSuggestions();
+  });
   gameScroll.addEventListener("scroll",()=>{if(roomView.hidden&&atLatest())latestButton.classList.remove("is-unread")},{passive:true});
   mud.addEventListener("keydown",event=>{if(event.key==="Escape"&&!roomView.hidden)showRoom(false)});
+  input.addEventListener("input",()=>{
+    historyIndex=-1;
+    historyDraft="";
+    activeSuggestion=0;
+    refreshSuggestions();
+  });
+  input.addEventListener("keydown",event=>{
+    if(event.isComposing||event.ctrlKey||event.altKey||event.metaKey)return;
+    if(event.key==="Tab"&&!suggestions.hidden&&suggestionItems.length){
+      event.preventDefault();
+      fillSuggestion(suggestionItems[activeSuggestion].command);
+    }else if(event.key==="ArrowUp"||event.key==="ArrowDown"){
+      if(!commandHistory.length)return;
+      event.preventDefault();
+      if(historyIndex===-1&&event.key==="ArrowUp")historyDraft=input.value;
+      const next=historyStep(commandHistory,historyIndex,historyDraft,event.key==="ArrowUp"?1:-1);
+      historyIndex=next.index;
+      input.value=next.value;
+      input.setSelectionRange(input.value.length,input.value.length);
+      activeSuggestion=0;
+      hideSuggestions();
+    }else if(event.key==="Escape"&&!suggestions.hidden){
+      event.stopPropagation();
+      hideSuggestions();
+    }
+  });
   form.addEventListener("submit",async event=>{
     event.preventDefault();
+    if(busy)return;
     const text=input.value.trim();
     if(!text)return;
+    if(text.startsWith("/")&&commandHistory.at(-1)!==text){
+      commandHistory.push(text);
+      if(commandHistory.length>50)commandHistory.shift();
+    }
+    historyIndex=-1;
+    historyDraft="";
+    hideSuggestions();
     const sent=await dispatch(text.startsWith("/")?{command:text}:{message:text});
-    if(sent)input.value="";
+    if(sent&&input.value.trim()===text)input.value="";
     input.focus();
   });
   addEventListener("pagehide",()=>{

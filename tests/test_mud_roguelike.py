@@ -12,6 +12,12 @@ from stationnet.db import get_db
 from stationnet import mud
 
 
+def test_expeditions_alias_uses_expedition_handler():
+    definition, parameters = mud.actions.from_command("/expeditions")
+    assert definition.key == "expedition"
+    assert parameters == {"arguments": []}
+
+
 @pytest.fixture
 def game():
     data_dir = Path(__file__).parent / f"_mud_test_{uuid.uuid4().hex}"
@@ -398,6 +404,9 @@ def test_hub_console_commands_and_idempotent_purchase(game):
         session["csrf_token"] = "test-token"
     page = client.get("/mud")
     assert page.status_code == 200
+    assert b'data-mud-suggestions' in page.data
+    assert b'data-mud-initial-state' in page.data
+    assert b'"name": "expeditions"' in page.data
     assert b"QUICK ACTIONS" not in page.data
     assert b"data-mud-action=" not in page.data
     payload = {

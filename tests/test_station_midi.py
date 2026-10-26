@@ -1,12 +1,21 @@
 from io import BytesIO
 
+import pytest
+
 from stationnet import create_app
 from stationnet.db import get_db
+from stationnet.midi import InvalidMidi, inspect_midi
 
 
-def _midi():
-    track = b"\x00\x90\x3c\x40\x83\x60\x80\x3c\x00\x00\xff\x2f\x00"
+def _midi(velocity=0x40):
+    track = b"\x00\x90\x3c" + bytes([velocity]) + b"\x83\x60\x80\x3c\x00\x00\xff\x2f\x00"
     return b"MThd\x00\x00\x00\x06\x00\x00\x00\x01\x01\xe0MTrk" + len(track).to_bytes(4, "big") + track
+
+
+def test_station_theme_allows_extended_note_on_velocity_only():
+    with pytest.raises(InvalidMidi, match="Invalid MIDI channel event"):
+        inspect_midi(_midi(0x9a))
+    assert inspect_midi(_midi(0x9a), allow_extended_velocity=True) == 0.5
 
 
 def _login(client, user_id):
@@ -33,13 +42,13 @@ def test_station_midi_upload_preference_radio_and_clear(tmp_path):
     assert client.post("/sysop/settings/midi", data={"csrf_token": "test-token", "station_midi": (BytesIO(b"bad"), "bad.mid")}).status_code == 302
     assert not (tmp_path / "station_theme.mid").exists()
 
-    response = client.post("/sysop/settings/midi", data={"csrf_token": "test-token", "station_midi": (BytesIO(_midi()), "theme.mid")})
+    response = client.post("/sysop/settings/midi", data={"csrf_token": "test-token", "station_midi": (BytesIO(_midi(0x9a)), "theme.mid")})
     assert response.status_code == 302
-    assert (tmp_path / "station_theme.mid").read_bytes() == _midi()
+    assert (tmp_path / "station_theme.mid").read_bytes() == _midi(0x9a)
     assert b"data-music-toggle" not in client.get("/").data
     assert client.post("/sysop/settings/midi", data={"csrf_token": "test-token", "play_station_midi": "on"}).status_code == 302
     assert b"data-music-toggle" in client.get("/").data
-    assert client.get("/station-theme.mid").data == _midi()
+    assert client.get("/station-theme.mid").data == _midi(0x9a)
 
     _login(client, member)
     assert b"MUSIC: OFF" in client.get("/").data

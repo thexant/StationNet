@@ -29,8 +29,13 @@ def _varint(data, position):
     raise InvalidMidi("MIDI variable-length value is too long.")
 
 
-def inspect_midi(payload):
-    """Return a safe playback duration, rejecting malformed or costly SMF files."""
+def inspect_midi(payload, *, allow_extended_velocity=False):
+    """Return a safe playback duration, rejecting malformed or costly SMF files.
+
+    Some exported themes contain note-on velocities above 127. The bundled
+    browser synthesizer parses those files, so station themes may opt in to
+    accepting those velocity bytes while radio uploads remain strict.
+    """
     if not 14 <= len(payload) <= MAX_MIDI_BYTES or payload[:4] != b"MThd":
         raise InvalidMidi("Expected a Standard MIDI File of at most 2 MB.")
     header_size = int.from_bytes(payload[4:8], "big")
@@ -105,8 +110,13 @@ def inspect_midi(payload):
                 cursor += length
             elif 0x80 <= status <= 0xef:
                 length = 1 if status & 0xf0 in (0xc0, 0xd0) else 2
-                if cursor + length > len(track) or any(byte & 0x80 for byte in track[cursor:cursor + length]):
+                if cursor + length > len(track):
                     raise InvalidMidi("Invalid MIDI channel event.")
+                for index, byte in enumerate(track[cursor:cursor + length]):
+                    if byte & 0x80 and not (
+                        allow_extended_velocity and status & 0xf0 == 0x90 and index == 1
+                    ):
+                        raise InvalidMidi("Invalid MIDI channel event.")
                 if status & 0xf0 == 0x90 and track[cursor + 1] != 0:
                     playable = True
                 cursor += length

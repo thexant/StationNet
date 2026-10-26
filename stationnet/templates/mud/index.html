@@ -72,11 +72,12 @@
       </section>
       <form class="mud-command" data-mud-command>
         <label for="mud-command-input">ROOM CHAT / COMMAND INPUT</label>
-        <div>
-          <input id="mud-command-input" name="command" data-command-input maxlength="1000" autocomplete="off" placeholder="Say something, or use /help" aria-describedby="mud-command-help" required>
+        <div class="mud-command-row">
+          <input id="mud-command-input" name="command" data-command-input maxlength="1000" autocomplete="off" autocapitalize="off" spellcheck="false" enterkeyhint="send" placeholder="Say something, or use /help" aria-describedby="mud-command-help" aria-autocomplete="list" aria-controls="mud-command-suggestions" aria-expanded="false" role="combobox" required>
           <button>SEND</button>
         </div>
-        <small id="mud-command-help">Plain text is speech; commands start with /. Use /help to list commands.</small>
+        <div class="mud-suggestions" id="mud-command-suggestions" data-mud-suggestions role="listbox" aria-label="Command suggestions" hidden></div>
+        <small id="mud-command-help">Plain text is speech; commands start with /. Tab fills a suggestion. Up/Down recalls commands.</small>
         <span class="mud-error" data-mud-error role="alert"></span>
       </form>
 
@@ -160,6 +161,7 @@
       </section>
     </aside>
   </div>
+  <script type="application/json" data-mud-initial-state>{{ {'room': room, 'combat': combat, 'inventory': inventory, 'hub': hub, 'catalog': command_catalog}|tojson }}</script>
 </section>
-<script src="{{ url_for('static',filename='mud.js') }}" defer></script>
+<script type="module" src="{{ url_for('static',filename='mud.js') }}"></script>
 {% endblock %}

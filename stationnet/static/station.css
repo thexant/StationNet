@@ -762,10 +762,17 @@ button:disabled { opacity: .5; cursor: not-allowed; }
 .mud-event-arrival p { color: var(--green-bright); }
 .mud-event-departure p { color: var(--grey); }
 .mud-command { padding: .45rem .65rem .5rem; border-top: 1px solid var(--green-dim); background: var(--black); }
-.mud-command > div { display: grid; grid-template-columns: minmax(0,1fr) auto; gap: .5rem; }
+.mud-command .mud-command-row { display: grid; grid-template-columns: minmax(0,1fr) auto; gap: .5rem; }
 .mud-command label { margin-bottom: .2rem; color: var(--cyan); }
 .mud-command small { display: block; margin-top: .2rem; color: var(--grey); font-size: var(--text-xs); }
-.mud-command button { min-width: 7rem; justify-content: center; }
+.mud-command-row > button { min-width: 7rem; justify-content: center; }
+.mud-suggestions { display: grid; gap: 1px; max-height: min(15rem, 35dvh); margin-top: .35rem; overflow-y: auto; border: 1px solid var(--green-dim); background: var(--green-dim); }
+.mud-suggestions[hidden] { display: none; }
+.mud-suggestion { display: flex; align-items: center; justify-content: space-between; gap: .75rem; width: 100%; min-height: 2.75rem; padding: .4rem .55rem; border: 0; border-radius: 0; background: var(--black); color: var(--green-bright); text-align: left; cursor: pointer; }
+.mud-suggestion span { min-width: 0; overflow-wrap: anywhere; }
+.mud-suggestion small { flex: 0 1 auto; max-width: 55%; margin: 0; color: var(--grey); text-align: right; }
+.mud-suggestion:hover, .mud-suggestion.is-active, .mud-suggestion:focus-visible { outline: 1px solid var(--cyan); outline-offset: -1px; background: var(--surface-field); }
+.mud-suggestion.is-active span { color: var(--cyan); }
 .mud-error { display: block; min-height: 1em; margin-top: .35rem; color: var(--red); font-size: var(--text-xs); }
 .mud-sidebar { min-width: 0; min-height: 0; overflow-y: auto; background: var(--black); scrollbar-color: var(--green-dim) #000; }
 .mud-panel { padding: .55rem .65rem; border-bottom: 1px solid var(--green-dim); }
@@ -1068,8 +1075,8 @@ button:disabled { opacity: .5; cursor: not-allowed; }
   .track-row { align-items: flex-start; flex-direction: column; }
   .mud-header { align-items: start; flex-direction: column; }
   .mud-event { grid-template-columns: 1fr; gap: .2rem; }
-  .mud-command > div { grid-template-columns: 1fr; }
-  .mud-command button { width: 100%; }
+  .mud-command .mud-command-row { grid-template-columns: 1fr; }
+  .mud-command-row > button { width: 100%; }
   .mud-enemy { grid-template-columns: 1fr; }
   .mud-sidebar { grid-template-columns: 1fr; }
   .mud-header-actions { align-items: flex-start; justify-content: flex-start; }
@@ -1140,8 +1147,8 @@ button:disabled { opacity: .5; cursor: not-allowed; }
   .mud-header h1 { font-size: 1.1rem; }
   .mud-scene-facts { grid-template-columns: 1fr 1fr; }
   .mud-scene-facts div:last-child { grid-column: 1 / -1; }
-  .mud-command > div { grid-template-columns: minmax(0,1fr) auto; }
-  .mud-command button { width: auto; min-width: 4.5rem; }
+  .mud-command .mud-command-row { grid-template-columns: minmax(0,1fr) auto; }
+  .mud-command-row > button { width: auto; min-width: 4.5rem; }
   .mud-command small { display: none; }
 }
 
@@ -1199,8 +1206,9 @@ button:disabled { opacity: .5; cursor: not-allowed; }
   .mud-game-jumps { grid-column: 2; grid-row: 1; justify-self: end; margin-left: 0; }
   .mud-game-place { grid-column: 1 / -1; grid-row: 2; }
   .mud-game-jumps button { padding-inline: .3rem; }
-  .mud-command > div { grid-template-columns: minmax(0, 1fr) auto; }
-  .mud-command button { width: auto; min-width: 4.5rem; }
+  .mud-command .mud-command-row { grid-template-columns: minmax(0, 1fr) auto; }
+  .mud-command-row > button { width: auto; min-width: 4.5rem; }
+  .mud-suggestion small { display: none; }
 }
 
 .event-list { display: grid; gap: 1rem; margin-bottom: 2rem; }

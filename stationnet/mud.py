@@ -393,7 +393,7 @@ def _help_action(_database, _user, parameters):
         "/character (or /stats) — view your character and progression\n"
         "/inventory (or /inv) — list carried and equipped items\n"
         "/portal enters the portal hub; /world returns when available\n"
-        "/expedition <theme> [difficulty] [size], /join <code>, /run\n"
+        "/expeditions lists themes; /expedition <theme> [difficulty] [size], /join <code>, /run\n"
         "/daily, /daily enter, /daily join <code> — today's station challenge\n"
         "/shop buy <name>, /shop sell <item>, /storage deposit|withdraw <item> at the hub\n"
         "/complete at the exit keeps loot; /abandon loses this run's loot\n"
@@ -3633,7 +3633,7 @@ actions.register(ActionDefinition(
 actions.register(ActionDefinition(
     key="expedition", label="LAUNCH EXPEDITION",
     description="Launch a random expedition from an installed theme.",
-    commands=("expedition",), handler=_expedition_action,
+    commands=("expedition", "expeditions"), handler=_expedition_action,
     group="EXPEDITIONS", show_context=False,
 ))
 actions.register(ActionDefinition(
@@ -3960,6 +3960,11 @@ def index():
         activity_cleared=cleared_view is not None,
         room=room, character=character, inventory=inventory,
         quests=quests, combat=combat, hub=hub,
+        command_catalog=[
+            {"name": name, "key": definition.key, "description": definition.description}
+            for name, (definition, prefix) in actions._commands.items()
+            if not prefix and _authorized(definition, g.user)
+        ],
     )
 
 

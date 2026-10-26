@@ -56,7 +56,7 @@ def upload_station_midi():
     if uploaded is not None and uploaded.filename:
         payload = uploaded.read(MAX_MIDI_BYTES + 1)
         try:
-            inspect_midi(payload)
+            inspect_midi(payload, allow_extended_velocity=True)
         except InvalidMidi as error:
             flash(str(error), "error")
             return redirect(url_for("station.settings") + "#station-parameters")
