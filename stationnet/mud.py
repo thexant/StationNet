@@ -17,7 +17,7 @@ from flask import Blueprint, abort, flash, g, jsonify, redirect, render_template
 
 from .auth import admin_required, login_required
 from .db import get_db
-from . import dungeons, character_creation
+from . import dungeons, character_creation, mud_effects
 from .security import validate_csrf
 
 bp = Blueprint("mud", __name__, url_prefix="/mud")
@@ -207,7 +207,8 @@ def _character_row(database, user_id, track_key=None):
     )
     return database.execute(
         "SELECT c.id,c.user_id,c.display_name,p.track_key,p.level,p.experience,"
-        "p.current_health,p.maximum_health,p.strength,p.agility,p.intellect,p.vitality "
+        "p.current_health,p.maximum_health,p.current_mana,p.maximum_mana,"
+        "p.strength,p.agility,p.intellect,p.vitality "
         "FROM mud_characters AS c JOIN mud_character_progression AS p "
         "ON p.character_id=c.id WHERE c.user_id=? AND p.track_key=?",
         (user_id, track_key),
@@ -253,6 +254,9 @@ def character_state(database, user_id, track_key=None):
         "experience_to_next_level": next_floor - row["experience"],
         "health": row["current_health"],
         "maximum_health": row["maximum_health"],
+        "mana": row["current_mana"],
+        "maximum_mana": row["maximum_mana"],
+        "effects": mud_effects.list_effects(database, "character", row["id"]),
         "attributes": {
             "strength": row["strength"],
             "agility": row["agility"],
@@ -317,6 +321,8 @@ def _character_effects(database, character_id):
         effect = skill.get("effect")
         if effect in totals:
             totals[effect] += ranks.get(skill["key"], 0) * skill.get("per_rank", 1)
+    for key in ("attack", "defense"):
+        totals[key] += mud_effects.modifier(database, "character", character_id, key)
     return totals
 
 
@@ -340,16 +346,22 @@ def _character_action(database, user, parameters):
     character = character_state(database, user["id"])
     attributes = character["attributes"]
     skills = ", ".join(f"{skill['name']} {skill['rank']}" for skill in character["skills"])
+    active_effects = ", ".join(
+        f"{effect['effect_key']} {effect['potency']} ({effect['remaining_turns']} turns)"
+        for effect in character["effects"]
+    )
     return [EventDraft(
         f"{character['name']} — Level {character['level']}\n"
         f"Origin: {character['race'] or 'Unchosen'} / {character['class'] or 'Unchosen'}\n"
         f"Health: {character['health']}/{character['maximum_health']}\n"
+        f"Mana: {character['mana']}/{character['maximum_mana']}\n"
         f"Experience: {character['experience_into_level']}/"
         f"{character['experience_for_next_level']} "
         f"({character['experience_to_next_level']} to next level)\n"
         f"Strength {attributes['strength']} · Agility {attributes['agility']} · "
         f"Intellect {attributes['intellect']} · Vitality {attributes['vitality']}\n"
         f"Skills: {skills or 'none'}\n"
+        f"Effects: {active_effects or 'none'}\n"
         f"Track: {character['progression_label']}",
         event_type="character",
     )]
@@ -366,6 +378,7 @@ def _help_action(_database, _user, parameters):
         "/get <item> [from <container>], /drop <item>, /open <container>\n"
         "/put <item> in <container>, /equip <item>, /unequip <item>, /use <item>\n"
         "/combat, /hide, /attack <enemy>, /defend, /flee - turn-based combat\n"
+        "/spells, /cast <spell> [enemy], /rest - magic and recovery\n"
         "/talk <npc>, /respond <number or response> — converse with an NPC\n"
         "/quests, /quest accept <name> — view or accept available quests\n"
         "/north, /south, /east, /west, /up, /down, /in, /out — direction shortcuts\n"
@@ -750,6 +763,20 @@ def _json_properties(raw):
     return value if isinstance(value, dict) else {}
 
 
+def _effect_specs(properties, field):
+    value = properties.get(field, [])
+    if not isinstance(value, list):
+        return []
+    valid = []
+    for spec in value:
+        try:
+            mud_effects.validate(spec)
+            valid.append(spec)
+        except ValueError:
+            continue
+    return valid
+
+
 def _integer_property(properties, *names):
     for name in names:
         value = properties.get(name)
@@ -852,6 +879,7 @@ def combat_state(database, user_id):
             "encounter_id": encounter["id"], "status": encounter["status"],
             "health": encounter["current_health"], "maximum_health": encounter["maximum_health"],
             "attack": npc["combat_attack"], "defense": npc["combat_defense"],
+            "effects": mud_effects.list_effects(database, "encounter", encounter["id"]),
         })
     return {"scope_type": "instance" if room.get("instance_id") else "room",
             "scope_key": room.get("instance_id") or room["id"], "enemies": enemies,
@@ -1723,10 +1751,12 @@ def _enemy_turn(database, user, defending=False, chosen=None):
     player_gear = _equipment_combat_totals(database, character_id=character["id"])
     effects = _character_effects(database, character["id"])
     damage = max(1, npc["combat_attack"] + enemy_gear["attack"]
+                 + mud_effects.modifier(database, "encounter", encounter["id"], "attack")
                  - (character["vitality"] // 10 + character["agility"] // 5
                     + player_gear["defense"] + effects["defense"]))
     if defending:
         damage = max(0, damage // 3)
+    damage += sum(amount for _, amount in mud_effects.tick(database, "character", character["id"]))
     _practice_effect(database, character["id"], "defense")
     health = max(0, character["current_health"] - damage)
     database.execute(
@@ -1737,6 +1767,13 @@ def _enemy_turn(database, user, defending=False, chosen=None):
         f"{npc['name']} strikes for {damage} damage ({health}/{character['maximum_health']} health).",
         event_type="combat",
     )]
+    if health > 0 and damage > 0:
+        for spec in _effect_specs(_json_properties(npc["properties_json"]), "on_hit_effects"):
+            try:
+                key = mud_effects.apply(database, "character", character["id"], spec, npc["name"])
+                drafts.append(EventDraft(f"{npc['name']} inflicts {key}.", event_type="combat"))
+            except (ValueError, TypeError):
+                continue
     if health == 0:
         refreshed = database.execute(
             "SELECT * FROM mud_combat_encounters WHERE id=?", (encounter["id"],)
@@ -1766,9 +1803,10 @@ def _entry_attack(database, user):
 def _defeat_player(database, user, encounter, npc):
     _set_hidden(database, user["id"], False)
     character = _character_row(database, user["id"])
+    mud_effects.clear(database, "character", character["id"])
     old_room = _current_room(database, user["id"])
     database.execute(
-        "UPDATE mud_character_progression SET current_health=maximum_health,"
+        "UPDATE mud_character_progression SET current_health=maximum_health,current_mana=maximum_mana,"
         "updated_at=CURRENT_TIMESTAMP WHERE character_id=? AND track_key=?",
         (character["id"], character["track_key"]),
     )
@@ -1868,11 +1906,19 @@ def _attack_action(database, user, parameters):
     effects = _character_effects(database, character["id"])
     surprise = _is_hidden(database, user["id"])
     _set_hidden(database, user["id"], False)
-    damage = max(1, 4 + character["strength"] // 2 + player_gear["attack"]
-                 + effects["attack"] - (npc["combat_defense"] + enemy_gear["defense"]) // 2)
+    spell_damage = parameters.get("_spell_damage")
+    damage = (max(1, spell_damage + character["intellect"] // 3
+                  - (npc["combat_defense"] + enemy_gear["defense"]
+                     + mud_effects.modifier(database, "encounter", encounter["id"], "defense")) // 2)
+              if spell_damage is not None else
+              max(1, 4 + character["strength"] // 2 + player_gear["attack"]
+                  + effects["attack"] - (npc["combat_defense"] + enemy_gear["defense"]
+                     + mud_effects.modifier(database, "encounter", encounter["id"], "defense")) // 2))
     if surprise:
         damage += max(2, character["agility"] // 2)
-    _practice_effect(database, character["id"], "attack")
+    if spell_damage is None:
+        _practice_effect(database, character["id"], "attack")
+    damage += sum(amount for _, amount in mud_effects.tick(database, "encounter", encounter["id"]))
     remaining = max(0, encounter["current_health"] - damage)
     database.execute(
         "UPDATE mud_combat_encounters SET status=?,current_health=?,"
@@ -1890,12 +1936,24 @@ def _attack_action(database, user, parameters):
     audience_type = "instance" if room.get("instance_id") else "room"
     audience_key = room.get("instance_id") or room["id"]
     drafts = [EventDraft(
-        f"{character['display_name']} {'surprises' if surprise else 'attacks'} {display_name} for {damage} damage "
+        f"{character['display_name']} {'casts at' if spell_damage is not None else 'surprises' if surprise else 'attacks'} {display_name} for {damage} damage "
         f"({remaining}/{encounter['maximum_health']} health).",
         event_type="combat", audience_type=audience_type, audience_key=audience_key,
         recipient_ids=tuple(sorted(recipients)),
     )]
+    if remaining > 0:
+        applications = parameters.get("_spell_effects") if spell_damage is not None else []
+        if spell_damage is None:
+            for equipped in _inventory_rows(database, user["id"], True):
+                applications += _effect_specs(_json_properties(equipped["properties_json"]), "on_hit_effects")
+        for spec in applications:
+            try:
+                key = mud_effects.apply(database, "encounter", encounter["id"], spec, character["display_name"])
+                drafts.append(EventDraft(f"{display_name} suffers {key}.", event_type="combat"))
+            except (ValueError, TypeError):
+                continue
     if remaining == 0:
+        mud_effects.clear(database, "encounter", encounter["id"])
         defeated = database.execute(
             "SELECT * FROM mud_combat_encounters WHERE id=?", (encounter["id"],),
         ).fetchone()
@@ -1975,6 +2033,88 @@ def _combat_action(database, user, parameters):
     if state["hidden"]:
         body = "You are hidden.\n" + body
     return [EventDraft(body, event_type="combat")]
+
+
+SPELLS = {
+    "ember": {"cost": 8, "damage": 9, "effects": [{"key": "burning", "potency": 2, "duration": 3}]},
+    "venom": {"cost": 7, "damage": 5, "effects": [{"key": "poison", "potency": 3, "duration": 3}]},
+    "rend": {"cost": 6, "damage": 7, "effects": [{"key": "bleeding", "potency": 2, "duration": 3}]},
+    "hex": {"cost": 7, "damage": 2, "effects": [{"key": "weakness", "potency": 2, "duration": 3},
+                                                   {"key": "vulnerability", "potency": 2, "duration": 3}]},
+    "mend": {"cost": 7, "heal": 20},
+    "ward": {"cost": 6, "effects": [{"key": "ward", "potency": 3, "duration": 3}]},
+    "might": {"cost": 6, "effects": [{"key": "might", "potency": 3, "duration": 3}]},
+}
+
+
+def _known_spells(database, character_id):
+    _, archetype = _origin_options(database, character_id)
+    return tuple((archetype or {}).get("spells", ()))
+
+
+def _spells_action(database, user, parameters):
+    if parameters.get("arguments"):
+        raise ActionError("The spells command does not accept arguments.")
+    character = _character_row(database, user["id"])
+    known = _known_spells(database, character["id"])
+    lines = [f"{name}: {SPELLS[name]['cost']} mana" for name in known if name in SPELLS]
+    return [EventDraft("Known spells:\n" + ("\n".join(lines) or "none"), event_type="character")]
+
+
+def _cast_action(database, user, parameters):
+    args = parameters.get("arguments") or []
+    if not args:
+        raise ActionError("Cast which spell? Use /spells to see known spells.")
+    name = args[0].casefold()
+    character = _character_row(database, user["id"])
+    if name not in _known_spells(database, character["id"]) or name not in SPELLS:
+        raise ActionError("You do not know that spell.")
+    spell = SPELLS[name]
+    if character["current_mana"] < spell["cost"]:
+        raise ActionError("You do not have enough mana.")
+    target = " ".join(args[1:])
+    if "damage" in spell:
+        if not target:
+            raise ActionError(f"Cast {name} at which enemy?")
+        room = _current_room(database, user["id"])
+        npc = _npc_match(_room_npc_rows(database, room["id"], room.get("instance_id")), target)
+        if npc["combat_maximum_health"] is None or _encounter_row(database, npc)["status"] == "defeated":
+            raise ActionError("That enemy cannot be targeted.")
+    elif target:
+        raise ActionError(f"{name} is a self-targeted spell.")
+    if "heal" in spell and character["current_health"] >= character["maximum_health"]:
+        raise ActionError("Your health is already full.")
+    database.execute(
+        "UPDATE mud_character_progression SET current_mana=current_mana-?,updated_at=CURRENT_TIMESTAMP "
+        "WHERE character_id=? AND track_key=?",
+        (spell["cost"], character["id"], character["track_key"]),
+    )
+    if "damage" in spell:
+        return _attack_action(database, user, {"arguments": args[1:], "_spell_damage": spell["damage"],
+                                               "_spell_effects": spell.get("effects", [])})
+    drafts = []
+    if "heal" in spell:
+        restored = min(spell["heal"] + character["intellect"] // 2,
+                       character["maximum_health"] - character["current_health"])
+        database.execute("UPDATE mud_character_progression SET current_health=current_health+? "
+                         "WHERE character_id=? AND track_key=?",
+                         (restored, character["id"], character["track_key"]))
+        drafts.append(EventDraft(f"You cast {name} and restore {restored} health.", event_type="combat"))
+    for spec in spell.get("effects", []):
+        key = mud_effects.apply(database, "character", character["id"], spec, name)
+        drafts.append(EventDraft(f"You cast {name} and gain {key}.", event_type="combat"))
+    return drafts + _enemy_turn(database, user)
+
+
+def _rest_action(database, user, parameters):
+    if parameters.get("arguments"):
+        raise ActionError("The rest command does not accept arguments.")
+    if _active_hostiles(database, _current_room(database, user["id"])):
+        raise ActionError("You cannot rest while enemies are nearby.")
+    character = _character_row(database, user["id"])
+    database.execute("UPDATE mud_character_progression SET current_mana=maximum_mana "
+                     "WHERE character_id=? AND track_key=?", (character["id"], character["track_key"]))
+    return [EventDraft("You rest and recover your mana.", event_type="character")]
 
 
 def _look_action(database, user, parameters):
@@ -2118,6 +2258,33 @@ def _use_action(database, user, parameters):
     target = _item_target(parameters)
     item = _item_matches(list(_inventory_rows(database, user["id"])) + list(_inventory_rows(database, user["id"], True)), target)
     properties = _json_properties(item["properties_json"])
+    use_effects = properties.get("on_use_effects", [])
+    if use_effects:
+        if not isinstance(use_effects, list):
+            raise ActionError("This item's effects are invalid.")
+        character = _character_row(database, user["id"])
+        try:
+            keys = [mud_effects.validate(spec)[0] for spec in use_effects]
+        except ValueError as problem:
+            raise ActionError(f"This item's effects are invalid: {problem}") from problem
+        for spec in use_effects:
+            mud_effects.apply(database, "character", character["id"], spec, item["name"])
+        restored = 0
+        heal_value = properties.get("heal")
+        if item["item_type"] == "consumable" and type(heal_value) is int and heal_value > 0:
+            restored = min(heal_value, character["maximum_health"] - character["current_health"])
+            if restored:
+                database.execute(
+                    "UPDATE mud_character_progression SET current_health=current_health+? "
+                    "WHERE character_id=? AND track_key=?",
+                    (restored, character["id"], character["track_key"]),
+                )
+        if item["item_type"] == "consumable":
+            database.execute("DELETE FROM mud_item_instances WHERE id=?", (item["id"],))
+        message = f"You use {item['name']} and gain {', '.join(keys)}"
+        if restored:
+            message += f", restoring {restored} health"
+        return [EventDraft(message + ".", event_type="item")] + _enemy_turn(database, user)
     heal = properties.get("heal")
     if not isinstance(heal, int) or isinstance(heal, bool) or heal <= 0:
         if item["item_type"] == "consumable" and any(
@@ -3209,6 +3376,9 @@ actions.register(ActionDefinition(key="talk", label="TALK", description="Talk to
 actions.register(ActionDefinition(key="respond", label="RESPOND", description="Choose a response in your current NPC conversation.", commands=("respond", "reply"), handler=_respond_action, group="DIALOGUE", show_context=False))
 actions.register(ActionDefinition(key="quests", label="VIEW QUESTS", description="View your active quest objectives and progress.", commands=("quests", "quest", "objectives"), handler=_quests_action, group="QUESTS"))
 actions.register(ActionDefinition(key="combat", label="COMBAT STATUS", description="View hostile enemies and encounter status.", commands=("combat",), handler=_combat_action, group="COMBAT"))
+actions.register(ActionDefinition(key="spells", label="KNOWN SPELLS", description="List your class spells and their mana costs.", commands=("spells",), handler=_spells_action, group="MAGIC"))
+actions.register(ActionDefinition(key="cast", label="CAST SPELL", description="Cast a known spell, targeting an enemy when required.", commands=("cast",), handler=_cast_action, group="MAGIC", show_context=False))
+actions.register(ActionDefinition(key="rest", label="REST", description="Recover mana outside combat.", commands=("rest",), handler=_rest_action, group="MAGIC"))
 actions.register(ActionDefinition(key="hide", label="HIDE", description="Hide from enemies using Agility against their awareness; your next attack gains surprise damage.", commands=("hide",), handler=_hide_action, group="COMBAT", show_context=False))
 actions.register(ActionDefinition(key="attack", label="ATTACK", description="Attack a hostile enemy and resolve one combat round.", commands=("attack", "hit"), handler=_attack_action, group="COMBAT", show_context=False))
 actions.register(ActionDefinition(key="defend", label="DEFEND", description="Brace to reduce the next enemy attack.", commands=("defend", "guard"), handler=_defend_action, group="COMBAT", show_context=False))
@@ -3823,6 +3993,8 @@ def builder():
         item["attack_bonus"] = _integer_property(properties, "damage", "attack", "attack_bonus")
         item["defense_bonus"] = _integer_property(properties, "armor", "defense", "defense_bonus")
         item["use_message"] = properties.get("use_message", "")
+        item["on_use_effects_json"] = json.dumps(properties.get("on_use_effects", []))
+        item["on_hit_effects_json"] = json.dumps(properties.get("on_hit_effects", []))
         definitions.append(item)
     items_by_room = {room["id"]: [] for room in rooms}
     for row in database.execute("SELECT i.id,i.room_id,d.name,d.item_type FROM mud_item_instances i JOIN mud_item_definitions d ON d.id=i.definition_id WHERE i.room_id IS NOT NULL ORDER BY d.name COLLATE NOCASE"):
@@ -3927,6 +4099,17 @@ def _item_definition_fields():
     if use_message: properties["use_message"] = use_message
     if attack_bonus: properties["attack_bonus"] = attack_bonus
     if defense_bonus: properties["defense_bonus"] = defense_bonus
+    for field in ("on_use_effects", "on_hit_effects"):
+        try:
+            specs = json.loads(request.form.get(field, "[]") or "[]")
+            if not isinstance(specs, list) or len(specs) > 10:
+                raise ValueError("Use an array of up to 10 effects.")
+            for spec in specs:
+                mud_effects.validate(spec)
+        except (ValueError, json.JSONDecodeError) as problem:
+            return None, f"Invalid {field}: {problem}"
+        if specs:
+            properties[field] = specs
     return (name, description, item_type, json.dumps(properties, separators=(",", ":"), sort_keys=True), slot), None
 
 

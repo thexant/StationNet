@@ -469,9 +469,21 @@ CREATE TABLE IF NOT EXISTS mud_character_progression (
  agility INTEGER NOT NULL DEFAULT 10 CHECK(agility>=1),
  intellect INTEGER NOT NULL DEFAULT 10 CHECK(intellect>=1),
  vitality INTEGER NOT NULL DEFAULT 10 CHECK(vitality>=1),
+ current_mana INTEGER NOT NULL DEFAULT 30 CHECK(current_mana>=0),
+ maximum_mana INTEGER NOT NULL DEFAULT 30 CHECK(maximum_mana>=1 AND current_mana<=maximum_mana),
  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
  PRIMARY KEY(character_id,track_key),
  CHECK(current_health<=maximum_health));
+CREATE TABLE IF NOT EXISTS mud_active_effects (
+ target_type TEXT NOT NULL CHECK(target_type IN ('character','encounter')),
+ target_id TEXT NOT NULL,
+ effect_key TEXT NOT NULL,
+ potency INTEGER NOT NULL CHECK(potency BETWEEN 1 AND 1000),
+ remaining_turns INTEGER NOT NULL CHECK(remaining_turns BETWEEN 1 AND 100),
+ source TEXT NOT NULL DEFAULT '',
+ PRIMARY KEY(target_type,target_id,effect_key));
+CREATE INDEX IF NOT EXISTS idx_mud_active_effects_target
+ ON mud_active_effects(target_type,target_id);
 CREATE INDEX IF NOT EXISTS idx_mud_character_progression_track
  ON mud_character_progression(track_key,level,experience);
 CREATE TABLE IF NOT EXISTS mud_builder_permissions (
@@ -1089,6 +1101,7 @@ def init_db():
     _migrate_mud_roguelike(database)
     _migrate_application_permissions(database)
     _migrate_mud_character_creation(database)
+    _migrate_mud_magic(database)
     _initialize_mud_characters(database)
     _initialize_mud_world(database)
     _migrate_mud_world_packages(database)
@@ -1258,6 +1271,14 @@ def _migrate_mud_character_creation(database):
         "experience INTEGER NOT NULL DEFAULT 0 CHECK(experience>=0),"
         "PRIMARY KEY(character_id,skill_key))"
     )
+
+
+def _migrate_mud_magic(database):
+    columns = {row["name"] for row in database.execute("PRAGMA table_info(mud_character_progression)")}
+    if "current_mana" not in columns:
+        database.execute("ALTER TABLE mud_character_progression ADD COLUMN current_mana INTEGER NOT NULL DEFAULT 30")
+    if "maximum_mana" not in columns:
+        database.execute("ALTER TABLE mud_character_progression ADD COLUMN maximum_mana INTEGER NOT NULL DEFAULT 30")
 
 
 def _initialize_mud_characters(database):

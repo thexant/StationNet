@@ -31,7 +31,7 @@ const playSfx=name=>{
   if(!sfxEnabled||!sfxAudio[name])return null;
   const audio=sfxAudio[name].cloneNode();
   audio.volume=.7;
-  audio.play().catch(()=>{});
+  audio.play().catch(()=>audio.dispatchEvent(new Event("error")));
   return audio;
 };
 window.StationNetSfx={play:playSfx,isEnabled:()=>sfxEnabled};
@@ -55,7 +55,17 @@ document.addEventListener("click",event=>{
   if(!(event.target instanceof Element))return;
   const control=event.target.closest('a,button,summary,[role="button"],[role="menuitem"],input[type="button"],input[type="submit"],input[type="reset"],input[type="checkbox"],input[type="radio"],input[type="file"],select,option');
   if(!control||control===sfxToggle||control.matches(":disabled,[aria-disabled='true']"))return;
-  playSfx("click");
+  const audio=playSfx("click");
+  const link=control.closest("a[href]");
+  if(!audio||!link||event.defaultPrevented||event.button!==0||event.metaKey||event.ctrlKey||event.shiftKey||event.altKey||link.target&&link.target!=="_self"||link.hasAttribute("download"))return;
+  const destination=new URL(link.href,location.href);
+  if(!["http:","https:"].includes(destination.protocol)||destination.href===location.href||destination.origin===location.origin&&destination.pathname===location.pathname&&destination.search===location.search&&destination.hash)return;
+  event.preventDefault();
+  let navigated=false;
+  const navigate=()=>{if(navigated)return;navigated=true;location.assign(destination.href)};
+  audio.addEventListener("ended",navigate,{once:true});
+  audio.addEventListener("error",navigate,{once:true});
+  setTimeout(navigate,1000);
 });
 for(const form of document.querySelectorAll("form[data-sfx-submit]"))form.addEventListener("submit",event=>{
   if(form.dataset.sfxSubmitting||!sfxEnabled)return;

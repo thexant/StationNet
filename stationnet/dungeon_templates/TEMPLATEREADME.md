@@ -25,6 +25,13 @@ everything players see comes from the file you write.
 
 ## Quick start
 
+Embedded item and enemy `properties` support the shared MUD effects format.
+Use `on_use_effects` for consumables and `on_hit_effects` for equipment or
+enemies. For example, `"properties": {"on_hit_effects":
+[{"key":"bleeding","potency":2,"duration":3}]}`. Available keys are
+`poison`, `burning`, `bleeding`, `might`, `weakness`, `ward`, and
+`vulnerability`. Potency must be 1–1000 and duration 1–100 combat turns.
+
 1. Copy `data/dungeons/_template.json` to a new file, for example `my-theme.json`.
 2. Set a unique lowercase `id`, a `version`, a `name`, and an `author`.
 3. Replace every bracketed placeholder (`[Theme name]`, `[Entrance room name]`,

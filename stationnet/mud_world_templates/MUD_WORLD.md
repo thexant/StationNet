@@ -69,6 +69,23 @@ same room. An empty exit list is valid for a one-room world.
 
 ## 4. Add optional world content
 
+### Magic and timed effects
+
+Item and NPC definition `properties_json` may include shared effects. A consumable
+can use `"on_use_effects"`; equipped weapons and hostile NPCs can use
+`"on_hit_effects"`. For example:
+
+```json
+{"on_hit_effects": [{"key": "poison", "potency": 2, "duration": 3}]}
+```
+
+Keys are `poison`, `burning`, `bleeding` (damage each combat turn), `might` and
+`weakness` (attack), or `ward` and `vulnerability` (defense). Potency is 1–1000
+and duration is 1–100 turns. Reapplying a key keeps its stronger potency and
+longer remaining duration. Character classes declare their known spells in
+`character_options.json`. Players use `/spells`, `/cast <spell> [enemy]`, and
+`/rest` to recover mana outside combat.
+
 `content.json` is an object whose keys are authored MUD table names and whose
 values are arrays of records. IDs are **local to the ZIP** and can be short
 names such as `lantern` or `keeper` (with the same lowercase ID rule as rooms);

@@ -5,6 +5,7 @@ not start a run or move a character; Chunks 11 and 12 own those concerns.
 """
 from collections import deque
 from copy import deepcopy
+from . import mud_effects
 import hashlib
 import json
 from pathlib import Path
@@ -214,6 +215,20 @@ def _validate_embedded_definitions(errors, template, database=None):
                     errors.append(f"{here}.{field}: must be a non-empty string")
             _validate_json_object(errors, definition.get("properties"), f"{here}.properties")
             _validate_json_object(errors, definition.get("behaviors"), f"{here}.behaviors")
+            properties = definition.get("properties")
+            if isinstance(properties, dict):
+                for effect_field in ("on_use_effects", "on_hit_effects"):
+                    if effect_field not in properties:
+                        continue
+                    specs = properties[effect_field]
+                    if not isinstance(specs, list):
+                        errors.append(f"{here}.properties.{effect_field}: must be an array")
+                        continue
+                    for effect_index, spec in enumerate(specs):
+                        try:
+                            mud_effects.validate(spec)
+                        except ValueError as problem:
+                            errors.append(f"{here}.properties.{effect_field}[{effect_index}]: {problem}")
             if kind == "items":
                 item_type = definition.get("item_type", "misc")
                 if item_type not in {"misc", "equipment", "container", "consumable", "key"}:
