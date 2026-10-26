@@ -5,6 +5,6 @@
   "description": "Pomodoro timer with session logging, weekly chart, streaks, and a station-wide focus leaderboard.",
   "author": "StationNet Core",
   "version": "1.0.0",
-  "category": "Apps",
+  "category": "Productivity",
   "entrypoint": "main.js"
 }

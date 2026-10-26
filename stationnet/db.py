@@ -40,6 +40,7 @@ CREATE TABLE IF NOT EXISTS station (
  imageboard_enabled INTEGER NOT NULL DEFAULT 0 CHECK(imageboard_enabled IN (0,1)),
  events_enabled INTEGER NOT NULL DEFAULT 0 CHECK(events_enabled IN (0,1)),
  office_enabled INTEGER NOT NULL DEFAULT 0 CHECK(office_enabled IN (0,1)),
+ office_nav_links_enabled INTEGER NOT NULL DEFAULT 1 CHECK(office_nav_links_enabled IN (0,1)),
  events_create_permission TEXT NOT NULL DEFAULT 'sysops' CHECK(events_create_permission IN ('sysops','groups','members')),
  videos_mode TEXT NOT NULL DEFAULT 'community' CHECK(videos_mode IN ('community','curated')),
  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);
@@ -411,7 +412,7 @@ CREATE TABLE IF NOT EXISTS installed_applications (
  description TEXT NOT NULL,
  author TEXT NOT NULL,
  version TEXT NOT NULL,
- category TEXT NOT NULL CHECK(category IN ('Games','Apps')),
+ category TEXT NOT NULL CHECK(category IN ('Games','Utilities','Creative','Educational','Productivity','Other')),
  entrypoint TEXT NOT NULL, permissions_json TEXT NOT NULL DEFAULT '[]',
  capabilities_json TEXT NOT NULL DEFAULT '{}',
  installed_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);
@@ -1086,6 +1087,11 @@ def _migrate_office(database):
             "ALTER TABLE station ADD COLUMN office_enabled INTEGER NOT NULL DEFAULT 0 "
             "CHECK(office_enabled IN (0,1))"
         )
+    if "office_nav_links_enabled" not in columns:
+        database.execute(
+            "ALTER TABLE station ADD COLUMN office_nav_links_enabled INTEGER NOT NULL DEFAULT 1 "
+            "CHECK(office_nav_links_enabled IN (0,1))"
+        )
 
 
 def init_db():
@@ -1112,6 +1118,7 @@ def init_db():
     _migrate_mud_crossover(database)
     _migrate_mud_roguelike(database)
     _migrate_application_permissions(database)
+    _migrate_application_categories(database)
     _migrate_mud_character_creation(database)
     _migrate_mud_magic(database)
     _initialize_mud_characters(database)
@@ -1249,6 +1256,34 @@ def _migrate_application_permissions(database):
         database.execute(
             "ALTER TABLE installed_applications ADD COLUMN capabilities_json TEXT NOT NULL DEFAULT '{}'"
         )
+
+
+def _migrate_application_categories(database):
+    """Replace the old Apps category constraint and keep installed packages."""
+    definition = database.execute(
+        "SELECT sql FROM sqlite_master WHERE type='table' AND name='installed_applications'"
+    ).fetchone()["sql"]
+    if "'Apps'" not in definition:
+        return
+    database.execute(
+        "CREATE TABLE installed_applications_new ("
+        "slug TEXT PRIMARY KEY, name TEXT NOT NULL, description TEXT NOT NULL, "
+        "author TEXT NOT NULL, version TEXT NOT NULL, "
+        "category TEXT NOT NULL CHECK(category IN "
+        "('Games','Utilities','Creative','Educational','Productivity','Other')), "
+        "entrypoint TEXT NOT NULL, permissions_json TEXT NOT NULL DEFAULT '[]', "
+        "capabilities_json TEXT NOT NULL DEFAULT '{}', "
+        "installed_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP)"
+    )
+    database.execute(
+        "INSERT INTO installed_applications_new "
+        "SELECT slug,name,description,author,version,"
+        "CASE WHEN category='Apps' THEN 'Other' ELSE category END,"
+        "entrypoint,permissions_json,capabilities_json,installed_at "
+        "FROM installed_applications"
+    )
+    database.execute("DROP TABLE installed_applications")
+    database.execute("ALTER TABLE installed_applications_new RENAME TO installed_applications")
 
 
 def _migrate_mail_threads(database):

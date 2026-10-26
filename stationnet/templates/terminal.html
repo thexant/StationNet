@@ -30,7 +30,7 @@
       ('archive.index', 'FILE ARCHIVE', 'SHARED STATION FILES'),
       ('users.directory', 'USER DIRECTORY', 'LIST OF REGISTERED USERS ON THIS STATION')
     ] %}
-    {% if g.station.office_enabled %}
+    {% if g.station.office_enabled and g.station.office_nav_links_enabled %}
       {% set services = services + [('office.index', 'OFFICE', 'STATIONNET OFFICE SUITE')] %}
     {% endif %}
     {% set services = services + [

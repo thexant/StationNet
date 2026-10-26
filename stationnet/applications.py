@@ -25,8 +25,8 @@ bp = Blueprint("applications", __name__, url_prefix="/games-apps")
 admin_bp = Blueprint("application_admin", __name__, url_prefix="/sysop/applications")
 
 GAMES = "Games"
-APPS = "Apps"
-CATEGORIES = (GAMES, APPS)
+CATEGORIES = (GAMES, "Utilities", "Creative", "Educational", "Productivity", "Other")
+OFFICE_CATEGORY = "Office"
 PACKAGE_FORMAT = 1
 PACKAGE_MAX_BYTES = 5 * 1024 * 1024
 PACKAGE_MAX_EXPANDED_BYTES = 4 * 1024 * 1024
@@ -67,10 +67,27 @@ class Application:
     platforms: tuple[str, ...] = ("desktop", "touch")
     required_inputs: tuple[str, ...] = ()
     preferred_presentation: str = "standard"
+    launch_endpoint: str | None = None
 
     @property
     def runnable(self) -> bool:
-        return self.entrypoint is not None
+        return self.entrypoint is not None or self.launch_endpoint is not None
+
+
+OFFICE_PROGRAMS = (
+    Application("office-sheets", "Sheets", "Create and edit private spreadsheets.",
+                "StationNet", "1", OFFICE_CATEGORY, launch_endpoint="office.sheets"),
+    Application("office-documents", "Documents", "Create and edit private documents.",
+                "StationNet", "1", OFFICE_CATEGORY, launch_endpoint="office.documents"),
+    Application("office-presentations", "Presentations", "Create and edit private presentations.",
+                "StationNet", "1", OFFICE_CATEGORY, launch_endpoint="office.presentations"),
+)
+
+
+def _office_program(slug: str) -> Application | None:
+    if g.station and g.station["office_enabled"]:
+        return next((item for item in OFFICE_PROGRAMS if item.slug == slug), None)
+    return None
 
 
 _catalog: dict[str, Application] = {}
@@ -120,6 +137,8 @@ def _package_files(application: Application) -> dict[str, str]:
 def _validate_metadata(application: Application) -> None:
     if application.category not in CATEGORIES:
         raise ValueError(f"Unknown application category: {application.category}")
+    if application.slug in {item.slug for item in OFFICE_PROGRAMS}:
+        raise ValueError(f"Reserved application identifier: {application.slug}")
     if not SLUG_RE.fullmatch(application.slug):
         raise ValueError(f"Invalid application identifier: {application.slug}")
     if any(not value or value != value.strip() or len(value) > limit for value, limit in (
@@ -441,6 +460,8 @@ def install_package(package_bytes: bytes) -> Application:
 @login_required
 def index():
     visible = tuple(item for item in catalog() if item.enabled and item.runnable)
+    if g.station and g.station["office_enabled"]:
+        visible += OFFICE_PROGRAMS
     preferences = {
         row["application_slug"]: row for row in get_db().execute(
             "SELECT application_slug,pinned_at,last_used_at FROM user_application_preferences WHERE user_id=?",
@@ -458,15 +479,16 @@ def index():
     selected = request.args.get("selected")
     if selected not in {item.slug for item in visible}:
         selected = visible[0].slug if visible else None
+    categories = CATEGORIES + ((OFFICE_CATEGORY,) if g.station and g.station["office_enabled"] else ())
     return render_template("applications/index.html", applications=visible,
-                           pinned=pinned, recent=recent, selected=selected)
+                           categories=categories, pinned=pinned, recent=recent, selected=selected)
 
 
 @bp.post("/<slug>/pin")
 @login_required
 def toggle_pin(slug):
     validate_csrf()
-    application = find(slug)
+    application = _office_program(slug) or find(slug)
     if application is None or not application.enabled or not application.runnable:
         abort(404)
     database = get_db()
@@ -493,7 +515,7 @@ def toggle_pin(slug):
 @bp.get("/<slug>")
 @login_required
 def display(slug):
-    application = find(slug)
+    application = _office_program(slug) or find(slug)
     if application is None or not application.enabled or not application.runnable:
         abort(404)
     database = get_db()
@@ -504,6 +526,8 @@ def display(slug):
         (g.user["id"], slug),
     )
     database.commit()
+    if application.launch_endpoint:
+        return redirect(url_for(application.launch_endpoint))
     response = make_response(render_template("applications/display.html", application=application))
     response.headers["Cache-Control"] = "no-store"
     return response

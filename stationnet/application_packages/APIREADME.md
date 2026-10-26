@@ -33,7 +33,7 @@ not become web URLs or grant DOM, filesystem, or network access.
   "description": "A short explanation of what it does.",
   "author": "Your name or station",
   "version": "1.0.0",
-  "category": "Apps",
+  "category": "Utilities",
   "entrypoint": "src/main.js",
   "platforms": ["desktop", "touch"],
   "required_inputs": [],
@@ -43,7 +43,8 @@ not become web URLs or grant DOM, filesystem, or network access.
 
 `slug` is the application's permanent, unique identifier. Use lowercase letters,
 numbers, and single hyphens; do not change it between releases. `category` must
-be `Games` or `Apps`. StationNet currently supports package format `1` and does
+be `Games`, `Utilities`, `Creative`, `Educational`, `Productivity`, or `Other`.
+StationNet currently supports package format `1` and does
 not resolve dependencies or perform automatic updates. Existing packages can
 keep `"entrypoint": "main.js"` unchanged.
 
@@ -119,9 +120,9 @@ export function greeting(name) { return `Hello, ${name}!`; }
 
 ## Install and manage
 
-Sign in as a sysop, open **SYSOP CONTROL**, then **MANAGE GAMES AND APPS**. Upload
+Sign in as a sysop, open **SYSOP CONTROL**, then **MANAGE PROGRAMS**. Upload
 the ZIP to install it. A valid package is enabled immediately and appears in the
-normal Games and Apps directory. The same page can disable, re-enable, or
+normal Programs directory. The same page can disable, re-enable, or
 uninstall it. Disabled applications cannot be opened or use storage endpoints.
 
 Uninstall removes the installed program files and registration, but deliberately

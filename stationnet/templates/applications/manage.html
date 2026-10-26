@@ -1,10 +1,10 @@
 {% extends 'base.html' %}
-{% block title %}Manage Games and Apps{% endblock %}
+{% block title %}Manage Programs{% endblock %}
 {% block content %}
 <header class="board-head">
   <div>
     <p class="eyebrow">SYSOP CONTROL / APPLICATION REGISTRY</p>
-    <h1>Manage games and apps</h1>
+    <h1>Manage programs</h1>
     <p class="muted">Install portable StationNet ZIP packages and control station availability.</p>
   </div>
   <a class="button secondary" href="{{ url_for('station.settings') }}">&lt; SYSOP CONTROL</a>
@@ -13,7 +13,7 @@
 <section class="terminal-card settings-section">
   <p class="eyebrow">PACKAGE RECEIVER / FORMAT 01</p>
   <h2>Install application</h2>
-  <p class="muted">Uploaded games and apps are stored in the station data directory under <code>applications/</code>. Back up that directory with the station data to preserve them. Maximum upload: 5 MiB.</p>
+  <p class="muted">Uploaded programs are stored in the station data directory under <code>applications/</code>. Back up that directory with the station data to preserve them. Maximum upload: 5 MiB.</p>
   <form method="post" action="{{ url_for('application_admin.install') }}" enctype="multipart/form-data" class="form-grid">
     <input type="hidden" name="csrf_token" value="{{ session.csrf_token }}">
     <label>StationNet application ZIP<input type="file" name="package" accept=".zip,application/zip" required></label>

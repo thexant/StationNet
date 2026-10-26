@@ -927,7 +927,13 @@ def settings():
         if request.form.get("settings_section") == "office":
             enabled = request.form.get("office_enabled") == "on"
             database = get_db()
-            database.execute("UPDATE station SET office_enabled=? WHERE id=1", (enabled,))
+            if request.form.get("office_nav_setting_present") == "1":
+                database.execute(
+                    "UPDATE station SET office_enabled=?,office_nav_links_enabled=? WHERE id=1",
+                    (enabled, request.form.get("office_nav_links_enabled") == "on"),
+                )
+            else:
+                database.execute("UPDATE station SET office_enabled=? WHERE id=1", (enabled,))
             database.commit()
             flash("Office enabled." if enabled else "Office disabled.", "success")
             return redirect(url_for("station.settings") + "#office-suite")

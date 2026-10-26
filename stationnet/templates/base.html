@@ -55,7 +55,7 @@
         <i>*</i><a href="{{ url_for('radio.console') }}" {% if request.blueprint in ('radio', 'broadcast', 'programs') %}aria-current="page"{% endif %}>RADIO</a>
         <i>*</i><a href="{{ url_for('archive.index') }}" {% if request.blueprint=='archive' %}aria-current="page"{% endif %}>FILES</a>
         <i>*</i><a href="{{ url_for('users.directory') }}" {% if request.blueprint=='users' %}aria-current="page"{% endif %}>USERS</a>
-        {% if g.station.office_enabled %}<i>*</i><a href="{{ url_for('office.index') }}" {% if request.blueprint=='office' %}aria-current="page"{% endif %}>OFFICE</a>{% endif %}
+        {% if g.station.office_enabled and g.station.office_nav_links_enabled %}<i>*</i><a href="{{ url_for('office.index') }}" {% if request.blueprint=='office' %}aria-current="page"{% endif %}>OFFICE</a>{% endif %}
         <i>*</i><a href="{{ url_for('applications.index') }}" {% if request.blueprint=='applications' %}aria-current="page"{% endif %}>PROGRAMS</a>
         {% if g.station.mud_enabled %}<i>*</i><a href="{{ url_for('mud.index') }}" {% if request.endpoint=='mud.index' %}aria-current="page"{% endif %}>MUD</a>{% endif %}
         {% if g.mud_can_build %}<i>*</i><a href="{{ url_for('mud.builder') }}" {% if request.endpoint and request.endpoint.startswith('mud.builder') %}aria-current="page"{% endif %}>WORLD BUILDER</a>{% endif %}

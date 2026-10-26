@@ -69,6 +69,51 @@ def test_sysop_can_enable_and_disable_office(tmp_path):
     assert client.get("/office").status_code == 404
 
 
+def test_office_programs_remain_available_without_navigation_links(tmp_path):
+    app, user_id = _configured_app(tmp_path)
+    client = app.test_client()
+    _sign_in(client, user_id)
+
+    disabled = client.get("/games-apps").data
+    assert b'data-program-filter="Office"' not in disabled
+    assert b'data-program-filter="Apps"' not in disabled
+    for category in (b"Games", b"Utilities", b"Creative", b"Educational", b"Productivity", b"Other"):
+        assert b'data-program-filter="' + category + b'"' in disabled
+
+    client.post("/sysop/settings", data={
+        "csrf_token": "test-token", "settings_section": "office", "office_enabled": "on",
+    })
+    settings = client.get("/sysop/settings").data
+    assert b"Show OFFICE navigation links" in settings
+    assert b'name="office_nav_links_enabled" checked' in settings
+    programs = client.get("/games-apps").data
+    assert b'data-program-filter="Office"' in programs
+    for slug, destination in (("office-sheets", "/office/sheets"),
+                              ("office-documents", "/office/documents"),
+                              ("office-presentations", "/office/presentations")):
+        assert programs.count(f'data-program-row data-slug="{slug}"'.encode()) == 1
+        response = client.get(f"/games-apps/{slug}")
+        assert response.status_code == 302
+        assert response.headers["Location"].endswith(destination)
+        assert b"OFFICE Password" in client.get(destination).data
+
+    client.post("/sysop/settings", data={
+        "csrf_token": "test-token", "settings_section": "office", "office_enabled": "on",
+        "office_nav_setting_present": "1",
+    })
+    assert b'href="/office"' not in client.get("/terminal").data
+    assert b'href="/office"' not in client.get("/games-apps").data
+    assert b'data-program-filter="Office"' in client.get("/games-apps").data
+    assert client.get("/games-apps/office-sheets").status_code == 302
+
+    client.post("/sysop/settings", data={
+        "csrf_token": "test-token", "settings_section": "office",
+        "office_nav_setting_present": "1",
+    })
+    assert b'data-program-filter="Office"' not in client.get("/games-apps").data
+    assert client.get("/games-apps/office-sheets").status_code == 404
+
+
 def test_enabled_office_is_available_only_while_signed_in(tmp_path):
     app, _user_id = _configured_app(tmp_path)
     with app.app_context():

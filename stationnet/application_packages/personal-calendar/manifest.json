@@ -5,6 +5,6 @@
   "description": "A private month calendar and daily planner with repeating events.",
   "author": "StationNet Core",
   "version": "1.0.0",
-  "category": "Apps",
+  "category": "Productivity",
   "entrypoint": "main.js"
 }

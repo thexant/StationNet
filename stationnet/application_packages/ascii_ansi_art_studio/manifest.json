@@ -5,6 +5,6 @@
   "description": "Draw colored character art, save projects, and import or export plain text and ANSI files.",
   "author": "StationNet Core",
   "version": "1.0.0",
-  "category": "Apps",
+  "category": "Creative",
   "entrypoint": "main.js"
 }

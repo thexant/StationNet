@@ -5,7 +5,7 @@
   "description": "Time, alarms, timers, stopwatch laps, and world clocks for your station.",
   "author": "StationNet Core",
   "version": "1.0.0",
-  "category": "Apps",
+  "category": "Utilities",
   "entrypoint": "main.js",
   "platforms": ["desktop", "touch"]
 }
