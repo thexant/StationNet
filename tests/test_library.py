@@ -1,6 +1,7 @@
 """EPUB and PDF library upload, reader, and access rules."""
 import io
 import zipfile
+from flask import request
 from pypdf import PdfWriter
 
 from stationnet import create_app
@@ -38,6 +39,72 @@ def pdf():
                          "/Subject": "Operational reference"})
     writer.write(stream)
     return stream.getvalue()
+
+
+def test_library_file_size_setting_controls_member_and_station_uploads(tmp_path):
+    app = create_app({"TESTING": True, "DATA_DIR": str(tmp_path)})
+    with app.app_context():
+        db = get_db()
+        db.execute("INSERT INTO station(name,description,callsign,library_enabled) VALUES('Test','Test','TST-1',1)")
+        admin = db.execute("INSERT INTO users(username,callsign,password_hash,is_admin) VALUES('admin','ADM-1','unused',1)").lastrowid
+        member = db.execute("INSERT INTO users(username,callsign,password_hash) VALUES('member','MEM-1','unused')").lastrowid
+        db.commit()
+
+    @app.after_request
+    def report_request_limit(response):
+        response.headers["X-Test-Request-Limit"] = str(request.max_content_length)
+        return response
+
+    client = app.test_client()
+    sign_in(client, member)
+    assert b"up to 512 MB" in client.get("/library/upload").data
+    response = client.post("/library/upload", data={"csrf_token": "library-test",
+        "file": (io.BytesIO(pdf()), "default.pdf")}, content_type="multipart/form-data")
+    assert response.status_code == 302
+    assert int(response.headers["X-Test-Request-Limit"]) > 512 * 1024 * 1024
+    large_epub = io.BytesIO()
+    with zipfile.ZipFile(io.BytesIO(epub())) as source, zipfile.ZipFile(large_epub, "w") as target:
+        for name in source.namelist():
+            target.writestr(name, source.read(name))
+        target.writestr("OPS/large-resource.bin", b"x" * (51 * 1024 * 1024),
+                        compress_type=zipfile.ZIP_STORED)
+    response = client.post("/library/upload", data={"csrf_token": "library-test",
+        "file": (io.BytesIO(large_epub.getvalue()), "large.epub")}, content_type="multipart/form-data")
+    assert response.status_code == 302 and response.headers["Location"].endswith("/library/2")
+
+    sign_in(client, admin)
+    settings = {"csrf_token": "library-test", "settings_section": "library",
+                "library_enabled": "on", "library_mode": "community",
+                "library_default_quota_mb": "512", "library_max_upload_mb": "1"}
+    assert client.post("/sysop/settings", data=settings).status_code == 302
+    with app.app_context():
+        assert get_db().execute("SELECT library_max_upload_mb FROM station").fetchone()[0] == 1
+    assert b"up to 1 MB" in client.get("/sysop/settings").data
+    invalid = client.post("/sysop/settings", data={**settings, "library_max_upload_mb": "0"},
+                          follow_redirects=True)
+    assert b"Library file size limit must be between 1 and 10240 MB" in invalid.data
+    with app.app_context():
+        assert get_db().execute("SELECT library_max_upload_mb FROM station").fetchone()[0] == 1
+
+    oversized = pdf() + b" " * (1024 * 1024)
+    sign_in(client, member)
+    assert b"up to 1 MB" in client.get("/library/upload").data
+    rejected = client.post("/library/upload", data={"csrf_token": "library-test",
+        "file": (io.BytesIO(oversized), "oversized.pdf")},
+        content_type="multipart/form-data", follow_redirects=True)
+    assert b"Document exceeds the 1 MB limit" in rejected.data
+    sign_in(client, admin)
+    rejected = client.post("/library/station-upload", data={"csrf_token": "library-test",
+        "file": (io.BytesIO(oversized), "oversized.pdf")},
+        content_type="multipart/form-data", follow_redirects=True)
+    assert b"Document exceeds the 1 MB limit" in rejected.data
+    with app.app_context():
+        assert get_db().execute("SELECT COUNT(*) FROM library_books").fetchone()[0] == 2
+    assert client.post("/sysop/settings", data={**settings, "library_max_upload_mb": "2"}).status_code == 302
+    sign_in(client, member)
+    accepted = client.post("/library/upload", data={"csrf_token": "library-test",
+        "file": (io.BytesIO(oversized), "accepted.pdf")}, content_type="multipart/form-data")
+    assert accepted.status_code == 302 and accepted.headers["Location"].endswith("/library/3")
 
 
 def test_pdf_library_upload_reader_and_modes(tmp_path):

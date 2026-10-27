@@ -1385,15 +1385,18 @@ def settings():
         if request.form.get("settings_section") == "library":
             mode = request.form.get("library_mode")
             quota = request.form.get("library_default_quota_mb", type=int)
+            max_upload = request.form.get("library_max_upload_mb", type=int)
             if mode not in {"community", "curated"}:
                 flash("Select a valid library mode.", "error")
             elif quota is None or not 1 <= quota <= 10240:
                 flash("Default library quota must be between 1 and 10240 MB.", "error")
+            elif max_upload is None or not 1 <= max_upload <= 10240:
+                flash("Library file size limit must be between 1 and 10240 MB.", "error")
             else:
                 database = get_db()
                 database.execute("UPDATE station SET library_enabled=?,library_mode=?,"
-                                 "library_default_quota_mb=? WHERE id=1",
-                                 (request.form.get("library_enabled") == "on", mode, quota))
+                                 "library_default_quota_mb=?,library_max_upload_mb=? WHERE id=1",
+                                 (request.form.get("library_enabled") == "on", mode, quota, max_upload))
                 database.commit()
                 flash("Library settings updated.", "success")
             return redirect(url_for("station.settings") + "#library-service")

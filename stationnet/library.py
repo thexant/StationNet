@@ -5,6 +5,7 @@ import io
 from pathlib import Path
 import posixpath
 import secrets
+import shutil
 import textwrap
 from urllib.parse import unquote
 import zipfile
@@ -21,16 +22,17 @@ from .moderation import audit
 from .security import validate_csrf
 
 bp = Blueprint("library", __name__, url_prefix="/library")
-MAX_BOOK_BYTES = 50 * 1024 * 1024
 MAX_EXPANDED_BYTES = 150 * 1024 * 1024
 IMAGE_TYPES = {".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg",
                ".gif": "image/gif", ".webp": "image/webp"}
 
 
-def _pdf_fields(data):
-    if not data.startswith(b"%PDF-"):
+def _pdf_fields(stream):
+    stream.seek(0)
+    if stream.read(5) != b"%PDF-":
         raise ValueError("Invalid PDF header")
-    reader = PdfReader(io.BytesIO(data), strict=False)
+    stream.seek(0)
+    reader = PdfReader(stream, strict=False)
     if reader.is_encrypted:
         raise ValueError("Encrypted PDFs are not supported")
     count = len(reader.pages)
@@ -52,6 +54,12 @@ def _format(book):
 def require_enabled():
     if not g.station or not g.station["library_enabled"]:
         abort(404)
+    if request.method == "POST" and request.endpoint in {"library.upload", "library.station_upload"}:
+        # Flask's global 128 MB request limit would otherwise reject the default 512 MB book.
+        request.max_content_length = max(
+            current_app.config["MAX_CONTENT_LENGTH"],
+            (g.station["library_max_upload_mb"] + 1) * 1024 * 1024,
+        )
 
 
 def _path(book):
@@ -84,7 +92,9 @@ def _inside(base, href):
 
 def _archive(zf):
     infos = zf.infolist()
-    if len(infos) > 3000 or sum(i.file_size for i in infos) > MAX_EXPANDED_BYTES:
+    # Keep existing books readable when a SYSOP later lowers the upload limit.
+    expanded_limit = max(MAX_EXPANDED_BYTES, sum(i.compress_size for i in infos) * 3)
+    if len(infos) > 3000 or sum(i.file_size for i in infos) > expanded_limit:
         raise ValueError("EPUB has too many or oversized resources.")
     names = set()
     for info in infos:
@@ -321,16 +331,19 @@ def _save_upload(station_post):
     kind = Path(uploaded.filename or "").suffix.lower().lstrip(".") if uploaded else ""
     if kind not in {"epub", "pdf"}:
         return "Select an EPUB or PDF document."
-    data = uploaded.stream.read(MAX_BOOK_BYTES + 1)
-    if len(data) > MAX_BOOK_BYTES:
-        return "Document exceeds the 50 MB limit."
+    max_upload_mb = g.station["library_max_upload_mb"]
+    uploaded.stream.seek(0, io.SEEK_END)
+    size = uploaded.stream.tell()
+    uploaded.stream.seek(0)
+    if size > max_upload_mb * 1024 * 1024:
+        return f"Document exceeds the {max_upload_mb} MB limit."
     try:
         if kind == "epub":
-            with zipfile.ZipFile(io.BytesIO(data)) as zf:
+            with zipfile.ZipFile(uploaded.stream) as zf:
                 fields, _, _, _, cover = _archive(zf)
             page_count = 0
         else:
-            fields, page_count = _pdf_fields(data)
+            fields, page_count = _pdf_fields(uploaded.stream)
             cover = ""
     except (ValueError, KeyError, zipfile.BadZipFile, ET.ParseError, RuntimeError,
             PdfReadError, TypeError, IndexError):
@@ -348,11 +361,12 @@ def _save_upload(station_post):
     try:
         if not station_post:
             database.execute("BEGIN IMMEDIATE")
-            if len(data) > _quota_remaining(database):
+            if size > _quota_remaining(database):
                 database.rollback()
                 return "Library upload quota exceeded. Remove a book or ask a SYSOP to raise your quota."
+        uploaded.stream.seek(0)
         with path.open("xb") as output:
-            output.write(data)
+            shutil.copyfileobj(uploaded.stream, output, length=1024 * 1024)
         cursor = database.execute(
             "INSERT INTO library_books(uploader_id,station_post,title,author,description,language,"
             "publisher,identifier,stored_name,original_name,size_bytes,cover_path,format,page_count,category_id) "
@@ -360,7 +374,7 @@ def _save_upload(station_post):
             (g.user["id"], station_post, title, author, description,
              fields.get("language", "")[:80], fields.get("publisher", "")[:150],
              fields.get("identifier", "")[:250], filename, Path(uploaded.filename).name[:250],
-             len(data), cover, kind, page_count, category_id))
+             size, cover, kind, page_count, category_id))
         database.commit()
         saved = True
         return cursor.lastrowid
