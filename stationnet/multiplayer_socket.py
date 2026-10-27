@@ -1,11 +1,13 @@
 """ASGI WebSocket relay for transient, station-local application messages."""
 import asyncio
+from concurrent.futures import ThreadPoolExecutor
 import hmac
 import json
 import re
 import time
+from threading import Event
 
-from uvicorn.middleware.wsgi import WSGIMiddleware
+from uvicorn.middleware.wsgi import WSGIMiddleware, WSGIResponder
 
 from . import applications, moderation, mud
 from .realtime import utc_now
@@ -13,6 +15,7 @@ from .db import get_db
 from .multiplayer import MAX_EVENT_BYTES, MultiplayerError, _emit, _promote_connected_host
 
 PATH = re.compile(r"^/games-apps/([a-z0-9]+(?:-[a-z0-9]+)*)/realtime$")
+EXTERNAL_AUDIO_PATH = re.compile(r"^/radio/external/\d+/audio$")
 MAX_FRAME = 16 * 1024
 MAX_QUEUE = 64
 MAX_CONNECTIONS = 512
@@ -100,6 +103,63 @@ def create_asgi_app(flask_app):
     relay = RoomRelay()
     flask_app.extensions["multiplayer_relay"] = relay
     http = WSGIMiddleware(flask_app)
+    # Uvicorn's WSGI worker remains occupied until a response iterable ends.
+    # Internet radio responses can last hours, so they need their own pool.
+    audio_workers = ThreadPoolExecutor(max_workers=10, thread_name_prefix="radio-audio")
+    audio_disconnects = set()
+
+    async def stream_audio(scope, receive, send):
+        first = await receive()
+        if first["type"] == "http.disconnect":
+            return
+        body = [first.get("body", b"")]
+        while first.get("more_body", False):
+            first = await receive()
+            if first["type"] == "http.disconnect":
+                return
+            body.append(first.get("body", b""))
+        request_message = {"type": "http.request", "body": b"".join(body),
+                           "more_body": False}
+        disconnected = Event()
+        audio_disconnects.add(disconnected)
+
+        def cancellable_app(environ, start_response):
+            if disconnected.is_set():
+                start_response("499 Client Closed Request", [])
+                return []
+            response = flask_app(environ, start_response)
+            try:
+                for chunk in response:
+                    if disconnected.is_set():
+                        break
+                    yield chunk
+            finally:
+                close = getattr(response, "close", None)
+                if close is not None:
+                    close()
+
+        async def replay_request():
+            return request_message
+
+        async def watch_disconnect():
+            while True:
+                message = await receive()
+                if message["type"] == "http.disconnect":
+                    disconnected.set()
+                    return
+
+        watcher = asyncio.create_task(watch_disconnect())
+        responder = WSGIResponder(cancellable_app, audio_workers, scope)
+        try:
+            await responder(replay_request, send)
+        finally:
+            disconnected.set()
+            audio_disconnects.discard(disconnected)
+            watcher.cancel()
+            try:
+                await watcher
+            except asyncio.CancelledError:
+                pass
 
     async def mud_timer():
         while True:
@@ -118,6 +178,9 @@ def create_asgi_app(flask_app):
                     timer = asyncio.create_task(mud_timer())
                     await send({"type": "lifespan.startup.complete"})
                 elif message["type"] == "lifespan.shutdown":
+                    for disconnected in tuple(audio_disconnects):
+                        disconnected.set()
+                    audio_workers.shutdown(wait=False, cancel_futures=True)
                     if timer:
                         timer.cancel()
                         try:
@@ -128,7 +191,11 @@ def create_asgi_app(flask_app):
                     return
             return
         if scope["type"] != "websocket":
-            await http(scope, receive, send)
+            if (scope["type"] == "http" and scope["method"] == "GET" and
+                    EXTERNAL_AUDIO_PATH.fullmatch(scope.get("path", ""))):
+                await stream_audio(scope, receive, send)
+            else:
+                await http(scope, receive, send)
             return
         match = PATH.fullmatch(scope.get("path", ""))
         if not match:

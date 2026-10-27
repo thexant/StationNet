@@ -94,6 +94,7 @@
     }
     element.addEventListener("error",()=>{if(element!==externalAudio||!externalKey)return;if(externalHls&&!externalCorsFallback){externalCorsFallback=true;externalPlayAttempt++;externalPlayPending=false;makeExternalElement();externalAudio.src=externalUrl;syncVolume();externalAudio.load();externalLastProgress=Date.now();playExternalAudio();return}retryExternalAudio(`media error ${element.error?.code||"unknown"}`)});
     element.addEventListener("ended",()=>{if(element===externalAudio)retryExternalAudio("stream ended")});
+    element.addEventListener("timeupdate",()=>{if(element!==externalAudio)return;if(element.currentTime>externalLastTime+.1){externalLastTime=element.currentTime;externalLastProgress=Date.now();externalError="";externalRetryCount=0}});
     syncVolume();
   };
   const stopExternalAudio=()=>{clearTimeout(externalRetryTimer);externalRetryTimer=null;externalPlayAttempt++;externalPlayPending=false;discardExternalElement();externalKey=null;externalUrl=null;externalError="";externalRetryCount=0;externalBlocked=false;externalUnsupported=false;externalHls=false;externalCorsFallback=false;externalGraphUnavailable=false};
@@ -247,7 +248,10 @@
       if(requestedFrequency!==frequency||generation!==tuneGeneration||!powered||currentAccess==="DENIED")return;
       receiveFailures++;const delay=Math.min(8000,500*2**Math.min(receiveFailures-1,4));nextReceiveAt=Date.now()+delay;
       if(receiveFailures===1||receiveFailures===4||receiveFailures%12===0)console.warn(`[radio] Receiver poll failed (${problem.status||controller.signal.reason||problem.name||"network"}); attempt ${receiveFailures}, retry in ${delay}ms`);
-      if(!transmissionId&&transmissionMode!=="DJ")setStatus("LINK RETRYING");
+      if(!transmissionId&&transmissionMode!=="DJ"){
+        const audioPlaying=externalKey&&externalAudio&&!externalAudio.paused&&!externalAudio.error&&Date.now()-externalLastProgress<5000;
+        setStatus(audioPlaying?"AUDIO PLAYING / STATUS LINK RETRYING":"LINK RETRYING");
+      }
     }finally{clearTimeout(timeout);if(receiveController===controller)receiveController=null;receiving=false}
   };
 
