@@ -17,7 +17,10 @@ connection; the browser reconnects with bounded backoff after an interruption.
 StationNet resolves M3U and PLS files with a size limit, validates public addresses
 again after redirects and DNS resolution, and relays the continuous audio without
 buffering the whole stream. HLS remains a direct URL and requires native browser
-support. Sysop start warnings and server logs report connection errors. Stream URLs
+support. The oscilloscope analyzes relayed audio on the StationNet origin. For HLS,
+it tries CORS-enabled playback and falls back to ordinary playback if the stream
+rejects that request; a source without CORS may play without a waveform. Sysop
+start warnings and server logs report connection errors. Stream URLs
 should not contain private credentials.
 
 ## Persisted model
