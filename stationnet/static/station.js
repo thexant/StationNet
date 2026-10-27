@@ -289,7 +289,7 @@ for(const editor of document.querySelectorAll("[data-tagline-editor]")){
   const list=editor.querySelector("[data-tagline-list]");
   const template=editor.querySelector("[data-tagline-template]");
   const output=editor.querySelector("[data-tagline-preview-output]");
-  const style=editor.querySelector("[data-tagline-preview-style]");
+  const style=document.querySelector("[data-tagline-preview-style]");
   const original=list.innerHTML;
   const preview=row=>{
     const value=row.querySelector("[data-tagline-text]").value;
@@ -317,6 +317,10 @@ for(const editor of document.querySelectorAll("[data-tagline-editor]")){
     else if(button.matches("[data-tagline-delete]")){row.remove();output.className="brand-tag";output.textContent="Choose PREVIEW on a tagline to see its current text, color, and effect.";style.textContent=""}
     else if(button.matches("[data-tagline-up]")&&row.previousElementSibling)list.insertBefore(row,row.previousElementSibling);
     else if(button.matches("[data-tagline-down]")&&row.nextElementSibling)list.insertBefore(row.nextElementSibling,row);
+  });
+  list.addEventListener("input",event=>{
+    if(!event.target.matches("[data-tagline-color-value]"))return;
+    event.target.closest("[data-tagline-row]").querySelector("[data-tagline-color-mode]").value="custom";
   });
   editor.addEventListener("reset",()=>setTimeout(()=>{
     list.innerHTML=original;

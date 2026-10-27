@@ -51,6 +51,7 @@ def test_save_reorder_delete_and_unicode_preview_controls(tmp_path):
     settings = client.get("/sysop/settings").get_data(as_text=True)
     assert "HEADER TAGLINES" in settings
     assert "data-tagline-preview-button" in settings
+    assert "Picking a color automatically selects Custom color." in settings
     assert "H7/dS! // YOUR INDEPENDENT COMMUNITY STATION //" in settings
 
     response = _save(client, ["✦ First ✦", "☻ Second ★"],
@@ -109,3 +110,11 @@ def test_css_respects_reduced_motion(tmp_path):
     css = client.get("/static/station.css").get_data(as_text=True)
     assert "@media (prefers-reduced-motion: reduce)" in css
     assert ".tagline-effect-blink, .tagline-effect-rainbow, .tagline-effect-glow { animation: none; }" in css
+
+
+def test_color_picker_activates_custom_mode_and_preview_style_is_found(tmp_path):
+    _, client = _client(tmp_path)
+    script = client.get("/static/station.js").get_data(as_text=True)
+    assert 'event.target.matches("[data-tagline-color-value]")' in script
+    assert '.querySelector("[data-tagline-color-mode]").value="custom"' in script
+    assert 'document.querySelector("[data-tagline-preview-style]")' in script
