@@ -31,6 +31,7 @@ for(const mud of document.querySelectorAll("[data-mud]")){
   const characterLevel=mud.querySelector("[data-character-level]");
   const characterTrack=mud.querySelector("[data-character-track]");
   const characterOrigin=mud.querySelector("[data-character-origin]");
+  const characterOriginFeatures=mud.querySelector("[data-character-origin-features]");
   const characterSkills=mud.querySelector("[data-character-skills]");
   const characterMode=mud.querySelector("[data-character-mode]");
   const characterHealth=mud.querySelector("[data-character-health]");
@@ -180,6 +181,9 @@ for(const mud of document.querySelectorAll("[data-mud]")){
     characterLevel.textContent=`LEVEL ${character.level}`;
     characterTrack.textContent=character.progression_label;
     if(characterOrigin)characterOrigin.textContent=character.race?`${character.race} · ${character.class}`:"";
+    if(characterOriginFeatures)characterOriginFeatures.replaceChildren(...(character.origin?.summary||[]).map(line=>{
+      const item=document.createElement("li");item.textContent=line;return item;
+    }));
     if(characterSkills){
       const points=characterSkills.querySelector("[data-character-skill-points]");
       points.hidden=!character.skill_points;

@@ -174,8 +174,16 @@ def read_package(payload):
         pick_difficulty = item.get("pick_difficulty")
         if pick_difficulty is not None and not _whole(pick_difficulty, 1, 200):
             raise WorldError("Exit pick_difficulty must be a whole number from 1 to 200.")
+        try:
+            conditions = mud_conditions.validate_conditions(item.get("conditions"))
+        except ValueError as problem:
+            raise WorldError(f"Invalid exit conditions: {problem}") from problem
+        message = item.get("conditions_message", "")
+        if not isinstance(message, str) or len(message.strip()) > 200:
+            raise WorldError("Exit conditions_message must be text up to 200 characters.")
         clean_exits.append({"from": source, "to": target, "name": label, "direction": direction,
-                            "key_item_id": key_item_id, "pick_difficulty": pick_difficulty})
+                            "key_item_id": key_item_id, "pick_difficulty": pick_difficulty,
+                            "conditions": conditions, "conditions_message": " ".join(message.split())})
     content = docs.get(CONTENT_FILE, {})
     if not isinstance(content, dict) or set(content) - set(CONTENT_TABLES):
         raise WorldError("content.json must be an object of supported content tables.")
@@ -205,6 +213,10 @@ def read_package(payload):
                 if "category" in properties and (not isinstance(properties["category"], str)
                                                  or not ID_RE.fullmatch(properties["category"])):
                     raise WorldError("Item category must be a lowercase key such as blade.")
+                try:
+                    mud_conditions.validate_item_requirements(properties.get("requirements"))
+                except ValueError as problem:
+                    raise WorldError(f"Invalid item requirements: {problem}") from problem
             elif table == "mud_npc_combat_profiles":
                 if any(row.get(key) is not None and not _whole(row[key], 0, 100)
                        for key in ("accuracy", "evasion")):
@@ -336,6 +348,17 @@ def _mapped(maps, table, value, column):
         raise WorldError(f"{column} references unknown {table} ID {value!r}.") from None
 
 
+def _remap_item_properties(value, mapper):
+    """Point item race/class requirements at bundled origin keys (or back to local keys)."""
+    properties = json.loads(value) if isinstance(value, str) else value
+    if isinstance(properties, dict) and properties.get("requirements"):
+        properties = {**properties, "requirements": mud_conditions.remap_item_requirements(
+            mud_conditions.validate_item_requirements(properties["requirements"]), mapper)}
+    if not isinstance(properties, (dict, list)):
+        raise WorldError("properties_json must be JSON text or an object.")
+    return json.dumps(properties, ensure_ascii=False, separators=(",", ":"))
+
+
 def _insert_content(database, document, installation_key, skill_map=None):
     from . import mud_skills
     maps = _content_maps(document, installation_key)
@@ -418,6 +441,8 @@ def _insert_content(database, document, installation_key, skill_map=None):
                 elif column in CONDITION_COLUMNS.get(table, ()):
                     value = json.dumps(mud_conditions.remap(_condition_validator(column)(value), condition_mapper),
                                        ensure_ascii=False, separators=(",", ":"))
+                elif table == "mud_item_definitions" and column == "properties_json":
+                    value = _remap_item_properties(value, condition_mapper)
                 elif column.endswith("_json"):
                     if isinstance(value, (dict, list)):
                         value = json.dumps(value, ensure_ascii=False, separators=(",", ":"))
@@ -622,6 +647,19 @@ def availability_choice(database, world_id, mode="preserve", selected=None):
     return chosen
 
 
+def _exit_condition_mapper(document, maps, skill_map):
+    """Exit conditions resolve like content conditions, once content IDs exist."""
+    origin_map = _bundled_origin_map(document)
+
+    def mapper(kind, value):
+        if kind in ORIGIN_KINDS:
+            return origin_map.get((ORIGIN_KINDS[kind], value), value)
+        if kind == "skill":
+            return (skill_map or {}).get(value, value)
+        return _mapped(maps, CONDITION_TABLES[kind], value, f"exit {kind} condition")
+    return mapper
+
+
 def install(database, payload, *, origin_mode="preserve", selected=None):
     document = read_package(payload)
     world_id = document["id"]
@@ -642,12 +680,19 @@ def install(database, payload, *, origin_mode="preserve", selected=None):
             database.execute("INSERT INTO mud_world_rooms(id,name,description,world_id) VALUES(?,?,?,?)",
                              (prefix + room["id"], room["name"], room["description"], world_id))
         for ordinal, item in enumerate(document["exits"]):
-            database.execute("INSERT INTO mud_world_exits(id,from_room_id,to_room_id,name,direction,pick_difficulty) "
-                             "VALUES(?,?,?,?,?,?)",
+            database.execute("INSERT INTO mud_world_exits(id,from_room_id,to_room_id,name,direction,pick_difficulty,"
+                             "conditions_json,conditions_message) VALUES(?,?,?,?,?,?,?,?)",
                              (f"world:{world_id}:{installation_key}:exit:{ordinal}", prefix + item["from"],
-                              prefix + item["to"], item["name"], item["direction"], item["pick_difficulty"]))
+                              prefix + item["to"], item["name"], item["direction"], item["pick_difficulty"],
+                              "[]", item["conditions_message"]))
         maps = _insert_content(database, document, installation_key, skill_map)
+        exit_mapper = _exit_condition_mapper(document, maps, skill_map)
         for ordinal, item in enumerate(document["exits"]):
+            if item["conditions"]:
+                database.execute("UPDATE mud_world_exits SET conditions_json=? WHERE id=?",
+                                 (json.dumps(mud_conditions.remap(item["conditions"], exit_mapper),
+                                             ensure_ascii=False, separators=(",", ":")),
+                                  f"world:{world_id}:{installation_key}:exit:{ordinal}"))
             if item["key_item_id"]:
                 database.execute("UPDATE mud_world_exits SET key_item_id=? WHERE id=?",
                                  (_mapped(maps, "mud_item_definitions", item["key_item_id"], "key_item_id"),
@@ -713,8 +758,10 @@ def _export_content(database, world_id, room_map):
     for row in database.execute(
         "SELECT r.conditions_json,r.outcomes_json FROM mud_dialogue_responses r "
         "JOIN mud_dialogue_nodes n ON n.id=r.node_id JOIN mud_conversations c ON c.id=n.conversation_id "
-        "WHERE c.world_id=? UNION ALL SELECT conditions_json,'[]' FROM mud_quests WHERE world_id=?",
-        (world_id, world_id),
+        "WHERE c.world_id=? UNION ALL SELECT conditions_json,'[]' FROM mud_quests WHERE world_id=? "
+        "UNION ALL SELECT e.conditions_json,'[]' FROM mud_world_exits e "
+        "JOIN mud_world_rooms r ON r.id=e.from_room_id WHERE r.world_id=?",
+        (world_id, world_id, world_id),
     ):
         needed_items |= {ref for kind, ref in mud_conditions.references(
             _stored_conditions(row["conditions_json"], "conditions_json"),
@@ -830,7 +877,8 @@ def export(database, world_id, *, origin_keys=None, skill_keys=None):
     if world["start_room_id"] not in ids:
         raise WorldError("World starting room is missing.")
     exits = database.execute(
-        "SELECT e.from_room_id,e.to_room_id,e.name,e.direction,e.key_item_id,e.pick_difficulty FROM mud_world_exits e "
+        "SELECT e.from_room_id,e.to_room_id,e.name,e.direction,e.key_item_id,e.pick_difficulty,"
+        "e.conditions_json,e.conditions_message FROM mud_world_exits e "
         "JOIN mud_world_rooms r ON r.id=e.from_room_id WHERE r.world_id=? ORDER BY e.id", (world_id,)
     ).fetchall()
     content, maps = _export_content(database, world_id, ids)
@@ -843,7 +891,10 @@ def export(database, world_id, *, origin_keys=None, skill_keys=None):
                            "name": row["name"], "direction": row["direction"],
                            **({"key_item_id": _mapped(maps, "mud_item_definitions", row["key_item_id"], "key_item_id")}
                               if row["key_item_id"] else {}),
-                           **({"pick_difficulty": row["pick_difficulty"]} if row["pick_difficulty"] else {})}
+                           **({"pick_difficulty": row["pick_difficulty"]} if row["pick_difficulty"] else {}),
+                           **({"conditions": mud_conditions.validate_conditions(row["conditions_json"])}
+                              if row["conditions_json"] not in (None, "", "[]") else {}),
+                           **({"conditions_message": row["conditions_message"]} if row["conditions_message"] else {})}
                           for row in exits if row["to_room_id"] in ids],
                 "content": content}
     from . import character_creation
@@ -895,7 +946,22 @@ def export(database, world_id, *, origin_keys=None, skill_keys=None):
         for row in content.get(table, []):
             for column in columns:
                 row[column] = mud_conditions.remap(row[column], local_reference)
+    for row in content.get("mud_item_definitions", []):
+        if isinstance(row.get("properties_json"), dict) and row["properties_json"].get("requirements"):
+            row["properties_json"] = json.loads(_remap_item_properties(row["properties_json"], local_reference))
+    for item in document["exits"]:
+        if "conditions" in item:
+            item["conditions"] = mud_conditions.remap(item["conditions"], _export_exit_reference(maps, local_reference))
     return package_bytes(document)
+
+
+def _export_exit_reference(maps, local_reference):
+    """Exit conditions name content by installed ID; export them by package-local ID."""
+    def mapper(kind, value):
+        if kind in ORIGIN_KINDS or kind == "skill":
+            return local_reference(kind, value)
+        return _mapped(maps, CONDITION_TABLES[kind], value, f"exit {kind} condition")
+    return mapper
 
 
 def activation_impact(database, world_id, *, origin_mode="preserve", selected=None):

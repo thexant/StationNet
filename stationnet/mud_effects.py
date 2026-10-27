@@ -30,6 +30,21 @@ def validate(spec):
     return spec["key"], potency, duration
 
 
+def resist(spec, percent):
+    """Scale an incoming effect by a resistance percentage; None means it is shrugged off.
+
+    Negative resistance is a vulnerability and strengthens the effect instead.
+    """
+    if not percent:
+        return spec
+    key, potency, duration = validate(spec)
+    potency = potency * (100 - percent) // 100
+    if potency <= 0:
+        return None
+    return {"key": key, "potency": min(1000, potency),
+            "duration": max(1, min(100, duration * (100 - percent) // 100))}
+
+
 def apply(database, target_type, target_id, spec, source=""):
     key, potency, duration = validate(spec)
     if target_type not in ("character", "encounter"):

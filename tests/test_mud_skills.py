@@ -260,7 +260,8 @@ def test_guard_learns_only_from_real_blows_and_lore_scales(game, monkeypatch):
     # Lore practice scales with the boosted award instead of counting once per award.
     after = _skill(db, user_id, "lore")
     progress = sum(mud_skills.next_rank_cost(rank) for rank in range(2, after["rank"])) + after["experience"]
-    assert result["amount"] > 400 and progress == result["amount"] // 25
+    # Scholars practice knowledge skills such as Lore 50% faster.
+    assert result["amount"] > 400 and progress == result["amount"] // 25 * 150 // 100
     assert result["skill_notices"] == ["Your Lore skill rises to rank 3."]
 
 
@@ -314,12 +315,15 @@ def test_skill_points_learning_practice_and_refunds(game):
     db.execute("UPDATE mud_character_progression SET level=4 WHERE character_id=? AND track_key='shared'", (cid,))
     db.execute("UPDATE mud_character_progression SET level=3 WHERE character_id=? AND track_key='traditional'",
                (cid,))
-    assert mud.character_state(db, user_id)["skill_points"] == 2  # highest track only, never summed
+    # Highest track only, never summed, plus the human origin's bonus point.
+    assert mud.character_state(db, user_id)["skill_points"] == 3
     learned = mud._learn_action(db, user, {"arguments": ["stealth"]})
     assert "You learn Stealth at rank 1 (1 skill point)" in learned[0].body
     assert _skill(db, user_id, "stealth")["source"] == "learned"
     trained = mud._practice_skill_action(db, user, {"arguments": ["stealth"]})
     assert "rises to rank 2" in trained[0].body
+    trained = mud._practice_skill_action(db, user, {"arguments": ["stealth"]})
+    assert "rises to rank 3" in trained[0].body
     assert mud.character_state(db, user_id)["skill_points"] == 0
     with pytest.raises(mud.ActionError, match="no skill points"):
         mud._practice_skill_action(db, user, {"arguments": ["stealth"]})
@@ -328,10 +332,10 @@ def test_skill_points_learning_practice_and_refunds(game):
     # Disabling a skill makes it dormant and returns the points spent on it.
     mud_skills.set_enabled(db, set(mud_skills.definitions(db)) - {"stealth"})
     state = mud.character_state(db, user_id)
-    assert state["skill_points"] == 2
+    assert state["skill_points"] == 3
     assert next(skill for skill in state["skills"] if skill["skill_key"] == "stealth")["active"] is False
     assert mud._character_effects(db, cid)["stealth"] == 0
-    assert _skill(db, user_id, "stealth")["rank"] == 2
+    assert _skill(db, user_id, "stealth")["rank"] == 3
     _import(db, {"key": "veteran", "name": "Veteran", "description": "Hard-won.",
                  "effects": [{"type": "defense"}], "requirements": {"level": 10}})
     with pytest.raises(mud.ActionError, match="requires level 10"):
@@ -363,7 +367,7 @@ def test_skills_command_and_character_state_feedback(game):
     db, user_id = game
     user = _user(db, user_id)
     body = mud._skills_action(db, user, {})[0].body
-    assert body.startswith("Skill points: 0")
+    assert body.startswith("Skill points: 1")  # humans start with a bonus point
     assert "Knowledge:\n- Lore 2/20 [0/12]: +4 % experience earned" in body
     assert "Learnable:" in body and "- Stealth (1 pt)" in body
     detail = mud._skills_action(db, user, {"arguments": ["stealth"]})[0].body

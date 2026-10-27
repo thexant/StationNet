@@ -5,7 +5,7 @@ not start a run or move a character; Chunks 11 and 12 own those concerns.
 """
 from collections import deque
 from copy import deepcopy
-from . import mud_effects, mud_firearms
+from . import mud_conditions, mud_effects, mud_firearms
 import hashlib
 import json
 from pathlib import Path
@@ -430,6 +430,10 @@ def _validate_embedded_definitions(errors, template, database=None):
                     firearm_error = mud_firearms.validate_item(item_type, slot, properties)
                     if firearm_error:
                         errors.append(f"{here}.properties: {firearm_error}")
+                    try:
+                        mud_conditions.validate_item_requirements(properties.get("requirements"))
+                    except ValueError as problem:
+                        errors.append(f"{here}.properties.requirements: {problem}")
                 if isinstance(local_id, str):
                     item_slots[local_id] = slot
                 continue
@@ -530,13 +534,39 @@ def _validate_response_rules(errors, response, path, local_items, database):
             errors.append(f"{path}: item {ref!r} is neither an embedded item nor an existing definition")
 
 
-def _response_rules_json(template, response):
-    """Store a response's conditions/outcomes with embedded item IDs resolved."""
-    from . import mud_conditions
-    local_items = {item["id"] for item in template.get("definitions", {}).get("items", [])}
+def _origin_resolver(template):
+    """Map a race/class key a theme bundles to its installed key; others pass through."""
+    bundled = {(kind, source.get("key")) for kind in ("races", "classes")
+               for source in template.get("origins", {}).get(kind, [])}
+    kinds = {"race": "races", "class": "classes"}
 
     def resolve(kind, ref):
-        return local_definition_id(template, "item", ref) if kind == "item" and ref in local_items else ref
+        if kind in kinds and (kinds[kind], ref) in bundled:
+            return bundled_origin_key(template["id"], kinds[kind], ref)
+        return ref
+    return resolve
+
+
+def _item_properties_json(template, properties):
+    """Store item properties with bundled race/class requirement keys resolved."""
+    from . import mud_conditions
+    properties = dict(properties or {})
+    if properties.get("requirements"):
+        properties["requirements"] = mud_conditions.remap_item_requirements(
+            mud_conditions.validate_item_requirements(properties["requirements"]), _origin_resolver(template))
+    return canonical_json(properties)
+
+
+def _response_rules_json(template, response):
+    """Store a response's conditions/outcomes with embedded item and bundled origin IDs resolved."""
+    from . import mud_conditions
+    local_items = {item["id"] for item in template.get("definitions", {}).get("items", [])}
+    origin = _origin_resolver(template)
+
+    def resolve(kind, ref):
+        if kind == "item" and ref in local_items:
+            return local_definition_id(template, "item", ref)
+        return origin(kind, ref)
 
     conditions = mud_conditions.validate_conditions(response.get("conditions", []), allow_quests=False)
     outcomes = mud_conditions.validate_outcomes(response.get("outcomes", []))
@@ -1274,7 +1304,7 @@ def _install_embedded_definitions(database, template):
                 "(id,name,description,item_type,properties_json,behaviors_json,equipment_slot) "
                 "VALUES(?,?,?,?,?,?,?)",
                 (definition_id, item["name"], item["description"], item.get("item_type", "misc"),
-                 canonical_json(item.get("properties", {})), canonical_json(item.get("behaviors", {})),
+                 _item_properties_json(template, item.get("properties", {})), canonical_json(item.get("behaviors", {})),
                  item.get("equipment_slot")),
             )
     for kind in ("npcs", "enemies"):

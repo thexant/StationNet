@@ -4,6 +4,11 @@
   "description": "Travelers who make their homes beside rivers and marshes.",
   "traits": "Sure footing",
   "attributes": {"agility": 1},
-  "effects": {"defense": 1},
-  "skills": {"evasion": 1}
+  "effects": {"defense": 1, "flee": 5},
+  "skills": {"evasion": 1},
+  "tags": ["amphibious", "river-born"],
+  "proficiencies": {"weapons": ["blade"]},
+  "skill_affinities": {"exploration": 25, "evasion": 50},
+  "resistances": {"poison": 25, "snared": 50},
+  "progression": {"health_per_level": 1}
 }

@@ -117,6 +117,10 @@
         "item_definition_id": {"type": "string", "minLength": 1}
       }
     },
+    "originKeys": {
+      "type": "array", "minItems": 1, "maxItems": 50,
+      "items": {"type": "string", "pattern": "^[a-z][a-z0-9-]{1,39}$"}
+    },
     "itemDefinition": {
       "type": "object", "required": ["id", "name", "description"],
       "properties": {
@@ -137,7 +141,22 @@
             "heal": {"type": "integer", "minimum": 1},
             "value": {"type": "integer", "minimum": 1, "maximum": 100000},
             "reveal_exit": {"type": "boolean"},
-            "use_message": {"type": "string"}
+            "use_message": {"type": "string"},
+            "requirements": {
+              "type": "object",
+              "description": "Who may equip the item: attribute minimums, level, and race/class/tag lists. races, classes, and tags pass when any listed key matches; not_races, not_classes, and not_tags fail when any matches.",
+              "properties": {
+                "strength": {"type": "integer", "minimum": 1, "maximum": 30},
+                "agility": {"type": "integer", "minimum": 1, "maximum": 30},
+                "intellect": {"type": "integer", "minimum": 1, "maximum": 30},
+                "vitality": {"type": "integer", "minimum": 1, "maximum": 30},
+                "level": {"type": "integer", "minimum": 1, "maximum": 1000},
+                "races": {"$ref": "#/$defs/originKeys"}, "classes": {"$ref": "#/$defs/originKeys"},
+                "tags": {"$ref": "#/$defs/originKeys"}, "not_races": {"$ref": "#/$defs/originKeys"},
+                "not_classes": {"$ref": "#/$defs/originKeys"}, "not_tags": {"$ref": "#/$defs/originKeys"}
+              },
+              "additionalProperties": false
+            }
           },
           "additionalProperties": true
         },
@@ -162,7 +181,7 @@
                 "state_key": {"type": "string"}, "state_value": {"type": "string"},
                 "sort_order": {"type": "integer"},
                 "conditions": {"type": "array", "maxItems": 20, "items": {"type": "object"},
-                               "description": "All must hold for the response to appear: level, race, class, has_item, coins, attribute, skill, state, claimed; any condition accepts negate, and {\"any\": [...]} groups alternatives. Item IDs may name embedded items."},
+                               "description": "All must hold for the response to appear: level, race, class, tag, has_item, coins, attribute, skill, state, claimed; any condition accepts negate, and {\"any\": [...]} groups alternatives. Item IDs may name embedded items."},
                 "outcomes": {"type": "array", "maxItems": 10, "items": {
                   "type": "object", "required": ["type"],
                   "properties": {

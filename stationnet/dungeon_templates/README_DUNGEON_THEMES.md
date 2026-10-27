@@ -62,6 +62,10 @@ enemies. For example, `"properties": {"on_hit_effects":
 Themes imported through SYSOP Settings may include an optional top-level
 `origins` object with `races` and/or `classes` arrays. Each entry uses the same
 format as the [race and class templates](../mud_origin_templates/README_RACES_CLASSES.md).
+Bundled choices support every field in that guide, including `tags`,
+`resistances`, `proficiencies`, `skill_affinities`, and `progression`. Response
+conditions and item requirements that name a bundled race or class by its local
+key are mapped to the installed key automatically.
 Imported choices start inactive; enable them under MUD race and class availability
 when ready. The theme removal form lists its linked choices and offers optional
 cleanup. Definitions still linked to another installed world or theme are preserved.
@@ -210,8 +214,9 @@ Required fields: `id`, `name`, `description` (enemies also require `combat`).
   `state_key` / `state_value`.
 
   A response may also have `conditions`, an array that must all hold for the
-  response to appear. Supported types are `level`, `race`, `class`,
-  `has_item`, `coins`, `attribute`, `skill`, `state`, and `claimed`. Any
+  response to appear. Supported types are `level`, `race`, `class`, `tag`
+  (a trait the character's race or class declares), `has_item`, `coins`,
+  `attribute`, `skill`, `state`, and `claimed`. Any
   condition can take `"negate": true`, and `{"any": [...]}` groups
   alternatives. Quest conditions are not available in dungeons.
 
@@ -273,6 +278,7 @@ Give items that affect a run explicit properties:
 | Healing consumable | `heal`: positive integer | Restores up to that much health and consumes the item. In combat it advances an enemy turn. |
 | Navigation consumable | `reveal_exit: true` | Reveals the next direction toward the exit and consumes the item. |
 | Any saleable item | `value`: integer, 1 to 100,000 | Sets its full coin value. The portal trader pays 40% of it, rounded down, minimum one coin. |
+| Restricted equipment | `requirements`: attribute minimums (1 to 30), `level`, and `races`, `classes`, or `tags` lists, plus `not_races`, `not_classes`, `not_tags` | Only characters who meet every requirement can equip it, for example `{"tags": ["arcane"], "level": 3}`. See the [custom world guide](../mud_world_templates/README_CUSTOM_WORLDS.md) for details. |
 
 Notes:
 

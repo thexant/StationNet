@@ -15,6 +15,13 @@ MAX_ORIGIN_BYTES = 32 * 1024
 MAX_ORIGIN_PACK_BYTES = 1024 * 1024
 MAX_ORIGINS_PER_PACK_KIND = 100
 KEY_RE = re.compile(r"^[a-z][a-z0-9-]{1,39}$")
+# Growth an origin adds on top of the usual rules: (minimum, maximum) per key.
+PROGRESSION_BOUNDS = {"health": (-50, 50), "mana": (-50, 50), "health_per_level": (-5, 5),
+                      "mana_per_level": (-5, 5), "skill_points": (0, 10), "starting_skill_choices": (0, 3)}
+# Damage taken from enemy blows, plus every hostile timed effect, can be resisted.
+RESISTANCES = ("physical", "poison", "burning", "bleeding", "weakness", "vulnerability", "blinded", "snared")
+MAX_ORIGIN_TAGS = 12
+MAX_AFFINITIES = 12
 
 
 def _built_in_options():
@@ -92,17 +99,56 @@ def validate_origin(kind, document, database, *, check_key=True):
         "description": _text(document.get("description"), "Description", 1000),
         "traits": _text(document.get("traits"), "Traits", 160),
     }
+    from . import mud_skills
     for field, allowed, bound in (("attributes", ATTRIBUTES, 10),
-                                   ("effects", ("attack", "defense", "experience_percent"), 100)):
+                                   ("effects", tuple(mud_skills.EFFECT_TYPES), 100)):
         values = document.get(field, {})
         if not isinstance(values, dict) or any(
             name not in allowed or type(value) is not int or abs(value) > bound
             for name, value in values.items()
         ):
-            raise ValueError(f"{field} must contain supported keys with integer values within {bound}.")
+            raise ValueError(f"{field} must contain supported keys ({', '.join(allowed)}) "
+                             f"with integer values within {bound}.")
         definition[field] = values
-    from . import mud_skills
     skills = {entry["key"] for entry in mud_skills.catalog(database)}
+    # Optional fields are stored only when present so older definitions compare unchanged.
+    progression = document.get("progression", {})
+    if not isinstance(progression, dict) or any(
+        name not in PROGRESSION_BOUNDS or type(value) is not int
+        or not PROGRESSION_BOUNDS[name][0] <= value <= PROGRESSION_BOUNDS[name][1]
+        for name, value in progression.items()
+    ):
+        raise ValueError("progression may contain " + ", ".join(
+            f"{name} ({low} to {high})" for name, (low, high) in PROGRESSION_BOUNDS.items()) + ".")
+    if progression:
+        definition["progression"] = progression
+    proficiencies = document.get("proficiencies", {})
+    if not isinstance(proficiencies, dict) or set(proficiencies) - {"weapons", "armor"}:
+        raise ValueError("proficiencies may contain weapons and armor category lists.")
+    proficiencies = {kind: mud_skills._key_list(proficiencies.get(kind), f"{kind} proficiencies")
+                     for kind in ("weapons", "armor")}
+    if any(proficiencies.values()):
+        definition["proficiencies"] = proficiencies
+    affinities = document.get("skill_affinities", {})
+    if not isinstance(affinities, dict) or len(affinities) > MAX_AFFINITIES or any(
+        (key not in skills and key not in mud_skills.GROUPS) or type(value) is not int
+        or not -50 <= value <= 200 for key, value in affinities.items()
+    ):
+        raise ValueError(f"skill_affinities must map up to {MAX_AFFINITIES} installed skill keys or skill "
+                         f"groups ({', '.join(mud_skills.GROUPS)}) to percentages from -50 to 200.")
+    if affinities:
+        definition["skill_affinities"] = affinities
+    resistances = document.get("resistances", {})
+    if not isinstance(resistances, dict) or any(
+        name not in RESISTANCES or type(value) is not int or abs(value) > 100
+        for name, value in resistances.items()
+    ):
+        raise ValueError(f"resistances must map {', '.join(RESISTANCES)} to percentages from -100 to 100.")
+    if resistances:
+        definition["resistances"] = resistances
+    tags = mud_skills._key_list(document.get("tags"), "tags", MAX_ORIGIN_TAGS)
+    if tags:
+        definition["tags"] = tags
     grants = document.get("skills", {})
     if not isinstance(grants, dict) or len(grants) > 10 or any(
         key not in skills or type(rank) is not int or not 1 <= rank <= 5 for key, rank in grants.items()
@@ -110,46 +156,140 @@ def validate_origin(kind, document, database, *, check_key=True):
         raise ValueError("Granted skills must map installed skill keys to ranks from 1 to 5.")
     if grants:
         definition["skills"] = grants
+    from .mud import EQUIPMENT_SLOTS, SPELLS
     if kind == "classes":
-        from .mud import EQUIPMENT_SLOTS, SPELLS
         skill = document.get("skill")
         if not isinstance(skill, str) or skill not in skills:
             raise ValueError("Class favored skill must be a supported skill.")
         definition["skill"] = skill
-        spells = document.get("spells", [])
-        if (not isinstance(spells, list) or len(spells) > len(SPELLS)
-                or any(not isinstance(spell, str) or spell not in SPELLS for spell in spells)
-                or len(set(spells)) != len(spells)):
-            raise ValueError("Class spells must be distinct supported spell keys.")
+    # Races may carry innate abilities and heirloom gear too; classes always list both.
+    spells = document.get("spells", [])
+    if (not isinstance(spells, list) or len(spells) > len(SPELLS)
+            or any(not isinstance(spell, str) or spell not in SPELLS for spell in spells)
+            or len(set(spells)) != len(spells)):
+        raise ValueError(f"Spells must be distinct supported spell keys: {', '.join(SPELLS)}.")
+    if spells or kind == "classes":
         definition["spells"] = spells
-        equipment = document.get("equipment", [])
-        if not isinstance(equipment, list) or len(equipment) > len(EQUIPMENT_SLOTS):
-            raise ValueError("Class equipment must be a list of up to eight items.")
-        parsed = []
-        for item in equipment:
-            if not isinstance(item, dict) or not isinstance(item.get("key"), str) or not KEY_RE.fullmatch(item["key"]):
-                raise ValueError("Each equipment item needs a valid key.")
-            if item.get("slot") not in EQUIPMENT_SLOTS:
-                raise ValueError("Equipment must use a supported slot.")
-            parsed_item = {"key": item["key"], "name": _text(item.get("name"), "Equipment name", 80, 2),
-                           "description": _text(item.get("description"), "Equipment description", 1000),
-                           "slot": item["slot"]}
-            if "category" in item:
-                if not isinstance(item["category"], str) or not KEY_RE.fullmatch(item["category"]):
-                    raise ValueError("Equipment category must be a lowercase key such as blade.")
-                parsed_item["category"] = item["category"]
-            for stat in ("attack", "defense"):
-                value = item.get(stat, 0)
-                if type(value) is not int or not 0 <= value <= 100:
-                    raise ValueError("Equipment attack and defense must be integers from 0 to 100.")
-                parsed_item[stat] = value
-            parsed.append(parsed_item)
-        if len({item["key"] for item in parsed}) != len(parsed):
-            raise ValueError("Equipment keys must be distinct within a class.")
+    equipment = document.get("equipment", [])
+    if not isinstance(equipment, list) or len(equipment) > len(EQUIPMENT_SLOTS):
+        raise ValueError("Equipment must be a list of up to eight items.")
+    parsed = []
+    for item in equipment:
+        if not isinstance(item, dict) or not isinstance(item.get("key"), str) or not KEY_RE.fullmatch(item["key"]):
+            raise ValueError("Each equipment item needs a valid key.")
+        if item.get("slot") not in EQUIPMENT_SLOTS:
+            raise ValueError("Equipment must use a supported slot.")
+        parsed_item = {"key": item["key"], "name": _text(item.get("name"), "Equipment name", 80, 2),
+                       "description": _text(item.get("description"), "Equipment description", 1000),
+                       "slot": item["slot"]}
+        if "category" in item:
+            if not isinstance(item["category"], str) or not KEY_RE.fullmatch(item["category"]):
+                raise ValueError("Equipment category must be a lowercase key such as blade.")
+            parsed_item["category"] = item["category"]
+        for stat in ("attack", "defense"):
+            value = item.get(stat, 0)
+            if type(value) is not int or not 0 <= value <= 100:
+                raise ValueError("Equipment attack and defense must be integers from 0 to 100.")
+            parsed_item[stat] = value
+        for stat in ("accuracy", "evasion"):
+            if stat in item:
+                if type(item[stat]) is not int or abs(item[stat]) > 20:
+                    raise ValueError("Equipment accuracy and evasion must be integers from -20 to 20.")
+                parsed_item[stat] = item[stat]
+        parsed.append(parsed_item)
+    if len({item["key"] for item in parsed}) != len(parsed):
+        raise ValueError(f"Equipment keys must be distinct within a {KIND_NAMES[kind]}.")
+    if parsed or kind == "classes":
         definition["equipment"] = parsed
     if check_key and any(entry["key"] == key for entry in catalog(database, include_removed=True)[kind]):
         raise ValueError(f"A {KIND_NAMES[kind]} with that key already exists or was used by a character.")
     return definition
+
+
+def character_origins(database, character_id):
+    """The race and class definitions a character uses, including disabled or removed ones."""
+    row = database.execute(
+        "SELECT race_key,class_key FROM mud_characters WHERE id=?", (character_id,)
+    ).fetchone()
+    if row is None:
+        return None, None
+    config = options(database, include_inactive=True, include_removed=True)
+    return tuple(next((item for item in config[group] if item["key"] == row[key]), None)
+                 for group, key in (("races", "race_key"), ("classes", "class_key")))
+
+
+def origin_profile(*origins):
+    """Merge race and class features; missing optional fields count as empty."""
+    profile = {"effects": {}, "progression": {}, "resistances": {}, "skill_affinities": {},
+               "proficiencies": {"weapons": [], "armor": []}, "tags": [], "spells": []}
+    # Class spells come first so the familiar spell order is kept.
+    for origin in sorted((origin for origin in origins if origin), key=lambda origin: "skill" not in origin):
+        for field in ("effects", "progression", "resistances", "skill_affinities"):
+            for key, value in origin.get(field, {}).items():
+                profile[field][key] = profile[field].get(key, 0) + value
+        for kind in ("weapons", "armor"):
+            for category in origin.get("proficiencies", {}).get(kind, []):
+                if category not in profile["proficiencies"][kind]:
+                    profile["proficiencies"][kind].append(category)
+        for field in ("tags", "spells"):
+            for key in origin.get(field, []):
+                if key not in profile[field]:
+                    profile[field].append(key)
+    profile["resistances"] = {key: max(-100, min(100, value)) for key, value in profile["resistances"].items()}
+    return profile
+
+
+def origin_facts(database, character_id):
+    """What item requirements and tag conditions compare against: keys and tags as sets."""
+    row = database.execute(
+        "SELECT race_key,class_key FROM mud_characters WHERE id=?", (character_id,)
+    ).fetchone()
+    tags = origin_profile(*character_origins(database, character_id))["tags"]
+    return {"races": {row["race_key"]} - {None} if row else set(),
+            "classes": {row["class_key"]} - {None} if row else set(), "tags": set(tags)}
+
+
+def origin_resources(profile, level):
+    """Maximum health and mana an origin adds at a level."""
+    growth = profile["progression"]
+    return (growth.get("health", 0) + (level - 1) * growth.get("health_per_level", 0),
+            growth.get("mana", 0) + (level - 1) * growth.get("mana_per_level", 0))
+
+
+def sync_origin_resources(database, character_id):
+    """Bring each track's origin health and mana in line with the current definitions.
+
+    Returns True when a row changed. Progression rows remember the amount already applied, so this is idempotent and
+    also absorbs origin swaps, level gains, and rebalanced built-in definitions.
+    """
+    profile = origin_profile(*character_origins(database, character_id))
+    changed = False
+    for row in database.execute(
+        "SELECT track_key,level,current_health,maximum_health,current_mana,maximum_mana,"
+        "origin_health,origin_mana FROM mud_character_progression WHERE character_id=?", (character_id,)
+    ).fetchall():
+        health, mana = origin_resources(profile, row["level"])
+        if (health, mana) == (row["origin_health"], row["origin_mana"]):
+            continue
+        maximum = max(1, row["maximum_health"] + health - row["origin_health"])
+        # A fallen character stays at zero; anyone standing keeps at least one point.
+        current = (min(maximum, max(1, row["current_health"] + health - row["origin_health"]))
+                   if row["current_health"] > 0 else 0)
+        maximum_mana = max(1, row["maximum_mana"] + mana - row["origin_mana"])
+        current_mana = min(maximum_mana, max(0, row["current_mana"] + mana - row["origin_mana"]))
+        database.execute(
+            "UPDATE mud_character_progression SET maximum_health=?,current_health=?,maximum_mana=?,"
+            "current_mana=?,origin_health=?,origin_mana=? WHERE character_id=? AND track_key=?",
+            (maximum, current, maximum_mana, current_mana, health, mana, character_id, row["track_key"]),
+        )
+        changed = True
+    return changed
+
+
+def starting_skill_count(config, race, archetype):
+    """Starting skill picks: the configured number plus any origin bonus."""
+    bonus = origin_profile(race, archetype)["progression"].get("starting_skill_choices", 0)
+    return config["starting_skill_choices"] + bonus
 
 
 def import_origin(database, kind, payload):
@@ -364,7 +504,7 @@ def validate(payload, config):
         raise ValueError("An attribute modifier is outside the supported range.")
     skills = payload.get("skills")
     eligible = eligible_skills(config, race, archetype, final)
-    required = min(config["starting_skill_choices"], len(eligible))
+    required = min(starting_skill_count(config, race, archetype), len(eligible))
     if (not isinstance(skills, list) or any(not isinstance(skill, str) for skill in skills)
             or len(skills) != required
             or len(set(skills)) != len(skills) or not set(skills) <= {item["key"] for item in eligible}):
@@ -435,29 +575,31 @@ def complete(database, user_id, payload, possession_mode="traditional"):
         )
     mud_skills.grant(database, row["id"], mud_skills.origin_grants(race, archetype))
     # One grant during creation; legacy possessions and equipment are untouched.
-    for item in archetype.get("equipment", []):
-        item_hash = hashlib.sha256(json.dumps(item, sort_keys=True).encode()).hexdigest()[:12]
-        definition_id = f"origin:{config['id']}:{archetype['key']}:{item['key']}:{item_hash}"
-        database.execute(
-            "INSERT OR IGNORE INTO mud_item_definitions"
-            "(id,name,description,item_type,properties_json,equipment_slot) "
-            "VALUES(?,?,?,'equipment',?,?)",
-            (definition_id, item["name"], item["description"],
-             json.dumps({"attack": item.get("attack", 0), "defense": item.get("defense", 0),
-                        **({"category": item["category"]} if "category" in item else {})}),
-             item["slot"]),
-        )
-        database.execute(
-            "INSERT INTO mud_item_instances(id,definition_id,owner_character_id,possession_mode) "
-            "VALUES(?,?,?,?)",
-            (f"origin:item:{uuid.uuid4().hex}", definition_id, row["id"], possession_mode),
-        )
+    for origin in (race, archetype):
+        for item in origin.get("equipment", []):
+            item_hash = hashlib.sha256(json.dumps(item, sort_keys=True).encode()).hexdigest()[:12]
+            owner = origin["key"] if origin is archetype else f"race:{origin['key']}"
+            definition_id = f"origin:{config['id']}:{owner}:{item['key']}:{item_hash}"
+            properties = {"attack": item.get("attack", 0), "defense": item.get("defense", 0),
+                          **{key: item[key] for key in ("category", "accuracy", "evasion") if key in item}}
+            database.execute(
+                "INSERT OR IGNORE INTO mud_item_definitions"
+                "(id,name,description,item_type,properties_json,equipment_slot) "
+                "VALUES(?,?,?,'equipment',?,?)",
+                (definition_id, item["name"], item["description"], json.dumps(properties), item["slot"]),
+            )
+            database.execute(
+                "INSERT INTO mud_item_instances(id,definition_id,owner_character_id,possession_mode) "
+                "VALUES(?,?,?,?)",
+                (f"origin:item:{uuid.uuid4().hex}", definition_id, row["id"], possession_mode),
+            )
     database.execute(
         "UPDATE mud_characters SET display_name=?,race_key=?,class_key=?,base_attributes_json=?,"
         "creation_state='complete',"
         "updated_at=CURRENT_TIMESTAMP WHERE id=? AND creation_state IN ('pending','legacy')",
         (name, race["key"], archetype["key"], json.dumps(allocated), row["id"]),
     )
+    sync_origin_resources(database, row["id"])
     return name
 
 

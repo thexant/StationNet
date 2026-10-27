@@ -6,7 +6,10 @@
       "description": "Travelers who make their homes beside rivers and marshes.",
       "traits": "Sure footing",
       "attributes": {"agility": 1},
-      "effects": {"defense": 1}
+      "effects": {"defense": 1},
+      "tags": ["amphibious"],
+      "resistances": {"poison": 25},
+      "skill_affinities": {"exploration": 25}
     }
   ],
   "classes": [
@@ -16,9 +19,12 @@
       "description": "A guide practiced at crossing uncertain ground.",
       "traits": "Trail craft",
       "attributes": {"agility": 1},
-      "effects": {"defense": 1},
+      "effects": {"defense": 1, "search": 3},
       "spells": ["ward"],
       "skill": "guard",
+      "tags": ["wilderness"],
+      "proficiencies": {"armor": ["light"]},
+      "progression": {"health": 5},
       "equipment": []
     }
   ]

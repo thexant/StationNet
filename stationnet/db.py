@@ -1418,6 +1418,7 @@ def init_db():
     _migrate_mud_progression(database)
     _migrate_mud_skills(database)
     _migrate_mud_combat_balance(database)
+    _migrate_mud_origin_features(database)
     _initialize_mud_characters(database)
     _initialize_mud_world(database)
     _migrate_mud_world_packages(database)
@@ -1670,6 +1671,21 @@ def _migrate_mud_combat_balance(database):
             "accuracy": "INTEGER CHECK(accuracy IS NULL OR accuracy BETWEEN 0 AND 100)",
             "evasion": "INTEGER CHECK(evasion IS NULL OR evasion BETWEEN 0 AND 100)",
         },
+    }
+    for table, columns in additions.items():
+        existing = {row["name"] for row in database.execute(f"PRAGMA table_info({table})")}
+        for column, definition in columns.items():
+            if column not in existing:
+                database.execute(f"ALTER TABLE {table} ADD COLUMN {column} {definition}")
+
+
+def _migrate_mud_origin_features(database):
+    """Track origin health/mana already applied, and let world exits carry conditions."""
+    additions = {
+        "mud_character_progression": {"origin_health": "INTEGER NOT NULL DEFAULT 0",
+                                      "origin_mana": "INTEGER NOT NULL DEFAULT 0"},
+        "mud_world_exits": {"conditions_json": "TEXT NOT NULL DEFAULT '[]'",
+                            "conditions_message": "TEXT NOT NULL DEFAULT ''"},
     }
     for table, columns in additions.items():
         existing = {row["name"] for row in database.execute(f"PRAGMA table_info({table})")}

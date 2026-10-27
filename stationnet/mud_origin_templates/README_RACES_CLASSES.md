@@ -5,6 +5,12 @@ origin packs in SYSOP Settings > MUD service. Download a template there, or
 start with the complete examples below. The same choices appear in traditional
 and procedural character creation. Each individual file is limited to 32 KB.
 
+Races and classes do more than adjust starting attributes. A definition can
+give lasting bonuses, traits that world content reacts to, weapon and armor
+training, resistances, innate abilities, faster learning for chosen skills,
+and extra health, mana, or skill points as the character levels. Every one of
+these fields is optional, so older definitions keep working unchanged.
+
 ## Origin packs
 
 A pack uses the same `origins.json` object convention as a bundled MUD world:
@@ -35,7 +41,13 @@ Save as `riverfolk.json` and import as a race:
   "description": "Travelers who make their homes beside rivers and marshes.",
   "traits": "Sure footing",
   "attributes": {"agility": 1},
-  "effects": {"defense": 1}
+  "effects": {"defense": 1, "flee": 5},
+  "skills": {"evasion": 1},
+  "tags": ["amphibious", "river-born"],
+  "proficiencies": {"weapons": ["blade"]},
+  "skill_affinities": {"exploration": 25, "evasion": 50},
+  "resistances": {"poison": 25, "snared": 50},
+  "progression": {"health_per_level": 1}
 }
 ```
 
@@ -50,13 +62,18 @@ Save as `pathfinder.json` and import as a class:
   "description": "A guide practiced at crossing uncertain ground.",
   "traits": "Trail craft",
   "attributes": {"agility": 1},
-  "effects": {"defense": 1},
+  "effects": {"defense": 1, "search": 3},
   "skill": "guard",
   "spells": ["ward"],
+  "tags": ["wilderness"],
+  "proficiencies": {"weapons": ["blade"], "armor": ["light"]},
+  "skill_affinities": {"exploration": 50},
+  "progression": {"health": 5, "skill_points": 1},
   "equipment": [
     {"key": "trail-knife", "name": "Trail Knife",
      "description": "A short, sturdy knife carried on the trail.",
-     "slot": "main_hand", "attack": 1, "defense": 0}
+     "slot": "main_hand", "attack": 1, "defense": 0, "accuracy": 2,
+     "category": "blade"}
   ]
 }
 ```
@@ -75,28 +92,64 @@ or [dungeon theme](../dungeon_templates/README_DUNGEON_THEMES.md).
 | `description` | required | required | 1 to 1,000 nonblank characters. |
 | `traits` | required | required | 1 to 160 nonblank characters; display text, not a scripted ability. |
 | `attributes` | optional | optional | Object with any of `strength`, `agility`, `intellect`, `vitality`. Each modifier is an integer from -10 to 10; `{}` is valid. |
-| `effects` | optional | optional | Object with any of `attack`, `defense`, `experience_percent`. Each value is an integer from -100 to 100; `{}` is valid. |
+| `effects` | optional | optional | Lasting bonuses. Object with any skill effect type (see below); each value is an integer from -100 to 100; `{}` is valid. |
 | `skills` | optional | optional | Object granting starting ranks, such as `{"perception": 1}`. Keys must be installed skills; ranks are 1 to 5. Granted skills do not count toward the player's starting choices. |
 | `skill` | — | required | Favored skill key; any installed skill (default or imported). It starts at rank 2 if the player picks it. |
-| `spells` | — | optional | Array of distinct supported spell keys; `[]` gives no spells. |
-| `equipment` | — | optional | Array of up to eight starter items; `[]` gives none. |
+| `spells` | optional | optional | Array of distinct supported spell keys; `[]` gives no spells. On a race these are innate abilities, known in addition to the class's spells. |
+| `equipment` | optional | optional | Array of up to eight starter items; `[]` gives none. |
+| `tags` | optional | optional | Up to 12 lowercase keys, such as `["darkvision", "undead"]`. Tags mean nothing by themselves; world content, items, and dialogue can require or exclude them. |
+| `proficiencies` | optional | optional | `{"weapons": [...], "armor": [...]}` gear categories this origin is trained with, as if a skill granted them. |
+| `resistances` | optional | optional | Percentages from -100 to 100 against `physical` (enemy blows) and the hostile effects `poison`, `burning`, `bleeding`, `weakness`, `vulnerability`, `blinded`, `snared`. 100 is immunity; negative values are vulnerabilities. |
+| `skill_affinities` | optional | optional | Up to 12 entries mapping an installed skill key or a skill group (`combat`, `weapon`, `armor`, `magic`, `stealth`, `exploration`, `social`, `knowledge`) to a percentage from -50 to 200. Practice toward those skills is scaled by it. |
+| `progression` | optional | optional | Growth on top of the usual rules: `health` and `mana` (-50 to 50), `health_per_level` and `mana_per_level` (-5 to 5), `skill_points` (0 to 10), and `starting_skill_choices` (0 to 3 extra picks at creation). |
 
-Each equipment entry needs a unique `key` within the class, a `name` of 2 to
-80 characters, a `description` of 1 to 1,000 characters, and a `slot`. Slots
-are `head`, `body`, `hands`, `legs`, `feet`, `main_hand`, `off_hand`, and
-`accessory`. Optional `attack` and `defense` are integers from 0 to 100 and
-default to zero. Optional `category` (a lowercase key such as `blade`,
-`axe`, `heavy`, or `shield`) ties the item to weapon and armor proficiency;
-grant a matching skill so the class can use it fully. Origin equipment
-supports these basic bonuses; its JSON cannot specify firearm or consumable
-properties.
+### Effects
+
+`effects` accepts the same effect types as skills: `attack`,
+`melee_damage`, `firearm_damage`, `spell_power`, `healing`, `defense`,
+`accuracy`, `evasion`, `experience_percent`, `stealth`, `flee`, `search`,
+`lockpick`, and `shop_discount`. Origin effects always apply. For a bonus
+that grows with rank or only applies with certain gear, define a custom skill
+(see the [skills guide](../mud_skill_templates/README_SKILLS.md)) and grant it
+through `skills`.
+
+### How the other fields play out
+
+- **Resistances.** `physical` scales the damage of enemy blows that land
+  after armor; any resistance below 100 still lets at least 1 point through.
+  Effect resistances scale the potency and duration of hostile effects
+  enemies inflict. An effect reduced to nothing is shrugged off.
+- **Skill affinities.** A skill's own key takes priority over its group. An
+  affinity of 50 makes practice count 50% more; -50 halves it, but an action
+  that teaches a skill always teaches at least one point.
+- **Progression.** `health` and `mana` change maximums immediately;
+  per-level amounts apply for every level above 1. Changes are kept in step
+  automatically when a character levels, changes origin, or when a built-in
+  definition is rebalanced. `skill_points` adds to the points earned from
+  levels. `starting_skill_choices` raises how many skills a player must
+  choose at creation.
+- **Tags.** Tags are setting-defined. Quests, dialogue responses, and world
+  exits can require them with a `tag` condition, and items can require or
+  exclude them (see [custom worlds](../mud_world_templates/README_CUSTOM_WORLDS.md)).
+  Prefer tags over listing race keys when several origins share a trait,
+  such as several races that see in the dark.
+
+Each equipment entry needs a unique `key` within its race or class, a `name`
+of 2 to 80 characters, a `description` of 1 to 1,000 characters, and a
+`slot`. Slots are `head`, `body`, `hands`, `legs`, `feet`, `main_hand`,
+`off_hand`, and `accessory`. Optional `attack` and `defense` are integers
+from 0 to 100 and default to zero; optional `accuracy` and `evasion` are
+integers from -20 to 20. Optional `category` (a lowercase key such as
+`blade`, `axe`, `heavy`, or `shield`) ties the item to weapon and armor
+proficiency; list the category under `proficiencies` or grant a matching
+skill so the character can use it fully. Origin equipment supports these
+basic bonuses; its JSON cannot specify firearm or consumable properties.
 
 Character creation allocates points according to `stationnet/character_options.json`
 (or Flask's `MUD_CHARACTER_OPTIONS` file), then adds race and class modifiers.
 **Every final attribute must be from 1 to 30.** An origin can import
 successfully yet produce an invalid race/class/point allocation combination,
-so test combinations players can select. Origin effects add to attack,
-defense, or earned experience percentage. A class's favored skill starts at
+so test combinations players can select. A class's favored skill starts at
 rank 2 if the player selects it among starting skills; other selected skills
 start at rank 1. Skills are managed separately; see the
 [skills guide](../mud_skill_templates/README_SKILLS.md) to add new ones.
@@ -104,7 +157,8 @@ Origin imports cannot change the point budget.
 
 ## Spells and mana
 
-`spells` belongs to a class. The supported keys and mana costs are:
+`spells` may appear on a class or a race; a character knows both lists. The
+supported keys and mana costs are:
 
 | Spell | Mana | Effect |
 | --- | ---: | --- |
@@ -133,10 +187,10 @@ Adding an unknown spell name to JSON cannot create a new spell implementation.
 3. Imported choices start enabled. Disabling one hides it from new character
    creation. At least one race and class must stay enabled while either MUD
    mode is enabled.
-4. Removing an imported choice takes it out of character creation. Existing
-   characters retain their origin abilities through a private snapshot, and
-   keys still used by characters remain reserved. Built-in choices can be
-   disabled but cannot be removed.
+4. Removing an imported choice takes it out of character creation. Its
+   definition is kept while any character or archived campaign still uses
+   it, so those characters retain their origin abilities, and the key stays
+   reserved. Built-in choices can be disabled but cannot be removed.
 
 The character-options file is a separate, station-wide configuration source
 for the point budget, skill list, and built-in races/classes. If you provide

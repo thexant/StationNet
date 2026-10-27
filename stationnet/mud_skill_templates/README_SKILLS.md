@@ -188,7 +188,22 @@ Races and classes may grant skills with `"skills": {"perception": 1}` (ranks
 1–5). Granted skills are added at creation, don't count toward the starting
 choices, and are added (never lowered) when a character replaces a disabled
 race or class. A class's favored `skill` starts at rank 2 if the player picks
-it. See the [race and class guide](../mud_origin_templates/README_RACES_CLASSES.md).
+it.
+
+Races and classes also interact with skills in three other ways:
+
+- `skill_affinities` speeds up or slows down practice for named skills or
+  whole skill groups, for example `{"magic": 50, "stealth": -25}`.
+- `proficiencies` grants gear categories directly, so a class can be trained
+  with `heavy` armor without holding the Heavy Armor skill.
+- `progression.skill_points` adds skill points on top of those earned from
+  levels.
+
+Removing a skill that an installed race or class names in `skills`, `skill`,
+or `skill_affinities` is refused until that definition is updated. To give a
+race or class a bonus that scales with rank or depends on equipped gear,
+define a custom skill and grant it. See the
+[race and class guide](../mud_origin_templates/README_RACES_CLASSES.md).
 
 ## Compatibility
 

@@ -37,7 +37,9 @@ for(const creator of document.querySelectorAll("[data-character-creator]")){
     const notes=Object.fromEntries(config.skills.map(skill=>[skill.key,
       grants[skill.key]?`Granted at rank ${grants[skill.key]}`:skillProblems(skill,race,archetype,final,grants).map(item=>`Requires ${item}`).join(" · ")]));
     const eligible=config.skills.filter(skill=>!notes[skill.key]).map(skill=>skill.key);
-    return {grants,notes,eligible,required:Math.min(config.starting_skill_choices,eligible.length)};
+    // Mirrors character_creation.starting_skill_count: origins may add picks.
+    const bonus=(race?.progression?.starting_skill_choices||0)+(archetype?.progression?.starting_skill_choices||0);
+    return {grants,notes,eligible,required:Math.min(config.starting_skill_choices+bonus,eligible.length)};
   };
   const build=()=>({
     name:form.querySelector("[data-name]").value.trim().replace(/\s+/g," "),
@@ -90,11 +92,21 @@ for(const creator of document.querySelectorAll("[data-character-creator]")){
         return sum+(skill?.effects||[]).filter(item=>item.type===key&&!item.weapon_category&&!item.armor_category)
           .reduce((total,item)=>total+Math.min(item.max??Infinity,Math.floor(rank/(item.every||1))*item.per_rank),0);
       },0);
+    const merged=field=>({...race?.[field]||{},...Object.fromEntries(Object.entries(archetype?.[field]||{})
+      .map(([key,value])=>[key,value+(race?.[field]?.[key]||0)]))});
+    const unique=items=>[...new Set(items.filter(Boolean))];
+    const growth=merged("progression");
+    const health=100+(final.vitality-10)*5+(growth.health||0);
+    const resistances=Object.entries(merged("resistances")).map(([key,value])=>`${key} ${value}%`);
     const lines=[`Name: ${data.name||"—"}`,`Race: ${race?.name||"—"}`,`Archetype: ${archetype?.name||"—"}`,
       `Attributes: ${Object.entries(final).map(([key,value])=>`${key} ${value}`).join(" · ")}`,
-      `Starting health: ${100+(final.vitality-10)*5} · Melee bonus: +${Math.floor(final.strength/2)+effect("attack")+effect("melee_damage")} · Damage reduction: ${Math.floor(final.vitality/10)+Math.floor(final.agility/5)+effect("defense")} · Experience bonus: +${Math.max(0,final.intellect-8)+effect("experience_percent")}%`,
+      `Starting health: ${health} · Melee bonus: +${Math.floor(final.strength/2)+effect("attack")+effect("melee_damage")} · Damage reduction: ${Math.floor(final.vitality/10)+Math.floor(final.agility/5)+effect("defense")} · Experience bonus: +${Math.max(0,final.intellect-8)+effect("experience_percent")}%`,
       `Skills: ${Object.entries(ranks).map(([key,rank])=>`${skillName(key)} ${rank}`).join(" · ")||"—"}`,
-      `Equipment: ${archetype?.equipment?.map(item=>item.name).join(", ")||"—"}`];
+      `Equipment: ${[...race?.equipment||[],...archetype?.equipment||[]].map(item=>item.name).join(", ")||"—"}`,
+      `Traits: ${unique([...race?.tags||[],...archetype?.tags||[]]).join(", ")||"—"}`,
+      `Abilities: ${unique([...archetype?.spells||[],...race?.spells||[]]).join(", ")||"—"}`,
+      `Trained with: ${unique([race,archetype].flatMap(origin=>[...origin?.proficiencies?.weapons||[],...origin?.proficiencies?.armor||[]])).join(", ")||"skills only"}`,
+      `Resists: ${resistances.join(" · ")||"—"}`];
     for(const line of lines){const p=document.createElement("p");p.textContent=line;review.append(p)}
   };
   const validate=current=>{

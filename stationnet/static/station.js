@@ -52,6 +52,24 @@ sfxToggle?.addEventListener("click",()=>{
   if(sfxEnabled)playSfx("click");
 });
 
+const vfxStorageKey="stationnet.vfx.enabled";
+let vfxEnabled=true;
+try{vfxEnabled=localStorage.getItem(vfxStorageKey)!=="false"}catch(_){}
+const vfxToggle=document.querySelector("[data-vfx-toggle]");
+const renderVfxToggle=()=>{
+  document.documentElement.dataset.vfxEnabled=String(vfxEnabled);
+  if(!vfxToggle)return;
+  vfxToggle.textContent=`VFX: ${vfxEnabled?"ON":"OFF"}`;
+  vfxToggle.setAttribute("aria-pressed",String(vfxEnabled));
+  vfxToggle.setAttribute("aria-label",`${vfxEnabled?"Disable":"Enable"} CRT scanline effect`);
+};
+renderVfxToggle();
+vfxToggle?.addEventListener("click",()=>{
+  vfxEnabled=!vfxEnabled;
+  try{localStorage.setItem(vfxStorageKey,String(vfxEnabled))}catch(_){}
+  renderVfxToggle();
+});
+
 const musicToggle=document.querySelector("[data-music-toggle]");
 if(musicToggle){
   const musicPositionKey=`stationnet.music.position.${musicToggle.dataset.userId}.${musicToggle.dataset.midiVersion}`;

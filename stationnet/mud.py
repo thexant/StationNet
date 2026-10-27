@@ -288,6 +288,8 @@ def _character_row(database, user_id, track_key=None):
 def character_state(database, user_id, track_key=None):
     """Return the authoritative identity and selected progression track."""
     row = _character_row(database, user_id, track_key)
+    if character_creation.sync_origin_resources(database, row["id"]):
+        row = _character_row(database, user_id, track_key)
     origin = database.execute(
         "SELECT creation_state,race_key,class_key FROM mud_characters WHERE id=?", (row["id"],)
     ).fetchone()
@@ -316,6 +318,7 @@ def character_state(database, user_id, track_key=None):
         "creation_state": origin["creation_state"],
         "race": race["name"] if race else None,
         "class": archetype["name"] if archetype else None,
+        "origin": _origin_summary(race, archetype, known),
         "skills": skills,
         "skill_points": mud_skills.available_points(database, row["id"]),
         "mode": _current_mode(database, user_id),
@@ -386,6 +389,8 @@ def award_experience(database, user_id, amount, track_key=None):
         (experience, level, current_health, maximum_health, current_mana, maximum_mana,
          points_gained, before["id"], resolved_track),
     )
+    # Origins may grant extra health or mana per level on top of attribute growth.
+    character_creation.sync_origin_resources(database, before["id"])
     points_after = mud_skills.earned_points(mud_skills.highest_level(database, before["id"]))
     return {
         "amount": amount,
@@ -398,13 +403,50 @@ def award_experience(database, user_id, amount, track_key=None):
     }
 
 
+def _origin_summary(race, archetype, skills):
+    """Player-facing digest of what a race and class do beyond attributes."""
+    profile = character_creation.origin_profile(race, archetype)
+    proficiencies = profile["proficiencies"]
+    affinities = {(skills[key]["name"] if key in skills else key): value
+                  for key, value in profile["skill_affinities"].items()}
+    growth = {key: value for key, value in profile["progression"].items() if value}
+    trained = proficiencies["weapons"] + [item for item in proficiencies["armor"]
+                                          if item not in proficiencies["weapons"]]
+    summary = [label + ": " + text for label, text in (
+        ("Traits", ", ".join(profile["tags"])),
+        ("Abilities", ", ".join(name for name in profile["spells"] if name in SPELLS)),
+        ("Trained with", ", ".join(trained)),
+        ("Resists", " · ".join(f"{key} {value}%" for key, value in profile["resistances"].items() if value)),
+        ("Learns faster", " · ".join(f"{key} {value:+d}%" for key, value in affinities.items() if value)),
+        ("Growth", " · ".join(f"{key.replace('_', ' ')} {value:+d}" for key, value in growth.items())),
+    ) if text]
+    return {
+        "summary": summary,
+        "traits": [origin["traits"] for origin in (race, archetype) if origin],
+        "tags": profile["tags"],
+        "abilities": [name for name in profile["spells"] if name in SPELLS],
+        "proficiencies": trained,
+        "resistances": profile["resistances"],
+        "affinities": affinities,
+        "effects": {mud_skills.EFFECT_TYPES.get(key, key): value
+                    for key, value in profile["effects"].items() if value},
+        "growth": growth,
+    }
+
+
 def _origin_options(database, character_id):
-    row = database.execute(
-        "SELECT race_key,class_key FROM mud_characters WHERE id=?", (character_id,)
-    ).fetchone()
-    config = character_creation.options(database, include_inactive=True, include_removed=True)
-    return tuple(next((item for item in config[group] if item["key"] == row[key]), None)
-                 for group, key in (("races", "race_key"), ("classes", "class_key")))
+    return character_creation.character_origins(database, character_id)
+
+
+def _origin_profile(database, character_id):
+    return character_creation.origin_profile(*_origin_options(database, character_id))
+
+
+def _proficiencies(database, character_id):
+    """Gear categories a character is trained with: from skills and from race and class."""
+    proficiencies = _origin_profile(database, character_id)["proficiencies"]
+    return (mud_skills.proficiencies(database, character_id)
+            | set(proficiencies["weapons"]) | set(proficiencies["armor"]))
 
 
 def _character_effects(database, character_id, gear=None):
@@ -417,6 +459,8 @@ def _character_effects(database, character_id, gear=None):
         for key, value in (origin or {}).get("effects", {}).items():
             if key in totals:
                 totals[key] += value
+    for key, cap in mud_skills.EFFECT_CAPS.items():
+        totals[key] = min(totals[key], cap)
     for key in ("attack", "defense", "accuracy", "evasion"):
         totals[key] += mud_effects.modifier(database, "character", character_id, key)
     return totals
@@ -459,6 +503,13 @@ def _npc_hit_stat(database, npc, encounter, gear, stat):
     authored = npc[f"combat_{stat}"] if f"combat_{stat}" in npc.keys() else None
     return ((authored or 0) + gear[stat]
             + mud_effects.modifier(database, "encounter", encounter["id"], stat))
+
+
+def _resisted(damage, percent):
+    """Scale a landed blow by a resistance percentage; only full immunity reaches 0."""
+    if percent >= 100:
+        return 0
+    return max(1, damage - damage * percent // 100) if damage > 0 else damage
 
 
 def _hit_roll():
@@ -534,6 +585,7 @@ def _character_action(database, user, parameters):
     lines = [
         f"{character['name']} — Level {character['level']}/{character['max_level']}",
         f"Origin: {character['race'] or 'Unchosen'} / {character['class'] or 'Unchosen'}",
+        *character["origin"]["summary"],
         f"Health: {character['health']}/{character['maximum_health']}",
         f"Mana: {character['mana']}/{character['maximum_mana']}",
         experience,
@@ -1093,7 +1145,7 @@ def _room_exits(database, room_id, instance_id=None):
         ).fetchall()]
     return database.execute(
         "SELECT e.id,e.name,e.direction,e.to_room_id,e.key_item_id,e.pick_difficulty,"
-        "r.name AS destination_name "
+        "e.conditions_json,e.conditions_message,r.name AS destination_name "
         "FROM mud_world_exits AS e JOIN mud_world_rooms AS r ON r.id=e.to_room_id "
         "WHERE e.from_room_id=? ORDER BY "
         "CASE WHEN e.direction IS NULL THEN 1 ELSE 0 END,e.name COLLATE NOCASE,e.id",
@@ -1157,8 +1209,22 @@ def _exit_locked(exit_row):
                 ("pick_difficulty" in keys and exit_row["pick_difficulty"]))
 
 
+def _exit_open_to(database, user_id, exit_row):
+    """World exits may require conditions, such as a race, class, or origin tag."""
+    conditions = exit_row["conditions_json"] if "conditions_json" in exit_row.keys() else None
+    if conditions in (None, "", "[]"):
+        return True
+    return mud_conditions.evaluate(conditions, _ConditionContext(database, user_id))
+
+
+def _exit_barred_message(exit_row):
+    return exit_row["conditions_message"] or "Something keeps you from going that way."
+
+
 def _player_exit_label(database, user_id, exit_row):
     label = _exit_label(exit_row)
+    if not _exit_open_to(database, user_id, exit_row):
+        return label + " [barred]"
     if not _exit_locked(exit_row):
         return label
     character = _character_row(database, user_id)
@@ -1275,21 +1341,20 @@ def _integer_property(properties, *names):
 
 
 def _item_requirements(properties):
-    requirements = properties.get("requirements", {})
-    if (not isinstance(requirements, dict) or any(
-        key not in character_creation.ATTRIBUTES or type(value) is not int or not 1 <= value <= 30
-        for key, value in requirements.items()
-    )):
-        raise ValueError("requirements must map attributes to minimum values from 1 to 30")
-    return requirements
+    return mud_conditions.validate_item_requirements(properties.get("requirements", {}))
 
 
-def _meets_item_requirements(properties, character):
+def _item_requirement_problems(properties, character, facts):
+    """Unmet requirements for a character row; invalid requirements are never met."""
     try:
-        return all(character[key] >= value for key, value in
-                   _item_requirements(properties).items())
+        requirements = _item_requirements(properties)
     except ValueError:
-        return False
+        return ["valid requirements"]
+    return mud_conditions.requirement_problems(requirements, character, facts)
+
+
+def _meets_item_requirements(properties, character, facts):
+    return not _item_requirement_problems(properties, character, facts)
 
 
 def _equipment_combat_totals(database, character_id=None, npc_definition_id=None):
@@ -1299,6 +1364,7 @@ def _equipment_combat_totals(database, character_id=None, npc_definition_id=None
         ).fetchone()
         loadout = _inventory_context(database, owner["user_id"])["loadout"]
         character = _character_row(database, owner["user_id"])
+        facts = character_creation.origin_facts(database, character_id)
         rows = database.execute(
             "SELECT d.name,d.properties_json FROM mud_character_equipment AS e "
             "JOIN mud_item_instances AS i ON i.id=e.item_instance_id "
@@ -1314,11 +1380,11 @@ def _equipment_combat_totals(database, character_id=None, npc_definition_id=None
         ).fetchall()
     attack = defense = accuracy = firearm_accuracy = evasion = 0
     categories, unproficient = set(), []
-    known = mud_skills.proficiencies(database, character_id) if character_id is not None else set()
+    known = _proficiencies(database, character_id) if character_id is not None else set()
     limit = mud_combat.ITEM_EVASION_LIMIT
     for row in rows:
         properties = _json_properties(row["properties_json"])
-        if character_id is not None and not _meets_item_requirements(properties, character):
+        if character_id is not None and not _meets_item_requirements(properties, character, facts):
             continue
         item_attack = max(0, _integer_property(properties, "damage", "attack", "attack_bonus"))
         item_defense = max(0, _integer_property(properties, "armor", "defense", "defense_bonus"))
@@ -1642,10 +1708,11 @@ def _remaining_ammo(item):
 
 def _equipped_firearm(database, user_id):
     character = _character_row(database, user_id)
+    facts = character_creation.origin_facts(database, character["id"])
     for item in _inventory_rows(database, user_id, equipped=True):
         if item["equipped_slot"] in ("main_hand", "off_hand") and mud_firearms.is_firearm(
             _json_properties(item["properties_json"])
-        ) and _meets_item_requirements(_json_properties(item["properties_json"]), character):
+        ) and _meets_item_requirements(_json_properties(item["properties_json"]), character, facts):
             return item
     return None
 
@@ -1806,6 +1873,7 @@ def _room_item_event(database, user, room, message):
 def inventory_state(database, user_id):
     context = _inventory_context(database, user_id)
     character = _character_row(database, user_id)
+    facts = character_creation.origin_facts(database, character["id"])
     inventory = [dict(row) for row in _inventory_rows(database, user_id)]
     equipment = [dict(row) for row in _inventory_rows(database, user_id, equipped=True)]
     for items in (inventory, equipment):
@@ -1813,7 +1881,7 @@ def inventory_state(database, user_id):
             item["display_name"] = label
             properties = _json_properties(item["properties_json"])
             if item["equipped_slot"]:
-                item["requirements_met"] = _meets_item_requirements(properties, character)
+                item["requirements_met"] = _meets_item_requirements(properties, character, facts)
             if mud_firearms.is_firearm(properties):
                 item["loaded_rounds"] = _loaded_rounds(item)
                 item["magazine_size"] = properties["magazine_size"]
@@ -2526,6 +2594,9 @@ class _ConditionContext:
     def class_key(self):
         return self._origins()["class_key"]
 
+    def tags(self):
+        return _origin_profile(self.database, self._character()["id"])["tags"]
+
     def coins(self):
         return _wallet(self.database, self._character()["id"])
 
@@ -2574,9 +2645,7 @@ def _describe_item(database, row, user_id=None):
         except ValueError:
             requirements = {}
         if requirements:
-            body += "\nRequires: " + ", ".join(
-                f"{key.title()} {value}" for key, value in requirements.items()
-            )
+            body += "\nRequires: " + mud_conditions.describe_item_requirements(requirements)
     if _is_container(row):
         contents = _container_rows(database, row["id"], user_id)
         if row["is_open"]:
@@ -3061,6 +3130,7 @@ def _enemy_strike(database, user, npc, encounter, defending=False):
         damage = max(1, npc["combat_attack"] + (2 if npc_firearm else 0) + enemy_gear["attack"]
                      + mud_effects.modifier(database, "encounter", encounter["id"], "attack")
                      - _player_mitigation(character, player_gear, effects))
+        damage = _resisted(damage, _origin_profile(database, character["id"])["resistances"].get("physical", 0))
         if defending:
             damage = max(0, (damage - max(0, (character["vitality"] - 10) // 2)) // 3)
     # Only real blows teach defense; dodging teaches evasion. Reloads and misses teach neither.
@@ -3087,11 +3157,16 @@ def _enemy_strike(database, user, npc, encounter, defending=False):
     }[outcome]
     drafts = [EventDraft(body, event_type="combat")] + practiced
     if health > 0 and damage > 0:
+        resistances = _origin_profile(database, character["id"])["resistances"]
         for spec in _effect_specs(_json_properties(npc["properties_json"]), "on_hit_effects"):
             try:
-                key = mud_effects.apply(database, "character", character["id"], spec, npc["name"])
+                resisted = mud_effects.resist(spec, resistances.get(spec.get("key"), 0))
+                if resisted is None:
+                    drafts.append(EventDraft(f"You shrug off {spec['key']}.", event_type="combat"))
+                    continue
+                key = mud_effects.apply(database, "character", character["id"], resisted, npc["name"])
                 drafts.append(EventDraft(f"{npc['name']} inflicts {key}.", event_type="combat"))
-            except (ValueError, TypeError):
+            except (ValueError, TypeError, AttributeError):
                 continue
     if health == 0:
         refreshed = database.execute(
@@ -3251,7 +3326,7 @@ def _attack_action(database, user, parameters):
         firearm_properties = _json_properties(firearm["properties_json"])
         firearm_attack = max(0, _integer_property(firearm_properties, "damage", "attack", "attack_bonus"))
         firearm_category = _item_category(firearm_properties)
-        if firearm_category and firearm_category not in mud_skills.proficiencies(database, character["id"]):
+        if firearm_category and firearm_category not in _proficiencies(database, character["id"]):
             firearm_attack = _untrained(firearm_attack)
     weapon_attack = firearm_attack if firearm else player_gear["attack"]
     weapon_stat = character["agility"] if firearm else character["strength"]
@@ -3319,8 +3394,9 @@ def _attack_action(database, user, parameters):
     if remaining > 0 and outcome == "hit":
         applications = parameters.get("_spell_effects") if spell_damage is not None else []
         if spell_damage is None:
+            facts = character_creation.origin_facts(database, character["id"])
             for equipped in ([firearm] if firearm else _inventory_rows(database, user["id"], True)):
-                if not _meets_item_requirements(_json_properties(equipped["properties_json"]), character):
+                if not _meets_item_requirements(_json_properties(equipped["properties_json"]), character, facts):
                     continue
                 if not firearm and mud_firearms.is_firearm(_json_properties(equipped["properties_json"])):
                     continue
@@ -3474,8 +3550,8 @@ SPELLS = {
 
 
 def _known_spells(database, character_id):
-    _, archetype = _origin_options(database, character_id)
-    return tuple((archetype or {}).get("spells", ()))
+    """Class spells plus any innate race abilities."""
+    return tuple(_origin_profile(database, character_id)["spells"])
 
 
 def _spells_action(database, user, parameters):
@@ -3761,8 +3837,8 @@ def _equip_action(database, user, parameters):
         requirements = _item_requirements(_json_properties(item["properties_json"]))
     except ValueError as problem:
         raise ActionError(f"{item['name']} has invalid equipment requirements.") from problem
-    missing = [f"{key.title()} {value}" for key, value in requirements.items()
-               if character[key] < value]
+    missing = mud_conditions.requirement_problems(
+        requirements, character, character_creation.origin_facts(database, character["id"]))
     if missing:
         raise ActionError(f"{item['name']} requires {', '.join(missing)}.")
     slot = item["definition_slot"]
@@ -3780,7 +3856,7 @@ def _equip_action(database, user, parameters):
     drafts = [EventDraft(f"You equip {item['name']} ({slot.replace('_', ' ')}).", event_type="item"),
               _room_item_event(database, user, room, f"{character['display_name']} equips {item['name']}.")]
     category = _item_category(_json_properties(item["properties_json"]))
-    if category and category not in mud_skills.proficiencies(database, character["id"]):
+    if category and category not in _proficiencies(database, character["id"]):
         drafts.append(EventDraft(
             f"You are untrained with {category} gear, so {item['name']} gives only three quarters of its "
             "bonuses. Learn a skill with that proficiency to use it fully (see /skills).", event_type="item"))
@@ -5135,6 +5211,8 @@ def _go_action(database, user, parameters):
     if len(matches) > 1:
         raise ActionError(f'More than one exit matches "{destination}". Use an exit name or direction.')
     chosen = matches[0]
+    if not instance_id and not _exit_open_to(database, user["id"], chosen):
+        raise ActionError(_exit_barred_message(chosen))
     if not instance_id and _exit_locked(chosen):
         unlocked = database.execute("SELECT 1 FROM mud_exit_unlocks WHERE character_id=? AND exit_id=?",
                                     (_character_row(database, user["id"])["id"], chosen["id"])).fetchone()
@@ -6094,6 +6172,7 @@ def create_character():
     config = character_creation.options()
     config["skill_names"] = {key: definition["name"]
                              for key, definition in mud_skills.definitions(database).items()}
+    config["effect_names"] = mud_skills.EFFECT_TYPES
     error = None
     selected = {}
     if request.method == "POST":
@@ -6331,7 +6410,13 @@ def _valid_exit_fields(database, exit_id=None):
     ).fetchone()
     if duplicate:
         return None, "That source room already has an exit with this name or direction."
-    return (from_room_id, to_room_id, name, direction, key_item_id, pick_difficulty), None
+    conditions, error = _builder_rules(database, "conditions_json", mud_conditions.validate_conditions)
+    if error:
+        return None, f"Exit conditions: {error}"
+    message = " ".join(request.form.get("conditions_message", "").split())
+    if len(message) > 200:
+        return None, "The barred-exit message cannot exceed 200 characters."
+    return (from_room_id, to_room_id, name, direction, key_item_id, pick_difficulty, conditions, message), None
 
 
 @bp.get("/builder")
@@ -6526,7 +6611,7 @@ def _item_definition_fields():
     except (ValueError, json.JSONDecodeError) as problem:
         return None, f"Invalid equipment requirements: {problem}"
     if requirements and item_type != "equipment":
-        return None, "Attribute requirements apply only to equipment."
+        return None, "Requirements apply only to equipment."
     if requirements:
         properties["requirements"] = requirements
     if category:
@@ -7321,8 +7406,8 @@ def builder_create_exit():
         return _builder_redirect(request.form.get("from_room_id"))
     exit_id = f"world:exit:{uuid.uuid4().hex}"
     database.execute(
-        "INSERT INTO mud_world_exits(id,from_room_id,to_room_id,name,direction,key_item_id,pick_difficulty) "
-        "VALUES(?,?,?,?,?,?,?)", (exit_id, *fields),
+        "INSERT INTO mud_world_exits(id,from_room_id,to_room_id,name,direction,key_item_id,pick_difficulty,"
+        "conditions_json,conditions_message) VALUES(?,?,?,?,?,?,?,?,?)", (exit_id, *fields),
     )
     database.commit()
     flash(f"Exit {fields[2]} created.", "success")
@@ -7347,7 +7432,7 @@ def builder_update_exit(exit_id):
         return _builder_redirect(existing["from_room_id"])
     database.execute(
         "UPDATE mud_world_exits SET from_room_id=?,to_room_id=?,name=?,direction=?,key_item_id=?,"
-        "pick_difficulty=? WHERE id=?",
+        "pick_difficulty=?,conditions_json=?,conditions_message=? WHERE id=?",
         (*fields, exit_id),
     )
     if (existing["key_item_id"] != fields[4] or existing["pick_difficulty"] != fields[5]

@@ -32,9 +32,10 @@ def test_attributes_drive_resources_and_equipment():
             })
             character = mud.character_state(db, user_id)
             assert character["attributes"]["intellect"] == 15
-            assert character["maximum_mana"] == 45
+            # Intellect gives 15 extra mana and the scholar class 10 more.
+            assert character["maximum_mana"] == 55
             assert character["maximum_health"] == 120
-            assert all(row[0] == 45 for row in db.execute(
+            assert all(row[0] == 55 for row in db.execute(
                 "SELECT maximum_mana FROM mud_character_progression WHERE character_id=?",
                 (character["id"],)))
 
@@ -42,7 +43,7 @@ def test_attributes_drive_resources_and_equipment():
             assert gained["levels_gained"] >= 1
             after = gained["character"]
             assert after["maximum_health"] == 120 + gained["levels_gained"] * 12
-            assert after["maximum_mana"] == 45 + gained["levels_gained"] * 4
+            assert after["maximum_mana"] == 55 + gained["levels_gained"] * 5  # scholars gain 1 more
             assert after["health"] == after["maximum_health"]
             assert after["mana"] == after["maximum_mana"]
 

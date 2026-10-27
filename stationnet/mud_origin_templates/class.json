@@ -4,10 +4,15 @@
   "description": "A guide practiced at crossing uncertain ground.",
   "traits": "Trail craft",
   "attributes": {"agility": 1},
-  "effects": {"defense": 1},
+  "effects": {"defense": 1, "search": 3},
   "spells": ["ward"],
   "skill": "guard",
   "skills": {"perception": 1},
+  "tags": ["wilderness"],
+  "proficiencies": {"weapons": ["blade"], "armor": ["light"]},
+  "skill_affinities": {"exploration": 50},
+  "resistances": {"blinded": 25},
+  "progression": {"health": 5, "skill_points": 1},
   "equipment": [
     {
       "key": "trail-knife",
@@ -16,6 +21,7 @@
       "slot": "main_hand",
       "attack": 1,
       "defense": 0,
+      "accuracy": 2,
       "category": "blade"
     }
   ]

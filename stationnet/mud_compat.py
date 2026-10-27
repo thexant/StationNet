@@ -84,9 +84,17 @@ def replace_origins(database, user_id, race_key, class_key):
              min(health_max, max(0, track["current_health"] + health_delta)), mana_max,
              min(mana_max, max(0, track["current_mana"] + mana_delta)), row["id"], track["track_key"]),
         )
-    # Spells derive from the current class. Retain earned skill ranks and all items;
-    # unequip gear whose requirements the revised attributes no longer meet.
-    from .mud import _item_requirements, _json_properties
+    if allocated is None and tracks:
+        trained = _trained_attributes(tracks[0]["trained_attributes_json"])
+        allocated = {key: tracks[0][key] - old_mod[key] - trained.get(key, 0)
+                     for key in character_creation.ATTRIBUTES}
+    database.execute("UPDATE mud_characters SET race_key=?,class_key=?,base_attributes_json=?,"
+                     "updated_at=CURRENT_TIMESTAMP WHERE id=?",
+                     (race_key, class_key, json.dumps(allocated) if allocated else None, row["id"]))
+    # Spells, tags, and proficiencies derive from the current origins. Retain earned skill
+    # ranks and all items; unequip gear the revised character no longer qualifies for.
+    from .mud import _item_requirement_problems, _json_properties
+    facts = character_creation.origin_facts(database, row["id"])
     equipment = database.execute(
         "SELECT e.item_instance_id,d.properties_json,e.loadout_key "
         "FROM mud_character_equipment e JOIN mud_item_instances i ON i.id=e.item_instance_id "
@@ -95,21 +103,11 @@ def replace_origins(database, user_id, race_key, class_key):
         track = next((track for track in tracks if track["track_key"] == item["loadout_key"]), None)
         if track is None:
             continue
-        attributes = revised(track)
-        try:
-            requirements = _item_requirements(_json_properties(item["properties_json"]))
-        except ValueError:
-            requirements = {}
-        if any(attributes[key] < value for key, value in requirements.items()):
+        character = {**revised(track), "level": track["level"]}
+        if _item_requirement_problems(_json_properties(item["properties_json"]), character, facts):
             database.execute("DELETE FROM mud_character_equipment WHERE character_id=? AND loadout_key=? "
                              "AND item_instance_id=?", (row["id"], item["loadout_key"], item["item_instance_id"]))
-    if allocated is None and tracks:
-        trained = _trained_attributes(tracks[0]["trained_attributes_json"])
-        allocated = {key: tracks[0][key] - old_mod[key] - trained.get(key, 0)
-                     for key in character_creation.ATTRIBUTES}
-    database.execute("UPDATE mud_characters SET race_key=?,class_key=?,base_attributes_json=?,"
-                     "updated_at=CURRENT_TIMESTAMP WHERE id=?",
-                     (race_key, class_key, json.dumps(allocated) if allocated else None, row["id"]))
+    character_creation.sync_origin_resources(database, row["id"])
     # New origins add their skill grants; earned ranks are never lowered.
     from . import mud_skills
     mud_skills.grant(database, row["id"], mud_skills.origin_grants(new["races"], new["classes"]))

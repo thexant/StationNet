@@ -6,9 +6,12 @@ reference (for world import/export), and evaluates conditions against a
 context object supplied by the game. It never touches the database itself.
 
 A context must provide these methods:
-    level() race() class_key() coins() item_count(item_id) attribute(name)
+    level() race() class_key() tags() coins() item_count(item_id) attribute(name)
     skill_rank(skill_key) quest_status(quest_id) objective_complete(objective_id)
     state(key) claimed()
+
+It also validates and checks equipment requirements, which gate items on
+attributes, level, and the wearer's race, class, or origin tags.
 """
 import json
 
@@ -18,7 +21,7 @@ MAX_CONDITIONS = 20
 MAX_OUTCOMES = 10
 MAX_ID_LENGTH = 200
 QUEST_STATUSES = ("not_started", "active", "ready", "completed")
-CONDITION_TYPES = ("level", "race", "class", "has_item", "coins", "attribute", "skill",
+CONDITION_TYPES = ("level", "race", "class", "tag", "has_item", "coins", "attribute", "skill",
                    "quest", "objective", "state", "claimed")
 OUTCOME_TYPES = ("give_item", "take_item", "experience", "coins", "take_coins")
 # Condition types that only make sense where traditional-world quests exist.
@@ -86,7 +89,7 @@ def _condition(raw, allowed, nested):
                 result[bound] = raw[bound]
         if result.get("min", 1) > result.get("max", 1000):
             raise ValueError("Level min cannot exceed max.")
-    elif kind in ("race", "class"):
+    elif kind in ("race", "class", "tag"):
         fields |= {"key", "keys"}
         keys = raw.get("keys", [raw["key"]] if "key" in raw else None)
         if (not isinstance(keys, list) or not 1 <= len(keys) <= 50
@@ -232,6 +235,8 @@ def _holds(condition, context):
         return context.race() in condition["keys"]
     if kind == "class":
         return context.class_key() in condition["keys"]
+    if kind == "tag":
+        return bool(set(context.tags()) & set(condition["keys"]))
     if kind == "has_item":
         return context.item_count(condition["item"]) >= condition["count"]
     if kind == "coins":
@@ -262,6 +267,92 @@ def evaluate(conditions, context):
     except ValueError:
         return False
     return all(_check(condition, context) for condition in conditions)
+
+
+# Equipment requirements ----------------------------------------------------
+
+ORIGIN_REQUIREMENTS = {"races": "race", "classes": "class", "tags": "tag"}
+
+
+def validate_item_requirements(value):
+    """Normalize item requirements: attribute minimums, level, and origin gates.
+
+    ``races``/``classes``/``tags`` pass when the wearer matches any listed key;
+    ``not_races``/``not_classes``/``not_tags`` fail when the wearer matches any.
+    Keys are not checked against installed origins so content can name origins
+    installed later or not at all.
+    """
+    if value is None or value == "":
+        return {}
+    if not isinstance(value, dict):
+        raise ValueError("requirements must be an object")
+    result = {}
+    for key, entry in value.items():
+        if key in ATTRIBUTES:
+            if not _whole(entry, 1, 30):
+                raise ValueError(f"{key} requirements must be whole numbers from 1 to 30")
+        elif key == "level":
+            if not _whole(entry, 1, 1000):
+                raise ValueError("level requirements must be whole numbers from 1 to 1000")
+        elif key.removeprefix("not_") in ORIGIN_REQUIREMENTS:
+            if (not isinstance(entry, list) or not 1 <= len(entry) <= 50
+                    or any(not isinstance(item, str) or not KEY_RE.fullmatch(item) for item in entry)):
+                raise ValueError(f"{key} requirements must be a list of lowercase keys")
+            entry = sorted(set(entry))
+        else:
+            raise ValueError(f"unsupported requirement {key!r}; use {', '.join(ATTRIBUTES)}, level, "
+                             "races, classes, tags, not_races, not_classes, or not_tags")
+        result[key] = entry
+    return result
+
+
+def requirement_problems(requirements, character, facts):
+    """Readable unmet requirements for a character mapping (attributes and level)
+    and origin facts ({"races": set, "classes": set, "tags": set})."""
+    problems = []
+    for key, entry in requirements.items():
+        if key in ATTRIBUTES and character[key] < entry:
+            problems.append(f"{key.title()} {entry}")
+        elif key == "level" and character["level"] < entry:
+            problems.append(f"level {entry}")
+    for field, label in ORIGIN_REQUIREMENTS.items():
+        held = facts.get(field, set())
+        wanted, barred = requirements.get(field), requirements.get(f"not_{field}")
+        if wanted and not held & set(wanted):
+            problems.append(f"the {' or '.join(wanted)} trait" if field == "tags" else f"a specific {label}")
+        if barred and held & set(barred):
+            problems.append(f"lacking the {' or '.join(sorted(held & set(barred)))} trait"
+                            if field == "tags" else f"a different {label}")
+    return problems
+
+
+def describe_item_requirements(requirements):
+    """Short text such as 'Strength 12, level 5, tag: darkvision'."""
+    parts = []
+    for key, entry in requirements.items():
+        if key in ATTRIBUTES:
+            parts.append(f"{key.title()} {entry}")
+        elif key == "level":
+            parts.append(f"level {entry}")
+        elif key == "tags":
+            parts.append("trait: " + " or ".join(entry))
+        elif key == "not_tags":
+            parts.append("not for: " + ", ".join(entry))
+        elif key.startswith("not_"):
+            parts.append(f"some {key[4:]} excluded")
+        else:
+            parts.append(f"specific {key}")
+    return ", ".join(parts)
+
+
+def remap_item_requirements(requirements, mapper):
+    """Rewrite race/class keys in item requirements with mapper(kind, key)."""
+    result = dict(requirements)
+    for field in ("races", "classes"):
+        for key in (field, f"not_{field}"):
+            if key in result:
+                result[key] = sorted({mapper(ORIGIN_REQUIREMENTS[field], item) for item in result[key]})
+    return result
 
 
 def describe(entries):

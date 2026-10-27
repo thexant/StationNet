@@ -344,6 +344,7 @@ def test_world_death_costs_progress_but_never_a_level(game):
         _npc(db, "test:bear", "Bear", attack=500)
         floor = mud.experience_for_level(3)
         _set(db, uid, level=3, experience=floor + 300, current_health=1)
+        _state(db, uid)  # settle the warrior's per-level origin health for the forced level
         drafts = mud._enemy_turn(db, user)
         state = _state(db, uid)
         assert "You lose 30 experience." in drafts[-2].body

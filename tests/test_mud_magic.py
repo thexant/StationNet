@@ -27,7 +27,8 @@ def test_spell_effects_and_custom_item():
                 mud._set_player_location(db, user_id, "traditional", "world_room", mud.START_ROOM_ID)
                 drafts = mud._cast_action(db, user, {"arguments": ["ward"]})
                 assert "ward" in drafts[0].body
-                assert mud.character_state(db, user_id)["mana"] == 24
+                # Scholars start with 10 extra mana; ward costs 6 of the 40.
+                assert mud.character_state(db, user_id)["mana"] == 34
                 assert mud_effects.modifier(db, "character", character["id"], "defense") == 3
                 mud_effects.apply(db, "character", character["id"],
                                   {"key": "poison", "potency": 2, "duration": 2})
@@ -45,7 +46,7 @@ def test_spell_effects_and_custom_item():
                 assert mud_effects.modifier(db, "character", character["id"], "defense") == 4
                 assert db.execute("SELECT 1 FROM mud_item_instances WHERE id=?", (item_id,)).fetchone() is None
                 mud._rest_action(db, user, {})
-                assert mud.character_state(db, user_id)["mana"] == 30
+                assert mud.character_state(db, user_id)["mana"] == 40
                 db.execute("INSERT INTO mud_npc_definitions(id,name,description,properties_json) "
                            "VALUES('test:witch','Witch','A hostile caster',?)",
                            (json.dumps({"on_hit_effects": [

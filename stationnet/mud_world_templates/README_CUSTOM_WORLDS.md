@@ -79,6 +79,17 @@ with `/pick <exit>` and the Lockpicking skill; an exit may have a key, a
 pickable lock, or both. Unlocking persists per character; `/look <exit>`
 reports the lock state.
 
+An exit can also admit only some characters. Add `"conditions"` (the same
+array format as [conditions](#conditions) below) and an optional
+`"conditions_message"` of up to 200 characters shown to anyone turned away.
+Barred exits stay visible and are marked `[barred]` for that player:
+
+```json
+{"from": "gate", "to": "deep-hall", "name": "dark stair", "direction": "down",
+ "conditions": [{"type": "tag", "keys": ["darkvision"]}],
+ "conditions_message": "The stair vanishes into perfect darkness."}
+```
+
 ## 4. Add optional world content
 
 ### Magic, mana, and timed effects
@@ -111,13 +122,25 @@ references use those local IDs. Rooms use
 the IDs from `rooms.json`. StationNet gives every imported record a unique
 internal ID, so two worlds may both have an item called `lantern`.
 
-Equipment can declare minimum character attributes in `properties_json`, for
-example `{"attack_bonus": 4, "requirements": {"strength": 14}}`. Players can
-inspect these requirements and must meet all of them before equipping the item.
-Supported attributes are `strength`, `agility`, `intellect`, and `vitality`, with
-minimum values from 1 to 30. Existing equipment without requirements remains
-usable by all characters. Gear becomes inactive if a character no longer meets
-its requirements on the current progression track. Strength improves equipped melee weapon bonuses,
+Equipment can declare requirements in `properties_json`, for example
+`{"attack_bonus": 4, "requirements": {"strength": 14, "classes": ["warrior"]}}`.
+Players can inspect these requirements and must meet all of them before
+equipping the item.
+
+| Key | Value | Met when |
+| --- | --- | --- |
+| `strength`, `agility`, `intellect`, `vitality` | 1–30 | The attribute is at least this value. |
+| `level` | 1–1000 | The character is at least this level. |
+| `races`, `classes`, `tags` | Array of lowercase keys | The character's race, class, or one of its origin tags is listed. |
+| `not_races`, `not_classes`, `not_tags` | Array of lowercase keys | The character's race, class, and tags are all absent from the list. |
+
+Race and class keys may name built-in choices, bundled `origins.json` entries
+(by local key, mapped on import), or choices the station might install later;
+they are not required to exist. Tags come from the character's race and class
+definitions, so `"tags": ["darkvision"]` suits any origin that declares that
+trait. Existing equipment without requirements remains usable by all
+characters. Gear becomes inactive if a character no longer meets its
+requirements on the current progression track. Strength improves equipped melee weapon bonuses,
 Agility improves firearm bonuses, and Vitality improves equipped armor bonuses.
 
 Equipment may also set a proficiency `category`, for example
@@ -348,6 +371,7 @@ its entries holds; groups cannot be nested. A list holds up to 20 entries.
 | --- | --- | --- |
 | `level` | `min` and/or `max` (1–1000) | The character's level is within the bounds. |
 | `race` / `class` | `keys`: array of origin keys (or a single `key`) | The character's race/class is one of them. Built-in keys such as `human` or `warrior` work, and bundled `origins.json` keys are mapped on import. |
+| `tag` | `keys`: array of tags (or a single `key`) | The character's race or class declares at least one of these tags. |
 | `has_item` | `item`, optional `count` (default 1) | The character carries at least `count` of the item definition. |
 | `coins` | `min` | The character has at least `min` coins. |
 | `attribute` | `attribute` (`strength`, `agility`, `intellect`, `vitality`), `min` | The attribute is at least `min`. |
@@ -482,9 +506,17 @@ fields as a standalone race or class JSON file. For example:
 }
 ```
 
+Bundled races and classes support every field in the
+[race and class guide](../mud_origin_templates/README_RACES_CLASSES.md),
+including `tags`, `resistances`, `proficiencies`, `skill_affinities`, and
+`progression`. Their `skills`, favored `skill`, and `skill_affinities` may name
+skills from the same package's `skills.json` by local key.
+
 Keys in this file are local to the world. StationNet derives stable global keys
 from the world ID, kind, and local key, so another world or standalone import
-may use the same local key. At most 100 definitions of each kind may be bundled.
+may use the same local key. Conditions, exit conditions, and item requirements
+that name a bundled race or class by its local key are mapped to the global key
+on import and back to the local key on export. At most 100 definitions of each kind may be bundled.
 Imported definitions stay installed even when disabled or when the world is
 removed. Importing a world does not activate it or change existing characters.
 

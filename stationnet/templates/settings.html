@@ -472,7 +472,7 @@
   </form>
   <section id="mud-origins" aria-labelledby="mud-origins-heading">
     <h3 id="mud-origins-heading">Races and Classes</h3>
-    <p class="muted">Import individual JSON definitions or a pack containing races, classes, or both. Enabled choices appear in character creation for both MUD modes. Characters using a disabled or removed choice retain their saved progress and choose a replacement on their next visit.</p>
+    <p class="muted">Import individual JSON definitions or a pack containing races, classes, or both. Enabled choices appear in character creation for both MUD modes. Characters using a disabled or removed choice retain their saved progress and choose a replacement on their next visit. Beyond attributes, definitions can grant traits (tags), proficiencies, resistances, skill affinities, abilities, starting gear, and health, mana, or skill-point growth; hover a choice to see its features.</p>
     <form method="post" action="{{ url_for('station.mud_origin_availability') }}" class="form-grid" id="mud-origin-availability">
       <input type="hidden" name="csrf_token" value="{{ session.csrf_token }}">
       {% for kind in ('races', 'classes') %}
@@ -485,7 +485,7 @@
         <button type="button" class="secondary" data-origin-selection="imported">SELECT IMPORTED</button>
       </div>
       {% for entry in mud_origins[kind] %}
-      <label class="switch origin-choice"><input type="checkbox" name="{{ kind }}" value="{{ entry.key }}" data-origin-source="{{ 'imported' if entry.imported else 'default' }}" {% if entry.enabled %}checked{% endif %}> <span>{{ entry.definition.name }}</span><span class="origin-badge {{ 'imported' if entry.imported else 'default' }}">{{ 'IMPORTED' if entry.imported else 'DEFAULT' }}</span></label>
+      {% set origin = entry.definition %}<label class="switch origin-choice" title="{{ origin.traits }}{% if origin.get('tags') %} · traits: {{ origin.tags|join(', ') }}{% endif %}{% if origin.get('spells') %} · abilities: {{ origin.spells|join(', ') }}{% endif %}{% if origin.get('resistances') %} · resists: {% for key,value in origin.resistances.items() %}{{ key }} {{ value }}%{% if not loop.last %}, {% endif %}{% endfor %}{% endif %}{% if origin.get('proficiencies') %} · trained with: {{ (origin.proficiencies.get('weapons', []) + origin.proficiencies.get('armor', []))|join(', ') }}{% endif %}"><input type="checkbox" name="{{ kind }}" value="{{ entry.key }}" data-origin-source="{{ 'imported' if entry.imported else 'default' }}" {% if entry.enabled %}checked{% endif %}> <span>{{ entry.definition.name }}</span><span class="origin-badge {{ 'imported' if entry.imported else 'default' }}">{{ 'IMPORTED' if entry.imported else 'DEFAULT' }}</span></label>
       {% endfor %}
       </div>
       {% endfor %}

@@ -342,7 +342,8 @@ def dependents(database, key, ignored=()):
     for kind in character_creation.KINDS:
         for entry in entries[kind]:
             definition = entry["definition"]
-            if definition.get("skill") == key or key in definition.get("skills", {}):
+            if (definition.get("skill") == key or key in definition.get("skills", {})
+                    or key in definition.get("skill_affinities", {})):
                 names.append(f"{character_creation.KIND_NAMES[kind]} {definition['name']}")
     for entry in catalog(database):
         if entry["key"] not in ignored and key in entry["definition"]["requirements"]["skills"]:
@@ -409,8 +410,9 @@ def remap(definition, mapping):
     result = dict(definition)
     if result.get("skill") in mapping:
         result["skill"] = mapping[result["skill"]]
-    if isinstance(result.get("skills"), dict):
-        result["skills"] = {mapping.get(key, key): value for key, value in result["skills"].items()}
+    for field in ("skills", "skill_affinities"):
+        if isinstance(result.get(field), dict):
+            result[field] = {mapping.get(key, key): value for key, value in result[field].items()}
     if isinstance(result.get("requirements"), dict):
         requirements = dict(result["requirements"])
         if isinstance(requirements.get("skills"), dict):
@@ -470,11 +472,28 @@ def active_ranks(database, character_id, active=None):
             for row in character_rows(database, character_id) if row["skill_key"] in active}
 
 
+def origin_profile(database, character_id):
+    return character_creation.origin_profile(*character_creation.character_origins(database, character_id))
+
+
 def available_points(database, character_id):
     active = definitions(database)
     spent = sum(row["points_spent"] for row in character_rows(database, character_id)
                 if row["skill_key"] in active)
-    return max(0, earned_points(highest_level(database, character_id)) - spent)
+    bonus = origin_profile(database, character_id)["progression"].get("skill_points", 0)
+    return max(0, earned_points(highest_level(database, character_id)) + bonus - spent)
+
+
+def affinity(profile, definition):
+    """Practice percentage from race and class: a skill's own entry beats its group's."""
+    affinities = profile["skill_affinities"]
+    return affinities.get(definition["key"], affinities.get(definition["group"], 0))
+
+
+def practice_gain(amount, rate, percent):
+    """Practice earned for an action; affinities scale it but never erase it."""
+    base = amount * rate
+    return max(1, base * (100 + percent) // 100) if base > 0 else base
 
 
 def proficiencies(database, character_id):
@@ -510,6 +529,7 @@ def practice(database, character_id, trigger, amount=1, *, categories=None, skil
     if trigger not in TRIGGERS:
         raise ValueError("Unknown practice trigger.")
     level = highest_level(database, character_id)
+    profile = origin_profile(database, character_id)
     notices = []
     for key, (definition, rank) in active_ranks(database, character_id).items():
         if skill_key is not None and key != skill_key:
@@ -526,7 +546,7 @@ def practice(database, character_id, trigger, amount=1, *, categories=None, skil
         if rank >= definition["max_rank"]:
             continue
         start, held = rank, experience
-        experience += amount * definition["practice"]["rate"]
+        experience += practice_gain(amount, definition["practice"]["rate"], affinity(profile, definition))
         while rank < cap and experience >= next_rank_cost(rank):
             experience -= next_rank_cost(rank)
             rank += 1
