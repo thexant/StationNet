@@ -762,32 +762,68 @@ def activate(database, world_id, *, origin_mode="preserve", selected=None,
     return True
 
 
-def remove(database, world_id):
+def removal_origins(database, world_id):
+    from . import character_creation
+    return character_creation.removable_associations(
+        database, {**world_origin_keys(database, world_id), "world_id": world_id})
+
+
+def remove(database, world_id, *, remove_origins=False):
+    from . import character_creation
+    world = database.execute("SELECT imported,active FROM mud_world_packages WHERE id=?", (world_id,)).fetchone()
+    if world is None or not world["imported"]:
+        raise WorldError("Only installed custom worlds can be removed.")
+    if world["active"]:
+        raise WorldError("Select another active world before removing this one.")
     path = directory() / f"{world_id}.zip"
-    with database:
-        database.execute("BEGIN IMMEDIATE")
-        world = database.execute("SELECT imported,active FROM mud_world_packages WHERE id=?", (world_id,)).fetchone()
-        if world is None or not world["imported"]:
-            raise WorldError("Only installed custom worlds can be removed.")
-        if world["active"]:
-            raise WorldError("Select another active world before removing this one.")
-        # Keep definitions referenced by a player's possessions or quest history,
-        # while separating them from a later installation with the same world ID.
-        retired_id = f"retired:{world_id}:{uuid.uuid4().hex}"
-        for table in ("mud_item_definitions", "mud_npc_definitions", "mud_conversations", "mud_quests"):
-            database.execute(f"UPDATE {table} SET world_id=? WHERE world_id=?", (retired_id, world_id))
-        # Room items may contain other items; remove descendants before their
-        # containers so the item-location constraint remains satisfied.
-        items = database.execute(
-            "WITH RECURSIVE placed(id,depth) AS ("
-            "SELECT id,0 FROM mud_item_instances WHERE room_id IN "
-            "(SELECT id FROM mud_world_rooms WHERE world_id=?) UNION ALL "
-            "SELECT child.id,placed.depth+1 FROM mud_item_instances child "
-            "JOIN placed ON child.container_id=placed.id) "
-            "SELECT id FROM placed ORDER BY depth DESC", (world_id,)
-        ).fetchall()
-        for item in items:
-            database.execute("DELETE FROM mud_item_instances WHERE id=?", (item["id"],))
-        database.execute("DELETE FROM mud_world_rooms WHERE world_id=?", (world_id,))
-        database.execute("DELETE FROM mud_world_packages WHERE id=?", (world_id,))
-    path.unlink(missing_ok=True)
+    staged = path.with_name(path.name + ".removing-" + uuid.uuid4().hex)
+    if path.exists():
+        path.rename(staged)
+    try:
+        with database:
+            database.execute("BEGIN IMMEDIATE")
+            world = database.execute("SELECT imported,active FROM mud_world_packages WHERE id=?", (world_id,)).fetchone()
+            if world is None or not world["imported"]:
+                raise WorldError("Only installed custom worlds can be removed.")
+            if world["active"]:
+                raise WorldError("Select another active world before removing this one.")
+            associated = removal_origins(database, world_id)
+            linked = world_origin_keys(database, world_id)
+            selected = {kind: {entry["key"] for entry in associated[kind]}
+                        for kind in character_creation.KINDS}
+            preserved = {kind: len(linked[kind]) - (len(selected[kind]) if remove_origins else 0)
+                         for kind in character_creation.KINDS}
+            # Keep definitions referenced by a player's possessions or quest history,
+            # while separating them from a later installation with the same world ID.
+            retired_id = f"retired:{world_id}:{uuid.uuid4().hex}"
+            for table in ("mud_item_definitions", "mud_npc_definitions", "mud_conversations", "mud_quests"):
+                database.execute(f"UPDATE {table} SET world_id=? WHERE world_id=?", (retired_id, world_id))
+            # Room items may contain other items; remove descendants before their
+            # containers so the item-location constraint remains satisfied.
+            items = database.execute(
+                "WITH RECURSIVE placed(id,depth) AS ("
+                "SELECT id,0 FROM mud_item_instances WHERE room_id IN "
+                "(SELECT id FROM mud_world_rooms WHERE world_id=?) UNION ALL "
+                "SELECT child.id,placed.depth+1 FROM mud_item_instances child "
+                "JOIN placed ON child.container_id=placed.id) "
+                "SELECT id FROM placed ORDER BY depth DESC", (world_id,)
+            ).fetchall()
+            for item in items:
+                database.execute("DELETE FROM mud_item_instances WHERE id=?", (item["id"],))
+            database.execute("DELETE FROM mud_world_rooms WHERE world_id=?", (world_id,))
+            database.execute("DELETE FROM mud_world_packages WHERE id=?", (world_id,))
+            if remove_origins and any(selected.values()):
+                character_creation.remove_origins(database, selected)
+            restored = character_creation.restore_missing_defaults(database)
+    except Exception:
+        if staged.exists():
+            staged.rename(path)
+        raise
+    try:
+        staged.unlink(missing_ok=True)
+        file_warning = False
+    except OSError:
+        file_warning = True
+    return {"removed": selected if remove_origins else {kind: set() for kind in character_creation.KINDS},
+            "preserved": preserved,
+            "restored": restored, "file_warning": file_warning}

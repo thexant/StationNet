@@ -836,6 +836,17 @@ def activate_mud_world():
     return redirect(destination)
 
 
+def _removal_message(label, result):
+    removed = ", ".join(f"{len(result['removed'][kind])} {kind}" for kind in character_creation.KINDS)
+    preserved = ", ".join(f"{result['preserved'][kind]} {kind}" for kind in character_creation.KINDS)
+    message = f"{label} removed. Associated definitions removed: {removed}; preserved: {preserved}."
+    if result["restored"]:
+        message += " Built-in " + " and ".join(result["restored"]) + " restored for character creation."
+    if result["file_warning"]:
+        message += " Package file cleanup failed; remove the leftover file manually."
+    return message
+
+
 @bp.post("/sysop/settings/mud-worlds/remove")
 @admin_required
 def remove_mud_world():
@@ -845,11 +856,12 @@ def remove_mud_world():
         flash("Confirm world removal first.", "error")
         return redirect(destination)
     try:
-        mud_worlds.remove(get_db(), request.form.get("world_id", ""))
-    except mud_worlds.WorldError as error:
+        result = mud_worlds.remove(get_db(), request.form.get("world_id", ""),
+                                   remove_origins=request.form.get("remove_origins") == "on")
+    except (mud_worlds.WorldError, ValueError, sqlite3.Error) as error:
         flash(str(error), "error")
     else:
-        flash("Custom world removed.", "success")
+        flash(_removal_message("Custom world", result), "success")
     return redirect(destination)
 
 
@@ -895,8 +907,18 @@ def import_dungeon():
         flash("A dungeon theme file with that ID already exists.", "error")
         return redirect(destination)
     database = get_db()
-    database.execute("DELETE FROM mud_dungeon_theme_settings WHERE theme_id=?", (document["id"],))
-    database.commit()
+    try:
+        with database:
+            dungeons.install_origins(database, document)
+            database.execute("DELETE FROM mud_dungeon_theme_settings WHERE theme_id=?", (document["id"],))
+    except (ValueError, sqlite3.Error) as error:
+        try:
+            path.unlink(missing_ok=True)
+            cleanup = ""
+        except OSError:
+            cleanup = " The imported file could not be cleaned up; remove it manually."
+        flash(f"Dungeon theme import failed: {error}.{cleanup}", "error")
+        return redirect(destination)
     flash(f"Imported dungeon theme {document['name']} by {document['author']}.", "success")
     return redirect(destination)
 
@@ -920,29 +942,15 @@ def remove_dungeon():
     if entry is None or entry[0] != path or path.is_symlink():
         flash("Select an installed custom dungeon theme to remove.", "error")
         return redirect(destination)
-    try:
-        path.unlink()
-    except OSError:
-        flash("Could not remove the dungeon theme file.", "error")
-        return redirect(destination)
     database = get_db()
-    database.execute("DELETE FROM mud_dungeon_theme_settings WHERE theme_id=?", (theme_id,))
-    settings = database.execute(
-        "SELECT eligible_theme_ids_json FROM mud_daily_dungeon_settings WHERE id=1"
-    ).fetchone()
-    if settings:
-        try:
-            eligible = json.loads(settings["eligible_theme_ids_json"] or "[]")
-        except json.JSONDecodeError:
-            eligible = None
-        if isinstance(eligible, list) and theme_id in eligible:
-            eligible = [item for item in eligible if item != theme_id]
-            database.execute(
-                "UPDATE mud_daily_dungeon_settings SET eligible_theme_ids_json=? WHERE id=1",
-                (json.dumps(eligible),),
-            )
-    database.commit()
-    flash(f"Removed dungeon theme {entry[1]['name']}.", "success")
+    try:
+        result = dungeons.remove_template(database, theme_id, path,
+            remove_origins=request.form.get("remove_origins") == "on")
+    except (ValueError, sqlite3.Error, OSError) as error:
+        flash(f"Could not remove dungeon theme: {error}", "error")
+    else:
+        flash(f"Removed dungeon theme {entry[1]['name']}. " +
+              _removal_message("Custom dungeon theme", result), "success")
     return redirect(destination)
 
 
@@ -1414,6 +1422,17 @@ def settings():
         world["id"]: {kind: sorted(keys) for kind, keys in mud_worlds.world_origin_keys(
             database, world["id"]).items()}
         for world in mud_world_list}
+    def removal_preview(linked, removable):
+        lookup = {(kind, entry["key"]): entry["definition"]["name"]
+                  for kind in character_creation.KINDS for entry in mud_origins[kind]}
+        return {kind: [{"name": lookup.get((kind, key), key),
+                        "removable": key in {entry["key"] for entry in removable[kind]}}
+                       for key in sorted(linked[kind])]
+                for kind in character_creation.KINDS}
+    mud_world_removal = {world["id"]: removal_preview(
+        mud_worlds.world_origin_keys(database, world["id"]),
+        mud_worlds.removal_origins(database, world["id"]))
+        for world in mud_world_list if world["imported"]}
     mud_daily_settings_row = database.execute(
         "SELECT * FROM mud_daily_dungeon_settings WHERE id=1"
     ).fetchone()
@@ -1427,6 +1446,10 @@ def settings():
         ]
     except dungeons.TemplateError:
         mud_dungeon_themes = []
+    mud_dungeon_removal = {theme["id"]: removal_preview(
+        dungeons.theme_origin_keys(database, theme["id"]),
+        dungeons.removal_origins(database, theme["id"]))
+        for theme in mud_dungeon_themes if theme["custom"]}
     mud_daily_themes = [theme for theme in mud_dungeon_themes if theme["enabled"]]
     try:
         configured_daily_themes = set(json.loads(
@@ -1465,6 +1488,8 @@ def settings():
                            mud_world_list=mud_world_list,
                            mud_origins=mud_origins,
                            mud_world_origin_keys=mud_world_origin_keys,
+                           mud_world_removal=mud_world_removal,
+                           mud_dungeon_removal=mud_dungeon_removal,
                            mud_daily_settings=mud_daily_settings_row,
                            mud_dungeon_themes=mud_dungeon_themes,
                            mud_daily_themes=mud_daily_themes,

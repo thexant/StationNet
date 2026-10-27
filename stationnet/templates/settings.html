@@ -592,7 +592,9 @@
     {% if mud_world_list|selectattr('imported')|list %}
     <form method="post" action="{{ url_for('station.remove_mud_world') }}" class="form-grid">
       <input type="hidden" name="csrf_token" value="{{ session.csrf_token }}">
-      <label>Remove custom world<select name="world_id" required><option value="">Select a world</option>{% for world in mud_world_list if world.imported %}<option value="{{ world.id }}">{{ world.name }}{% if world.active %} (active; switch first){% endif %}</option>{% endfor %}</select></label>
+      <label>Remove custom world<select name="world_id" id="world-remove-id" required><option value="">Select a world</option>{% for world in mud_world_list if world.imported %}<option value="{{ world.id }}">{{ world.name }}{% if world.active %} (active; switch first){% endif %}</option>{% endfor %}</select></label>
+      <div id="world-remove-origins" aria-live="polite"></div>
+      <label class="switch"><input type="checkbox" name="remove_origins"> Also remove this world's unshared races and classes</label>
       <label class="switch"><input type="checkbox" name="confirm_remove" required> Confirm world removal</label>
       <button class="secondary">REMOVE WORLD</button>
     </form>
@@ -600,6 +602,21 @@
     <script>
       (() => {
         const linked = {{ mud_world_origin_keys|tojson }};
+        const removal = {{ mud_world_removal|tojson }};
+        const removeSelect = document.getElementById('world-remove-id');
+        const removeDetails = document.getElementById('world-remove-origins');
+        const updateRemove = () => {
+          const entries = removal[removeSelect.value];
+          removeDetails.replaceChildren();
+          if (!entries) return;
+          for (const kind of ['races', 'classes']) {
+            const line = document.createElement('p');
+            const items = entries[kind];
+            line.textContent = `${kind}: ${items.length ? items.map(item => `${item.name} (${item.removable ? 'eligible for removal' : 'shared or unavailable; preserved'})`).join(', ') : 'none'}`;
+            removeDetails.append(line);
+          }
+        };
+        removeSelect?.addEventListener('change', updateRemove);
         const exportSelect = document.getElementById('world-export-id');
         exportSelect?.addEventListener('change', () => {
           document.querySelectorAll('.world-export-origin').forEach(box => {
@@ -672,15 +689,35 @@
       <input type="hidden" name="csrf_token" value="{{ session.csrf_token }}">
       <div class="divider">REMOVE CUSTOM DUNGEON THEME</div>
       <label>Installed dungeon theme
-        <select name="theme_id" required>
+        <select name="theme_id" id="dungeon-remove-id" required>
           <option value="">Select a custom dungeon theme</option>
           {% for theme in mud_dungeon_themes if theme.custom %}<option value="{{ theme.id }}">{{ theme.name }} ({{ theme.id }}@{{ theme.version }}) — {{ theme.author }}</option>{% endfor %}
         </select>
       </label>
+      <div id="dungeon-remove-origins" aria-live="polite"></div>
+      <label class="switch"><input type="checkbox" name="remove_origins"> Also remove this theme's unshared races and classes</label>
       <label class="switch"><input type="checkbox" name="confirm_remove" required> Confirm removal of the selected dungeon theme</label>
       <small>Existing runs and today's dungeon remain available. Future runs cannot select this theme.</small>
       <button type="submit" class="secondary">REMOVE DUNGEON</button>
     </form>
+    <script>
+      (() => {
+        const removal = {{ mud_dungeon_removal|tojson }};
+        const select = document.getElementById('dungeon-remove-id');
+        const details = document.getElementById('dungeon-remove-origins');
+        select.addEventListener('change', () => {
+          details.replaceChildren();
+          const entries = removal[select.value];
+          if (!entries) return;
+          for (const kind of ['races', 'classes']) {
+            const line = document.createElement('p');
+            const items = entries[kind];
+            line.textContent = `${kind}: ${items.length ? items.map(item => `${item.name} (${item.removable ? 'eligible for removal' : 'shared or unavailable; preserved'})`).join(', ') : 'none'}`;
+            details.append(line);
+          }
+        });
+      })();
+    </script>
     {% endif %}
     <p class="muted">Enabled for new dungeons: {% for theme in mud_daily_themes %}{{ theme.name }} ({{ theme.id }}@{{ theme.version }}){{ ', ' if not loop.last }}{% else %}none. Existing dungeons remain available.{% endfor %}</p>
   </section>

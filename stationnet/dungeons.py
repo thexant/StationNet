@@ -132,6 +132,99 @@ def set_theme_enabled(database, theme_id, enabled):
     )
 
 
+def bundled_origin_key(theme_id, kind, local_key):
+    return "d-" + hashlib.sha256(
+        f"{theme_id}:{kind}:{local_key}".encode("utf-8")).hexdigest()[:32]
+
+
+def install_origins(database, template):
+    from . import character_creation
+    for kind in character_creation.KINDS:
+        seen = set()
+        for source in template.get("origins", {}).get(kind, []):
+            local_key = source.get("key")
+            if (not isinstance(local_key, str) or
+                    not character_creation.KEY_RE.fullmatch(local_key) or local_key in seen):
+                raise ValueError(f"Bundled {kind} need distinct valid local keys.")
+            seen.add(local_key)
+            key = bundled_origin_key(template["id"], kind, local_key)
+            definition = character_creation.validate_origin(
+                kind, {**source, "key": key}, database, check_key=False)
+            existing = database.execute(
+                "SELECT definition_json,installed FROM mud_origin_definitions WHERE kind=? AND key=?",
+                (kind, key)).fetchone()
+            if existing:
+                if not existing["installed"] or json.loads(existing["definition_json"]) != definition:
+                    raise ValueError(f"Bundled {kind[:-1]} {local_key} conflicts with an installed definition.")
+            else:
+                database.execute(
+                    "INSERT INTO mud_origin_definitions(kind,key,definition_json,imported,installed,enabled) "
+                    "VALUES(?,?,?,1,1,0)",
+                    (kind, key, json.dumps(definition, separators=(",", ":"))),
+                )
+            database.execute(
+                "INSERT INTO mud_dungeon_origins(theme_id,kind,origin_key,local_key) VALUES(?,?,?,?)",
+                (template["id"], kind, key, local_key))
+
+
+def theme_origin_keys(database, theme_id):
+    from . import character_creation
+    return {kind: {row["origin_key"] for row in database.execute(
+        "SELECT origin_key FROM mud_dungeon_origins WHERE theme_id=? AND kind=?",
+        (theme_id, kind))} for kind in character_creation.KINDS}
+
+
+def removal_origins(database, theme_id):
+    from . import character_creation
+    return character_creation.removable_associations(
+        database, {**theme_origin_keys(database, theme_id), "theme_id": theme_id})
+
+
+def remove_template(database, theme_id, path, *, remove_origins=False):
+    """Remove a custom template and its unshared origins as one logical operation."""
+    from . import character_creation
+    path = Path(path)
+    staged = path.with_name(path.name + ".removing-" + uuid.uuid4().hex)
+    linked = theme_origin_keys(database, theme_id)
+    associated = removal_origins(database, theme_id)
+    selected = {kind: {entry["key"] for entry in associated[kind]}
+                for kind in character_creation.KINDS}
+    preserved = {kind: len(linked[kind]) - (len(selected[kind]) if remove_origins else 0)
+                 for kind in character_creation.KINDS}
+    path.rename(staged)
+    try:
+        with database:
+            database.execute("BEGIN IMMEDIATE")
+            database.execute("DELETE FROM mud_dungeon_origins WHERE theme_id=?", (theme_id,))
+            database.execute("DELETE FROM mud_dungeon_theme_settings WHERE theme_id=?", (theme_id,))
+            settings = database.execute(
+                "SELECT eligible_theme_ids_json FROM mud_daily_dungeon_settings WHERE id=1"
+            ).fetchone()
+            if settings:
+                try:
+                    eligible = json.loads(settings["eligible_theme_ids_json"] or "[]")
+                except json.JSONDecodeError:
+                    eligible = None
+                if isinstance(eligible, list) and theme_id in eligible:
+                    database.execute(
+                        "UPDATE mud_daily_dungeon_settings SET eligible_theme_ids_json=? WHERE id=1",
+                        (json.dumps([item for item in eligible if item != theme_id]),),
+                    )
+            if remove_origins and any(selected.values()):
+                character_creation.remove_origins(database, selected)
+            restored = character_creation.restore_missing_defaults(database)
+    except Exception:
+        staged.rename(path)
+        raise
+    try:
+        staged.unlink()
+        file_warning = False
+    except OSError:
+        file_warning = True
+    return {"removed": selected if remove_origins else {kind: set() for kind in character_creation.KINDS},
+            "preserved": preserved, "restored": restored, "file_warning": file_warning}
+
+
 def _is_int(value, minimum=None, maximum=None):
     return (isinstance(value, int) and not isinstance(value, bool)
             and (minimum is None or value >= minimum)
@@ -410,6 +503,14 @@ def validate_template(template, database=None):
         errors.append("$.name: must be a non-empty string")
     if "author" in template and (not isinstance(template["author"], str) or not template["author"].strip()):
         errors.append("$.author: must be a non-empty string")
+    origins = template.get("origins", {})
+    if not isinstance(origins, dict) or set(origins) - {"races", "classes"}:
+        errors.append("$.origins: must contain races and/or classes arrays")
+    else:
+        for kind, definitions in origins.items():
+            if not isinstance(definitions, list) or len(definitions) > 100 or any(
+                    not isinstance(item, dict) for item in definitions):
+                errors.append(f"$.origins.{kind}: must contain at most 100 definition objects")
     embedded_ids = _validate_embedded_definitions(errors, template, database)
 
     generation = template.get("generation")

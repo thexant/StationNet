@@ -170,6 +170,70 @@ def test_world_lifecycle_and_player_relocation(tmp_path):
         coordinator._timer.cancel()
 
 
+def test_world_origin_cleanup_restores_only_missing_races(tmp_path):
+    app = create_app({"TESTING": True, "DATA_DIR": str(tmp_path)})
+    try:
+        with app.app_context():
+            db = get_db()
+            templates = Path(character_creation.__file__).with_name("mud_origin_templates")
+            document = mud_worlds.read_package(_archive("cleanup"))
+            document["origins"] = {"races": [json.loads((templates / "race.json").read_text())]}
+            mud_worlds.install(db, mud_worlds.package_bytes(document))
+            key = mud_worlds.bundled_key("cleanup", "races", "riverfolk")
+            for entry in character_creation.catalog(db)["races"]:
+                db.execute("INSERT INTO mud_origin_definitions(kind,key,enabled) VALUES('races',?,0) "
+                           "ON CONFLICT(kind,key) DO UPDATE SET enabled=0", (entry["key"],))
+            db.execute("UPDATE mud_origin_definitions SET enabled=1 WHERE kind='races' AND key=?", (key,))
+            before_classes = {item["key"] for item in character_creation.catalog(db)["classes"] if item["enabled"]}
+            db.commit()
+            result = mud_worlds.remove(db, "cleanup", remove_origins=True)
+            assert key in result["removed"]["races"]
+            assert result["restored"] == ["races"]
+            assert character_creation.active_counts(db)["races"] > 0
+            assert {item["key"] for item in character_creation.catalog(db)["classes"] if item["enabled"]} == before_classes
+            assert db.execute("SELECT 1 FROM mud_origin_definitions WHERE key=?", (key,)).fetchone() is None
+    finally:
+        coordinator = app.extensions["broadcast_coordinator"]
+        coordinator._closed = True
+        coordinator._timer.cancel()
+
+
+def test_world_cleanup_preserves_shared_origin(tmp_path):
+    app = create_app({"TESTING": True, "DATA_DIR": str(tmp_path)})
+    try:
+        with app.app_context():
+            db = get_db()
+            templates = Path(character_creation.__file__).with_name("mud_origin_templates")
+            first = mud_worlds.read_package(_archive("first-world"))
+            first["origins"] = {"races": [json.loads((templates / "race.json").read_text())]}
+            mud_worlds.install(db, mud_worlds.package_bytes(first))
+            mud_worlds.install(db, _archive("second-world"))
+            key = mud_worlds.bundled_key("first-world", "races", "riverfolk")
+            db.execute("INSERT INTO mud_world_origins(world_id,kind,origin_key,local_key) "
+                       "VALUES('second-world','races',?,'riverfolk')", (key,))
+            db.commit()
+            result = mud_worlds.remove(db, "first-world", remove_origins=True)
+            assert result["removed"]["races"] == set()
+            assert result["preserved"]["races"] == 1
+            assert db.execute("SELECT installed FROM mud_origin_definitions WHERE key=?", (key,)).fetchone()[0] == 1
+            user_id = db.execute("INSERT INTO users(username,callsign,password_hash) "
+                                 "VALUES('archived','ARC','unused')").lastrowid
+            archive_id = db.execute("INSERT INTO mud_campaign_archives(world_id,world_name) "
+                                    "VALUES('second-world','Second World')").lastrowid
+            db.execute("INSERT INTO mud_campaign_characters(archive_id,user_id,snapshot_json) "
+                       "VALUES(?,?,?)", (archive_id, user_id,
+                       json.dumps({"character": {"race_key": key}})))
+            db.commit()
+            result = mud_worlds.remove(db, "second-world", remove_origins=True)
+            assert result["removed"]["races"] == {key}
+            assert db.execute("SELECT installed,enabled FROM mud_origin_definitions WHERE key=?",
+                              (key,)).fetchone()[:] == (0, 0)
+    finally:
+        coordinator = app.extensions["broadcast_coordinator"]
+        coordinator._closed = True
+        coordinator._timer.cancel()
+
+
 def test_non_sysop_cannot_install_or_switch(tmp_path):
     app = create_app({"TESTING": True, "DATA_DIR": str(tmp_path)})
     try:

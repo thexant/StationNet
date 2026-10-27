@@ -236,7 +236,11 @@ def remove_origins(database, selected, *, require_active=False):
             used = database.execute(
                 f"SELECT 1 FROM mud_characters WHERE {column}=? LIMIT 1", (key,)
             ).fetchone()
-            if used:
+            archived = any(
+                json.loads(row["snapshot_json"]).get("character", {}).get(column) == key
+                for row in database.execute("SELECT snapshot_json FROM mud_campaign_characters")
+            )
+            if used or archived:
                 database.execute(
                     "UPDATE mud_origin_definitions SET installed=0,enabled=0 WHERE kind=? AND key=?",
                     (kind, key),
@@ -247,6 +251,9 @@ def remove_origins(database, selected, *, require_active=False):
                 )
             database.execute(
                 "DELETE FROM mud_world_origins WHERE kind=? AND origin_key=?", (kind, key)
+            )
+            database.execute(
+                "DELETE FROM mud_dungeon_origins WHERE kind=? AND origin_key=?", (kind, key)
             )
             removed.append(entry)
     if require_active:
@@ -263,6 +270,50 @@ def require_available(database):
     counts = active_counts(database)
     if not counts["races"] or not counts["classes"]:
         raise ValueError("Enable at least one race and one class while a MUD mode is enabled.")
+
+
+def restore_missing_defaults(database):
+    """Re-enable existing built-in choices only for empty categories."""
+    counts = active_counts(database)
+    defaults = _built_in_options()
+    restored = []
+    for kind in KINDS:
+        if counts[kind]:
+            continue
+        if not defaults[kind]:
+            raise ValueError(f"No built-in {kind} are configured for character creation.")
+        for definition in defaults[kind]:
+            database.execute(
+                "INSERT INTO mud_origin_definitions(kind,key,enabled) VALUES(?,?,1) "
+                "ON CONFLICT(kind,key) DO UPDATE SET enabled=1",
+                (kind, definition["key"]),
+            )
+        restored.append(kind)
+    require_available(database)
+    return restored
+
+
+def removable_associations(database, linked):
+    """Find installed origins linked only to the content being removed."""
+    entries = catalog(database)
+    result = {kind: [] for kind in KINDS}
+    for kind in KINDS:
+        lookup = {entry["key"]: entry for entry in entries[kind] if entry["imported"]}
+        for key in sorted(linked[kind]):
+            entry = lookup.get(key)
+            if entry is None:
+                continue
+            world_ref = database.execute(
+                "SELECT 1 FROM mud_world_origins WHERE kind=? AND origin_key=? AND world_id!=? LIMIT 1",
+                (kind, key, linked.get("world_id", "")),
+            ).fetchone()
+            dungeon_ref = database.execute(
+                "SELECT 1 FROM mud_dungeon_origins WHERE kind=? AND origin_key=? AND theme_id!=? LIMIT 1",
+                (kind, key, linked.get("theme_id", "")),
+            ).fetchone()
+            if not world_ref and not dungeon_ref:
+                result[kind].append(entry)
+    return result
 
 
 def _choice(items, key, label):

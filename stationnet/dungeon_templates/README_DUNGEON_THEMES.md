@@ -58,6 +58,15 @@ enemies. For example, `"properties": {"on_hit_effects":
 7. Play it from Dungeon Portals, or launch with
    `/expedition my-theme [difficulty] [size]`.
 
+Themes imported through SYSOP Settings may include an optional top-level
+`origins` object with `races` and/or `classes` arrays. Each entry uses the same
+format as the [race and class templates](../mud_origin_templates/README_RACES_CLASSES.md).
+Imported choices start inactive; enable them under MUD race and class availability
+when ready. The theme removal form lists its linked choices and offers optional
+cleanup. Definitions still linked to another installed world or theme are preserved.
+If cleanup leaves no active races or classes, StationNet re-enables the built-in
+choices for that category.
+
 The starter's `"$schema": "./theme-schema.json"` line lets most editors validate
 and autocomplete the file as you type. Keep `theme-schema.json` next to your
 theme while editing. The copied starter contains placeholders and is not a

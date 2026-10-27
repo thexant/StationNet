@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-from stationnet import create_app, dungeons, mud
+from stationnet import create_app, character_creation, dungeons, mud
 from stationnet.db import get_db
 
 
@@ -23,6 +23,72 @@ def _upload(client, theme):
         "csrf_token": "test-token",
         "dungeon_file": (BytesIO(json.dumps(theme).encode("utf-8")), "cavern.json"),
     }, follow_redirects=True)
+
+
+def test_dungeon_bundled_origins_optional_cleanup_and_fallback(data_dir):
+    tmp_path, apps = data_dir
+    app = create_app({"TESTING": True, "DATA_DIR": str(tmp_path)})
+    apps.append(app)
+    with app.app_context():
+        db = get_db()
+        db.execute("INSERT INTO station(name,description,callsign,mud_enabled,mud_procedural_enabled) "
+                   "VALUES('Test','Test','TST',1,1)")
+        sysop = db.execute("INSERT INTO users(username,callsign,password_hash,is_admin) "
+                           "VALUES('sysop','SYS','unused',1)").lastrowid
+        db.commit()
+    client = app.test_client()
+    with client.session_transaction() as session:
+        session["user_id"] = sysop
+        session["csrf_token"] = "test-token"
+    templates = Path(character_creation.__file__).with_name("mud_origin_templates")
+    theme = _theme()
+    theme["origins"] = {
+        "races": [json.loads((templates / "race.json").read_text())],
+        "classes": [json.loads((templates / "class.json").read_text())],
+    }
+    invalid = json.loads(json.dumps(theme))
+    invalid["origins"]["classes"][0]["skill"] = "unknown"
+    assert b"Dungeon theme import failed" in _upload(client, invalid).data
+    assert not (tmp_path / "dungeons" / "custom-cavern.json").exists()
+    assert b"Imported dungeon theme" in _upload(client, theme).data
+    settings = client.get("/sysop/settings").data
+    assert b"dungeon-remove-origins" in settings
+    assert b"Riverfolk" in settings and b"Pathfinder" in settings
+    race_key = dungeons.bundled_origin_key(theme["id"], "races", "riverfolk")
+    class_key = dungeons.bundled_origin_key(theme["id"], "classes", "pathfinder")
+    with app.app_context():
+        db = get_db()
+        assert dungeons.theme_origin_keys(db, theme["id"]) == {
+            "races": {race_key}, "classes": {class_key}}
+    preserved = client.post("/sysop/settings/dungeons/remove", data={
+        "csrf_token": "test-token", "theme_id": theme["id"],
+        "confirm_remove": "on"}, follow_redirects=True)
+    assert b"preserved: 1 races, 1 classes" in preserved.data
+    with app.app_context():
+        assert get_db().execute("SELECT COUNT(*) FROM mud_origin_definitions "
+                                "WHERE key IN (?,?)", (race_key, class_key)).fetchone()[0] == 2
+    assert b"Imported dungeon theme" in _upload(client, theme).data
+    with app.app_context():
+        db = get_db()
+        for kind in character_creation.KINDS:
+            db.execute("UPDATE mud_origin_definitions SET enabled=0 WHERE kind=?", (kind,))
+            for entry in character_creation.catalog(db)[kind]:
+                if not entry["imported"]:
+                    db.execute("INSERT INTO mud_origin_definitions(kind,key,enabled) VALUES(?,?,0) "
+                               "ON CONFLICT(kind,key) DO UPDATE SET enabled=0",
+                               (kind, entry["key"]))
+        db.execute("UPDATE mud_origin_definitions SET enabled=1 WHERE key IN (?,?)", (race_key, class_key))
+        db.commit()
+    response = client.post("/sysop/settings/dungeons/remove", data={
+        "csrf_token": "test-token", "theme_id": theme["id"],
+        "confirm_remove": "on", "remove_origins": "on"}, follow_redirects=True)
+    assert b"Built-in races and classes restored" in response.data
+    with app.app_context():
+        db = get_db()
+        assert character_creation.active_counts(db)["races"] > 0
+        assert character_creation.active_counts(db)["classes"] > 0
+        assert db.execute("SELECT 1 FROM mud_origin_definitions WHERE key IN (?,?)",
+                          (race_key, class_key)).fetchone() is None
 
 
 @pytest.fixture
