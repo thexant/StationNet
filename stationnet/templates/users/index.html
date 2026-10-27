@@ -2,5 +2,28 @@
 {% block title %}User Directory{% endblock %}
 {% block content %}
 <header class="board-head"><div><p class="eyebrow">REGISTERED USERS</p><h1>User directory</h1><p class="muted">Direct chat is only available while another user is online.</p></div><a class="button secondary" href="{{ url_for('users.edit_profile',user_id=g.user.id) }}">EDIT MY PROFILE</a></header>
-<section class="user-grid">{% for user in users %}<article class="user-card"><div class="user-card-identity"><div class="user-avatar{% if not user.profile_photo_filename %} empty{% endif %}">{% if user.profile_photo_filename %}<img src="{{ url_for('users.profile_photo',user_id=user.id) }}" alt="{{ user.username }} profile photo" width="56" height="56">{% else %}<span aria-hidden="true">--</span>{% endif %}</div><div><span class="presence {{ 'online' if user.online else '' }}">{{ 'ONLINE' if user.online else 'OFFLINE' }}</span><h2><a href="{{ url_for('users.profile',user_id=user.id) }}">{{ user.username }}</a></h2><p>{{ user.callsign }}{% if user.is_admin %} / SYSOP{% endif %}</p><small>{{ user.tagline or 'NO STATUS RECORDED' }}</small><small class="user-last-seen">LAST SEEN: {% if user.online %}NOW{% elif user.last_seen %}<time datetime="{{ user.last_seen }}" data-local-time>{{ user.last_seen }} UTC</time>{% else %}NEVER{% endif %}</small></div></div><div class="button-row"><a class="button secondary" href="{{ url_for('users.profile',user_id=user.id) }}">{{ 'MY PROFILE' if user.id==g.user.id else 'PROFILE' }}</a>{% if user.online and user.id!=g.user.id %}<a class="button" href="{{ url_for('chat.direct',user_id=user.id) }}">DIRECT CHAT</a>{% endif %}{% if user.id!=g.user.id %}<a class="button secondary" href="{{ url_for('mail.compose',to=user.id) }}">MAIL</a>{% endif %}</div></article>{% else %}<div class="empty-state"><h2>No users found.</h2></div>{% endfor %}</section>
+<div class="directory-toolbar">
+  <p class="directory-count" aria-live="polite">{% if total %}SHOWING {{ first_result }}–{{ last_result }} OF {{ total }} USERS{% else %}NO USERS FOUND{% endif %}</p>
+  <form method="get" action="{{ url_for('users.directory') }}" class="directory-sort">
+    <label for="directory-sort">SORT BY</label>
+    <select id="directory-sort" name="sort">
+      <option value="active"{% if sort == 'active' %} selected{% endif %}>Most recently active</option>
+      <option value="newest"{% if sort == 'newest' %} selected{% endif %}>Newest registered</option>
+      <option value="oldest"{% if sort == 'oldest' %} selected{% endif %}>Oldest registered</option>
+      <option value="alphabetical"{% if sort == 'alphabetical' %} selected{% endif %}>Alphabetical (A–Z)</option>
+    </select>
+    <button type="submit">SORT</button>
+  </form>
+</div>
+<section class="user-grid" aria-label="Users">{% for user in users %}<article class="user-card"><div class="user-card-identity"><div class="user-avatar{% if not user.profile_photo_filename %} empty{% endif %}">{% if user.profile_photo_filename %}<img src="{{ url_for('users.profile_photo',user_id=user.id) }}" alt="{{ user.username }} profile photo" width="56" height="56">{% else %}<span aria-hidden="true">--</span>{% endif %}</div><div><span class="presence {{ 'online' if user.online else '' }}">{{ 'ONLINE' if user.online else 'OFFLINE' }}</span><h2><a href="{{ url_for('users.profile',user_id=user.id) }}">{{ user.username }}</a></h2><p>{{ user.callsign }}{% if user.is_admin %} / SYSOP{% endif %}</p><small>{{ user.tagline or 'NO STATUS RECORDED' }}</small><small class="user-last-seen">LAST ACTIVE: {% if user.online %}NOW{% elif user.last_seen %}<time datetime="{{ user.last_seen }}" data-local-time>{{ user.last_seen }} UTC</time>{% else %}NEVER{% endif %}</small></div></div><div class="button-row"><a class="button secondary" href="{{ url_for('users.profile',user_id=user.id) }}">{{ 'MY PROFILE' if user.id==g.user.id else 'PROFILE' }}</a>{% if user.online and user.id!=g.user.id %}<a class="button" href="{{ url_for('chat.direct',user_id=user.id) }}">DIRECT CHAT</a>{% endif %}{% if user.id!=g.user.id %}<a class="button secondary" href="{{ url_for('mail.compose',to=user.id) }}">MAIL</a>{% endif %}</div></article>{% else %}<div class="empty-state"><h2>No users found.</h2></div>{% endfor %}</section>
+{% if total_pages > 1 %}
+<nav class="directory-pagination" aria-label="User directory pages">
+  {% if page > 1 %}<a class="button secondary" href="{{ url_for('users.directory', sort=sort, page=page-1) }}" rel="prev">PREVIOUS</a>{% endif %}
+  {% if page_numbers.start > 1 %}<a href="{{ url_for('users.directory', sort=sort, page=1) }}" aria-label="Page 1">1</a>{% if page_numbers.start > 2 %}<span aria-hidden="true">…</span>{% endif %}{% endif %}
+  {% for number in page_numbers %}<a href="{{ url_for('users.directory', sort=sort, page=number) }}" aria-label="Page {{ number }}"{% if number == page %} aria-current="page"{% endif %}>{{ number }}</a>{% endfor %}
+  {% if page_numbers.stop <= total_pages %}{% if page_numbers.stop < total_pages %}<span aria-hidden="true">…</span>{% endif %}<a href="{{ url_for('users.directory', sort=sort, page=total_pages) }}" aria-label="Page {{ total_pages }}">{{ total_pages }}</a>{% endif %}
+  <span class="directory-page-total">PAGE {{ page }} OF {{ total_pages }}</span>
+  {% if page < total_pages %}<a class="button secondary" href="{{ url_for('users.directory', sort=sort, page=page+1) }}" rel="next">NEXT</a>{% endif %}
+</nav>
+{% endif %}
 {% endblock %}

@@ -18,6 +18,13 @@ from . import themes
 from .security import check_password, hash_password, validate_csrf, validate_password
 
 bp = Blueprint("users", __name__, url_prefix="/users")
+DIRECTORY_PAGE_SIZE = 10
+DIRECTORY_SORTS = {
+    "active": "last_seen DESC, id DESC",
+    "newest": "created_at DESC, id DESC",
+    "oldest": "created_at ASC, id ASC",
+    "alphabetical": "username COLLATE NOCASE ASC, id ASC",
+}
 PROFILE_PHOTO_MAX_BYTES = 10 * 1024 * 1024
 PROFILE_PHOTO_MAX_PIXELS = 20_000_000
 PROFILE_PHOTO_SIZE = (128, 128)
@@ -116,13 +123,24 @@ def presence():
 @bp.get("")
 @login_required
 def directory():
-    users = get_db().execute(
+    database = get_db()
+    sort = request.args.get("sort", "active")
+    if sort not in DIRECTORY_SORTS:
+        sort = "active"
+    total = database.execute("SELECT COUNT(*) FROM users").fetchone()[0]
+    total_pages = max(1, (total + DIRECTORY_PAGE_SIZE - 1) // DIRECTORY_PAGE_SIZE)
+    page = min(total_pages, max(1, request.args.get("page", 1, type=int)))
+    users = database.execute(
         "SELECT id,username,callsign,is_admin,tagline,created_at,last_seen,profile_photo_filename,"
         "(connection_id IS NOT NULL AND last_seen>=?) online FROM users "
-        "ORDER BY username COLLATE NOCASE",
-        (_cutoff(),),
+        f"ORDER BY {DIRECTORY_SORTS[sort]} LIMIT ? OFFSET ?",
+        (_cutoff(), DIRECTORY_PAGE_SIZE, (page - 1) * DIRECTORY_PAGE_SIZE),
     ).fetchall()
-    return render_template("users/index.html", users=users)
+    return render_template("users/index.html", users=users, sort=sort, page=page,
+                           total=total, total_pages=total_pages,
+                           page_numbers=range(max(1, page - 2), min(total_pages, page + 2) + 1),
+                           first_result=(page - 1) * DIRECTORY_PAGE_SIZE + 1 if total else 0,
+                           last_result=min(page * DIRECTORY_PAGE_SIZE, total))
 
 
 @bp.get("/<int:user_id>")
@@ -131,7 +149,7 @@ def profile(user_id):
     database = get_db()
     _cleanup_orphaned_profile_photos(database)
     profile_user = database.execute(
-        "SELECT id,username,callsign,is_admin,created_at,tagline,about,birthday,gender,"
+        "SELECT id,username,callsign,is_admin,created_at,last_seen,tagline,about,birthday,gender,"
         "profile_photo_filename,"
         "(connection_id IS NOT NULL AND last_seen>=?) online FROM users WHERE id=?",
         (_cutoff(), user_id),
