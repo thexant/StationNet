@@ -168,3 +168,114 @@ def test_remove_custom_dungeon_requires_confirmation_and_preserves_bundled(data_
             "SELECT eligible_theme_ids_json FROM mud_daily_dungeon_settings WHERE id=1"
         ).fetchone()
         assert json.loads(row["eligible_theme_ids_json"]) == ["desert"]
+
+
+def test_sysop_can_disable_and_reenable_built_in_and_custom_themes(data_dir):
+    tmp_path, apps = data_dir
+    app = create_app({"TESTING": True, "DATA_DIR": str(tmp_path)})
+    apps.append(app)
+    with app.app_context():
+        db = get_db()
+        db.execute("INSERT INTO station(name,description,callsign,mud_enabled,"
+                   "mud_procedural_enabled) VALUES('Test','Test','TST',1,1)")
+        sysop = db.execute(
+            "INSERT INTO users(username,callsign,password_hash,is_admin) "
+            "VALUES('sysop','SYS','unused',1)"
+        ).lastrowid
+        member = db.execute(
+            "INSERT INTO users(username,callsign,password_hash) VALUES('member','MEM','unused')"
+        ).lastrowid
+        db.execute("UPDATE mud_daily_dungeon_settings SET eligible_theme_ids_json=? WHERE id=1",
+                   (json.dumps(["desert"]),))
+        db.commit()
+
+    client = app.test_client()
+    with client.session_transaction() as session:
+        session["user_id"] = sysop
+        session["csrf_token"] = "test-token"
+    assert b"Imported dungeon theme" in _upload(client, _theme()).data
+    custom_path = tmp_path / "dungeons" / "custom-cavern.json"
+    original_custom = custom_path.read_bytes()
+    route = "/sysop/settings/dungeons/availability"
+
+    with client.session_transaction() as session:
+        session["user_id"] = member
+    denied = client.post(route, data={"csrf_token": "test-token", "theme_id": "desert",
+                                      "enabled": "0"}, follow_redirects=True)
+    assert b"SYSOP authorization required" in denied.data
+    with app.app_context():
+        assert "desert" in dungeons.playable_templates(get_db())
+
+    with client.session_transaction() as session:
+        session["user_id"] = sysop
+    for theme_id in ("desert", "custom-cavern"):
+        response = client.post(route, data={"csrf_token": "test-token", "theme_id": theme_id,
+                                            "enabled": "0"}, follow_redirects=True)
+        assert b"DISABLED" in response.data
+    with app.app_context():
+        db = get_db()
+        assert {"desert", "custom-cavern"}.issubset(dungeons.discover_templates())
+        assert "desert" not in dungeons.playable_templates(db)
+        assert "custom-cavern" not in dungeons.playable_templates(db)
+        assert json.loads(db.execute(
+            "SELECT eligible_theme_ids_json FROM mud_daily_dungeon_settings WHERE id=1"
+        ).fetchone()["eligible_theme_ids_json"]) == ["desert"]
+    assert custom_path.read_bytes() == original_custom
+
+    # A second app instance exercises the same database initialization used on restart.
+    restarted = create_app({"TESTING": True, "DATA_DIR": str(tmp_path)})
+    apps.append(restarted)
+    with restarted.app_context():
+        assert not dungeons.theme_is_enabled("desert", get_db())
+        assert "desert" in dungeons.discover_templates()
+
+    response = client.post(route, data={"csrf_token": "test-token", "theme_id": "desert",
+                                        "enabled": "1"}, follow_redirects=True)
+    assert b"Dungeon theme Desert Temples enabled" in response.data
+    with app.app_context():
+        assert "desert" in dungeons.playable_templates(get_db())
+
+
+def test_no_enabled_dungeon_themes_is_handled_and_existing_run_survives(data_dir):
+    tmp_path, apps = data_dir
+    app = create_app({"TESTING": True, "DATA_DIR": str(tmp_path)})
+    apps.append(app)
+    with app.app_context():
+        db = get_db()
+        db.execute("INSERT INTO station(name,description,callsign,mud_enabled,"
+                   "mud_procedural_enabled) VALUES('Test','Test','TST',1,1)")
+        player = db.execute(
+            "INSERT INTO users(username,callsign,password_hash) VALUES('player','PLY','unused')"
+        ).lastrowid
+        db.execute("UPDATE mud_characters SET creation_state='complete' WHERE user_id=?", (player,))
+        mud._set_player_location(db, player, "procedural", "portal", mud.PORTAL_ROOM_ID)
+        user = db.execute("SELECT * FROM users WHERE id=?", (player,)).fetchone()
+        mud._expedition_action(db, user, {"theme_id": "desert", "difficulty": 1, "size": 8})
+        existing_id = mud._active_expedition(db, player)["id"]
+        for theme_id in dungeons.discover_templates():
+            dungeons.set_theme_enabled(db, theme_id, False)
+        db.commit()
+
+        assert dungeons.playable_templates(db) == {}
+        assert mud._active_expedition(db, player)["id"] == existing_id
+        assert db.execute(
+            "SELECT COUNT(*) AS amount FROM mud_dungeon_rooms WHERE instance_id=?", (existing_id,)
+        ).fetchone()["amount"] > 0
+        daily = mud.ensure_daily_dungeon(db)
+        assert daily["status"] == "failed"
+        assert "No eligible playable dungeon themes" in daily["error_message"]
+
+        second = db.execute(
+            "INSERT INTO users(username,callsign,password_hash) VALUES('second','SEC','unused')"
+        ).lastrowid
+        db.execute("UPDATE mud_characters SET creation_state='complete' WHERE user_id=?", (second,))
+        mud._set_player_location(db, second, "procedural", "portal", mud.PORTAL_ROOM_ID)
+        second_user = db.execute("SELECT * FROM users WHERE id=?", (second,)).fetchone()
+        with pytest.raises(mud.ActionError, match="No playable dungeon themes"):
+            mud._expedition_action(db, second_user, {})
+
+        dungeons.set_theme_enabled(db, "desert", True)
+        db.commit()
+        mud._expedition_action(db, second_user,
+                               {"theme_id": "desert", "difficulty": 1, "size": 8})
+        assert mud._active_expedition(db, second)["theme_id"] == "desert"

@@ -695,6 +695,10 @@ CREATE TABLE IF NOT EXISTS mud_dungeon_template_versions (
  installed_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
  PRIMARY KEY(theme_id,version),
  UNIQUE(theme_id,version,template_hash));
+CREATE TABLE IF NOT EXISTS mud_dungeon_theme_settings (
+ theme_id TEXT PRIMARY KEY,
+ enabled INTEGER NOT NULL DEFAULT 1 CHECK(enabled IN (0,1)),
+ updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);
 CREATE TABLE IF NOT EXISTS mud_dungeon_managed_definitions (
  definition_id TEXT PRIMARY KEY,
  theme_id TEXT NOT NULL,

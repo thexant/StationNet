@@ -3266,7 +3266,7 @@ def _enter_expedition(database, user, instance_id, room_key):
 
 def _installed_expedition_themes(database, strict=False):
     try:
-        discovered = dungeons.discover_templates()
+        discovered = dungeons.playable_templates(database)
     except dungeons.TemplateError as problem:
         if strict:
             raise ActionError(f"Installed dungeon themes need attention: {problem}") from problem

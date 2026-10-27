@@ -47,6 +47,8 @@ enemies. For example, `"properties": {"on_hit_effects":
 5. Import it through SYSOP Settings > MUD service > Dungeon Themes, or copy it
    to `<STATIONNET_DATA>/dungeons/` (normally `data/dungeons/`). Discovery is
    live, so no restart is needed. `_template.json` is ignored as a starter.
+   SYSOPs can disable or re-enable any built-in or custom theme from the same
+   panel without removing its file or changing existing dungeon runs.
 6. Preview it:
 
    ```sh
@@ -419,6 +421,9 @@ Conditions can appear on pools and on individual content choices.
 - Install by importing the JSON in SYSOP Settings or copying it into
   `<STATIONNET_DATA>/dungeons/`.
   Playable themes then appear in Dungeon Portals.
+- Disabled themes remain installed but are omitted from new expeditions,
+  previews, generated designs, and future Dungeon of the Day selection until
+  a SYSOP enables them again.
 - Launch a run with `/expedition <theme-id> [difficulty] [size]`.
 
 `theme-schema.json` is the machine-readable contract. Runtime validation goes

@@ -894,6 +894,9 @@ def import_dungeon():
     except FileExistsError:
         flash("A dungeon theme file with that ID already exists.", "error")
         return redirect(destination)
+    database = get_db()
+    database.execute("DELETE FROM mud_dungeon_theme_settings WHERE theme_id=?", (document["id"],))
+    database.commit()
     flash(f"Imported dungeon theme {document['name']} by {document['author']}.", "success")
     return redirect(destination)
 
@@ -923,6 +926,7 @@ def remove_dungeon():
         flash("Could not remove the dungeon theme file.", "error")
         return redirect(destination)
     database = get_db()
+    database.execute("DELETE FROM mud_dungeon_theme_settings WHERE theme_id=?", (theme_id,))
     settings = database.execute(
         "SELECT eligible_theme_ids_json FROM mud_daily_dungeon_settings WHERE id=1"
     ).fetchone()
@@ -937,8 +941,36 @@ def remove_dungeon():
                 "UPDATE mud_daily_dungeon_settings SET eligible_theme_ids_json=? WHERE id=1",
                 (json.dumps(eligible),),
             )
-            database.commit()
+    database.commit()
     flash(f"Removed dungeon theme {entry[1]['name']}.", "success")
+    return redirect(destination)
+
+
+@bp.post("/sysop/settings/dungeons/availability")
+@admin_required
+def set_dungeon_availability():
+    """Enable or disable an installed theme without changing its package or history."""
+    validate_csrf()
+    destination = url_for("station.settings") + "#dungeon-themes"
+    theme_id = request.form.get("theme_id", "")
+    enabled_text = request.form.get("enabled")
+    if enabled_text not in {"0", "1"}:
+        abort(400)
+    try:
+        installed = dungeons.discover_templates()
+    except dungeons.TemplateError as problem:
+        flash(f"Installed dungeon themes need attention: {problem}", "error")
+        return redirect(destination)
+    entry = installed.get(theme_id)
+    if entry is None:
+        flash("Select an installed dungeon theme.", "error")
+        return redirect(destination)
+    enabled = enabled_text == "1"
+    database = get_db()
+    dungeons.set_theme_enabled(database, theme_id, enabled)
+    database.commit()
+    status = "enabled" if enabled else "disabled"
+    flash(f"Dungeon theme {entry[1]['name']} {status}.", "success")
     return redirect(destination)
 
 
@@ -969,7 +1001,7 @@ def mud_daily_settings():
         flash("Daily attempts must be between 1 and 20.", "error")
         return redirect(url_for("station.settings") + "#mud-daily")
     try:
-        discovered = dungeons.discover_templates()
+        discovered = dungeons.playable_templates(database)
     except dungeons.TemplateError as problem:
         flash(f"Installed dungeon themes need attention: {problem}", "error")
         return redirect(url_for("station.settings") + "#mud-daily")
@@ -1386,14 +1418,16 @@ def settings():
         "SELECT * FROM mud_daily_dungeon_settings WHERE id=1"
     ).fetchone()
     try:
-        mud_daily_themes = [
+        mud_dungeon_themes = [
             {"id": key, "name": template["name"], "version": template["version"],
              "author": template.get("author"),
-             "custom": path.parent == dungeons.custom_themes_directory() and not path.is_symlink()}
+             "custom": path.parent == dungeons.custom_themes_directory() and not path.is_symlink(),
+             "enabled": dungeons.theme_is_enabled(key, database)}
             for key, (path, template) in dungeons.discover_templates().items()
         ]
     except dungeons.TemplateError:
-        mud_daily_themes = []
+        mud_dungeon_themes = []
+    mud_daily_themes = [theme for theme in mud_dungeon_themes if theme["enabled"]]
     try:
         configured_daily_themes = set(json.loads(
             mud_daily_settings_row["eligible_theme_ids_json"] or "[]"
@@ -1432,6 +1466,7 @@ def settings():
                            mud_origins=mud_origins,
                            mud_world_origin_keys=mud_world_origin_keys,
                            mud_daily_settings=mud_daily_settings_row,
+                           mud_dungeon_themes=mud_dungeon_themes,
                            mud_daily_themes=mud_daily_themes,
                            configured_daily_themes=configured_daily_themes,
                            current_daily=current_daily, daily_failures=daily_failures,

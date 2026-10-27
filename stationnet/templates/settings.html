@@ -652,14 +652,29 @@
       <label>Dungeon theme file<input type="file" name="dungeon_file" accept=".json,application/json" required></label>
       <button>IMPORT DUNGEON</button>
     </form>
-    {% if mud_daily_themes|selectattr('custom')|list %}
+    <div class="dungeon-theme-list" aria-label="Installed dungeon themes">
+      {% for theme in mud_dungeon_themes %}
+      <article class="dungeon-theme-row{% if not theme.enabled %} is-disabled{% endif %}">
+        <div><strong>{{ theme.name }}</strong> <span class="dungeon-theme-status">{{ 'ENABLED' if theme.enabled else 'DISABLED' }}</span><br>
+          <small><code>{{ theme.id }}@{{ theme.version }}</code>{% if theme.author %} by {{ theme.author }}{% endif %} · {{ 'CUSTOM' if theme.custom else 'BUILT-IN' }}</small>
+        </div>
+        <form method="post" action="{{ url_for('station.set_dungeon_availability') }}">
+          <input type="hidden" name="csrf_token" value="{{ session.csrf_token }}">
+          <input type="hidden" name="theme_id" value="{{ theme.id }}">
+          <input type="hidden" name="enabled" value="{{ 0 if theme.enabled else 1 }}">
+          <button type="submit" class="secondary">{{ 'DISABLE' if theme.enabled else 'ENABLE' }}</button>
+        </form>
+      </article>
+      {% else %}<p class="muted">No valid themes are installed.</p>{% endfor %}
+    </div>
+    {% if mud_dungeon_themes|selectattr('custom')|list %}
     <form method="post" action="{{ url_for('station.remove_dungeon') }}" class="form-grid">
       <input type="hidden" name="csrf_token" value="{{ session.csrf_token }}">
       <div class="divider">REMOVE CUSTOM DUNGEON THEME</div>
       <label>Installed dungeon theme
         <select name="theme_id" required>
           <option value="">Select a custom dungeon theme</option>
-          {% for theme in mud_daily_themes if theme.custom %}<option value="{{ theme.id }}">{{ theme.name }} ({{ theme.id }}@{{ theme.version }}) — {{ theme.author }}</option>{% endfor %}
+          {% for theme in mud_dungeon_themes if theme.custom %}<option value="{{ theme.id }}">{{ theme.name }} ({{ theme.id }}@{{ theme.version }}) — {{ theme.author }}</option>{% endfor %}
         </select>
       </label>
       <label class="switch"><input type="checkbox" name="confirm_remove" required> Confirm removal of the selected dungeon theme</label>
@@ -667,7 +682,7 @@
       <button type="submit" class="secondary">REMOVE DUNGEON</button>
     </form>
     {% endif %}
-    <p class="muted">Available themes: {% for theme in mud_daily_themes %}{{ theme.name }} ({{ theme.id }}@{{ theme.version }}){% if theme.author %} by {{ theme.author }}{% endif %}{{ ', ' if not loop.last }}{% else %}none{% endfor %}</p>
+    <p class="muted">Enabled for new dungeons: {% for theme in mud_daily_themes %}{{ theme.name }} ({{ theme.id }}@{{ theme.version }}){{ ', ' if not loop.last }}{% else %}none. Existing dungeons remain available.{% endfor %}</p>
   </section>
   </div>
 </section>
@@ -693,7 +708,7 @@
       </select></label>
       <fieldset>
         <legend>Eligible themes</legend>
-        <label class="switch"><input type="checkbox" name="daily_all_themes" {% if not configured_daily_themes %}checked{% endif %}> All installed playable themes</label>
+        <label class="switch"><input type="checkbox" name="daily_all_themes" {% if not configured_daily_themes %}checked{% endif %}> All enabled playable themes</label>
         {% for theme in mud_daily_themes %}<label class="switch"><input type="checkbox" name="daily_theme_id" value="{{ theme.id }}" {% if theme.id in configured_daily_themes %}checked{% endif %}> {{ theme.name }} ({{ theme.id }}@{{ theme.version }})</label>{% else %}<p class="muted">No valid themes are installed.</p>{% endfor %}
       </fieldset>
       <button>SAVE DAILY CONFIGURATION</button>

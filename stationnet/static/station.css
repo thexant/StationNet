@@ -310,6 +310,14 @@ fieldset { padding: .8rem; border: 1px dotted var(--green-dim); }
 legend { color: var(--cyan); font-size: var(--text-xs); }
 .radio, .switch { display: flex; align-items: center; gap: .6rem; margin: .45rem 0; text-transform: none; }
 .radio input, .switch input { width: auto; accent-color: var(--green); }
+.dungeon-theme-list { display: grid; gap: .55rem; margin: 1rem 0; }
+.dungeon-theme-row { display: flex; align-items: center; justify-content: space-between; gap: .8rem; padding: .65rem; border: 1px solid var(--green-dim); }
+.dungeon-theme-row > div { min-width: 0; overflow-wrap: anywhere; }
+.dungeon-theme-row form { flex: none; }
+.dungeon-theme-row form button { margin: 0; }
+.dungeon-theme-status { margin-left: .4rem; color: var(--green-bright); font-size: var(--text-xs); letter-spacing: .08em; }
+.dungeon-theme-row.is-disabled { color: var(--grey); }
+.dungeon-theme-row.is-disabled .dungeon-theme-status { color: var(--amber); }
 .divider { margin-top: .5rem; padding: .55rem 0; color: var(--red); border-bottom: 1px solid var(--red-dim); font-size: .68rem; letter-spacing: .08em; }
 .icon-settings-heading { display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: .4rem 1rem; }
 .icon-settings-heading .switch { margin: 0; color: var(--green); letter-spacing: 0; }
@@ -1136,6 +1144,8 @@ button:disabled { opacity: .5; cursor: not-allowed; }
 }
 
 @media (max-width: 430px) {
+  .dungeon-theme-row { align-items: stretch; flex-direction: column; }
+  .dungeon-theme-row form button { width: 100%; justify-content: center; }
   .system-line span:last-child { display: none; }
   .system-line { justify-content: center; }
   .station-brand { margin-top: 1rem; }

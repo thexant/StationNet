@@ -104,6 +104,34 @@ def discover_templates(directory=None):
     return discovered
 
 
+def theme_is_enabled(theme_id, database=None):
+    """Treat newly installed and legacy themes as enabled until explicitly disabled."""
+    database = database or get_db()
+    row = database.execute(
+        "SELECT enabled FROM mud_dungeon_theme_settings WHERE theme_id=?", (theme_id,)
+    ).fetchone()
+    return row is None or bool(row["enabled"])
+
+
+def playable_templates(database=None):
+    """Return installed themes currently available for new dungeon generation."""
+    database = database or get_db()
+    return {
+        theme_id: entry for theme_id, entry in discover_templates().items()
+        if theme_is_enabled(theme_id, database)
+    }
+
+
+def set_theme_enabled(database, theme_id, enabled):
+    """Persist availability without altering the installed theme package."""
+    database.execute(
+        "INSERT INTO mud_dungeon_theme_settings(theme_id,enabled) VALUES(?,?) "
+        "ON CONFLICT(theme_id) DO UPDATE SET enabled=excluded.enabled,"
+        "updated_at=CURRENT_TIMESTAMP",
+        (theme_id, int(bool(enabled))),
+    )
+
+
 def _is_int(value, minimum=None, maximum=None):
     return (isinstance(value, int) and not isinstance(value, bool)
             and (minimum is None or value >= minimum)
@@ -1261,6 +1289,8 @@ def _load_installed(theme_id):
     if theme_id not in themes:
         available = ", ".join(sorted(themes)) or "none"
         raise click.ClickException(f"unknown theme {theme_id!r}; installed themes: {available}")
+    if not theme_is_enabled(theme_id):
+        raise click.ClickException(f"theme {theme_id!r} is installed but disabled")
     return themes[theme_id]
 
 
@@ -1281,7 +1311,9 @@ def list_themes_command():
         click.echo(f"No themes installed in {themes_directory()}")
     for theme_id, (path, template) in themes.items():
         author = f" by {template['author']}" if template.get("author") else ""
-        click.echo(f"{theme_id}@{template['version']}  {template['name']}{author}  ({path.name})")
+        status = "ENABLED" if theme_is_enabled(theme_id) else "DISABLED"
+        click.echo(f"{theme_id}@{template['version']}  {template['name']}{author}  "
+                   f"[{status}]  ({path.name})")
 
 
 @dungeon_cli.command("definitions")
