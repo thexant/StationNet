@@ -38,6 +38,9 @@ for(const mud of document.querySelectorAll("[data-mud]")){
   const characterExperience=mud.querySelector("[data-character-experience]");
   const characterExperienceBar=mud.querySelector("[data-character-experience-bar]");
   const characterExperienceRemaining=mud.querySelector("[data-character-experience-remaining]");
+  const characterMana=mud.querySelector("[data-character-mana]");
+  const characterManaBar=mud.querySelector("[data-character-mana-bar]");
+  const characterPoints=mud.querySelector("[data-character-points]");
   const carried=mud.querySelector("[data-mud-carried]");
   const equipped=mud.querySelector("[data-mud-equipped]");
   const inventoryScope=mud.querySelector("[data-mud-inventory-scope]");
@@ -182,10 +185,27 @@ for(const mud of document.querySelectorAll("[data-mud]")){
     characterHealth.textContent=`${character.health} / ${character.maximum_health}`;
     characterHealthBar.max=character.maximum_health;
     characterHealthBar.value=character.health;
-    characterExperience.textContent=`${character.experience_into_level} / ${character.experience_for_next_level}`;
-    characterExperienceBar.max=character.experience_for_next_level;
-    characterExperienceBar.value=character.experience_into_level;
-    characterExperienceRemaining.textContent=`${character.experience_to_next_level} XP to next level`;
+    if(characterMana){
+      characterMana.textContent=`${character.mana} / ${character.maximum_mana}`;
+      characterManaBar.max=character.maximum_mana;
+      characterManaBar.value=character.mana;
+    }
+    if(character.at_max_level){
+      characterExperience.textContent=`${character.experience}`;
+      characterExperienceBar.max=1;
+      characterExperienceBar.value=1;
+      characterExperienceRemaining.textContent="MAX LEVEL";
+    }else{
+      characterExperience.textContent=`${character.experience_into_level} / ${character.experience_for_next_level}`;
+      characterExperienceBar.max=character.experience_for_next_level;
+      characterExperienceBar.value=character.experience_into_level;
+      characterExperienceRemaining.textContent=`${character.experience_to_next_level} XP to next level`;
+    }
+    if(characterPoints){
+      const points=character.attribute_points||0;
+      characterPoints.hidden=!points;
+      characterPoints.textContent=`${points} attribute point${points===1?"":"s"} to spend — use /train`;
+    }
     for(const [name,value] of Object.entries(character.attributes||{})){
       const output=mud.querySelector(`[data-character-attribute="${name}"]`);
       if(output)output.textContent=value;

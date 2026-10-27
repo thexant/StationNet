@@ -896,6 +896,11 @@ button:disabled { opacity: .5; cursor: not-allowed; }
 .mud-character-meter progress::-webkit-progress-value { background: var(--green-bright); }
 .mud-character-meter progress::-moz-progress-bar { background: var(--green-bright); }
 .mud-character-meter small { display: block; margin-top: .25rem; color: var(--grey); font-size: var(--text-xs); text-align: right; }
+.mud-character-mana progress { accent-color: var(--cyan); }
+.mud-character-mana progress::-webkit-progress-value { background: var(--cyan); }
+.mud-character-mana progress::-moz-progress-bar { background: var(--cyan); }
+.mud-attribute-points { margin: .45rem 0 0; padding: .3rem .45rem; border: 1px solid var(--cyan); color: var(--cyan); font-size: var(--text-xs); letter-spacing: .05em; }
+.mud-attribute-points[hidden] { display: none; }
 .mud-attributes { display: grid; grid-template-columns: 1fr 1fr; gap: .25rem; margin: .55rem 0 0; }
 .mud-attributes div { display: flex; align-items: center; justify-content: space-between; padding: .35rem .45rem; border: 1px solid var(--green-dim); }
 .mud-attributes dt { color: var(--grey); font-size: var(--text-xs); }

@@ -324,6 +324,15 @@ your configured special roles, then evaluates pools. Room difficulty scales
 enemy combat stats and experience rewards. Completion pays coins based on
 difficulty and rooms visited, so harder runs pay more.
 
+Each difficulty is tuned for a recommended character level of
+`3 × difficulty − 2`: difficulty 1 suits level 1, difficulty 4 level 10, and
+difficulty 8 level 22. Deeper rooms run up to two difficulty steps higher.
+Kill and completion experience drops for characters more than three levels
+above the recommendation (15% per level, never below 25%). It rises 5% per
+level for characters below it, up to +25%. Players gain attack, spell, healing,
+and mitigation bonuses as they level. Choose difficulty ranges that cover the
+levels you expect players to bring.
+
 The generator also places a small amount of station supply or treasure loot
 outside your pools, with rarer rewards at greater risk and a reward at the exit.
 Your theme can still add its own weapons, healing supplies, and treasure via

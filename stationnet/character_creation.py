@@ -374,11 +374,18 @@ def complete(database, user_id, payload, possession_mode="traditional"):
     mana_bonus = (attributes["intellect"] - 10) * 3
     for track in ("shared", "traditional", "procedural"):
         progression = database.execute(
-            "SELECT current_health,maximum_health,current_mana,maximum_mana FROM mud_character_progression "
+            "SELECT current_health,maximum_health,current_mana,maximum_mana,attribute_points,"
+            "trained_attributes_json FROM mud_character_progression "
             "WHERE character_id=? AND track_key=?", (row["id"], track),
         ).fetchone()
         if progression is None:
             continue
+        # Base attributes are rewritten, so refund any training rather than lose it.
+        try:
+            trained = json.loads(progression["trained_attributes_json"] or "{}")
+        except json.JSONDecodeError:
+            trained = {}
+        refund = sum(value for value in trained.values() if type(value) is int and value > 0)             if isinstance(trained, dict) else 0
         maximum = max(1, progression["maximum_health"] + health_bonus)
         current = min(maximum, max(0, progression["current_health"] + health_bonus))
         maximum_mana = max(1, progression["maximum_mana"] + mana_bonus)
@@ -386,10 +393,10 @@ def complete(database, user_id, payload, possession_mode="traditional"):
         database.execute(
             "UPDATE mud_character_progression SET strength=?,agility=?,intellect=?,vitality=?,"
             "maximum_health=?,current_health=?,maximum_mana=?,current_mana=?,"
-            "updated_at=CURRENT_TIMESTAMP "
+            "attribute_points=?,trained_attributes_json='{}',updated_at=CURRENT_TIMESTAMP "
             "WHERE character_id=? AND track_key=?",
             (*[attributes[key] for key in ATTRIBUTES], maximum, current,
-             maximum_mana, current_mana, row["id"], track),
+             maximum_mana, current_mana, progression["attribute_points"] + refund, row["id"], track),
         )
     for skill in skills:
         database.execute(

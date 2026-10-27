@@ -583,6 +583,8 @@ CREATE TABLE IF NOT EXISTS mud_character_progression (
  vitality INTEGER NOT NULL DEFAULT 10 CHECK(vitality>=1),
  current_mana INTEGER NOT NULL DEFAULT 30 CHECK(current_mana>=0),
  maximum_mana INTEGER NOT NULL DEFAULT 30 CHECK(maximum_mana>=1 AND current_mana<=maximum_mana),
+ attribute_points INTEGER NOT NULL DEFAULT 0 CHECK(attribute_points>=0),
+ trained_attributes_json TEXT NOT NULL DEFAULT '{}',
  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
  PRIMARY KEY(character_id,track_key),
  CHECK(current_health<=maximum_health));
@@ -1363,6 +1365,7 @@ def init_db():
     _migrate_mud_character_creation(database)
     _migrate_mud_campaign_archives(database)
     _migrate_mud_magic(database)
+    _migrate_mud_progression(database)
     _initialize_mud_characters(database)
     _initialize_mud_world(database)
     _migrate_mud_world_packages(database)
@@ -1590,6 +1593,17 @@ def _migrate_mud_magic(database):
         database.execute("ALTER TABLE mud_character_progression ADD COLUMN current_mana INTEGER NOT NULL DEFAULT 30")
     if "maximum_mana" not in columns:
         database.execute("ALTER TABLE mud_character_progression ADD COLUMN maximum_mana INTEGER NOT NULL DEFAULT 30")
+
+
+def _migrate_mud_progression(database):
+    """Add spendable attribute points; existing tracks start with none."""
+    columns = {row["name"] for row in database.execute("PRAGMA table_info(mud_character_progression)")}
+    if "attribute_points" not in columns:
+        database.execute("ALTER TABLE mud_character_progression ADD COLUMN attribute_points INTEGER "
+                         "NOT NULL DEFAULT 0 CHECK(attribute_points>=0)")
+    if "trained_attributes_json" not in columns:
+        database.execute("ALTER TABLE mud_character_progression ADD COLUMN trained_attributes_json TEXT "
+                         "NOT NULL DEFAULT '{}'")
 
 
 def _initialize_mud_characters(database):

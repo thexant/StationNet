@@ -45,6 +45,21 @@ class GenerationError(ValueError):
     """A valid request could not produce a dungeon."""
 
 
+def recommended_level(difficulty):
+    """Return the character level a room or run of this difficulty is tuned for."""
+    return max(1, 3 * difficulty - 2)
+
+
+def dungeon_xp_percent(level, difficulty):
+    """Taper experience for characters far above a difficulty; reward those below it."""
+    gap = level - recommended_level(difficulty)
+    if gap > 3:
+        return max(25, 100 - 15 * (gap - 3))
+    if gap < 0:
+        return 100 + min(25, 5 * -gap)
+    return 100
+
+
 def canonical_json(value):
     return json.dumps(value, ensure_ascii=False, separators=(",", ":"), sort_keys=True)
 

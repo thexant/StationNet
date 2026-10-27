@@ -30,6 +30,14 @@ PROGRESSION_TRACKS = frozenset({"shared", "traditional", "procedural"})
 ACTIVE_PROGRESSION_TRACK = "shared"
 HEALTH_PER_LEVEL = 10
 MAX_EXPERIENCE = 2**63 - 1
+MAX_LEVEL = 50
+ATTRIBUTE_CAP = 30
+ATTRIBUTE_SUMMARIES = {
+    "strength": "melee damage",
+    "agility": "firearm damage, mitigation, flee and stealth",
+    "intellect": "spell power, healing, experience and mana per level",
+    "vitality": "health per level, mitigation and defending",
+}
 DIRECTIONS = (
     "north", "northeast", "east", "southeast", "south", "southwest",
     "west", "northwest", "up", "down", "in", "out",
@@ -153,6 +161,60 @@ def level_for_experience(experience):
     return math.isqrt(experience // 100) + 1
 
 
+def attribute_points_for_level(level):
+    """Return the spendable attribute points earned on reaching a level."""
+    return 1 + (1 if level % 5 == 0 else 0)
+
+
+def level_bonuses(level):
+    """Return the combat bonuses every character earns from level alone."""
+    return {
+        "attack": (level - 1) // 3,
+        "spell_power": (level - 1) // 3,
+        "healing": (level - 1) // 2,
+        "defense": (level - 1) // 5,
+    }
+
+
+def health_per_level(vitality):
+    return max(1, HEALTH_PER_LEVEL + (vitality - 10) // 2)
+
+
+def mana_per_level(intellect):
+    return max(1, 2 + (intellect - 10) // 2)
+
+
+def resource_delta(level, old_attributes, new_attributes):
+    """Return the maximum health and mana change caused by an attribute change."""
+    health = ((new_attributes["vitality"] - old_attributes["vitality"]) * 5 +
+              (level - 1) * (health_per_level(new_attributes["vitality"]) -
+                             health_per_level(old_attributes["vitality"])))
+    mana = ((new_attributes["intellect"] - old_attributes["intellect"]) * 3 +
+            (level - 1) * (mana_per_level(new_attributes["intellect"]) -
+                           mana_per_level(old_attributes["intellect"])))
+    return health, mana
+
+
+def level_up_text(result):
+    """Describe a level gain from an award_experience result, or return ''."""
+    if not result["levels_gained"]:
+        return ""
+    points = result["attribute_points_gained"]
+    return (f"You reached level {result['character']['level']}!"
+            + (f" +{points} attribute point{'s' if points != 1 else ''} — use /train." if points else ""))
+
+
+def _trained_attributes(value):
+    try:
+        trained = json.loads(value or "{}")
+    except (TypeError, json.JSONDecodeError):
+        return {}
+    if not isinstance(trained, dict):
+        return {}
+    return {key: trained[key] for key in character_creation.ATTRIBUTES
+            if type(trained.get(key)) is int and trained[key] > 0}
+
+
 def _crossover_settings(database):
     row = database.execute(
         "SELECT progression_shared,inventory_shared FROM mud_crossover_settings WHERE id=1"
@@ -209,7 +271,7 @@ def _character_row(database, user_id, track_key=None):
     return database.execute(
         "SELECT c.id,c.user_id,c.display_name,p.track_key,p.level,p.experience,"
         "p.current_health,p.maximum_health,p.current_mana,p.maximum_mana,"
-        "p.strength,p.agility,p.intellect,p.vitality "
+        "p.strength,p.agility,p.intellect,p.vitality,p.attribute_points,p.trained_attributes_json "
         "FROM mud_characters AS c JOIN mud_character_progression AS p "
         "ON p.character_id=c.id WHERE c.user_id=? AND p.track_key=?",
         (user_id, track_key),
@@ -229,6 +291,7 @@ def character_state(database, user_id, track_key=None):
         "SELECT skill_key,rank,experience FROM mud_character_skills WHERE character_id=? ORDER BY skill_key",
         (row["id"],),
     )]
+    at_max_level = row["level"] >= MAX_LEVEL
     level_floor = experience_for_level(row["level"])
     next_floor = experience_for_level(row["level"] + 1)
     return {
@@ -249,10 +312,15 @@ def character_state(database, user_id, track_key=None):
             "procedural": "Procedural progression",
         }[row["track_key"]],
         "level": row["level"],
+        "max_level": MAX_LEVEL,
+        "at_max_level": at_max_level,
         "experience": row["experience"],
-        "experience_into_level": row["experience"] - level_floor,
-        "experience_for_next_level": next_floor - level_floor,
-        "experience_to_next_level": next_floor - row["experience"],
+        "experience_into_level": 0 if at_max_level else row["experience"] - level_floor,
+        "experience_for_next_level": 0 if at_max_level else next_floor - level_floor,
+        "experience_to_next_level": 0 if at_max_level else next_floor - row["experience"],
+        "attribute_points": row["attribute_points"],
+        "trained_attributes": _trained_attributes(row["trained_attributes_json"]),
+        "combat": _combat_profile(database, row, origin["creation_state"]),
         "health": row["current_health"],
         "maximum_health": row["maximum_health"],
         "mana": row["current_mana"],
@@ -281,12 +349,13 @@ def award_experience(database, user_id, amount, track_key=None):
     experience = before["experience"] + amount
     if experience > MAX_EXPERIENCE:
         raise ValueError("Experience total exceeds the supported range.")
-    level = level_for_experience(experience)
+    # Levels are capped, but a character already above the cap is never demoted.
+    level = max(before["level"], min(MAX_LEVEL, level_for_experience(experience)))
     levels_gained = level - before["level"]
-    health_per_level = max(1, HEALTH_PER_LEVEL + (before["attributes"]["vitality"] - 10) // 2)
-    mana_per_level = max(1, 2 + (before["attributes"]["intellect"] - 10) // 2)
-    health_gain = levels_gained * health_per_level
-    mana_gain = levels_gained * mana_per_level
+    points_gained = sum(attribute_points_for_level(reached)
+                        for reached in range(before["level"] + 1, level + 1))
+    health_gain = levels_gained * health_per_level(before["attributes"]["vitality"])
+    mana_gain = levels_gained * mana_per_level(before["attributes"]["intellect"])
     maximum_health = before["maximum_health"] + health_gain
     current_health = min(
         maximum_health, before["health"] + health_gain
@@ -295,14 +364,15 @@ def award_experience(database, user_id, amount, track_key=None):
     current_mana = min(maximum_mana, before["mana"] + mana_gain)
     database.execute(
         "UPDATE mud_character_progression SET experience=?,level=?,current_health=?,"
-        "maximum_health=?,current_mana=?,maximum_mana=?,updated_at=CURRENT_TIMESTAMP "
-        "WHERE character_id=? AND track_key=?",
+        "maximum_health=?,current_mana=?,maximum_mana=?,attribute_points=attribute_points+?,"
+        "updated_at=CURRENT_TIMESTAMP WHERE character_id=? AND track_key=?",
         (experience, level, current_health, maximum_health, current_mana, maximum_mana,
-         before["id"], resolved_track),
+         points_gained, before["id"], resolved_track),
     )
     return {
         "amount": amount,
         "levels_gained": levels_gained,
+        "attribute_points_gained": points_gained,
         "previous_level": before["level"],
         "character": character_state(database, user_id, resolved_track),
     }
@@ -340,6 +410,33 @@ def _practice_effect(database, character_id, effect):
             character_creation.practice(database, character_id, skill["key"])
 
 
+def _flee_chance(agility):
+    return min(75, max(35, 50 + (agility - 10) * 2))
+
+
+def _combat_profile(database, row, creation_state):
+    """Summarize how attributes, level, gear, and skills shape combat before enemy defense."""
+    gear = _equipment_combat_totals(database, character_id=row["id"])
+    effects = _character_effects(database, row["id"])
+    bonuses = level_bonuses(row["level"])
+    strength, agility = row["strength"], row["agility"]
+    intellect, vitality = row["intellect"], row["vitality"]
+    return {
+        "melee_damage": 4 + strength // 2 + gear["attack"] + _equipment_stat_bonus(gear, strength, "attack")
+                        + effects["attack"] + bonuses["attack"],
+        "firearm_damage": 6 + agility // 2 + effects["attack"] + bonuses["attack"],
+        "spell_power": intellect // 3 + bonuses["spell_power"],
+        "healing_bonus": intellect // 2 + bonuses["healing"],
+        "mitigation": vitality // 10 + agility // 5 + gear["defense"]
+                      + _equipment_stat_bonus(gear, vitality, "defense") + effects["defense"] + bonuses["defense"],
+        "flee_chance": _flee_chance(agility),
+        "stealth_chance": _stealth_chance(agility, 5),
+        "experience_bonus": (max(0, intellect - 8) + effects["experience_percent"]
+                             if creation_state == "complete" else 0),
+        "level_bonuses": bonuses,
+    }
+
+
 def _status_action(_database, _user, parameters):
     if parameters.get("arguments"):
         raise ActionError("The status action does not accept arguments.")
@@ -353,24 +450,106 @@ def _character_action(database, user, parameters):
         raise ActionError("The character action does not accept arguments.")
     character = character_state(database, user["id"])
     attributes = character["attributes"]
+    trained = character["trained_attributes"]
+    combat = character["combat"]
     skills = ", ".join(f"{skill['name']} {skill['rank']}" for skill in character["skills"])
     active_effects = ", ".join(
         f"{effect['effect_key']} {effect['potency']} ({effect['remaining_turns']} turns)"
         for effect in character["effects"]
     )
-    return [EventDraft(
-        f"{character['name']} — Level {character['level']}\n"
-        f"Origin: {character['race'] or 'Unchosen'} / {character['class'] or 'Unchosen'}\n"
-        f"Health: {character['health']}/{character['maximum_health']}\n"
-        f"Mana: {character['mana']}/{character['maximum_mana']}\n"
-        f"Experience: {character['experience_into_level']}/"
-        f"{character['experience_for_next_level']} "
-        f"({character['experience_to_next_level']} to next level)\n"
-        f"Strength {attributes['strength']} · Agility {attributes['agility']} · "
-        f"Intellect {attributes['intellect']} · Vitality {attributes['vitality']}\n"
-        f"Skills: {skills or 'none'}\n"
-        f"Effects: {active_effects or 'none'}\n"
+    if character["at_max_level"]:
+        experience = f"Experience: {character['experience']} (maximum level reached)"
+    else:
+        filled = 20 * character["experience_into_level"] // character["experience_for_next_level"]
+        experience = (f"Experience: [{'#' * filled}{'.' * (20 - filled)}] "
+                      f"{character['experience_into_level']}/{character['experience_for_next_level']} "
+                      f"({character['experience_to_next_level']} to level {character['level'] + 1})")
+    lines = [
+        f"{character['name']} — Level {character['level']}/{character['max_level']}",
+        f"Origin: {character['race'] or 'Unchosen'} / {character['class'] or 'Unchosen'}",
+        f"Health: {character['health']}/{character['maximum_health']}",
+        f"Mana: {character['mana']}/{character['maximum_mana']}",
+        experience,
+    ]
+    if character["attribute_points"]:
+        lines.append(f"Attribute points: {character['attribute_points']} unspent — use /train <attribute>")
+    lines.append(" · ".join(
+        f"{key.title()} {attributes[key]}" + (f" (+{trained[key]} trained)" if trained.get(key) else "")
+        for key in character_creation.ATTRIBUTES
+    ))
+    bonuses = combat["level_bonuses"]
+    lines += [
+        f"Combat: melee {combat['melee_damage']} · firearm {combat['firearm_damage']} + weapon · "
+        f"spell power +{combat['spell_power']} · healing +{combat['healing_bonus']}",
+        f"Defense: mitigation {combat['mitigation']} · flee {combat['flee_chance']}% · "
+        f"stealth {combat['stealth_chance']}% · experience +{combat['experience_bonus']}%",
+        f"Level bonuses: attack +{bonuses['attack']} · spells +{bonuses['spell_power']} · "
+        f"healing +{bonuses['healing']} · mitigation +{bonuses['defense']}",
+        f"Skills: {skills or 'none'}",
+        f"Effects: {active_effects or 'none'}",
         f"Track: {character['progression_label']}",
+    ]
+    return [EventDraft("\n".join(lines), event_type="character")]
+
+
+def _resolve_attribute(name):
+    key = str(name).casefold()
+    matches = [attribute for attribute in character_creation.ATTRIBUTES if attribute.startswith(key)]
+    if not key or len(matches) != 1:
+        raise ActionError("Choose strength, agility, intellect, or vitality.")
+    return matches[0]
+
+
+def _train_action(database, user, parameters):
+    args = [str(value) for value in parameters.get("arguments", [])]
+    if len(args) > 2:
+        raise ActionError("Use /train <attribute> [points].")
+    character = character_state(database, user["id"])
+    if character["creation_state"] != "complete":
+        raise ActionError("Create your character before training attributes.")
+    points = character["attribute_points"]
+    if not args:
+        lines = [f"Attribute points available: {points}. Each level grants 1 point (2 at every fifth level)."]
+        for key in character_creation.ATTRIBUTES:
+            lines.append(f"- {key.title()} {character['attributes'][key]}/{ATTRIBUTE_CAP}: {ATTRIBUTE_SUMMARIES[key]}")
+        lines.append("Spend points with /train <attribute> [points], for example /train str 2.")
+        return [EventDraft("\n".join(lines), event_type="character")]
+    attribute = _resolve_attribute(args[0])
+    try:
+        amount = int(args[1]) if len(args) > 1 else 1
+    except ValueError as problem:
+        raise ActionError("Points must be a whole number.") from problem
+    if amount < 1:
+        raise ActionError("Train at least one point.")
+    if amount > points:
+        raise ActionError(f"You have {points} attribute point{'s' if points != 1 else ''} available.")
+    old = dict(character["attributes"])
+    if old[attribute] + amount > ATTRIBUTE_CAP:
+        raise ActionError(f"{attribute.title()} cannot exceed {ATTRIBUTE_CAP}.")
+    new = {**old, attribute: old[attribute] + amount}
+    health_delta, mana_delta = resource_delta(character["level"], old, new)
+    trained = dict(character["trained_attributes"])
+    trained[attribute] = trained.get(attribute, 0) + amount
+    updated = database.execute(
+        f"UPDATE mud_character_progression SET {attribute}=?,attribute_points=attribute_points-?,"
+        "trained_attributes_json=?,maximum_health=MAX(1,maximum_health+?),"
+        "current_health=MIN(MAX(1,maximum_health+?),MAX(0,current_health+?)),"
+        "maximum_mana=MAX(1,maximum_mana+?),current_mana=MIN(MAX(1,maximum_mana+?),MAX(0,current_mana+?)),"
+        "updated_at=CURRENT_TIMESTAMP WHERE character_id=? AND track_key=? AND attribute_points>=?",
+        (new[attribute], amount, json.dumps(trained, sort_keys=True), health_delta, health_delta, health_delta,
+         mana_delta, mana_delta, mana_delta, character["id"], character["progression_track"], amount),
+    ).rowcount
+    if not updated:
+        raise ActionError("Your attribute points changed; try again.", 409)
+    changes = [f"{attribute.title()} {old[attribute]} → {new[attribute]}"]
+    if health_delta:
+        changes.append(f"maximum health {health_delta:+d}")
+    if mana_delta:
+        changes.append(f"maximum mana {mana_delta:+d}")
+    remaining = points - amount
+    return [EventDraft(
+        f"You train {attribute}: {', '.join(changes)}. "
+        f"{remaining} attribute point{'s' if remaining != 1 else ''} remaining.",
         event_type="character",
     )]
 
@@ -391,6 +570,7 @@ def _help_action(_database, _user, parameters):
             "look": '/look "Oak Chest"', "tell": '/tell "Player Name" hello',
             "reply_player": '/reply hello', "respond": '/respond 1',
             "description": '/description A traveler in a blue coat',
+            "train": '/train strength 2',
         }
         body = f"/{name}: {definition.description}\nAliases: " + ", ".join(f"/{alias}" for alias in aliases)
         if definition.key in examples:
@@ -1674,7 +1854,7 @@ def _award_quest_rewards(database, user, quest_id):
             result = award_experience(database, user["id"], reward["amount"])
             messages.append(f"{reward['amount']} experience")
             if result["levels_gained"]:
-                messages.append(f"level {result['character']['level']}")
+                messages.append(level_up_text(result))
         elif reward["reward_type"] == "item":
             definition = database.execute(
                 "SELECT name FROM mud_item_definitions WHERE id=?", (reward["target_id"],)
@@ -1918,6 +2098,17 @@ def _combat_target(parameters):
     )).strip()
 
 
+def _dungeon_room_difficulty(database, instance_id, room_key):
+    row = database.execute(
+        "SELECT r.difficulty AS room_difficulty,i.difficulty AS run_difficulty "
+        "FROM mud_procedural_instances AS i LEFT JOIN mud_dungeon_rooms AS r "
+        "ON r.instance_id=i.id AND r.room_key=? WHERE i.id=?", (room_key, instance_id),
+    ).fetchone()
+    if row is None:
+        return 1
+    return row["room_difficulty"] or row["run_difficulty"] or 1
+
+
 def _encounter_reward_drafts(database, encounter, npc):
     drafts = []
     if encounter["scope_type"] == "instance":
@@ -1975,14 +2166,20 @@ def _encounter_reward_drafts(database, encounter, npc):
                     )
                 rewarded_items.add(reward["target_id"])
                 rewards.append(f"{reward['amount']} × {reward['item_name']}")
+        level_up = ""
+        if experience and encounter["scope_type"] == "instance":
+            # Dungeon kills taper for characters far above the room's recommended level.
+            experience = max(1, experience * dungeons.dungeon_xp_percent(
+                _character_row(database, participant["user_id"])["level"],
+                _dungeon_room_difficulty(database, encounter["scope_key"], npc.get("room_id")),
+            ) // 100)
         if experience:
             result = award_experience(database, participant["user_id"], experience)
             rewards.insert(0, f"{experience} experience")
-            if result["levels_gained"]:
-                rewards.append(f"level {result['character']['level']}")
+            level_up = level_up_text(result)
         summary = ", ".join(rewards) if rewards else "no configured rewards"
         drafts.append(EventDraft(
-            f"Victory rewards for defeating {npc['name']}: {summary}.",
+            f"Victory rewards for defeating {npc['name']}: {summary}." + (f" {level_up}" if level_up else ""),
             event_type="reward", audience_key=str(participant["user_id"]),
         ))
         for item_id in rewarded_items:
@@ -2146,7 +2343,7 @@ def _enemy_turn(database, user, defending=False, chosen=None):
                  - (character["vitality"] // 10 + character["agility"] // 5
                     + player_gear["defense"]
                     + _equipment_stat_bonus(player_gear, character["vitality"], "defense")
-                    + effects["defense"]))
+                    + effects["defense"] + level_bonuses(character["level"])["defense"]))
     if defending:
         damage = max(0, (damage - max(0, (character["vitality"] - 10) // 2)) // 3)
     damage += sum(amount for _, amount in mud_effects.tick(database, "character", character["id"]))
@@ -2315,13 +2512,14 @@ def _attack_action(database, user, parameters):
                                                 "damage", "attack", "attack_bonus")) if firearm else 0)
     weapon_attack = firearm_attack if firearm else player_gear["attack"]
     weapon_stat = character["agility"] if firearm else character["strength"]
-    damage = (max(1, spell_damage + character["intellect"] // 3
+    bonuses = level_bonuses(character["level"])
+    damage = (max(1, spell_damage + character["intellect"] // 3 + bonuses["spell_power"]
                   - (npc["combat_defense"] + enemy_gear["defense"]
                      + mud_effects.modifier(database, "encounter", encounter["id"], "defense")) // 2)
               if spell_damage is not None else
                max(1, (6 if firearm else 4) + weapon_stat // 2
                    + weapon_attack + _equipment_stat_bonus({"attack": weapon_attack}, weapon_stat, "attack")
-                  + effects["attack"] - (npc["combat_defense"] + enemy_gear["defense"]
+                  + effects["attack"] + bonuses["attack"] - (npc["combat_defense"] + enemy_gear["defense"]
                      + mud_effects.modifier(database, "encounter", encounter["id"], "defense")) // 2))
     if surprise:
         damage += max(2, character["agility"] // 2)
@@ -2445,7 +2643,7 @@ def _flee_action(database, user, _parameters):
     if not _active_hostiles(database, room):
         raise ActionError("There is no hostile enemy to flee from.")
     character = _character_row(database, user["id"])
-    chance = min(75, max(35, 50 + (character["agility"] - 10) * 2))
+    chance = _flee_chance(character["agility"])
     if secrets.randbelow(100) >= chance:
         return [EventDraft("Your escape fails.", event_type="combat")] + _enemy_turn(database, user)
     drafts = [EventDraft("You slip past the enemy, but it lashes out as you flee.", event_type="combat")]
@@ -2556,7 +2754,8 @@ def _cast_action(database, user, parameters):
                                                "_spell_effects": spell.get("effects", [])})
     drafts = []
     if "heal" in spell:
-        restored = min(spell["heal"] + character["intellect"] // 2,
+        restored = min(spell["heal"] + character["intellect"] // 2
+                       + level_bonuses(character["level"])["healing"],
                        character["maximum_health"] - character["current_health"])
         database.execute("UPDATE mud_character_progression SET current_health=current_health+? "
                          "WHERE character_id=? AND track_key=?",
@@ -3457,7 +3656,11 @@ def _expedition_action(database, user, parameters):
         lines = ["Available expedition themes:"]
         for key, _path, template in themes:
             rule = template["generation"]["difficulty"]
-            lines.append(f"- {key}: {template['name']} (difficulty {rule['minimum']}-{rule['maximum']})")
+            lines.append(f"- {key}: {template['name']} (difficulty {rule['minimum']}-{rule['maximum']}, "
+                         f"recommended level {dungeons.recommended_level(rule['minimum'])}-"
+                         f"{dungeons.recommended_level(rule['maximum'])})")
+        level = _character_row(database, user["id"])["level"]
+        lines.append(f"Each difficulty step suits about three character levels; you are level {level}.")
         lines.append("Launch with /expedition <theme> [difficulty] [size].")
         return [EventDraft("\n".join(lines), event_type="portal")]
     matches = [(path, template) for key, path, template in themes if key == theme_id]
@@ -3492,10 +3695,23 @@ def _expedition_action(database, user, parameters):
     )
     entry = _enter_expedition(database, user, instance_id, manifest["entrance"])
     return [EventDraft(
-        f"Expedition launched. Cooperative join code: {code}.\n\n"
+        f"Expedition launched. Cooperative join code: {code}."
+        f"{_difficulty_advice(character['level'], manifest['difficulty'])}\n\n"
         f"{_describe_room(database, _current_room(database, user['id']), user['id'])}",
         event_type="expedition",
     )] + entry
+
+
+def _difficulty_advice(level, difficulty):
+    recommended = dungeons.recommended_level(difficulty)
+    percent = dungeons.dungeon_xp_percent(level, difficulty)
+    if percent < 100:
+        return (f" Recommended level {recommended}: at level {level} this run is beneath you, "
+                f"so experience is reduced to {percent}%.")
+    if percent > 100:
+        return (f" Recommended level {recommended}: at level {level} this run is dangerous, "
+                f"but experience is increased to {percent}%.")
+    return f" Recommended level {recommended}."
 
 
 def _join_expedition_action(database, user, parameters):
@@ -3594,8 +3810,10 @@ def _complete_expedition_action(database, user, parameters):
     daily_day = _daily_run_day(database, run["id"])
     rewarded = 0
     coin_rewards = []
+    level_drafts = []
     for participant in active:
-        reward = max(1, run["difficulty"] * 10 + participant["rooms_visited"] * 2)
+        reward = max(1, (run["difficulty"] * 10 + participant["rooms_visited"] * 2) * dungeons.dungeon_xp_percent(
+            _character_row(database, participant["user_id"])["level"], run["difficulty"]) // 100)
         claimed = database.execute(
             "UPDATE mud_expedition_participants SET status='completed',finished_at=CURRENT_TIMESTAMP,"
             "reward_experience=?,rewarded_at=CURRENT_TIMESTAMP WHERE instance_id=? AND user_id=? "
@@ -3620,7 +3838,11 @@ def _complete_expedition_action(database, user, parameters):
                     (reward, run["id"], participant["user_id"]),
                 )
         if claimed and (daily_day is None or daily_claimed):
-            award_experience(database, participant["user_id"], reward)
+            level_up = level_up_text(award_experience(database, participant["user_id"], reward))
+            if level_up:
+                level_drafts.append(EventDraft(level_up, event_type="reward",
+                                               audience_key=str(participant["user_id"]),
+                                               recipient_ids=(participant["user_id"],)))
             rewarded += 1
         if claimed:
             _settle_run_loot(database, participant["user_id"], run["id"], keep=True)
@@ -3640,7 +3862,8 @@ def _complete_expedition_action(database, user, parameters):
         (run["id"],),
     )
     reward_text = (
-        "Each active explorer receives a completion experience reward based on difficulty and rooms personally visited."
+        "Each active explorer receives a completion experience reward based on difficulty and rooms personally visited, "
+        "reduced for explorers far above the recommended level."
         if daily_day is None else
         f"First-completion rewards were granted to {rewarded} eligible explorer{'s' if rewarded != 1 else ''}; repeat completions are recorded without another reward."
     )
@@ -3649,7 +3872,7 @@ def _complete_expedition_action(database, user, parameters):
         f"Collected loot is safe, and each explorer earns coins based on difficulty and rooms visited. {reward_text}",
         event_type="reward", audience_type="instance", audience_key=run["id"],
         recipient_ids=recipients,
-    )] + [EventDraft(
+    )] + level_drafts + [EventDraft(
         _describe_room(database, _current_room(database, participant["user_id"]), participant["user_id"]),
         event_type="room", audience_key=str(participant["user_id"]),
     ) for participant in active]
@@ -4063,6 +4286,13 @@ actions.register(ActionDefinition(
     key="character", label="VIEW STATS",
     description="View your character identity, health, mana, active effects, attributes, and progression.",
     commands=("character", "stats"), handler=_character_action,
+    group="CHARACTER",
+))
+actions.register(ActionDefinition(
+    key="train", label="TRAIN ATTRIBUTES",
+    description="Spend attribute points earned by leveling. Use /train alone to see options, "
+                "or /train <attribute> [points].",
+    commands=("train", "improve"), handler=_train_action,
     group="CHARACTER",
 ))
 actions.register(ActionDefinition(

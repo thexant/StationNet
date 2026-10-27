@@ -119,11 +119,21 @@
             <span><span>HEALTH</span><output data-character-health>{{ character.health }} / {{ character.maximum_health }}</output></span>
             <progress data-character-health-bar value="{{ character.health }}" max="{{ character.maximum_health }}">{{ character.health }} / {{ character.maximum_health }}</progress>
           </div>
+          <div class="mud-character-meter mud-character-mana">
+            <span><span>MANA</span><output data-character-mana>{{ character.mana }} / {{ character.maximum_mana }}</output></span>
+            <progress data-character-mana-bar value="{{ character.mana }}" max="{{ character.maximum_mana }}">{{ character.mana }} / {{ character.maximum_mana }}</progress>
+          </div>
           <div class="mud-character-meter">
             <span><span>EXPERIENCE</span><output data-character-experience>{{ character.experience_into_level }} / {{ character.experience_for_next_level }}</output></span>
+            {% if character.at_max_level %}
+            <progress data-character-experience-bar value="1" max="1">MAX</progress>
+            <small data-character-experience-remaining>MAX LEVEL</small>
+            {% else %}
             <progress data-character-experience-bar value="{{ character.experience_into_level }}" max="{{ character.experience_for_next_level }}">{{ character.experience_into_level }} / {{ character.experience_for_next_level }}</progress>
             <small data-character-experience-remaining>{{ character.experience_to_next_level }} XP to next level</small>
+            {% endif %}
           </div>
+          <p class="mud-attribute-points" data-character-points{% if not character.attribute_points %} hidden{% endif %}>{{ character.attribute_points }} attribute point{% if character.attribute_points != 1 %}s{% endif %} to spend — use /train</p>
           <dl class="mud-attributes">
             <div><dt>STR</dt><dd data-character-attribute="strength">{{ character.attributes.strength }}</dd></div>
             <div><dt>AGI</dt><dd data-character-attribute="agility">{{ character.attributes.agility }}</dd></div>

@@ -61,20 +61,19 @@ def replace_origins(database, user_id, race_key, class_key):
         type(allocated.get(key)) is not int for key in character_creation.ATTRIBUTES
     ):
         allocated = None
+    from .mud import _trained_attributes, resource_delta
+
+    def revised(track):
+        # Trained points sit on top of the allocation and survive origin changes.
+        trained = _trained_attributes(track["trained_attributes_json"])
+        return {key: (allocated[key] + trained.get(key, 0) if allocated else track[key] - old_mod[key])
+                + new_mod[key] for key in character_creation.ATTRIBUTES}
+
     for track in tracks:
-        attributes = {key: (allocated[key] if allocated else track[key] - old_mod[key]) + new_mod[key]
-                      for key in character_creation.ATTRIBUTES}
+        attributes = revised(track)
         if any(not 1 <= value <= 30 for value in attributes.values()):
             raise ValueError("These choices would put an attribute outside the supported range.")
-        from .mud import HEALTH_PER_LEVEL
-        health_delta = ((attributes["vitality"] - track["vitality"]) * 5 +
-                        (track["level"] - 1) *
-                        (max(1, HEALTH_PER_LEVEL + (attributes["vitality"] - 10) // 2) -
-                         max(1, HEALTH_PER_LEVEL + (track["vitality"] - 10) // 2)))
-        mana_delta = ((attributes["intellect"] - track["intellect"]) * 3 +
-                      (track["level"] - 1) *
-                      (max(1, 2 + (attributes["intellect"] - 10) // 2) -
-                       max(1, 2 + (track["intellect"] - 10) // 2)))
+        health_delta, mana_delta = resource_delta(track["level"], track, attributes)
         health_max = max(1, track["maximum_health"] + health_delta)
         mana_max = max(1, track["maximum_mana"] + mana_delta)
         database.execute(
@@ -96,8 +95,7 @@ def replace_origins(database, user_id, race_key, class_key):
         track = next((track for track in tracks if track["track_key"] == item["loadout_key"]), None)
         if track is None:
             continue
-        attributes = {key: (allocated[key] if allocated else track[key] - old_mod[key]) + new_mod[key]
-                      for key in character_creation.ATTRIBUTES}
+        attributes = revised(track)
         try:
             requirements = _item_requirements(_json_properties(item["properties_json"]))
         except ValueError:
@@ -106,7 +104,9 @@ def replace_origins(database, user_id, race_key, class_key):
             database.execute("DELETE FROM mud_character_equipment WHERE character_id=? AND loadout_key=? "
                              "AND item_instance_id=?", (row["id"], item["loadout_key"], item["item_instance_id"]))
     if allocated is None and tracks:
-        allocated = {key: tracks[0][key] - old_mod[key] for key in character_creation.ATTRIBUTES}
+        trained = _trained_attributes(tracks[0]["trained_attributes_json"])
+        allocated = {key: tracks[0][key] - old_mod[key] - trained.get(key, 0)
+                     for key in character_creation.ATTRIBUTES}
     database.execute("UPDATE mud_characters SET race_key=?,class_key=?,base_attributes_json=?,"
                      "updated_at=CURRENT_TIMESTAMP WHERE id=?",
                      (race_key, class_key, json.dumps(allocated) if allocated else None, row["id"]))
