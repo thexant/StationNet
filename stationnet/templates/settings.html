@@ -13,6 +13,7 @@
 </div>
 {% endmacro %}
 {% block content %}
+<nav class="subnav settings-jump-nav" aria-label="Settings sections"><a href="#module-availability">MODULES</a><a href="#station-parameters">STATION</a><a href="#access-policy">ACCESS</a><a href="#events-service">EVENTS</a><a href="#user-feeds">USER FEEDS</a><a href="#office-suite">OFFICE</a><a href="#videos-service">VIDEOS</a><a href="#library-service">LIBRARY</a><a href="#arcade-service">ARCADE</a><a href="#imageboard-service">IMAGEBOARD</a><a href="#kiwix-service">WIKI</a><a href="#mud-service">MUD</a><a href="#dungeon-themes">DUNGEON THEMES</a><a href="#mud-daily">DAILY MUD</a><a href="#radio-storage">RADIO STORAGE</a><a href="#radio-spectrum">SPECTRUM</a><a href="#broadcast-frequencies">FREQUENCIES</a><a href="#radio-permissions">PERMISSIONS</a><a href="#radio-users">USERS</a><a href="{{ url_for('moderation.dashboard') }}">MODERATION</a>{% if module_enabled('applications') %}<a href="{{ url_for('application_admin.manage') }}">PROGRAMS</a>{% endif %}</nav>
 <section class="narrow terminal-card settings-section collapsible-panel" id="module-availability" data-collapsible-panel data-panel-key="sysop-module-availability">
   <button type="button" class="collapsible-panel-toggle" data-panel-toggle aria-expanded="true" aria-controls="module-availability-content">
     <span class="collapsible-panel-heading"><span class="eyebrow">SYSOP CONTROL / MODULES</span><span class="collapsible-panel-title" role="heading" aria-level="2">Module availability</span></span>
@@ -30,7 +31,6 @@
     </form>
   </div>
 </section>
-<nav class="subnav settings-jump-nav" aria-label="Settings sections"><a href="#module-availability">MODULES</a><a href="#station-parameters">STATION</a><a href="#access-policy">ACCESS</a><a href="#events-service">EVENTS</a><a href="#user-feeds">USER FEEDS</a><a href="#office-suite">OFFICE</a><a href="#videos-service">VIDEOS</a><a href="#library-service">LIBRARY</a><a href="#arcade-service">ARCADE</a><a href="#imageboard-service">IMAGEBOARD</a><a href="#kiwix-service">WIKI</a><a href="#mud-service">MUD</a><a href="#dungeon-themes">DUNGEON THEMES</a><a href="#mud-daily">DAILY MUD</a><a href="#radio-storage">RADIO STORAGE</a><a href="#radio-spectrum">SPECTRUM</a><a href="#broadcast-frequencies">FREQUENCIES</a><a href="#radio-permissions">PERMISSIONS</a><a href="#radio-users">USERS</a>{% if module_enabled('moderation') %}<a href="{{ url_for('moderation.dashboard') }}">MODERATION</a>{% endif %}{% if module_enabled('applications') %}<a href="{{ url_for('application_admin.manage') }}">PROGRAMS</a>{% endif %}</nav>
 <section class="narrow terminal-card collapsible-panel" id="station-parameters" data-collapsible-panel data-panel-key="sysop-station-parameters">
   <button type="button" class="collapsible-panel-toggle" data-panel-toggle aria-expanded="true" aria-controls="station-parameters-content">
     <span class="collapsible-panel-heading"><span class="eyebrow">SYSOP CONTROL / STATION PARAMETERS</span><span class="collapsible-panel-title page-title" role="heading" aria-level="1">Station settings</span></span>

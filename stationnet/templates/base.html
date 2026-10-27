@@ -45,7 +45,7 @@
       </div>
       {% if g.user or g.station.guest_access %}
       <nav class="service-nav" id="service-nav" aria-label="Station services" tabindex="-1">
-        {% if module_enabled('station') %}<a href="{{ url_for('station.terminal') }}" {% if request.endpoint=='station.terminal' %}aria-current="page"{% endif %}>STATION</a>{% endif %}
+        <a href="{{ url_for('station.terminal') }}" {% if request.endpoint=='station.terminal' %}aria-current="page"{% endif %}>STATION</a>
         {% if module_enabled('board') %}<i aria-hidden="true">*</i><a href="{{ url_for('board.index') }}" {% if request.blueprint=='board' %}aria-current="page"{% endif %}>BULLETIN BOARD</a>{% endif %}
         {% if g.station.imageboard_enabled and g.user %}<i aria-hidden="true">*</i><a href="{{ url_for('imageboard.catalog') }}" {% if request.blueprint=='imageboard' %}aria-current="page"{% endif %}>IMAGEBOARD</a>{% endif %}
         {% if module_enabled('announcements') %}<i aria-hidden="true">*</i><a href="{{ url_for('announcements.index') }}" {% if request.blueprint=='announcements' %}aria-current="page"{% endif %}>ANNOUNCEMENTS</a>{% endif %}
@@ -65,7 +65,7 @@
         {% if g.station.mud_enabled %}<i>*</i><a href="{{ url_for('mud.index') }}" {% if request.endpoint=='mud.index' %}aria-current="page"{% endif %}>MUD</a>{% endif %}
         {% if g.station.mud_enabled and g.mud_can_build %}<i>*</i><a href="{{ url_for('mud.builder') }}" {% if request.endpoint and request.endpoint.startswith('mud.builder') %}aria-current="page"{% endif %}>WORLD BUILDER</a>{% endif %}
         {% endif %}
-        {% if g.user and g.user.is_admin %}<i>*</i><a href="{{ url_for('station.settings') }}" {% if request.endpoint=='station.settings' or request.blueprint=='application_admin' %}aria-current="page"{% endif %}>SYSOP CONTROL</a>{% if module_enabled('moderation') %}<i>*</i><a href="{{ url_for('moderation.dashboard') }}" {% if request.blueprint=='moderation' %}aria-current="page"{% endif %}>MODERATION</a>{% endif %}{% endif %}
+        {% if g.user and g.user.is_admin %}<i>*</i><a href="{{ url_for('station.settings') }}" {% if request.endpoint=='station.settings' or request.blueprint=='application_admin' %}aria-current="page"{% endif %}>SYSOP CONTROL</a><i>*</i><a href="{{ url_for('moderation.dashboard') }}" {% if request.blueprint=='moderation' %}aria-current="page"{% endif %}>MODERATION</a>{% endif %}
       </nav>
       {% endif %}
       {% endif %}

@@ -51,7 +51,6 @@ CREATE TABLE IF NOT EXISTS station (
  events_enabled INTEGER NOT NULL DEFAULT 0 CHECK(events_enabled IN (0,1)),
  office_enabled INTEGER NOT NULL DEFAULT 0 CHECK(office_enabled IN (0,1)),
  office_nav_links_enabled INTEGER NOT NULL DEFAULT 1 CHECK(office_nav_links_enabled IN (0,1)),
- station_enabled INTEGER NOT NULL DEFAULT 1 CHECK(station_enabled IN (0,1)),
  board_enabled INTEGER NOT NULL DEFAULT 1 CHECK(board_enabled IN (0,1)),
  announcements_enabled INTEGER NOT NULL DEFAULT 1 CHECK(announcements_enabled IN (0,1)),
  chat_enabled INTEGER NOT NULL DEFAULT 1 CHECK(chat_enabled IN (0,1)),
@@ -60,7 +59,6 @@ CREATE TABLE IF NOT EXISTS station (
  archive_enabled INTEGER NOT NULL DEFAULT 1 CHECK(archive_enabled IN (0,1)),
  users_enabled INTEGER NOT NULL DEFAULT 1 CHECK(users_enabled IN (0,1)),
  applications_enabled INTEGER NOT NULL DEFAULT 1 CHECK(applications_enabled IN (0,1)),
- moderation_enabled INTEGER NOT NULL DEFAULT 1 CHECK(moderation_enabled IN (0,1)),
  events_create_permission TEXT NOT NULL DEFAULT 'sysops' CHECK(events_create_permission IN ('sysops','groups','members')),
  videos_mode TEXT NOT NULL DEFAULT 'community' CHECK(videos_mode IN ('community','curated')),
  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);

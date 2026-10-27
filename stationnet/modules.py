@@ -2,7 +2,6 @@
 
 # These service tabs did not previously have their own switch.
 ADDITIONAL_MODULES = (
-    ("station", "STATION"),
     ("board", "BULLETIN BOARD"),
     ("announcements", "ANNOUNCEMENTS"),
     ("chat", "CHAT"),
@@ -11,11 +10,9 @@ ADDITIONAL_MODULES = (
     ("archive", "FILES"),
     ("users", "USERS"),
     ("applications", "PROGRAMS"),
-    ("moderation", "MODERATION"),
 )
 
 ALL_MODULES = (
-    ("station", "STATION"),
     ("board", "BULLETIN BOARD"),
     ("imageboard", "IMAGEBOARD"),
     ("announcements", "ANNOUNCEMENTS"),
@@ -33,7 +30,6 @@ ALL_MODULES = (
     ("applications", "PROGRAMS"),
     ("mud", "MUD"),
     ("user_feeds", "USER FEEDS"),
-    ("moderation", "MODERATION"),
 )
 
 BLUEPRINT_MODULES = {
@@ -41,8 +37,7 @@ BLUEPRINT_MODULES = {
     "chat": "chat", "mail": "mail", "radio": "radio",
     "broadcast": "radio", "programs": "radio", "archive": "archive",
     "users": "users", "applications": "applications",
-    "application_admin": "applications", "moderation": "moderation",
-    "reports": "moderation", "imageboard": "imageboard",
+    "application_admin": "applications", "imageboard": "imageboard",
     "events": "events", "feeds": "user_feeds", "office": "office",
     "kiwix": "kiwix", "videos": "videos", "library": "library",
     "arcade": "arcade", "mud": "mud",
@@ -54,6 +49,4 @@ def enabled(station, module):
 
 
 def request_module(request):
-    if request.endpoint == "station.terminal":
-        return "station"
     return BLUEPRINT_MODULES.get(request.blueprint)

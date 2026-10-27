@@ -40,6 +40,9 @@ def test_module_switches_hide_navigation_and_block_routes(tmp_path):
     assert settings.status_code == 200
     assert b"Module availability" in settings.data
     assert b"SYSOP CONTROL" in settings.data
+    assert settings.data.index(b'settings-jump-nav') < settings.data.index(b'id="module-availability"')
+    assert b'name="station_enabled"' not in settings.data
+    assert b'name="moderation_enabled"' not in settings.data
     assert b'href="/board"' not in settings.data
     assert b'href="/mud/builder"' not in settings.data
     for path in ("/board", "/chat/messages", "/mail/notifications", "/radio/state",
@@ -61,16 +64,18 @@ def test_module_switches_hide_navigation_and_block_routes(tmp_path):
     assert client.get("/games-apps").status_code == 200
     assert client.get("/mud/builder").status_code == 200
 
-    # The sysop can recover even after every service is disabled.
+    # Required Station and Moderation routes remain available when all optional services are off.
     client.post("/sysop/settings", data={
         "csrf_token": "test-token", "settings_section": "modules",
     })
     settings = client.get("/sysop/settings")
     assert settings.status_code == 200
     assert b"SYSOP CONTROL" in settings.data
-    for path in ("/terminal", "/board", "/announcements", "/events", "/wiki/",
+    assert client.get("/terminal").status_code == 200
+    assert client.get("/sysop/moderation").status_code == 200
+    for path in ("/board", "/announcements", "/events", "/wiki/",
                  "/videos", "/library", "/arcade/", "/chat/messages",
                  "/mail/notifications", "/radio/state", "/files", "/users/presence",
-                 "/office", "/games-apps", "/mud/builder", "/sysop/moderation"):
+                 "/office", "/games-apps", "/mud/builder"):
         assert client.get(path).status_code == 404, path
     assert client.post("/feeds/users/1/posts").status_code == 404
