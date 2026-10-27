@@ -114,6 +114,8 @@ def test_browser_fullscreen_restores_layout_and_scales_canvas(tmp_path, mobile):
                 url = f"http://127.0.0.1:{server.server_port}"
                 page.goto(url + "/test-application-login")
                 page.goto(url + "/games-apps/light-cycles")
+                expected_zoom = "1" if mobile else "1.25"
+                assert page.evaluate("getComputedStyle(document.documentElement).zoom") == expected_zoom
                 if mobile and page.locator("[data-app-launch-anyway]").is_visible():
                     page.locator("[data-app-launch-anyway]").click()
                 page.locator("[data-app-status]").get_by_text("RUNNING").wait_for(timeout=15000)
@@ -144,6 +146,7 @@ def test_browser_fullscreen_restores_layout_and_scales_canvas(tmp_path, mobile):
 
                 enter_fullscreen("application")
                 page.wait_for_function("() => document.fullscreenElement === document.querySelector('.application-display')")
+                assert page.evaluate("getComputedStyle(document.documentElement).zoom") == "1"
                 page.locator("[data-app-fullscreen-exit]").wait_for(state="visible")
                 assert page.locator(".station-header").is_hidden()
                 metrics = canvas.evaluate("""node => {
@@ -189,6 +192,7 @@ def test_browser_fullscreen_restores_layout_and_scales_canvas(tmp_path, mobile):
                 assert runtime_node.evaluate("node => node === document.querySelector('[data-app-runtime]')")
                 page.locator("[data-app-fullscreen-exit]").click()
                 page.wait_for_function("() => document.fullscreenElement === null")
+                assert page.evaluate("getComputedStyle(document.documentElement).zoom") == expected_zoom
                 assert page.locator("body").evaluate("node => node.classList.contains('application-immersive')") is was_immersive
                 assert page.locator("[data-app-fullscreen]").get_attribute("aria-pressed") == "false"
                 assert page.locator("[data-app-status]").inner_text().endswith("RUNNING")

@@ -36,6 +36,14 @@
 
 * { box-sizing: border-box; }
 html { min-height: 100%; background: var(--black); }
+/* Scale the whole desktop layout, including pixel-sized editors and controls.
+   Zoom participates in layout, unlike transform: scale(), so wrapping and
+   viewport-sized surfaces continue to use the available space. */
+@media screen and (min-width: 960px) and (pointer: fine) {
+  html { zoom: 1.25; }
+  /* Fullscreen owns the physical viewport; zoomed viewport units overflow it. */
+  html:has(:fullscreen) { zoom: 1; }
+}
 body { margin: 0; min-height: 100vh; color: var(--green); background: var(--black); line-height: 1.6; }
 body::after { content: ""; position: fixed; inset: 0; z-index: 20; pointer-events: none; opacity: .045; background: repeating-linear-gradient(0deg, transparent 0 2px, #fff 2px 3px); }
 ::selection { color: #000; background: var(--green); }
