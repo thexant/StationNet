@@ -364,8 +364,8 @@ function initialize() {
     try {
       if (!crypto?.getRandomValues) throw new Error('Secure browser cryptography is unavailable.');
       const vault = await request(app.dataset.vault, { method: 'POST', body: '{}' });
-      const [sheets, documents, presentations, agenda, drawings] = await Promise.all([request(api), request(app.dataset.documentsApi), request(app.dataset.presentationsApi), request(app.dataset.agendaApi), request(app.dataset.drawApi)]);
-      if (!sheets.sheets.length && !documents.documents.length && !presentations.presentations.length && !agenda.agenda && !drawings.drawings.length) {
+      const [sheets, documents, presentations, agenda, drawings, programs] = await Promise.all([request(api), request(app.dataset.documentsApi), request(app.dataset.presentationsApi), request(app.dataset.agendaApi), request(app.dataset.drawApi), request(app.dataset.basicApi)]);
+      if (!sheets.sheets.length && !documents.documents.length && !presentations.presentations.length && !agenda.agenda && !drawings.drawings.length && !programs.programs.length) {
         if ($('#sheets-confirm-row').hidden) { $('#sheets-confirm-row').hidden = false; $('#sheets-confirm').required = true; status('CONFIRM NEW PASSWORD', 'pending'); $('#sheets-confirm').focus(); return; }
         if ($('#sheets-confirm').value !== password) throw new Error('The new passwords do not match.');
       }
@@ -375,6 +375,7 @@ function initialize() {
       else if (presentations.presentations.length) decrypt(presentations.presentations[0].envelope);
       else if (agenda.agenda) decrypt(agenda.agenda.envelope);
       else if (drawings.drawings.length) decrypt(drawings.drawings[0].envelope);
+      else if (programs.programs.length) decrypt(programs.programs[0].envelope);
       rememberOfficeKey(key, csrf);
       $('#sheets-password').value = ''; $('#sheets-confirm').value = ''; $('#sheets-confirm-row').hidden = true;
       $('#sheets-unlock').hidden = true; $('#sheets-workspace').hidden = false; $('#sheets-lock').hidden = false;

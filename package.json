@@ -7,6 +7,7 @@
     "build:presentations": "node scripts/build-office-presentations.mjs",
     "build:agenda": "node scripts/build-office-agenda.mjs",
     "build:draw": "node scripts/build-office-draw.mjs",
+    "build:basic": "node scripts/build-office-basic.mjs",
     "build:midi": "node scripts/build-midi.mjs",
     "test:midi": "node scripts/verify-composer-playback.mjs && node scripts/verify-composer-new.mjs",
     "test:light-cycles": "node scripts/verify-light-cycles.mjs && node scripts/verify-light-cycles-runtime.mjs",
@@ -15,7 +16,8 @@
     "test:application-samples": "node tests/test_application_samples.mjs",
     "test:application-game-input": "node tests/test_application_game_input.mjs && node tests/test_application_game_input_host.mjs && node tests/test_application_game_input_relay.mjs && node tests/test_application_touch_gamepad.mjs && node tests/test_application_fullscreen.mjs",
     "test:application-ui": "node tests/test_application_ui_components.mjs",
-    "test:agenda": "node tests/test_office_agenda.mjs"
+    "test:agenda": "node tests/test_office_agenda.mjs",
+    "test:basic": "node tests/test_office_basic.mjs"
   },
   "dependencies": {
     "@noble/ciphers": "^2.4.0",

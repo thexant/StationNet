@@ -1,0 +1,96 @@
+.basic-page .station-shell{width:min(2200px,100%)}
+.basic-app{width:100%}
+.basic-app [hidden]{display:none!important}
+.basic-head,.basic-library-head,.basic-file-row,.basic-run-row,.basic-console-head{display:flex;justify-content:space-between;align-items:center;gap:.8rem;flex-wrap:wrap}
+.basic-head{align-items:end;margin-bottom:1rem}.basic-head h1{margin:0}
+.basic-head p:last-child{margin:.2rem 0;color:var(--grey);font-size:.7rem;letter-spacing:.08em}
+.basic-head #basic-status{font-size:.72rem}
+.basic-head [data-kind=saved]{color:var(--green)}.basic-head [data-kind=pending],.basic-head [data-kind=saving]{color:var(--amber)}.basic-head [data-kind=error],#basic-unlock-error{color:var(--red)}
+.basic-unlock{max-width:650px}
+
+.basic-workspace{display:grid;grid-template-columns:minmax(210px,240px) minmax(0,1fr);gap:1rem;align-items:start}
+.basic-library,.basic-editor{width:100%;margin:0;min-width:0}
+.basic-library h2,.basic-console-head h2{font-size:.82rem;margin:0;color:var(--cyan)}
+.basic-library-actions{display:grid;gap:.45rem;margin-top:.7rem}
+.basic-library-actions label{display:grid;gap:.25rem;color:var(--cyan);font-size:.65rem}
+.basic-library-actions select{width:100%}
+.basic-library ul{list-style:none;padding:0;margin:.8rem 0;max-height:60vh;overflow:auto}
+.basic-library li{margin:.2rem 0;overflow-wrap:anywhere}
+.basic-library li button{width:100%;text-align:left;border:1px solid var(--border-soft);background:var(--surface-field);padding:.45rem;color:var(--green-bright);overflow-wrap:anywhere}
+.basic-library li button.selected{border-color:var(--cyan);background:var(--surface-selected)}
+.basic-library p,.basic-help{font-size:.68rem;color:var(--grey)}
+.basic-help{margin:.8rem 0 0}
+
+.basic-file-row{margin-bottom:.6rem}.basic-file-row input{flex:1;min-width:180px;font-size:1rem}
+.basic-file-row>div{display:flex;flex-wrap:wrap;gap:.35rem}
+#basic-message{margin:.5rem 0;padding:.55rem;border:1px solid var(--red-dim);color:var(--red);font-size:.72rem}#basic-message button{margin-left:.4rem}
+.basic-run-row{justify-content:flex-start;gap:.4rem;padding:.5rem 0;margin-bottom:.6rem;border-top:1px solid var(--border-soft);border-bottom:1px solid var(--border-soft)}
+.basic-run-row button{padding:.4rem .7rem;font-size:.7rem}
+.basic-run-row button:disabled{opacity:.45;cursor:not-allowed}
+#basic-run-state{font-size:.7rem;letter-spacing:.06em;color:var(--grey);margin-left:.3rem}
+#basic-run-state[data-state=compiling],#basic-run-state[data-state=starting]{color:var(--amber)}
+#basic-run-state[data-state=running]{color:var(--green)}
+#basic-run-state[data-state=error],#basic-run-state[data-state=stalled]{color:var(--red)}
+.basic-view-tabs{display:none;margin-left:auto;gap:.3rem}
+.basic-view-tabs [aria-selected=true]{border-color:var(--cyan);color:var(--cyan);background:var(--surface-selected)}
+
+.basic-body{display:grid;grid-template-columns:minmax(0,1.1fr) minmax(0,1fr);gap:1rem;align-items:stretch}
+.basic-code,.basic-output{min-width:0;display:flex;flex-direction:column;gap:.5rem}
+.basic-code{height:min(76vh,1100px);min-height:460px}
+.basic-code textarea{width:100%;height:100%}
+.basic-code .CodeMirror{flex:1;height:100%;min-height:0;border:1px solid var(--border-soft);font-family:var(--mono);font-size:.86rem;line-height:1.45}
+.basic-screen{position:relative;aspect-ratio:16/10;width:100%;background:#000;border:1px solid var(--border-soft);overflow:hidden}
+.basic-screen:focus-within{border-color:var(--cyan)}
+.basic-screen iframe{position:absolute;inset:0;width:100%;height:100%;border:0;background:#000;display:block}
+.basic-screen:fullscreen{border:0;aspect-ratio:auto}
+#basic-screen-idle{position:absolute;inset:0;display:grid;place-items:center;margin:0;padding:1rem;text-align:center;color:var(--grey);font-size:.8rem}
+.basic-console{list-style:none;margin:0;padding:.4rem;flex:1;min-height:150px;max-height:32vh;overflow:auto;border:1px solid var(--border-soft);background:var(--surface-field);font-family:var(--mono);font-size:.74rem}
+.basic-console li{padding:.15rem .25rem;white-space:pre-wrap;overflow-wrap:anywhere;color:var(--green)}
+.basic-console li[data-kind=error]{color:var(--red)}
+.basic-console li[data-kind=warning]{color:var(--amber)}
+.basic-console li[data-kind=info]{color:var(--grey)}
+.basic-console li button{font:inherit;color:inherit;background:none;border:0;padding:0;text-align:left;cursor:pointer;text-decoration:underline dotted;width:100%}
+.basic-console li .basic-console-save{width:auto;margin-left:.6rem;text-decoration:none;border:1px solid var(--border-soft);padding:.1rem .4rem;color:var(--cyan)}
+
+/* Editor colors follow the active StationNet theme. */
+.cm-s-station.CodeMirror{background:var(--surface-field);color:var(--green-bright)}
+.cm-s-station .CodeMirror-gutters{background:var(--black);border-right:1px solid var(--border-soft)}
+.cm-s-station .CodeMirror-linenumber{color:var(--grey)}
+.cm-s-station .CodeMirror-cursor{border-left:2px solid var(--cyan)}
+.cm-s-station div.CodeMirror-selected,.cm-s-station.CodeMirror-focused div.CodeMirror-selected{background:rgba(var(--accent-rgb),.28)}
+.cm-s-station .CodeMirror-line::selection,.cm-s-station .CodeMirror-line>span::selection,.cm-s-station .CodeMirror-line>span>span::selection{background:rgba(var(--accent-rgb),.28)}
+.cm-s-station .CodeMirror-activeline-background{background:rgba(var(--theme-rgb),.08)}
+.cm-s-station span.cm-keyword,.cm-s-station span.cm-builtin{color:var(--cyan)}
+.cm-s-station span.cm-string,.cm-s-station span.cm-string-2{color:var(--amber)}
+.cm-s-station span.cm-number,.cm-s-station span.cm-atom{color:var(--magenta)}
+.cm-s-station span.cm-comment{color:var(--grey);font-style:italic}
+.cm-s-station span.cm-operator,.cm-s-station span.cm-bracket{color:var(--white)}
+.cm-s-station span.cm-variable,.cm-s-station span.cm-def,.cm-s-station span.cm-variable-2,.cm-s-station span.cm-variable-3,.cm-s-station span.cm-type{color:var(--green-bright)}
+.cm-s-station span.cm-meta{color:var(--green-dim)}
+.cm-s-station span.cm-error{color:var(--red)}
+.cm-s-station .CodeMirror-matchingbracket{outline:1px solid var(--cyan);color:var(--white)!important}
+.cm-s-station .cm-searching{background:rgba(var(--accent-rgb),.35)}
+.cm-s-station .basic-error-line{background:rgba(255,60,60,.16)}
+.basic-errors{width:14px}
+.basic-gutter-marker{color:var(--red);font-weight:bold;padding-left:3px}
+.CodeMirror-dialog{background:var(--black);color:var(--cyan)}
+.CodeMirror-dialog input{color:var(--green-bright)}
+
+/* station.css zooms desktop pages by 1.25. CodeMirror 5 measures text and
+   gutters without zoom, so the editor cancels it and enlarges its font instead. */
+@media screen and (min-width:960px) and (pointer:fine){
+  .basic-code .CodeMirror{zoom:.8;font-size:calc(.86rem * 1.25)}
+  html:has(:fullscreen) .basic-code .CodeMirror{zoom:1;font-size:.86rem}
+}
+@media(max-width:1300px){.basic-body{grid-template-columns:1fr}.basic-code{height:56vh;min-height:360px}.basic-console{max-height:26vh}}
+@media(max-width:1050px){.basic-workspace{grid-template-columns:1fr}.basic-library ul{display:flex;gap:.35rem;max-height:none;overflow:auto}.basic-library li{flex:0 0 155px}.basic-library p{display:none}.basic-library-actions{grid-template-columns:auto 1fr;align-items:end}}
+@media(max-width:700px){
+  .basic-view-tabs{display:flex}
+  .basic-body[data-view=code] .basic-output,.basic-body[data-view=run] .basic-code{display:none}
+  .basic-code{height:62vh;min-height:320px}
+  .basic-file-row>div{width:100%}.basic-file-row>div button{flex:1}
+  .basic-run-row button,.basic-library button,.basic-library select{min-height:38px}
+  .basic-library-actions{grid-template-columns:1fr}
+  .basic-screen{aspect-ratio:4/3}
+  .basic-help{line-height:1.5}
+}

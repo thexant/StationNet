@@ -270,7 +270,8 @@ function initialize() {
       const presentations = await requestJson(app.dataset.presentationsApi);
       const agenda = await requestJson(app.dataset.agendaApi);
       const drawings = await requestJson(app.dataset.drawApi);
-      if (!result.documents.length && !sheets.sheets.length && !presentations.presentations.length && !agenda.agenda && !drawings.drawings.length) {
+      const programs = await requestJson(app.dataset.basicApi);
+      if (!result.documents.length && !sheets.sheets.length && !presentations.presentations.length && !agenda.agenda && !drawings.drawings.length && !programs.programs.length) {
         const confirmRow = $('#document-confirm-row');
         if (confirmRow.hidden) {
           confirmRow.hidden = false;
@@ -287,6 +288,7 @@ function initialize() {
       else if (presentations.presentations.length) decrypt(presentations.presentations[0].envelope);
       else if (agenda.agenda) decrypt(agenda.agenda.envelope);
       else if (drawings.drawings.length) decrypt(drawings.drawings[0].envelope);
+      else if (programs.programs.length) decrypt(programs.programs[0].envelope);
       rememberOfficeKey(key, csrf);
       $('#document-passphrase').value = '';
       $('#document-passphrase-confirm').value = '';

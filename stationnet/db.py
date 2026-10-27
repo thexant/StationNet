@@ -120,6 +120,14 @@ CREATE TABLE IF NOT EXISTS office_drawings (
  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);
 CREATE INDEX IF NOT EXISTS idx_office_drawings_owner ON office_drawings(owner_id,updated_at DESC,id DESC);
+CREATE TABLE IF NOT EXISTS office_basic_programs (
+ id INTEGER PRIMARY KEY AUTOINCREMENT,
+ owner_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+ envelope TEXT NOT NULL,
+ revision INTEGER NOT NULL DEFAULT 1,
+ created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+ updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);
+CREATE INDEX IF NOT EXISTS idx_office_basic_programs_owner ON office_basic_programs(owner_id,updated_at DESC,id DESC);
  CREATE TABLE IF NOT EXISTS office_agendas (
   owner_id INTEGER PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
   envelope TEXT NOT NULL,

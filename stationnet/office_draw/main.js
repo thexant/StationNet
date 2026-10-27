@@ -196,8 +196,8 @@ function start() {
   async function unlock(event) {
     event.preventDefault(); const pass = $('#draw-password').value, errorBox = $('#draw-unlock-error'); errorBox.hidden = true; if (pass.length < 12) return; status('UNLOCKING…', 'saving');
     try { const vault = await request(app.dataset.vault, { method: 'POST', body: '{}' });
-      const [drawings, documents, sheets, presentations, agenda] = await Promise.all([request(api), request(app.dataset.documentsApi), request(app.dataset.sheetsApi), request(app.dataset.presentationsApi), request(app.dataset.agendaApi)]);
-      const first = drawings.drawings[0]?.envelope || documents.documents[0]?.envelope || sheets.sheets[0]?.envelope || presentations.presentations[0]?.envelope || agenda.agenda?.envelope;
+      const [drawings, documents, sheets, presentations, agenda, programs] = await Promise.all([request(api), request(app.dataset.documentsApi), request(app.dataset.sheetsApi), request(app.dataset.presentationsApi), request(app.dataset.agendaApi), request(app.dataset.basicApi)]);
+      const first = drawings.drawings[0]?.envelope || documents.documents[0]?.envelope || sheets.sheets[0]?.envelope || presentations.presentations[0]?.envelope || agenda.agenda?.envelope || programs.programs[0]?.envelope;
       if (!first) { if ($('#draw-confirm-row').hidden) { $('#draw-confirm-row').hidden = false; $('#draw-confirm').required = true; status('CONFIRM NEW PASSWORD', 'pending'); $('#draw-confirm').focus(); return; } if ($('#draw-confirm').value !== pass) throw new Error('The new passwords do not match.'); }
       key = await pbkdf2Async(sha256, enc.encode(pass), un64(vault.salt), { c: 210000, dkLen: 32, asyncTick: 20 }); if (first) decrypt(first); rememberOfficeKey(key, csrf);
       $('#draw-password').value = ''; $('#draw-confirm').value = ''; $('#draw-confirm-row').hidden = true; $('#draw-unlock').hidden = true; $('#draw-workspace').hidden = false; $('#draw-lock').hidden = false;

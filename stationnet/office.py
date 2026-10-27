@@ -16,6 +16,7 @@ MAX_ENVELOPE_BYTES = 8 * 1024 * 1024
 MAX_SHEET_ENVELOPE_BYTES = 32 * 1024 * 1024
 MAX_PRESENTATION_ENVELOPE_BYTES = 64 * 1024 * 1024
 MAX_DRAWING_ENVELOPE_BYTES = 64 * 1024 * 1024
+MAX_BASIC_ENVELOPE_BYTES = 8 * 1024 * 1024
 
 
 @bp.before_request
@@ -174,6 +175,116 @@ def drawing_delete(drawing_id):
     cursor = database.execute(
         "DELETE FROM office_drawings WHERE id=? AND owner_id=?",
         (drawing_id, g.user["id"]),
+    )
+    database.commit()
+    if not cursor.rowcount:
+        abort(404)
+    return jsonify(ok=True)
+
+
+@bp.get("/basic")
+@login_required
+def basic():
+    return render_template("office/basic.html")
+
+
+@bp.get("/basic/runner")
+@login_required
+def basic_runner():
+    """Return the sandbox document that compiles and runs one BASIC program.
+
+    It is framed with sandbox="allow-scripts" (opaque origin) and receives a
+    restrictive CSP in create_app's header hook. It never embeds user data.
+    """
+    return render_template("office/basic_runner.html")
+
+
+@bp.get("/basic/api")
+@login_required
+def basic_list():
+    rows = get_db().execute(
+        "SELECT id,envelope,revision,created_at,updated_at FROM office_basic_programs "
+        "WHERE owner_id=? ORDER BY updated_at DESC,id DESC", (g.user["id"],)
+    ).fetchall()
+    return jsonify(programs=[{
+        "id": row["id"], "envelope": json.loads(row["envelope"]),
+        "revision": row["revision"], "created_at": row["created_at"],
+        "updated_at": row["updated_at"],
+    } for row in rows])
+
+
+@bp.post("/basic/api")
+@login_required
+def basic_create():
+    failure = _csrf()
+    if failure:
+        return failure
+    envelope = _envelope(MAX_BASIC_ENVELOPE_BYTES)
+    if envelope is None:
+        return jsonify(error="Invalid encrypted program."), 400
+    database = get_db()
+    cursor = database.execute(
+        "INSERT INTO office_basic_programs(owner_id,envelope) VALUES(?,?)",
+        (g.user["id"], envelope),
+    )
+    database.commit()
+    return jsonify(id=cursor.lastrowid, revision=1), 201
+
+
+@bp.get("/basic/api/<int:program_id>")
+@login_required
+def basic_get(program_id):
+    row = get_db().execute(
+        "SELECT id,envelope,revision,created_at,updated_at FROM office_basic_programs "
+        "WHERE id=? AND owner_id=?", (program_id, g.user["id"]),
+    ).fetchone()
+    if row is None:
+        abort(404)
+    return jsonify(id=row["id"], envelope=json.loads(row["envelope"]),
+                   revision=row["revision"], created_at=row["created_at"],
+                   updated_at=row["updated_at"])
+
+
+@bp.put("/basic/api/<int:program_id>")
+@login_required
+def basic_update(program_id):
+    failure = _csrf()
+    if failure:
+        return failure
+    payload = request.get_json(silent=True) or {}
+    envelope = _envelope(MAX_BASIC_ENVELOPE_BYTES)
+    revision = payload.get("revision")
+    if envelope is None or type(revision) is not int or revision < 1:
+        return jsonify(error="Invalid encrypted program or revision."), 400
+    database = get_db()
+    cursor = database.execute(
+        "UPDATE office_basic_programs SET envelope=?,revision=revision+1,updated_at=CURRENT_TIMESTAMP "
+        "WHERE id=? AND owner_id=? AND revision=?",
+        (envelope, program_id, g.user["id"], revision),
+    )
+    if cursor.rowcount:
+        database.commit()
+        return jsonify(revision=revision + 1)
+    row = database.execute(
+        "SELECT revision FROM office_basic_programs WHERE id=? AND owner_id=?",
+        (program_id, g.user["id"]),
+    ).fetchone()
+    if row is None:
+        abort(404)
+    return jsonify(error="Revision conflict. This program changed in another tab or device.",
+                   revision=row["revision"]), 409
+
+
+@bp.delete("/basic/api/<int:program_id>")
+@login_required
+def basic_delete(program_id):
+    failure = _csrf()
+    if failure:
+        return failure
+    database = get_db()
+    cursor = database.execute(
+        "DELETE FROM office_basic_programs WHERE id=? AND owner_id=?",
+        (program_id, g.user["id"]),
     )
     database.commit()
     if not cursor.rowcount:

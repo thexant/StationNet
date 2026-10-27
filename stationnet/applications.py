@@ -87,6 +87,8 @@ OFFICE_PROGRAMS = (
                 "StationNet", "1", OFFICE_CATEGORY, launch_endpoint="office.agenda"),
     Application("office-draw", "Draw", "Create private vector drawings and diagrams.",
                 "StationNet", "1", OFFICE_CATEGORY, launch_endpoint="office.draw"),
+    Application("office-basic", "BASIC", "Write and run private BASIC programs with graphics and sound.",
+                "StationNet", "1", OFFICE_CATEGORY, launch_endpoint="office.basic"),
 )
 
 

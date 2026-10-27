@@ -187,6 +187,25 @@ def create_app(test_config=None):
                 "frame-src 'none'; worker-src blob:; base-uri 'none'; "
                 "form-action 'none'; frame-ancestors 'self'"
             )
+        if request.endpoint == "office.basic_runner":
+            # Framed with sandbox="allow-scripts" (opaque origin). QBJS runs
+            # compiled programs through AsyncFunction, so eval is allowed only
+            # here; scripts are limited to the bundled QBJS files and every
+            # network, frame, worker, and navigation channel is closed.
+            static = f"{request.host}{url_for('static', filename='')}"
+            response.headers["X-Frame-Options"] = "SAMEORIGIN"
+            response.headers["Content-Security-Policy"] = (
+                f"default-src 'none'; script-src 'unsafe-eval' {static}vendor/qbjs/ "
+                f"{static}office-basic-runner.js; style-src {static}office-basic-runner.css; "
+                "img-src data: blob:; font-src data:; media-src data: blob:; "
+                "connect-src 'none'; frame-src 'none'; child-src 'none'; worker-src 'none'; "
+                "manifest-src 'none'; object-src 'none'; base-uri 'none'; "
+                "form-action 'none'; frame-ancestors 'self'"
+            )
+            response.headers["Permissions-Policy"] = (
+                "camera=(), microphone=(), geolocation=(), usb=(), serial=(), hid=(), "
+                "payment=(), display-capture=(), clipboard-read=(), clipboard-write=()"
+            )
         if request.endpoint in {"kiwix.content", "kiwix.search_source", "kiwix.interactive"}:
             if (request.endpoint == "kiwix.interactive"
                     or request.args.get("stationnet-interactive") == "1"):

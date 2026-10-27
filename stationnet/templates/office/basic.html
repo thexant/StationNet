@@ -1,0 +1,42 @@
+{% extends 'base.html' %}
+{% block title %}BASIC{% endblock %}
+{% block content %}
+<link rel="stylesheet" href="{{ url_for('static', filename='vendor/qbjs/codemirror/codemirror.min.css', v='0.11.5') }}">
+<link rel="stylesheet" href="{{ url_for('static', filename='vendor/qbjs/codemirror/dialog.css', v='0.11.5') }}">
+<link rel="stylesheet" href="{{ url_for('static', filename='office-basic.css', v='1') }}">
+<div class="basic-app" data-api="{{ url_for('office.basic_list') }}" data-documents-api="{{ url_for('office.document_list') }}" data-sheets-api="{{ url_for('office.sheet_list') }}" data-presentations-api="{{ url_for('office.presentation_list') }}" data-agenda-api="{{ url_for('office.agenda_get') }}" data-draw-api="{{ url_for('office.drawing_list') }}" data-vault="{{ url_for('office.vault') }}" data-runner="{{ url_for('office.basic_runner') }}" data-csrf="{{ session.csrf_token }}">
+  <header class="basic-head"><div><p class="eyebrow"><a href="{{ url_for('office.index') }}">OFFICE</a> / BASIC</p><h1>BASIC</h1><p>PROGRAMS / GRAPHICS / SOUND / POWERED BY QBJS</p></div><div><span id="basic-status" role="status" aria-live="polite">LOCKED</span> <button id="basic-lock" type="button" class="secondary" hidden>LOCK</button></div></header>
+  <section id="basic-unlock" class="terminal-card basic-unlock"><h2>Unlock OFFICE</h2><p>One OFFICE Password unlocks Documents, Sheets, Presentations, Agenda, Draw, and BASIC in this browser tab. Programs and titles are encrypted before saving. Lost passwords cannot be recovered.</p><form id="basic-unlock-form" class="form-grid"><label>OFFICE Password<input id="basic-password" type="password" minlength="12" required autocomplete="off"></label><label id="basic-confirm-row" hidden>Confirm new OFFICE Password<input id="basic-confirm" type="password" minlength="12" autocomplete="off"></label><button type="submit">UNLOCK BASIC</button></form><p id="basic-unlock-error" role="alert" hidden></p></section>
+  <div id="basic-workspace" class="basic-workspace" hidden>
+    <aside class="terminal-card basic-library">
+      <div class="basic-library-head"><h2>MY PROGRAMS</h2><button id="basic-new" type="button">NEW</button></div>
+      <div class="basic-library-actions"><button id="basic-import" type="button" class="secondary">IMPORT .BAS</button><input id="basic-import-file" type="file" accept=".bas,.bi,.bm,.txt,text/plain" hidden>
+        <label>EXAMPLES <select id="basic-examples"><option value="">Open an example…</option></select></label></div>
+      <ul id="basic-list" aria-label="Saved programs"></ul>
+      <p>Programs are private. Select one to reopen it.</p>
+    </aside>
+    <main class="terminal-card basic-editor">
+      <div class="basic-file-row"><input id="basic-title" aria-label="Program title" maxlength="160" value="Untitled program"><div><button id="basic-save" type="button" class="secondary">SAVE</button><button id="basic-export" type="button" class="secondary">EXPORT .BAS</button><button id="basic-delete" type="button" class="danger">DELETE</button></div></div>
+      <div id="basic-message" role="alert" hidden></div>
+      <div class="basic-run-row" role="toolbar" aria-label="Program controls"><button id="basic-run" type="button">RUN ▶</button><button id="basic-stop" type="button" class="secondary" disabled>STOP ■</button><button id="basic-fullscreen" type="button" class="secondary">FULLSCREEN</button><span id="basic-run-state" data-state="idle" aria-live="polite">READY</span>
+        <div class="basic-view-tabs" role="tablist" aria-label="View"><button type="button" role="tab" data-view="code" aria-selected="true">CODE</button><button type="button" role="tab" data-view="run" aria-selected="false">SCREEN</button></div></div>
+      <div class="basic-body" data-view="code">
+        <section class="basic-code" aria-label="Program source"><textarea id="basic-source" aria-label="BASIC source code" spellcheck="false"></textarea></section>
+        <section class="basic-output" aria-label="Program output">
+          <div id="basic-screen" class="basic-screen"><p id="basic-screen-idle">Press RUN (F5) to start the program.</p></div>
+          <div class="basic-console-head"><h2>CONSOLE</h2><button id="basic-console-clear" type="button" class="secondary">CLEAR</button></div>
+          <ol id="basic-console" class="basic-console" aria-live="polite" aria-label="Console messages"></ol>
+        </section>
+      </div>
+      <p class="basic-help">F5 or Ctrl+Enter runs, Esc in the editor or STOP stops, Ctrl+S saves, Ctrl+F searches. Click the program screen to type into a running program. Programs run in an isolated sandbox with no network access; files they create last only while they run.</p>
+    </main>
+  </div>
+</div>
+<script src="{{ url_for('static', filename='vendor/qbjs/codemirror/codemirror.min.js', v='0.11.5') }}" defer></script>
+<script src="{{ url_for('static', filename='vendor/qbjs/codemirror/qb-lang.js', v='0.11.5') }}" defer></script>
+<script src="{{ url_for('static', filename='vendor/qbjs/codemirror/active-line.js', v='0.11.5') }}" defer></script>
+<script src="{{ url_for('static', filename='vendor/qbjs/codemirror/searchcursor.js', v='0.11.5') }}" defer></script>
+<script src="{{ url_for('static', filename='vendor/qbjs/codemirror/dialog.js', v='0.11.5') }}" defer></script>
+<script src="{{ url_for('static', filename='vendor/qbjs/codemirror/search.js', v='0.11.5') }}" defer></script>
+<script src="{{ url_for('static', filename='office-basic.js', v='1') }}" defer></script>
+{% endblock %}

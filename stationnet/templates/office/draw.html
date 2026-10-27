@@ -2,9 +2,9 @@
 {% block title %}Draw{% endblock %}
 {% block content %}
 <link rel="stylesheet" href="{{ url_for('static', filename='office-draw.css', v='3') }}">
-<div class="draw-app" data-api="{{ url_for('office.drawing_list') }}" data-documents-api="{{ url_for('office.document_list') }}" data-sheets-api="{{ url_for('office.sheet_list') }}" data-presentations-api="{{ url_for('office.presentation_list') }}" data-agenda-api="{{ url_for('office.agenda_get') }}" data-vault="{{ url_for('office.vault') }}" data-csrf="{{ session.csrf_token }}">
+<div class="draw-app" data-api="{{ url_for('office.drawing_list') }}" data-documents-api="{{ url_for('office.document_list') }}" data-sheets-api="{{ url_for('office.sheet_list') }}" data-presentations-api="{{ url_for('office.presentation_list') }}" data-agenda-api="{{ url_for('office.agenda_get') }}" data-basic-api="{{ url_for('office.basic_list') }}" data-vault="{{ url_for('office.vault') }}" data-csrf="{{ session.csrf_token }}">
   <header class="draw-head"><div><p class="eyebrow"><a href="{{ url_for('office.index') }}">OFFICE</a> / DRAW</p><h1>Draw</h1><p>VECTOR DRAWING / DIAGRAMS / PAGE LAYOUTS</p></div><div><span id="draw-status" role="status" aria-live="polite">LOCKED</span> <button id="draw-lock" type="button" class="secondary" hidden>LOCK</button></div></header>
-  <section id="draw-unlock" class="terminal-card draw-unlock"><h2>Unlock OFFICE</h2><p>One OFFICE Password unlocks Documents, Sheets, Presentations, Agenda, and Draw in this browser tab. Drawings and titles are encrypted before saving. Lost passwords cannot be recovered.</p><form id="draw-unlock-form" class="form-grid"><label>OFFICE Password<input id="draw-password" type="password" minlength="12" required autocomplete="off"></label><label id="draw-confirm-row" hidden>Confirm new OFFICE Password<input id="draw-confirm" type="password" minlength="12" autocomplete="off"></label><button type="submit">UNLOCK DRAW</button></form><p id="draw-unlock-error" role="alert" hidden></p></section>
+  <section id="draw-unlock" class="terminal-card draw-unlock"><h2>Unlock OFFICE</h2><p>One OFFICE Password unlocks Documents, Sheets, Presentations, Agenda, Draw, and BASIC in this browser tab. Drawings and titles are encrypted before saving. Lost passwords cannot be recovered.</p><form id="draw-unlock-form" class="form-grid"><label>OFFICE Password<input id="draw-password" type="password" minlength="12" required autocomplete="off"></label><label id="draw-confirm-row" hidden>Confirm new OFFICE Password<input id="draw-confirm" type="password" minlength="12" autocomplete="off"></label><button type="submit">UNLOCK DRAW</button></form><p id="draw-unlock-error" role="alert" hidden></p></section>
   <div id="draw-workspace" class="draw-workspace" hidden>
     <aside class="terminal-card draw-library"><div class="draw-library-head"><h2>MY DRAWINGS</h2><button id="draw-new" type="button">NEW</button></div><ul id="draw-list" aria-label="Saved drawings"></ul><p>Drawings are private. Select one to reopen it.</p></aside>
     <main class="terminal-card draw-editor">
@@ -20,5 +20,5 @@
     </main>
   </div>
 </div>
-<script src="{{ url_for('static', filename='office-draw.js', v='3') }}" defer></script>
+<script src="{{ url_for('static', filename='office-draw.js', v='4') }}" defer></script>
 {% endblock %}
