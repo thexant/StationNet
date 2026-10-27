@@ -102,6 +102,7 @@ def test_catalogue_filters_metadata_and_permissions(tmp_path):
     player = client.get("/arcade/1/player")
     assert player.status_code == 200
     assert b'EJS_core = "gambatte"' in player.data
+    assert b'EJS_gameUrl = "/arcade/1/rom"' in player.data
     assert player.headers["X-Frame-Options"] == "SAMEORIGIN"
     assert "connect-src 'self'" in player.headers["Content-Security-Policy"]
     assert client.get("/arcade/emulatorjs/data/loader.js").status_code == 200
@@ -185,5 +186,13 @@ def test_mame_core_install_is_pinned_verified_and_selected(tmp_path, monkeypatch
                             "platform": "arcade", "core": "mame2003_plus"})
     assert result.status_code == 302
     assert b'EJS_core = "mame2003_plus"' in client.get("/arcade/1/player").data
+    player = client.get("/arcade/1/player").get_data(as_text=True)
+    assert 'EJS_gameUrl = "/arcade/1/rom/Arcade%20Game.zip"' in player
+    rom = client.get("/arcade/1/rom/Arcade%20Game.zip")
+    assert rom.status_code == 200
+    with zipfile.ZipFile(BytesIO(rom.data)) as archive:
+        assert archive.read("game.rom") == b"test arcade rom"
+    assert client.get("/arcade/1/rom/wrong.zip").status_code == 404
+    assert client.get("/arcade/1/rom").status_code == 200
     assert client.get("/arcade/emulatorjs/data/cores/mame2003_plus-wasm.data").data == b"core" * 512
     assert b'"core":"mame2003_plus"' in client.get("/arcade/emulatorjs/data/cores/reports/mame2003_plus.json").data

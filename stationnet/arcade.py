@@ -238,6 +238,18 @@ def player(game_id):
 @bp.get("/<int:game_id>/rom")
 def rom(game_id):
     game = _game(game_id)
+    return _send_rom(game)
+
+
+@bp.get("/<int:game_id>/rom/<filename>")
+def named_rom(game_id, filename):
+    game = _game(game_id)
+    if filename != game["original_name"]:
+        abort(404)
+    return _send_rom(game)
+
+
+def _send_rom(game):
     if not _game_path(game).is_file():
         abort(404)
     response = send_file(_game_path(game), mimetype="application/octet-stream",

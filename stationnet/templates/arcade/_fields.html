@@ -8,7 +8,7 @@
   <label>Publisher<input name="publisher" maxlength="120" value="{{ game.publisher if game else '' }}"></label>
   <label>Players<input name="players" maxlength="40" value="{{ game.players if game else '' }}" placeholder="1–2"></label>
   <label class="arcade-wide">Description<textarea name="description" rows="4" maxlength="5000">{{ game.description if game else '' }}</textarea></label>
-  <label>ROM file{% if game %} (leave blank to keep current){% endif %}<input type="file" name="rom" accept=".nes,.sfc,.smc,.gb,.gbc,.gba,.md,.gen,.bin,.sms,.gg,.a26,.a78,.lnx,.pce,.col,.rom,.nds,.n64,.z64,.v64,.zip" {% if not game %}required{% endif %}><small>Use a ROM you are permitted to share. Arcade ROM sets must be ZIP files. Maximum 96 MB.</small></label>
+  <label>ROM file{% if game %} (leave blank to keep current){% endif %}<input type="file" name="rom" accept=".nes,.sfc,.smc,.gb,.gbc,.gba,.md,.gen,.bin,.sms,.gg,.a26,.a78,.lnx,.pce,.col,.rom,.nds,.n64,.z64,.v64,.zip" {% if not game %}required{% endif %}><small>Use a ROM you are permitted to share. MAME / Arcade sets must stay zipped and keep the core's set name (for example, pacman.zip). Use a complete set compatible with the selected core. Maximum 96 MB.</small></label>
   <label>Cover art{% if game %} (leave blank to keep current){% endif %}<input type="file" name="cover" accept="image/png,image/jpeg,image/webp,image/gif,.png,.jpg,.jpeg,.webp,.gif"><small>Optional; up to 8 MB.</small></label>
   {% if game and game.cover_name %}<label class="switch"><input type="checkbox" name="remove_cover"> Remove current cover</label>{% endif %}
   <button>{{ 'SAVE GAME' if game else 'UPLOAD GAME' }}</button>
