@@ -7,6 +7,7 @@
   "effects": {"defense": 1},
   "spells": ["ward"],
   "skill": "guard",
+  "skills": {"perception": 1},
   "equipment": [
     {
       "key": "trail-knife",
@@ -14,7 +15,8 @@
       "description": "A short, sturdy knife carried on the trail.",
       "slot": "main_hand",
       "attack": 1,
-      "defense": 0
+      "defense": 0,
+      "category": "blade"
     }
   ]
 }

@@ -11,11 +11,39 @@ for(const creator of document.querySelectorAll("[data-character-creator]")){
   const error=creator.querySelector("[data-creator-error]");
   let step=0;
   const chosen=name=>form.querySelector(`input[name="${name}"]:checked`)?.value;
+  const skillName=key=>config.skill_names?.[key]||key;
+  const grantsFor=(race,archetype)=>{
+    const grants={};
+    for(const origin of [race,archetype])for(const [key,rank] of Object.entries(origin?.skills||{}))grants[key]=Math.max(grants[key]||0,rank);
+    return grants;
+  };
+  // Mirrors character_creation.eligible_skills so the form never offers a rejected build.
+  const skillProblems=(skill,race,archetype,final,grants)=>{
+    const needs=skill.requirements||{};
+    const problems=[];
+    if((needs.level||1)>1)problems.push(`level ${needs.level}`);
+    for(const [key,value] of Object.entries(needs.attributes||{}))if((final[key]||0)<value)problems.push(`${key} ${value}`);
+    if(needs.races?.length&&!needs.races.includes(race?.key))problems.push("another race");
+    if(needs.classes?.length&&!needs.classes.includes(archetype?.key))problems.push("another archetype");
+    for(const [key,value] of Object.entries(needs.skills||{}))if((grants[key]||0)<value)problems.push(`${skillName(key)} ${value}`);
+    return problems;
+  };
+  const eligibility=data=>{
+    const race=config.races.find(item=>item.key===data.race);
+    const archetype=config.classes.find(item=>item.key===data.class);
+    const final=Object.fromEntries(Object.entries(data.attributes).map(([key,value])=>
+      [key,value+(race?.attributes?.[key]||0)+(archetype?.attributes?.[key]||0)]));
+    const grants=grantsFor(race,archetype);
+    const notes=Object.fromEntries(config.skills.map(skill=>[skill.key,
+      grants[skill.key]?`Granted at rank ${grants[skill.key]}`:skillProblems(skill,race,archetype,final,grants).map(item=>`Requires ${item}`).join(" · ")]));
+    const eligible=config.skills.filter(skill=>!notes[skill.key]).map(skill=>skill.key);
+    return {grants,notes,eligible,required:Math.min(config.starting_skill_choices,eligible.length)};
+  };
   const build=()=>({
     name:form.querySelector("[data-name]").value.trim().replace(/\s+/g," "),
     race:chosen("race"),class:chosen("class"),
     attributes:Object.fromEntries([...form.querySelectorAll("[data-attribute]")].map(input=>[input.dataset.attribute,Number(input.value)])),
-    skills:[...form.querySelectorAll('input[name="skill"]:checked')].map(input=>input.value)
+    skills:[...form.querySelectorAll('input[name="skill"]:checked:not(:disabled)')].map(input=>input.value)
   });
   const update=()=>{
     const data=build();
@@ -25,10 +53,22 @@ for(const creator of document.querySelectorAll("[data-character-creator]")){
       [key,value+(race?.attributes?.[key]||0)+(archetype?.attributes?.[key]||0)]));
     const spent=Object.values(data.attributes).reduce((sum,value)=>sum+value-config.point_buy.base,0);
     creator.querySelector("[data-points-left]").textContent=config.point_buy.points-spent;
-    creator.querySelector("[data-skills-left]").textContent=config.starting_skill_choices-data.skills.length;
-    for(const checkbox of form.querySelectorAll('input[name="skill"]')){
-      checkbox.disabled=!checkbox.checked&&data.skills.length>=config.starting_skill_choices;
+    const skillState=eligibility(data);
+    for(const card of form.querySelectorAll("[data-skill-card]")){
+      const checkbox=card.querySelector("input");
+      const note=skillState.notes[card.dataset.skillCard];
+      if(note)checkbox.checked=false;
+      card.querySelector("[data-skill-note]").textContent=note;
     }
+    data.skills=data.skills.filter(key=>skillState.eligible.includes(key));
+    for(const checkbox of form.querySelectorAll('input[name="skill"]')){
+      checkbox.disabled=!skillState.eligible.includes(checkbox.value)||
+        (!checkbox.checked&&data.skills.length>=skillState.required);
+    }
+    creator.querySelector("[data-skill-choices]").textContent=skillState.required;
+    creator.querySelector("[data-skills-left]").textContent=skillState.required-data.skills.length;
+    creator.querySelector("[data-skill-granted]").textContent=Object.keys(skillState.grants).length
+      ?`Granted: ${Object.entries(skillState.grants).map(([key,rank])=>`${skillName(key)} ${rank}`).join(" · ")}`:"";
     for(const button of form.querySelectorAll("[data-adjust]")){
       const value=data.attributes[button.dataset.for];
       button.disabled=Number(button.dataset.adjust)>0
@@ -41,15 +81,19 @@ for(const creator of document.querySelectorAll("[data-character-creator]")){
     }
     const review=creator.querySelector("[data-review]");
     review.replaceChildren();
+    const ranks={...skillState.grants};
+    for(const key of data.skills)ranks[key]=Math.max(ranks[key]||0,archetype?.skill===key?2:1);
+    // Category-limited bonuses depend on gear, so the preview counts only general effects.
     const effect=key=>(race?.effects?.[key]||0)+(archetype?.effects?.[key]||0)+
-      data.skills.reduce((sum,skillKey)=>{
+      Object.entries(ranks).reduce((sum,[skillKey,rank])=>{
         const skill=config.skills.find(item=>item.key===skillKey);
-        return sum+(skill?.effect===key?(skill?.per_rank||1)*(archetype?.skill===skillKey?2:1):0);
+        return sum+(skill?.effects||[]).filter(item=>item.type===key&&!item.weapon_category&&!item.armor_category)
+          .reduce((total,item)=>total+Math.min(item.max??Infinity,Math.floor(rank/(item.every||1))*item.per_rank),0);
       },0);
     const lines=[`Name: ${data.name||"—"}`,`Race: ${race?.name||"—"}`,`Archetype: ${archetype?.name||"—"}`,
       `Attributes: ${Object.entries(final).map(([key,value])=>`${key} ${value}`).join(" · ")}`,
-      `Starting health: ${100+(final.vitality-10)*5} · Melee bonus: +${Math.floor(final.strength/2)+effect("attack")} · Damage reduction: ${Math.floor(final.vitality/10)+Math.floor(final.agility/5)+effect("defense")} · Experience bonus: +${Math.max(0,final.intellect-8)+effect("experience_percent")}%`,
-      `Skills: ${data.skills.map(key=>config.skills.find(item=>item.key===key)?.name||key).join(" · ")||"—"}`,
+      `Starting health: ${100+(final.vitality-10)*5} · Melee bonus: +${Math.floor(final.strength/2)+effect("attack")+effect("melee_damage")} · Damage reduction: ${Math.floor(final.vitality/10)+Math.floor(final.agility/5)+effect("defense")} · Experience bonus: +${Math.max(0,final.intellect-8)+effect("experience_percent")}%`,
+      `Skills: ${Object.entries(ranks).map(([key,rank])=>`${skillName(key)} ${rank}`).join(" · ")||"—"}`,
       `Equipment: ${archetype?.equipment?.map(item=>item.name).join(", ")||"—"}`];
     for(const line of lines){const p=document.createElement("p");p.textContent=line;review.append(p)}
   };
@@ -63,7 +107,10 @@ for(const creator of document.querySelectorAll("[data-character-creator]")){
       if(values.some(value=>!Number.isInteger(value)||value<config.point_buy.minimum||value>config.point_buy.maximum))return "Keep attributes within the allowed range.";
       if(values.reduce((sum,value)=>sum+value-config.point_buy.base,0)!==config.point_buy.points)return "Spend all attribute points.";
     }
-    if(current===4&&data.skills.length!==config.starting_skill_choices)return `Choose ${config.starting_skill_choices} skills.`;
+    if(current===4){
+      const required=eligibility(data).required;
+      if(data.skills.length!==required)return `Choose ${required} skill${required===1?"":"s"}.`;
+    }
     return "";
   };
   const show=()=>{

@@ -1287,6 +1287,13 @@ button:disabled { opacity: .5; cursor: not-allowed; }
 .mud-legacy-notice { padding: .75rem; margin: .5rem 0 1rem; border: 1px solid var(--cyan, #8dd); }
 .mud-legacy-notice .button { margin-left: .5rem; }
 .mud-character-origin, .mud-character-skills { margin: .35rem 0; }
+.mud-character-skills ul { display: grid; gap: .3rem; margin: 0; padding: 0; list-style: none; }
+.mud-skill { display: grid; grid-template-columns: minmax(0, 1fr) 4.5rem; align-items: center; gap: .5rem; font-size: .85rem; }
+.mud-skill span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.mud-skill progress { width: 100%; height: .35rem; accent-color: var(--amber); }
+.mud-skill.inactive { opacity: .55; }
+.mud-skill-points { margin: 0 0 .35rem; color: var(--amber); font-size: .85rem; }
+.mud-skill-group { margin: .5rem 0 .25rem; color: var(--muted, #9ab); font-size: .8rem; text-transform: uppercase; }
 .moderation-list,.moderation-item{display:grid;gap:.6rem}
 .moderation-list>div,.moderation-item{padding:.75rem 0;border-bottom:1px solid #444}
 .moderation-item form{margin-top:.75rem}

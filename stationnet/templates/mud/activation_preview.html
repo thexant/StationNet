@@ -4,7 +4,7 @@
 <section class="panel">
   <h1>Activate {{ impact.world_name }}</h1>
   <p>Current world: {{ impact.current_world or 'None' }}. With migration, {{ impact.relocated }} player(s) in traditional world rooms will move to the new starting room.</p>
-  <p>Enabled races: {{ impact.chosen.races|join(', ') }}. Enabled classes: {{ impact.chosen.classes|join(', ') }}.</p>
+  <p>Enabled races: {{ impact.chosen.races|join(', ') }}. Enabled classes: {{ impact.chosen.classes|join(', ') }}. Enabled skills: {{ impact.chosen.skills|length }}; disabled skills stay on characters but stop working.</p>
   <h2>Character impact</h2>
   <p>{{ impact.characters|length }} existing character(s). {{ impact.characters|selectattr('missing')|list|length }} require a replacement race or class with migration.</p>
   {% if impact.characters %}<ul>{% for character in impact.characters %}
@@ -15,7 +15,7 @@
     <input type="hidden" name="world_id" value="{{ impact.world_id }}">
     <input type="hidden" name="origin_mode" value="{{ origin_mode }}">
     <input type="hidden" name="fingerprint" value="{{ impact.fingerprint }}">
-    {% for kind in ('races', 'classes') %}{% for key in selected[kind] %}<input type="hidden" name="{{ kind }}" value="{{ key }}">{% endfor %}{% endfor %}
+    {% for kind in ('races', 'classes', 'skills') %}{% for key in selected.get(kind, []) %}<input type="hidden" name="{{ kind }}" value="{{ key }}">{% endfor %}{% endfor %}
     <fieldset><legend>Campaign choice</legend>
       <label><input type="radio" name="campaign" value="migrate" checked> Migrate characters: keep identity, level, experience, skills, inventory and quests. Affected players choose replacement origins.</label>
       {% if impact.world_changed %}<label><input type="radio" name="campaign" value="new"> Start a new campaign: archive current characters and progress, then let players create new characters.</label>{% endif %}

@@ -79,14 +79,20 @@ def test_leveling_grants_points_and_announces_them(game):
         assert mud.character_state(db, user_id)["attribute_points"] == 0
         first = mud.award_experience(db, user_id, 100)
         assert (first["levels_gained"], first["attribute_points_gained"]) == (1, 1)
-        assert mud.level_up_text(first) == "You reached level 2! +1 attribute point — use /train."
+        assert first["skill_points_gained"] == 1
+        assert mud.level_up_text(first).startswith(
+            "You reached level 2! +1 attribute point — use /train. +1 skill point — use /skills.")
         # Levels 3, 4, and 5 arrive together; the fifth level grants a bonus point.
         jump = mud.award_experience(db, user_id, 1500)
         assert jump["character"]["level"] == 5
         assert jump["attribute_points_gained"] == 4
         assert jump["character"]["attribute_points"] == 5
         assert "+4 attribute points" in mud.level_up_text(jump)
-        assert mud.level_up_text(mud.award_experience(db, user_id, 1)) == ""
+        # Levels 3-5 add one point at level 4 and a fifth-level bonus.
+        assert jump["skill_points_gained"] == 2 and "+2 skill points" in mud.level_up_text(jump)
+        assert "Your Lore skill rises to rank" in mud.level_up_text(jump)
+        quiet = mud.award_experience(db, user_id, 1)
+        assert quiet["levels_gained"] == 0 and quiet["skill_points_gained"] == 0
 
 
 def test_level_cap_and_no_demotion(game):
@@ -226,6 +232,8 @@ def test_level_scales_melee_spells_healing_and_mitigation(game):
             return _damage(mud._attack_action(db, user, {"arguments": ["Dummy"]}))
 
         def struck():
+            # Hold Guard steady; faster skill practice would otherwise blur the level bonus.
+            db.execute("UPDATE mud_character_skills SET rank=1,experience=0 WHERE character_id=?", (cid,))
             before = _track(db, user_id)["current_health"]
             mud._enemy_turn(db, user)
             return before - _track(db, user_id)["current_health"]
@@ -295,8 +303,15 @@ def test_dungeon_kills_taper_for_overleveled_characters(game):
         user = _user(db, user_id)
         _set_level(db, user_id, 20)
         room_id = mud._start_room(db)["id"]
-        # Traditional worlds are hand-tuned, so their rewards stay untouched.
-        assert "100 experience" in _reward_body(db, user_id, "room", room_id, room_id)
+
+        def boosted(amount):
+            # Rewards report what was earned after Intellect and Lore bonuses.
+            bonus = mud.character_state(db, user_id)["combat"]["experience_bonus"]
+            return f"{amount + amount * bonus // 100} experience"
+
+        # Traditional worlds are hand-tuned, so their rewards are never tapered.
+        expected = boosted(100)
+        assert expected in _reward_body(db, user_id, "room", room_id, room_id)
 
         mud._set_player_location(db, user_id, "procedural", "portal", mud.PORTAL_ROOM_ID)
         launched = mud._expedition_action(db, user, {"theme_id": "generic-fantasy-dungeon",
@@ -305,9 +320,11 @@ def test_dungeon_kills_taper_for_overleveled_characters(game):
         run = mud._active_expedition(db, user_id)
         entrance = db.execute("SELECT current_room_key FROM mud_expedition_participants WHERE instance_id=?",
                               (run["id"],)).fetchone()[0]
-        assert "25 experience" in _reward_body(db, user_id, "instance", run["id"], entrance)
+        expected = boosted(25)
+        assert expected in _reward_body(db, user_id, "instance", run["id"], entrance)
         _set_level(db, user_id, 1)
-        assert "100 experience" in _reward_body(db, user_id, "instance", run["id"], entrance)
+        expected = boosted(100)
+        assert expected in _reward_body(db, user_id, "instance", run["id"], entrance)
 
 
 def test_expedition_listing_shows_recommended_levels(game):

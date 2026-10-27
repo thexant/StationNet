@@ -18,7 +18,7 @@ from flask import Blueprint, abort, flash, g, jsonify, redirect, render_template
 
 from .auth import admin_required, login_required
 from .db import get_db
-from . import dungeons, character_creation, mud_effects, mud_firearms, mud_compat, moderation
+from . import dungeons, character_creation, mud_effects, mud_firearms, mud_compat, mud_skills, moderation
 from .security import validate_csrf
 
 bp = Blueprint("mud", __name__, url_prefix="/mud")
@@ -196,12 +196,17 @@ def resource_delta(level, old_attributes, new_attributes):
 
 
 def level_up_text(result):
-    """Describe a level gain from an award_experience result, or return ''."""
-    if not result["levels_gained"]:
-        return ""
-    points = result["attribute_points_gained"]
-    return (f"You reached level {result['character']['level']}!"
-            + (f" +{points} attribute point{'s' if points != 1 else ''} — use /train." if points else ""))
+    """Describe level and skill gains from an award_experience result, or return ''."""
+    parts = []
+    if result["levels_gained"]:
+        points = result["attribute_points_gained"]
+        parts.append(f"You reached level {result['character']['level']}!"
+                     + (f" +{points} attribute point{'s' if points != 1 else ''} — use /train." if points else ""))
+    skill_points = result.get("skill_points_gained", 0)
+    if skill_points:
+        parts.append(f"+{skill_points} skill point{'s' if skill_points != 1 else ''} — use /skills.")
+    parts += result.get("skill_notices", [])
+    return " ".join(parts)
 
 
 def _trained_attributes(value):
@@ -287,10 +292,18 @@ def character_state(database, user_id, track_key=None):
     config = character_creation.options(database, include_inactive=True, include_removed=True)
     race = next((item for item in config["races"] if item["key"] == origin["race_key"]), None)
     archetype = next((item for item in config["classes"] if item["key"] == origin["class_key"]), None)
-    skills = [dict(skill) for skill in database.execute(
-        "SELECT skill_key,rank,experience FROM mud_character_skills WHERE character_id=? ORDER BY skill_key",
-        (row["id"],),
-    )]
+    known = mud_skills.definitions(database, include_inactive=True, include_removed=True)
+    active = mud_skills.definitions(database)
+    skills = []
+    for skill in mud_skills.character_rows(database, row["id"]):
+        definition = known.get(skill["skill_key"])
+        skills.append({**skill, "name": definition["name"] if definition else skill["skill_key"],
+                       "group": definition["group"] if definition else "knowledge",
+                       "active": skill["skill_key"] in active,
+                       "max_rank": definition["max_rank"] if definition else mud_skills.MAX_RANK,
+                       "next_rank_at": mud_skills.next_rank_cost(skill["rank"]),
+                       "effects": mud_skills.describe_effects(definition, skill["rank"]) if definition else ""})
+    skills.sort(key=lambda skill: (mud_skills.GROUPS.index(skill["group"]), skill["name"].casefold()))
     at_max_level = row["level"] >= MAX_LEVEL
     level_floor = experience_for_level(row["level"])
     next_floor = experience_for_level(row["level"] + 1)
@@ -301,9 +314,8 @@ def character_state(database, user_id, track_key=None):
         "creation_state": origin["creation_state"],
         "race": race["name"] if race else None,
         "class": archetype["name"] if archetype else None,
-        "skills": [{**skill, "name": next((item["name"] for item in config["skills"]
-                                             if item["key"] == skill["skill_key"]), skill["skill_key"])}
-                   for skill in skills],
+        "skills": skills,
+        "skill_points": mud_skills.available_points(database, row["id"]),
         "mode": _current_mode(database, user_id),
         "progression_track": row["track_key"],
         "progression_label": {
@@ -341,11 +353,14 @@ def award_experience(database, user_id, amount, track_key=None):
         raise ValueError("Experience award must be a positive integer.")
     resolved_track = track_key or _progression_track(database, user_id)
     before = character_state(database, user_id, resolved_track)
+    skill_notices = []
+    points_before = mud_skills.earned_points(mud_skills.highest_level(database, before["id"]))
     if before["creation_state"] == "complete":
         bonus = max(0, before["attributes"]["intellect"] - 8)
         bonus += _character_effects(database, before["id"])["experience_percent"]
         amount += amount * bonus // 100
-        _practice_effect(database, before["id"], "experience_percent")
+        # Larger rewards teach more, so Lore no longer advances once per award regardless of size.
+        skill_notices = mud_skills.practice(database, before["id"], "experience_gained", max(1, amount // 25))
     experience = before["experience"] + amount
     if experience > MAX_EXPERIENCE:
         raise ValueError("Experience total exceeds the supported range.")
@@ -369,10 +384,13 @@ def award_experience(database, user_id, amount, track_key=None):
         (experience, level, current_health, maximum_health, current_mana, maximum_mana,
          points_gained, before["id"], resolved_track),
     )
+    points_after = mud_skills.earned_points(mud_skills.highest_level(database, before["id"]))
     return {
         "amount": amount,
         "levels_gained": levels_gained,
         "attribute_points_gained": points_gained,
+        "skill_points_gained": points_after - points_before,
+        "skill_notices": skill_notices,
         "previous_level": before["level"],
         "character": character_state(database, user_id, resolved_track),
     }
@@ -387,53 +405,55 @@ def _origin_options(database, character_id):
                  for group, key in (("races", "race_key"), ("classes", "class_key")))
 
 
-def _character_effects(database, character_id):
+def _character_effects(database, character_id, gear=None):
+    """Origin, skill, and active effect modifiers; skill filters follow equipped gear."""
+    if gear is None:
+        gear = _equipment_combat_totals(database, character_id=character_id)
+    totals = mud_skills.bonuses(database, character_id, gear["categories"], gear["categories"])
     race, archetype = _origin_options(database, character_id)
-    totals = {key: 0 for key in ("attack", "defense", "experience_percent")}
     for origin in (race, archetype):
         for key, value in (origin or {}).get("effects", {}).items():
             if key in totals:
                 totals[key] += value
-    ranks = character_creation.skill_ranks(database, character_id)
-    for skill in character_creation.options()["skills"]:
-        effect = skill.get("effect")
-        if effect in totals:
-            totals[effect] += ranks.get(skill["key"], 0) * skill.get("per_rank", 1)
     for key in ("attack", "defense"):
         totals[key] += mud_effects.modifier(database, "character", character_id, key)
     return totals
 
 
-def _practice_effect(database, character_id, effect):
-    for skill in character_creation.options()["skills"]:
-        if skill.get("effect") == effect:
-            character_creation.practice(database, character_id, skill["key"])
+def _practice(database, character_id, trigger, amount=1, categories=None):
+    """Practice skills for a trigger and turn rank-ups into private events."""
+    return [EventDraft(notice, event_type="character")
+            for notice in mud_skills.practice(database, character_id, trigger, amount, categories=categories)]
 
 
-def _flee_chance(agility):
-    return min(75, max(35, 50 + (agility - 10) * 2))
+def _flee_chance(agility, bonus=0):
+    return min(95, max(35, min(75, 50 + (agility - 10) * 2) + bonus))
 
 
 def _combat_profile(database, row, creation_state):
     """Summarize how attributes, level, gear, and skills shape combat before enemy defense."""
     gear = _equipment_combat_totals(database, character_id=row["id"])
-    effects = _character_effects(database, row["id"])
+    effects = _character_effects(database, row["id"], gear)
     bonuses = level_bonuses(row["level"])
     strength, agility = row["strength"], row["agility"]
     intellect, vitality = row["intellect"], row["vitality"]
     return {
         "melee_damage": 4 + strength // 2 + gear["attack"] + _equipment_stat_bonus(gear, strength, "attack")
-                        + effects["attack"] + bonuses["attack"],
-        "firearm_damage": 6 + agility // 2 + effects["attack"] + bonuses["attack"],
-        "spell_power": intellect // 3 + bonuses["spell_power"],
-        "healing_bonus": intellect // 2 + bonuses["healing"],
+                        + effects["attack"] + effects["melee_damage"] + bonuses["attack"],
+        "firearm_damage": 6 + agility // 2 + effects["attack"] + effects["firearm_damage"] + bonuses["attack"],
+        "spell_power": intellect // 3 + effects["spell_power"] + bonuses["spell_power"],
+        "healing_bonus": intellect // 2 + effects["healing"] + bonuses["healing"],
         "mitigation": vitality // 10 + agility // 5 + gear["defense"]
                       + _equipment_stat_bonus(gear, vitality, "defense") + effects["defense"] + bonuses["defense"],
-        "flee_chance": _flee_chance(agility),
-        "stealth_chance": _stealth_chance(agility, 5),
+        "flee_chance": _flee_chance(agility, effects["flee"]),
+        "stealth_chance": _stealth_chance(agility, 5, effects["stealth"]),
+        "search_bonus": effects["search"],
+        "lockpick_bonus": effects["lockpick"],
+        "shop_discount": effects["shop_discount"],
         "experience_bonus": (max(0, intellect - 8) + effects["experience_percent"]
                              if creation_state == "complete" else 0),
         "level_bonuses": bonuses,
+        "proficiency_warnings": gear["unproficient"],
     }
 
 
@@ -452,7 +472,8 @@ def _character_action(database, user, parameters):
     attributes = character["attributes"]
     trained = character["trained_attributes"]
     combat = character["combat"]
-    skills = ", ".join(f"{skill['name']} {skill['rank']}" for skill in character["skills"])
+    skills = ", ".join(f"{skill['name']} {skill['rank']}" + ("" if skill["active"] else " (inactive)")
+                       for skill in character["skills"])
     active_effects = ", ".join(
         f"{effect['effect_key']} {effect['potency']} ({effect['remaining_turns']} turns)"
         for effect in character["effects"]
@@ -483,9 +504,16 @@ def _character_action(database, user, parameters):
         f"spell power +{combat['spell_power']} · healing +{combat['healing_bonus']}",
         f"Defense: mitigation {combat['mitigation']} · flee {combat['flee_chance']}% · "
         f"stealth {combat['stealth_chance']}% · experience +{combat['experience_bonus']}%",
+        *([f"Skills: search +{combat['search_bonus']} · lockpicking +{combat['lockpick_bonus']} · "
+           f"merchant discount {combat['shop_discount']}%"]
+          if combat["search_bonus"] or combat["lockpick_bonus"] or combat["shop_discount"] else []),
         f"Level bonuses: attack +{bonuses['attack']} · spells +{bonuses['spell_power']} · "
         f"healing +{bonuses['healing']} · mitigation +{bonuses['defense']}",
-        f"Skills: {skills or 'none'}",
+        f"Skills: {skills or 'none'}" + (f" · {character['skill_points']} skill point"
+                                         f"{'s' if character['skill_points'] != 1 else ''} — use /skills"
+                                         if character["skill_points"] else ""),
+        *([f"Untrained gear (reduced effect): {', '.join(combat['proficiency_warnings'])}"]
+          if combat["proficiency_warnings"] else []),
         f"Effects: {active_effects or 'none'}",
         f"Track: {character['progression_label']}",
     ]
@@ -554,6 +582,196 @@ def _train_action(database, user, parameters):
     )]
 
 
+def _resolve_skill(database, name, *, include_inactive=False):
+    known = mud_skills.definitions(database, include_inactive=include_inactive)
+    key = " ".join(str(name).casefold().split())
+    if not key:
+        raise ActionError("Name a skill, for example /skills stealth.")
+    exact = [definition for definition in known.values()
+             if key in {definition["key"], definition["name"].casefold()}]
+    matches = exact or [definition for definition in known.values()
+                        if definition["name"].casefold().startswith(key) or definition["key"].startswith(key)]
+    if len(matches) != 1:
+        raise ActionError(f'No single skill matches "{name}". Use /skills to list skills.')
+    return matches[0]
+
+
+def _skill_context(database, character):
+    origin = database.execute("SELECT race_key,class_key FROM mud_characters WHERE id=?",
+                              (character["id"],)).fetchone()
+    return {"level": mud_skills.highest_level(database, character["id"]),
+            "attributes": character["attributes"], "race_key": origin["race_key"],
+            "class_key": origin["class_key"],
+            "ranks": {skill["skill_key"]: skill["rank"] for skill in character["skills"] if skill["active"]}}
+
+
+def _room_trainers(database, user_id, skill_key=None, trainer_name=""):
+    room = _current_room(database, user_id)
+    if room.get("instance_id"):
+        return []
+    offers = []
+    for npc in _room_npc_rows(database, room["id"]):
+        if trainer_name and npc["name"].casefold() != trainer_name.casefold():
+            continue
+        if npc["combat_maximum_health"] is not None and _encounter_row(database, npc)["status"] == "defeated":
+            continue
+        for row in database.execute("SELECT * FROM mud_npc_trainers WHERE npc_definition_id=? ORDER BY skill_key",
+                                    (npc["definition_id"],)):
+            if skill_key is None or row["skill_key"] == skill_key:
+                offers.append((npc, row))
+    return offers
+
+
+def _split_trainer(arguments):
+    text = " ".join(str(value) for value in arguments).strip()
+    if re.search(r"\s+from\s+", text, re.I):
+        skill, trainer = re.split(r"\s+from\s+", text, maxsplit=1, flags=re.I)
+        return skill.strip(), trainer.strip()
+    return text, ""
+
+
+def _require_created(character, verb):
+    if character["creation_state"] != "complete":
+        raise ActionError(f"Create your character before {verb}.")
+
+
+def _skill_line(skill):
+    progress = ("max" if skill["rank"] >= skill["max_rank"] else
+                f"{skill['experience']}/{skill['next_rank_at']}")
+    return (f"- {skill['name']} {skill['rank']}/{skill['max_rank']} [{progress}]"
+            + (f": {skill['effects']}" if skill["active"] and skill["effects"] else "")
+            + ("" if skill["active"] else " (inactive)"))
+
+
+def _skills_action(database, user, parameters):
+    args = [str(value) for value in parameters.get("arguments", [])]
+    character = character_state(database, user["id"])
+    if args:
+        definition = _resolve_skill(database, " ".join(args), include_inactive=True)
+        known = next((skill for skill in character["skills"] if skill["skill_key"] == definition["key"]), None)
+        requirements = definition["requirements"]
+        needs = [f"level {requirements['level']}"] if requirements["level"] > 1 else []
+        needs += [f"{name.title()} {value}" for name, value in requirements["attributes"].items()]
+        needs += [f"{key} rank {value}" for key, value in requirements["skills"].items()]
+        if requirements["races"] or requirements["classes"]:
+            needs.append("specific races or classes")
+        triggers = ", ".join(mud_skills.TRIGGERS[trigger] for trigger in definition["practice"]["triggers"])
+        lines = [f"{definition['name']} ({definition['group']})", definition["description"],
+                 f"Per rank: {mud_skills.describe_effects(definition)}",
+                 f"Improves by: {triggers or 'training only'}",
+                 f"Learn: {definition['learn']['cost']} skill point(s)"
+                 + (", from a trainer" if definition["learn"]["trainer_required"] else "")
+                 + (f" · requires {', '.join(needs)}" if needs else "")]
+        if known:
+            lines.insert(2, f"Your rank: {known['rank']}/{known['max_rank']}"
+                            + (f" — now {known['effects']}" if known["active"] and known["effects"] else ""))
+        return [EventDraft("\n".join(lines), event_type="character")]
+    lines = [f"Skill points: {character['skill_points']} (earned at even levels and every fifth level)."]
+    for group in mud_skills.GROUPS:
+        members = [skill for skill in character["skills"] if skill["group"] == group]
+        if members:
+            lines.append(group.title() + ":")
+            lines += [_skill_line(skill) for skill in members]
+    if not character["skills"]:
+        lines.append("You have no skills yet.")
+    lines += _learnable_lines(database, user, character)
+    lines.append("Use /skills <name> for details, /learn <skill>, or /practice <skill> to spend a point.")
+    return [EventDraft("\n".join(lines), event_type="character")]
+
+
+def _learnable_lines(database, user, character):
+    if character["creation_state"] != "complete":
+        return []
+    context = _skill_context(database, character)
+    known = {skill["skill_key"] for skill in character["skills"]}
+    trainers = {}
+    for npc, offer in _room_trainers(database, user["id"]):
+        trainers.setdefault(offer["skill_key"], []).append(npc["name"])
+    lines = []
+    for definition in mud_skills.definitions(database).values():
+        if definition["key"] in known:
+            continue
+        problems = mud_skills.requirement_problems(definition, **context)
+        notes = [f"{definition['learn']['cost']} pt"]
+        if definition["learn"]["trainer_required"]:
+            notes.append("trainer only")
+        if definition["key"] in trainers:
+            notes.append("taught by " + ", ".join(trainers[definition["key"]]))
+        if problems:
+            notes.append("needs " + ", ".join(problems))
+        lines.append(f"- {definition['name']} ({'; '.join(notes)})")
+    return (["Learnable:"] + lines) if lines else []
+
+
+def _learn_action(database, user, parameters):
+    character = character_state(database, user["id"])
+    _require_created(character, "learning skills")
+    name, trainer_name = _split_trainer(parameters.get("arguments", []))
+    if not name:
+        lines = _learnable_lines(database, user, character) or ["There are no new skills to learn."]
+        return [EventDraft("\n".join([f"Skill points: {character['skill_points']}.", *lines]),
+                           event_type="character")]
+    definition = _resolve_skill(database, name)
+    offers = _room_trainers(database, user["id"], definition["key"], trainer_name)
+    if trainer_name and not offers:
+        raise ActionError(f"{trainer_name} does not teach {definition['name']} here.")
+    if not trainer_name and len(offers) > 1:
+        raise ActionError("Several trainers teach that here. Add 'from <trainer>'.")
+    use_trainer = bool(trainer_name) or (definition["learn"]["trainer_required"] and len(offers) == 1)
+    try:
+        _definition, cost = mud_skills.learn(database, character["id"], definition["key"],
+                                             context=_skill_context(database, character), trainer=use_trainer)
+    except ValueError as problem:
+        raise ActionError(str(problem)) from problem
+    paid = ""
+    if use_trainer:
+        npc, offer = offers[0]
+        _charge(database, character["id"], offer["price"])
+        paid = f" {npc['name']} teaches you" + (f" for {offer['price']} coins" if offer["price"] else "") + "."
+    spent = f" ({cost} skill point{'s' if cost != 1 else ''})" if cost else ""
+    return [EventDraft(f"You learn {definition['name']} at rank 1{spent}.{paid} "
+                       f"{mud_skills.describe_effects(definition, 1)}".rstrip(), event_type="character")]
+
+
+def _charge(database, character_id, price):
+    if not price:
+        return
+    _wallet(database, character_id)
+    if not database.execute("UPDATE mud_character_wallets SET coins=coins-? WHERE character_id=? AND coins>=?",
+                            (price, character_id, price)).rowcount:
+        raise ActionError(f"That lesson costs {price} coins.")
+
+
+def _practice_skill_action(database, user, parameters):
+    character = character_state(database, user["id"])
+    _require_created(character, "training skills")
+    name, trainer_name = _split_trainer(parameters.get("arguments", []))
+    if not name:
+        raise ActionError("Use /practice <skill> to spend a skill point, or /practice <skill> from <trainer>.")
+    definition = _resolve_skill(database, name)
+    offer = None
+    if trainer_name:
+        offers = _room_trainers(database, user["id"], definition["key"], trainer_name)
+        if not offers:
+            raise ActionError(f"{trainer_name} does not teach {definition['name']} here.")
+        offer = offers[0]
+    try:
+        _definition, rank = mud_skills.raise_rank(
+            database, character["id"], definition["key"], use_points=offer is None,
+            limit=offer[1]["max_rank"] if offer else None)
+    except ValueError as problem:
+        raise ActionError(str(problem)) from problem
+    if offer:
+        # Lessons grow more expensive with each rank they teach.
+        price = offer[1]["price"] * (rank - 1)
+        _charge(database, character["id"], price)
+        source = f"{offer[0]['name']} trains you" + (f" for {price} coins" if price else "")
+    else:
+        source = "You spend a skill point"
+    return [EventDraft(f"{source}. {definition['name']} rises to rank {rank}: "
+                       f"{mud_skills.describe_effects(definition, rank)}.", event_type="character")]
+
+
 def _help_action(_database, _user, parameters):
     args = parameters.get("arguments", [])
     if args:
@@ -570,7 +788,9 @@ def _help_action(_database, _user, parameters):
             "look": '/look "Oak Chest"', "tell": '/tell "Player Name" hello',
             "reply_player": '/reply hello', "respond": '/respond 1',
             "description": '/description A traveler in a blue coat',
-            "train": '/train strength 2',
+            "train": '/train strength 2', "skills": '/skills stealth',
+            "learn": '/learn lockpicking from "Old Thief"', "practice_skill": '/practice blades',
+            "pick": '/pick north',
         }
         body = f"/{name}: {definition.description}\nAliases: " + ", ".join(f"/{alias}" for alias in aliases)
         if definition.key in examples:
@@ -821,7 +1041,8 @@ def _room_exits(database, room_id, instance_id=None):
             (instance_id, room_id),
         ).fetchall()]
     return database.execute(
-        "SELECT e.id,e.name,e.direction,e.to_room_id,e.key_item_id,r.name AS destination_name "
+        "SELECT e.id,e.name,e.direction,e.to_room_id,e.key_item_id,e.pick_difficulty,"
+        "r.name AS destination_name "
         "FROM mud_world_exits AS e JOIN mud_world_rooms AS r ON r.id=e.to_room_id "
         "WHERE e.from_room_id=? ORDER BY "
         "CASE WHEN e.direction IS NULL THEN 1 ELSE 0 END,e.name COLLATE NOCASE,e.id",
@@ -878,9 +1099,16 @@ def _exit_label(exit_row):
     return f"{route.upper()} — {exit_row['destination_name']}"
 
 
+def _exit_locked(exit_row):
+    """Traditional exits lock behind a key, a pickable lock, or both."""
+    keys = exit_row.keys()
+    return bool(("key_item_id" in keys and exit_row["key_item_id"]) or
+                ("pick_difficulty" in keys and exit_row["pick_difficulty"]))
+
+
 def _player_exit_label(database, user_id, exit_row):
     label = _exit_label(exit_row)
-    if "key_item_id" not in exit_row.keys() or not exit_row["key_item_id"]:
+    if not _exit_locked(exit_row):
         return label
     character = _character_row(database, user_id)
     unlocked = database.execute("SELECT 1 FROM mud_exit_unlocks WHERE character_id=? AND exit_id=?",
@@ -1018,7 +1246,7 @@ def _equipment_combat_totals(database, character_id=None, npc_definition_id=None
         loadout = _inventory_context(database, owner["user_id"])["loadout"]
         character = _character_row(database, owner["user_id"])
         rows = database.execute(
-            "SELECT d.properties_json FROM mud_character_equipment AS e "
+            "SELECT d.name,d.properties_json FROM mud_character_equipment AS e "
             "JOIN mud_item_instances AS i ON i.id=e.item_instance_id "
             "JOIN mud_item_definitions AS d ON d.id=i.definition_id "
             "WHERE e.character_id=? AND e.loadout_key=? AND i.owner_character_id=?",
@@ -1026,19 +1254,39 @@ def _equipment_combat_totals(database, character_id=None, npc_definition_id=None
         ).fetchall()
     else:
         rows = database.execute(
-            "SELECT d.properties_json FROM mud_npc_equipment AS e "
+            "SELECT d.name,d.properties_json FROM mud_npc_equipment AS e "
             "JOIN mud_item_definitions AS d ON d.id=e.item_definition_id "
             "WHERE e.npc_definition_id=?", (npc_definition_id,),
         ).fetchall()
     attack = defense = 0
+    categories, unproficient = set(), []
+    known = mud_skills.proficiencies(database, character_id) if character_id is not None else set()
     for row in rows:
         properties = _json_properties(row["properties_json"])
         if character_id is not None and not _meets_item_requirements(properties, character):
             continue
+        item_attack = max(0, _integer_property(properties, "damage", "attack", "attack_bonus"))
+        item_defense = max(0, _integer_property(properties, "armor", "defense", "defense_bonus"))
+        category = _item_category(properties)
+        if character_id is not None and category:
+            categories.add(category)
+            if category not in known:
+                unproficient.append(row["name"])
+                item_attack, item_defense = _untrained(item_attack), _untrained(item_defense)
         if character_id is None or not mud_firearms.is_firearm(properties):
-            attack += max(0, _integer_property(properties, "damage", "attack", "attack_bonus"))
-        defense += max(0, _integer_property(properties, "armor", "defense", "defense_bonus"))
-    return {"attack": attack, "defense": defense}
+            attack += item_attack
+        defense += item_defense
+    return {"attack": attack, "defense": defense, "categories": categories, "unproficient": unproficient}
+
+
+def _item_category(properties):
+    category = properties.get("category")
+    return category if isinstance(category, str) and character_creation.KEY_RE.fullmatch(category) else None
+
+
+def _untrained(value):
+    """Categorized gear without a matching proficiency gives up a quarter of its bonus."""
+    return value - value // 4
 
 
 def _equipment_stat_bonus(gear, attribute, kind):
@@ -1606,9 +1854,15 @@ def hub_state(database, user_id):
     return {
         "coins": _wallet(database, character["id"]),
         "shop": [{"id": row["id"], "name": row["name"], "description": row["description"],
-                  "price": _item_value(row)} for row in catalog],
+                  "price": _discounted(database, character["id"], _item_value(row))} for row in catalog],
         "storage": [{"id": row["id"], "name": row["name"]} for row in stored],
     }
+
+
+def _discounted(database, character_id, price):
+    """Apply Haggling-style merchant discounts; every purchase still costs a coin."""
+    discount = _character_effects(database, character_id)["shop_discount"]
+    return max(1, price - price * discount // 100)
 
 
 def _require_hub(database, user_id):
@@ -1637,7 +1891,7 @@ def _shop_action(database, user, parameters):
         ).fetchone()
         if row is None:
             raise ActionError("That supply is not sold here.")
-        price = _item_value(row)
+        price = _discounted(database, character["id"], _item_value(row))
         _wallet(database, character["id"])
         if not database.execute(
             "UPDATE mud_character_wallets SET coins=coins-? WHERE character_id=? AND coins>=?",
@@ -1646,6 +1900,7 @@ def _shop_action(database, user, parameters):
             raise ActionError("You do not have enough coins.")
         _grant_item(database, user["id"], row["id"], "shop:item")
         return [EventDraft(f"You buy {row['name']} for {price} coins.", event_type="shop")] + \
+            _practice(database, character["id"], "purchase") + \
             _set_objective_progress(database, user, "possess_item", row["id"])
     if operation == "sell":
         item = _item_matches(
@@ -1701,7 +1956,7 @@ def _world_shop_action(database, user, parameters):
             "SELECT s.*,d.name FROM mud_shop_stock s JOIN mud_item_definitions d ON d.id=s.item_definition_id "
             "WHERE s.npc_definition_id=? AND (s.quantity IS NULL OR s.quantity>0) ORDER BY d.name COLLATE NOCASE",
             (npc["definition_id"],)).fetchall()
-        lines = [f"{npc['name']} offers:"] + [f"- {row['name']}: {row['price']} coins" +
+        lines = [f"{npc['name']} offers:"] + [f"- {row['name']}: {_discounted(database, character['id'], row['price'])} coins" +
                  (f" ({row['quantity']} left)" if row["quantity"] is not None else "") for row in stock]
         if not stock:
             lines.append("No stock available.")
@@ -1718,12 +1973,14 @@ def _world_shop_action(database, user, parameters):
         if row["quantity"] is not None and not database.execute(
             "UPDATE mud_shop_stock SET quantity=quantity-1 WHERE id=? AND quantity>0", (row["id"],)).rowcount:
             raise ActionError("That item is out of stock.")
+        price = _discounted(database, character["id"], row["price"])
         _wallet(database, character["id"])
         if not database.execute("UPDATE mud_character_wallets SET coins=coins-? WHERE character_id=? AND coins>=?",
-                                (row["price"], character["id"], row["price"])).rowcount:
+                                (price, character["id"], price)).rowcount:
             raise ActionError("You do not have enough coins.")
         _grant_item(database, user["id"], row["item_definition_id"], "shop:item")
-        return [EventDraft(f"You buy {row['name']} for {row['price']} coins.", event_type="shop")] + \
+        return [EventDraft(f"You buy {row['name']} for {price} coins.", event_type="shop")] + \
+            _practice(database, character["id"], "purchase") + \
             _set_objective_progress(database, user, "possess_item", row["item_definition_id"])
     if operation == "sell":
         if not shop["buys_items"]:
@@ -1852,9 +2109,11 @@ def _award_quest_rewards(database, user, quest_id):
     ):
         if reward["reward_type"] == "experience":
             result = award_experience(database, user["id"], reward["amount"])
-            messages.append(f"{reward['amount']} experience")
-            if result["levels_gained"]:
-                messages.append(level_up_text(result))
+            # Report what was actually earned after Intellect and Lore bonuses.
+            messages.append(f"{result['amount']} experience")
+            gains = level_up_text(result)
+            if gains:
+                messages.append(gains)
         elif reward["reward_type"] == "item":
             definition = database.execute(
                 "SELECT name FROM mud_item_definitions WHERE id=?", (reward["target_id"],)
@@ -2080,11 +2339,11 @@ def _examine_exit(database, _user, room, target):
         raise ActionError("More than one exit matches. Use its full name.")
     if matches:
         item = matches[0]
-        if "key_item_id" in item.keys() and item["key_item_id"]:
+        if _exit_locked(item):
             character = _character_row(database, _user["id"])
             unlocked = database.execute("SELECT 1 FROM mud_exit_unlocks WHERE character_id=? AND exit_id=?",
                                         (character["id"], item["id"])).fetchone()
-            return f"{item['name']}\nLeads to {item['destination_name']}. " + ("Unlocked." if unlocked else "Locked. Use /unlock <exit> with a key.")
+            return f"{item['name']}\nLeads to {item['destination_name']}. " + ("Unlocked." if unlocked else _locked_hint(item))
         return f"{item['name']}\nLeads to {item['destination_name']}."
     return None
 
@@ -2175,7 +2434,7 @@ def _encounter_reward_drafts(database, encounter, npc):
             ) // 100)
         if experience:
             result = award_experience(database, participant["user_id"], experience)
-            rewards.insert(0, f"{experience} experience")
+            rewards.insert(0, f"{result['amount']} experience")
             level_up = level_up_text(result)
         summary = ", ".join(rewards) if rewards else "no configured rewards"
         drafts.append(EventDraft(
@@ -2262,9 +2521,9 @@ def _set_hidden(database, user_id, hidden):
     )
 
 
-def _stealth_chance(agility, detection):
-    """Agility helps hiding; enemy defense doubles as awareness."""
-    return max(15, min(90, 55 + 5 * (agility - 10) - 4 * (detection - 5)))
+def _stealth_chance(agility, detection, bonus=0):
+    """Agility and Stealth help hiding; enemy defense doubles as awareness."""
+    return max(15, min(95, min(90, 55 + 5 * (agility - 10) - 4 * (detection - 5)) + bonus))
 
 
 def _hide_action(database, user, parameters):
@@ -2284,11 +2543,13 @@ def _hide_action(database, user, parameters):
     ).fetchone() for _, encounter in enemies):
         raise ActionError("You cannot hide while fighting. Flee first.")
     detection = max((npc["combat_defense"] for npc, _ in enemies), default=5)
-    if secrets.randbelow(100) >= _stealth_chance(character["agility"], detection):
-        drafts = [EventDraft("You try to hide, but are spotted.", event_type="combat")]
+    bonus = _character_effects(database, character["id"])["stealth"]
+    practiced = _practice(database, character["id"], "hide")
+    if secrets.randbelow(100) >= _stealth_chance(character["agility"], detection, bonus):
+        drafts = [EventDraft("You try to hide, but are spotted.", event_type="combat")] + practiced
         return drafts + (_enemy_turn(database, user) if enemies else [])
     _set_hidden(database, user["id"], True)
-    return [EventDraft("You slip into hiding.", event_type="combat")]
+    return [EventDraft("You slip into hiding.", event_type="combat")] + practiced
 
 
 def _enemy_turn(database, user, defending=False, chosen=None):
@@ -2337,7 +2598,7 @@ def _enemy_turn(database, user, defending=False, chosen=None):
             database.execute("UPDATE mud_encounter_firearms SET loaded_rounds=loaded_rounds-1 WHERE encounter_id=?",
                              (encounter["id"],))
     player_gear = _equipment_combat_totals(database, character_id=character["id"])
-    effects = _character_effects(database, character["id"])
+    effects = _character_effects(database, character["id"], player_gear)
     damage = 0 if npc_reloading else max(1, npc["combat_attack"] + (2 if npc_firearm else 0) + enemy_gear["attack"]
                  + mud_effects.modifier(database, "encounter", encounter["id"], "attack")
                  - (character["vitality"] // 10 + character["agility"] // 5
@@ -2346,8 +2607,12 @@ def _enemy_turn(database, user, defending=False, chosen=None):
                     + effects["defense"] + level_bonuses(character["level"])["defense"]))
     if defending:
         damage = max(0, (damage - max(0, (character["vitality"] - 10) // 2)) // 3)
+    # Only real blows teach defense: reload turns and fully blocked hits do not.
+    practiced = (_practice(database, character["id"], "damage_taken", categories=player_gear["categories"])
+                 if damage > 0 else [])
+    if defending:
+        practiced += _practice(database, character["id"], "defend", categories=player_gear["categories"])
     damage += sum(amount for _, amount in mud_effects.tick(database, "character", character["id"]))
-    _practice_effect(database, character["id"], "defense")
     health = max(0, character["current_health"] - damage)
     database.execute(
         "UPDATE mud_character_progression SET current_health=?,updated_at=CURRENT_TIMESTAMP "
@@ -2358,7 +2623,7 @@ def _enemy_turn(database, user, defending=False, chosen=None):
          if npc_reloading else
          f"{npc['name']} strikes for {damage} damage ({health}/{character['maximum_health']} health)."),
         event_type="combat",
-    )]
+    )] + practiced
     if health > 0 and damage > 0 and not npc_reloading:
         for spec in _effect_specs(_json_properties(npc["properties_json"]), "on_hit_effects"):
             try:
@@ -2382,7 +2647,8 @@ def _entry_attack(database, user):
     if _is_hidden(database, user["id"]):
         character = _character_row(database, user["id"])
         detection = max(npc["combat_defense"] for npc, _ in enemies)
-        if secrets.randbelow(100) < _stealth_chance(character["agility"], detection):
+        bonus = _character_effects(database, character["id"])["stealth"]
+        if secrets.randbelow(100) < _stealth_chance(character["agility"], detection, bonus):
             return [EventDraft("You pass the enemies unnoticed.", event_type="combat")]
         _set_hidden(database, user["id"], False)
         noticed = [EventDraft("An enemy spots you!", event_type="combat")]
@@ -2505,26 +2771,33 @@ def _attack_action(database, user, parameters):
     )
     player_gear = _equipment_combat_totals(database, character_id=character["id"])
     enemy_gear = _equipment_combat_totals(database, npc_definition_id=npc["definition_id"])
-    effects = _character_effects(database, character["id"])
+    effects = _character_effects(database, character["id"], player_gear)
     surprise = _is_hidden(database, user["id"])
     _set_hidden(database, user["id"], False)
-    firearm_attack = (max(0, _integer_property(_json_properties(firearm["properties_json"]),
-                                                "damage", "attack", "attack_bonus")) if firearm else 0)
+    firearm_attack = 0
+    if firearm:
+        firearm_properties = _json_properties(firearm["properties_json"])
+        firearm_attack = max(0, _integer_property(firearm_properties, "damage", "attack", "attack_bonus"))
+        firearm_category = _item_category(firearm_properties)
+        if firearm_category and firearm_category not in mud_skills.proficiencies(database, character["id"]):
+            firearm_attack = _untrained(firearm_attack)
     weapon_attack = firearm_attack if firearm else player_gear["attack"]
     weapon_stat = character["agility"] if firearm else character["strength"]
+    style_bonus = effects["firearm_damage"] if firearm else effects["melee_damage"]
     bonuses = level_bonuses(character["level"])
-    damage = (max(1, spell_damage + character["intellect"] // 3 + bonuses["spell_power"]
+    damage = (max(1, spell_damage + character["intellect"] // 3 + effects["spell_power"] + bonuses["spell_power"]
                   - (npc["combat_defense"] + enemy_gear["defense"]
                      + mud_effects.modifier(database, "encounter", encounter["id"], "defense")) // 2)
               if spell_damage is not None else
                max(1, (6 if firearm else 4) + weapon_stat // 2
                    + weapon_attack + _equipment_stat_bonus({"attack": weapon_attack}, weapon_stat, "attack")
-                  + effects["attack"] + bonuses["attack"] - (npc["combat_defense"] + enemy_gear["defense"]
+                  + effects["attack"] + style_bonus + bonuses["attack"] - (npc["combat_defense"] + enemy_gear["defense"]
                      + mud_effects.modifier(database, "encounter", encounter["id"], "defense")) // 2))
     if surprise:
         damage += max(2, character["agility"] // 2)
-    if spell_damage is None:
-        _practice_effect(database, character["id"], "attack")
+    practiced = _practice(database, character["id"],
+                          "spell_cast" if spell_damage is not None else "firearm_hit" if firearm else "melee_hit",
+                          categories=player_gear["categories"])
     if firearm:
         state = _item_state(firearm)
         state["loaded"] = _loaded_rounds(firearm) - 1
@@ -2551,7 +2824,7 @@ def _attack_action(database, user, parameters):
         f"({remaining}/{encounter['maximum_health']} health).",
         event_type="combat", audience_type=audience_type, audience_key=audience_key,
         recipient_ids=tuple(sorted(recipients)),
-    )]
+    )] + practiced
     if remaining > 0:
         applications = parameters.get("_spell_effects") if spell_damage is not None else []
         if spell_damage is None:
@@ -2643,10 +2916,11 @@ def _flee_action(database, user, _parameters):
     if not _active_hostiles(database, room):
         raise ActionError("There is no hostile enemy to flee from.")
     character = _character_row(database, user["id"])
-    chance = _flee_chance(character["agility"])
+    chance = _flee_chance(character["agility"], _character_effects(database, character["id"])["flee"])
+    practiced = _practice(database, character["id"], "flee")
     if secrets.randbelow(100) >= chance:
-        return [EventDraft("Your escape fails.", event_type="combat")] + _enemy_turn(database, user)
-    drafts = [EventDraft("You slip past the enemy, but it lashes out as you flee.", event_type="combat")]
+        return [EventDraft("Your escape fails.", event_type="combat")] + practiced + _enemy_turn(database, user)
+    drafts = [EventDraft("You slip past the enemy, but it lashes out as you flee.", event_type="combat")] + practiced
     drafts += _enemy_turn(database, user)
     if _current_room(database, user["id"])["id"] != room["id"]:
         return drafts
@@ -2755,12 +3029,14 @@ def _cast_action(database, user, parameters):
     drafts = []
     if "heal" in spell:
         restored = min(spell["heal"] + character["intellect"] // 2
+                       + _character_effects(database, character["id"])["healing"]
                        + level_bonuses(character["level"])["healing"],
                        character["maximum_health"] - character["current_health"])
         database.execute("UPDATE mud_character_progression SET current_health=current_health+? "
                          "WHERE character_id=? AND track_key=?",
                          (restored, character["id"], character["track_key"]))
         drafts.append(EventDraft(f"You cast {name} and restore {restored} health.", event_type="combat"))
+        drafts += _practice(database, character["id"], "heal_cast")
     for spec in spell.get("effects", []):
         key = mud_effects.apply(database, "character", character["id"], spec, name)
         drafts.append(EventDraft(f"You cast {name} and gain {key}.", event_type="combat"))
@@ -2795,15 +3071,22 @@ def _search_action(database, user, parameters):
     if room.get("instance_id"):
         raise ActionError("There is nothing to search here.")
     character = _character_row(database, user["id"])
-    found = database.execute(
+    hidden = database.execute(
         "SELECT d.* FROM mud_room_discoveries d WHERE d.room_id=? AND NOT EXISTS "
         "(SELECT 1 FROM mud_player_discoveries p WHERE p.character_id=? AND p.discovery_id=d.id) "
-        "ORDER BY d.id LIMIT 1", (room["id"], character["id"])).fetchone()
+        "ORDER BY d.id", (room["id"], character["id"])).fetchall()
+    # Only well-hidden discoveries are a real challenge, so only they teach Perception.
+    practiced = (_practice(database, character["id"], "search")
+                 if any(row["difficulty"] for row in hidden) else [])
+    score = _character_effects(database, character["id"])["search"] + 2 * (character["intellect"] - 10)
+    found = next((row for row in hidden if not row["difficulty"] or
+                  secrets.randbelow(100) < _skill_check_chance(score, row["difficulty"])), None)
     if found is None:
-        return [EventDraft("You search carefully but find nothing new.", event_type="room")]
+        return [EventDraft("You sense something more here, but it eludes you for now." if hidden else
+                           "You search carefully but find nothing new.", event_type="room")] + practiced
     database.execute("INSERT INTO mud_player_discoveries(character_id,discovery_id) VALUES(?,?)",
                      (character["id"], found["id"]))
-    drafts = [EventDraft(found["clue"], event_type="room")]
+    drafts = [EventDraft(found["clue"], event_type="room")] + practiced
     if found["item_definition_id"]:
         item = database.execute("SELECT name FROM mud_item_definitions WHERE id=?",
                                 (found["item_definition_id"],)).fetchone()
@@ -2812,6 +3095,11 @@ def _search_action(database, user, parameters):
             drafts.append(EventDraft(f"You discover {item['name']}.", event_type="item"))
             drafts += _set_objective_progress(database, user, "possess_item", found["item_definition_id"])
     return drafts
+
+
+def _skill_check_chance(score, difficulty):
+    """Shared search and lockpicking odds: 50% when score matches difficulty."""
+    return max(5, min(95, 50 + score - difficulty))
 
 
 def _room_entry_event(database, user):
@@ -2963,8 +3251,14 @@ def _equip_action(database, user, parameters):
         "VALUES(?,?,?,?)", (character["id"], loadout, slot, item["id"]),
     )
     room = _current_room(database, user["id"])
-    return [EventDraft(f"You equip {item['name']} ({slot.replace('_', ' ')}).", event_type="item"),
-            _room_item_event(database, user, room, f"{character['display_name']} equips {item['name']}.")]
+    drafts = [EventDraft(f"You equip {item['name']} ({slot.replace('_', ' ')}).", event_type="item"),
+              _room_item_event(database, user, room, f"{character['display_name']} equips {item['name']}.")]
+    category = _item_category(_json_properties(item["properties_json"]))
+    if category and category not in mud_skills.proficiencies(database, character["id"]):
+        drafts.append(EventDraft(
+            f"You are untrained with {category} gear, so {item['name']} gives only three quarters of its "
+            "bonuses. Learn a skill with that proficiency to use it fully (see /skills).", event_type="item"))
+    return drafts
 
 
 def _unequip_action(database, user, parameters):
@@ -4021,20 +4315,35 @@ def _dungeon_entrance_action(_database, _user, parameters):
         raise ActionError("Choose Dungeon of the Day or a Random Expedition.")
 
 
-def _unlock_action(database, user, parameters):
+def _locked_hint(exit_row):
+    methods = []
+    if exit_row["key_item_id"]:
+        methods.append("/unlock <exit> with a key")
+    if exit_row["pick_difficulty"]:
+        methods.append("/pick <exit>")
+    return "Locked. Use " + " or ".join(methods) + "."
+
+
+def _locked_exit(database, user, parameters, usage):
     target = " ".join(str(value) for value in parameters.get("arguments", [])).strip()
     if not target:
-        raise ActionError("Use /unlock <exit>.")
+        raise ActionError(usage)
     room = _current_room(database, user["id"])
     if room.get("instance_id"):
-        raise ActionError("There are no keyed exits here.")
+        raise ActionError("There are no locked exits here.")
     matches = [row for row in _room_exits(database, room["id"]) if target.casefold() in
                {row["id"].casefold(), row["name"].casefold(), (row["direction"] or "").casefold()}]
     if len(matches) != 1:
         raise ActionError("Choose a nearby exit by name or direction.")
-    chosen = matches[0]
-    if not chosen["key_item_id"]:
+    return room, matches[0]
+
+
+def _unlock_action(database, user, parameters):
+    _room, chosen = _locked_exit(database, user, parameters, "Use /unlock <exit>.")
+    if not _exit_locked(chosen):
         return [EventDraft(f"{chosen['name']} is already open.", event_type="room")]
+    if not chosen["key_item_id"]:
+        raise ActionError(f"{chosen['name']} has no keyhole you can use. Try /pick {chosen['direction'] or chosen['name']}.")
     character = _character_row(database, user["id"])
     if database.execute("SELECT 1 FROM mud_exit_unlocks WHERE character_id=? AND exit_id=?",
                         (character["id"], chosen["id"])).fetchone():
@@ -4045,6 +4354,27 @@ def _unlock_action(database, user, parameters):
     database.execute("INSERT INTO mud_exit_unlocks(character_id,exit_id) VALUES(?,?)",
                      (character["id"], chosen["id"]))
     return [EventDraft(f"You unlock {chosen['name']}.", event_type="room")]
+
+
+def _pick_action(database, user, parameters):
+    room, chosen = _locked_exit(database, user, parameters, "Use /pick <exit>.")
+    if not _exit_locked(chosen):
+        return [EventDraft(f"{chosen['name']} is already open.", event_type="room")]
+    if not chosen["pick_difficulty"]:
+        raise ActionError(f"The lock on {chosen['name']} cannot be picked; find its key.")
+    if _active_hostiles(database, room):
+        raise ActionError("You cannot work a lock with enemies nearby.", 409)
+    character = _character_row(database, user["id"])
+    if database.execute("SELECT 1 FROM mud_exit_unlocks WHERE character_id=? AND exit_id=?",
+                        (character["id"], chosen["id"])).fetchone():
+        return [EventDraft(f"{chosen['name']} is already unlocked.", event_type="room")]
+    score = _character_effects(database, character["id"])["lockpick"] + 2 * (character["agility"] - 10)
+    practiced = _practice(database, character["id"], "pick_lock")
+    if secrets.randbelow(100) >= _skill_check_chance(score, chosen["pick_difficulty"]):
+        return [EventDraft(f"The lock on {chosen['name']} resists your efforts.", event_type="room")] + practiced
+    database.execute("INSERT INTO mud_exit_unlocks(character_id,exit_id) VALUES(?,?)",
+                     (character["id"], chosen["id"]))
+    return [EventDraft(f"You pick the lock on {chosen['name']}.", event_type="room")] + practiced
 
 
 def _go_action(database, user, parameters):
@@ -4088,11 +4418,11 @@ def _go_action(database, user, parameters):
     if len(matches) > 1:
         raise ActionError(f'More than one exit matches "{destination}". Use an exit name or direction.')
     chosen = matches[0]
-    if not instance_id and chosen["key_item_id"]:
+    if not instance_id and _exit_locked(chosen):
         unlocked = database.execute("SELECT 1 FROM mud_exit_unlocks WHERE character_id=? AND exit_id=?",
                                     (_character_row(database, user["id"])["id"], chosen["id"])).fetchone()
         if not unlocked:
-            raise ActionError("That exit is locked. Use /unlock <exit> with its key.")
+            raise ActionError("That exit is locked. " + _locked_hint(chosen).removeprefix("Locked. "))
     old_recipients = _occupant_ids(database, room["id"], user["id"], instance_id)
     _leave_combat(database, user["id"], "instance" if instance_id else "room",
                   instance_id or room["id"])
@@ -4296,6 +4626,26 @@ actions.register(ActionDefinition(
     group="CHARACTER",
 ))
 actions.register(ActionDefinition(
+    key="skills", label="SKILLS",
+    description="List your skills, ranks, effects, skill points, and skills you can learn; "
+                "/skills <name> shows details.",
+    commands=("skills", "proficiencies"), handler=_skills_action,
+    group="CHARACTER",
+))
+actions.register(ActionDefinition(
+    key="learn", label="LEARN SKILL",
+    description="Learn a new skill with skill points: /learn <skill> [from <trainer>].",
+    commands=("learn",), handler=_learn_action,
+    group="CHARACTER", show_context=False,
+))
+actions.register(ActionDefinition(
+    key="practice_skill", label="PRACTICE SKILL",
+    description="Raise a known skill one rank with a skill point, or pay a trainer: "
+                "/practice <skill> [from <trainer>].",
+    commands=("practice",), handler=_practice_skill_action,
+    group="CHARACTER", show_context=False,
+))
+actions.register(ActionDefinition(
     key="inventory", label="VIEW INVENTORY",
     description="List carried and equipped items.",
     commands=("inventory", "inv", "i"), handler=_inventory_action,
@@ -4362,6 +4712,7 @@ actions.register(ActionDefinition(
     group="NAVIGATION", show_context=False,
 ))
 actions.register(ActionDefinition(key="unlock", label="UNLOCK EXIT", description="Unlock a nearby keyed exit with a carried key.", commands=("unlock",), handler=_unlock_action, group="NAVIGATION", show_context=False))
+actions.register(ActionDefinition(key="pick", label="PICK LOCK", description="Pick a nearby lock using Lockpicking and Agility.", commands=("pick", "picklock"), handler=_pick_action, group="NAVIGATION", show_context=False))
 actions.register(ActionDefinition(key="search", label="SEARCH ROOM", description="Search this room for authored discoveries.", commands=("search",), handler=_search_action, group="NAVIGATION", show_context=False))
 actions.register(ActionDefinition(
     key="portal", label="ENTER DUNGEON PORTALS",
@@ -5024,6 +5375,8 @@ def create_character():
         return redirect(url_for("mud.character_compatibility") if mud_compat.incompatible(database, g.user["id"])
                         else url_for("mud.index"))
     config = character_creation.options()
+    config["skill_names"] = {key: definition["name"]
+                             for key, definition in mud_skills.definitions(database).items()}
     error = None
     selected = {}
     if request.method == "POST":
@@ -5232,6 +5585,7 @@ def _valid_exit_fields(database, exit_id=None):
     name = " ".join(request.form.get("name", "").split())
     direction = request.form.get("direction", "").strip().casefold() or None
     key_item_id = request.form.get("key_item_id", "").strip() or None
+    pick_raw = request.form.get("pick_difficulty", "").strip()
     room_ids = {
         row["id"] for row in database.execute(
             "SELECT id FROM mud_world_rooms WHERE id IN (?,?) AND world_id=(SELECT id FROM mud_world_packages WHERE active=1)",
@@ -5247,6 +5601,12 @@ def _valid_exit_fields(database, exit_id=None):
     if key_item_id and database.execute("SELECT 1 FROM mud_item_definitions WHERE id=? AND item_type='key'",
                                         (key_item_id,)).fetchone() is None:
         return None, "Choose an existing key item."
+    try:
+        pick_difficulty = int(pick_raw) if pick_raw else None
+    except ValueError:
+        pick_difficulty = 0
+    if pick_difficulty is not None and not 1 <= pick_difficulty <= 200:
+        return None, "Lock difficulty must be blank (cannot be picked) or 1 to 200."
     duplicate = database.execute(
         "SELECT id FROM mud_world_exits WHERE from_room_id=? AND id<>COALESCE(?, '') "
         "AND (name=? COLLATE NOCASE OR (? IS NOT NULL AND direction=? COLLATE NOCASE))",
@@ -5254,7 +5614,7 @@ def _valid_exit_fields(database, exit_id=None):
     ).fetchone()
     if duplicate:
         return None, "That source room already has an exit with this name or direction."
-    return (from_room_id, to_room_id, name, direction, key_item_id), None
+    return (from_room_id, to_room_id, name, direction, key_item_id, pick_difficulty), None
 
 
 @bp.get("/builder")
@@ -5304,6 +5664,7 @@ def builder():
         item["on_use_effects_json"] = json.dumps(properties.get("on_use_effects", []))
         item["on_hit_effects_json"] = json.dumps(properties.get("on_hit_effects", []))
         item["requirements_json"] = json.dumps(properties.get("requirements", {}))
+        item["category"] = _item_category(properties) or ""
         definitions.append(item)
     items_by_room = {room["id"]: [] for room in rooms}
     for row in database.execute("SELECT i.id,i.room_id,d.name,d.item_type,s.respawn_seconds FROM mud_item_instances i JOIN mud_item_definitions d ON d.id=i.definition_id LEFT JOIN mud_item_spawns s ON s.live_instance_id=i.id WHERE i.room_id IS NOT NULL ORDER BY d.name COLLATE NOCASE"):
@@ -5344,6 +5705,16 @@ def builder():
         shop_stock.setdefault(row["npc_definition_id"], []).append(dict(row))
     for row in database.execute("SELECT * FROM mud_npc_equipment"):
         npc_equipment.setdefault(row["npc_definition_id"], {})[row["equipment_slot"]] = row["item_definition_id"]
+    skill_entries = mud_skills.catalog(database)
+    skill_names = {entry["key"]: entry["definition"]["name"] for entry in skill_entries}
+    npc_trainers = {item["id"]: [] for item in npc_definitions}
+    for row in database.execute("SELECT * FROM mud_npc_trainers ORDER BY skill_key"):
+        npc_trainers.setdefault(row["npc_definition_id"], []).append(
+            {**dict(row), "skill_name": skill_names.get(row["skill_key"], row["skill_key"])})
+    item_categories = sorted({category for entry in skill_entries
+                              for kind in ("weapons", "armor")
+                              for category in entry["definition"]["proficiencies"][kind]}
+                             | {item["category"] for item in definitions if item["category"]})
     for row in database.execute(
         "SELECT r.*,d.name AS item_name FROM mud_npc_combat_rewards AS r "
         "LEFT JOIN mud_item_definitions AS d ON d.id=r.target_id "
@@ -5378,6 +5749,9 @@ def builder():
         rewards_by_quest=rewards_by_quest, givers_by_quest=givers_by_quest,
         npc_equipment=npc_equipment, npc_combat_rewards=npc_combat_rewards,
         npc_shops=npc_shops, shop_stock=shop_stock, discoveries_by_room=discoveries_by_room,
+        skill_entries=[{**entry, "summary": mud_skills.describe_effects(entry["definition"])}
+                       for entry in skill_entries],
+        npc_trainers=npc_trainers, item_categories=item_categories,
     )
 
 
@@ -5412,6 +5786,7 @@ def _item_definition_fields():
     rounds = request.form.get("rounds", 0, type=int)
     heal = request.form.get("heal", 0, type=int)
     value = request.form.get("value", 0, type=int)
+    category = request.form.get("category", "").strip().casefold()
     if not 2 <= len(name) <= 80 or not 1 <= len(description) <= 4000:
         return None, "Item names must be 2–80 characters and descriptions 1–4000 characters."
     if item_type not in {"misc", "equipment", "container", "consumable", "key"}:
@@ -5436,6 +5811,10 @@ def _item_definition_fields():
         return None, "Attribute requirements apply only to equipment."
     if requirements:
         properties["requirements"] = requirements
+    if category:
+        if item_type != "equipment" or not character_creation.KEY_RE.fullmatch(category):
+            return None, "Categories apply to equipment and must be lowercase keys such as blade or heavy."
+        properties["category"] = category
     if use_message: properties["use_message"] = use_message
     if attack_bonus: properties["attack_bonus"] = attack_bonus
     if defense_bonus: properties["defense_bonus"] = defense_bonus
@@ -5722,6 +6101,35 @@ def builder_add_shop_stock(npc_id):
     database.commit(); flash("Merchant stock saved.", "success"); return _builder_redirect()
 
 
+@bp.post("/builder/npcs/<path:npc_id>/trainers")
+@builder_required
+def builder_save_trainer(npc_id):
+    validate_csrf(); database = get_db()
+    if _managed_dungeon_definition(database, npc_id): abort(404)
+    if database.execute("SELECT 1 FROM mud_npc_definitions WHERE id=?", (npc_id,)).fetchone() is None: abort(404)
+    skill_key = request.form.get("skill_key", "").strip()
+    price = request.form.get("price", 0, type=int)
+    max_rank = request.form.get("max_rank", 5, type=int)
+    if (skill_key not in mud_skills.definitions(database) or price is None or not 0 <= price <= 100000
+            or max_rank is None or not 1 <= max_rank <= mud_skills.MAX_RANK):
+        flash("Choose an enabled skill, a price from 0 to 100,000 coins, and a maximum rank from 1 to 20.", "error")
+        return _builder_redirect()
+    database.execute(
+        "INSERT INTO mud_npc_trainers(id,npc_definition_id,skill_key,price,max_rank) VALUES(?,?,?,?,?) "
+        "ON CONFLICT(npc_definition_id,skill_key) DO UPDATE SET price=excluded.price,max_rank=excluded.max_rank",
+        (f"world:trainer:{uuid.uuid4().hex}", npc_id, skill_key, price, max_rank))
+    database.commit(); flash("Trainer lesson saved.", "success"); return _builder_redirect()
+
+
+@bp.post("/builder/trainers/<path:trainer_id>/delete")
+@builder_required
+def builder_delete_trainer(trainer_id):
+    validate_csrf(); database = get_db()
+    if request.form.get("confirmation") != "delete": abort(400)
+    if database.execute("DELETE FROM mud_npc_trainers WHERE id=?", (trainer_id,)).rowcount != 1: abort(404)
+    database.commit(); flash("Trainer lesson removed.", "success"); return _builder_redirect()
+
+
 @bp.post("/builder/shop-stock/<path:stock_id>/delete")
 @builder_required
 def builder_delete_shop_stock(stock_id):
@@ -5883,10 +6291,13 @@ def builder_add_discovery(room_id):
     if database.execute("SELECT 1 FROM mud_world_rooms WHERE id=? AND world_id=(SELECT id FROM mud_world_packages WHERE active=1)", (room_id,)).fetchone() is None: abort(404)
     clue = request.form.get("clue", "").strip()
     item_id = request.form.get("item_definition_id", "").strip() or None
+    difficulty = request.form.get("difficulty", 0, type=int)
     if not 1 <= len(clue) <= 500 or (item_id and database.execute("SELECT 1 FROM mud_item_definitions WHERE id=?", (item_id,)).fetchone() is None):
         flash("Write a short clue and choose a valid optional item.", "error"); return _builder_redirect(room_id)
-    database.execute("INSERT INTO mud_room_discoveries(id,room_id,clue,item_definition_id) VALUES(?,?,?,?)",
-                     (f"world:discovery:{uuid.uuid4().hex}", room_id, clue, item_id))
+    if difficulty is None or not 0 <= difficulty <= 200:
+        flash("Search difficulty must be 0 (always found) to 200.", "error"); return _builder_redirect(room_id)
+    database.execute("INSERT INTO mud_room_discoveries(id,room_id,clue,item_definition_id,difficulty) VALUES(?,?,?,?,?)",
+                     (f"world:discovery:{uuid.uuid4().hex}", room_id, clue, item_id, difficulty))
     database.commit(); flash("Room discovery added.", "success"); return _builder_redirect(room_id)
 
 
@@ -6109,8 +6520,8 @@ def builder_create_exit():
         return _builder_redirect(request.form.get("from_room_id"))
     exit_id = f"world:exit:{uuid.uuid4().hex}"
     database.execute(
-        "INSERT INTO mud_world_exits(id,from_room_id,to_room_id,name,direction,key_item_id) "
-        "VALUES(?,?,?,?,?,?)", (exit_id, *fields),
+        "INSERT INTO mud_world_exits(id,from_room_id,to_room_id,name,direction,key_item_id,pick_difficulty) "
+        "VALUES(?,?,?,?,?,?,?)", (exit_id, *fields),
     )
     database.commit()
     flash(f"Exit {fields[2]} created.", "success")
@@ -6123,7 +6534,7 @@ def builder_update_exit(exit_id):
     validate_csrf()
     database = get_db()
     existing = database.execute(
-        "SELECT e.id,e.from_room_id,e.to_room_id,e.key_item_id FROM mud_world_exits e JOIN mud_world_rooms r "
+        "SELECT e.id,e.from_room_id,e.to_room_id,e.key_item_id,e.pick_difficulty FROM mud_world_exits e JOIN mud_world_rooms r "
         "ON r.id=e.from_room_id WHERE e.id=? "
         "AND r.world_id=(SELECT id FROM mud_world_packages WHERE active=1)", (exit_id,)
     ).fetchone()
@@ -6134,11 +6545,12 @@ def builder_update_exit(exit_id):
         flash(error, "error")
         return _builder_redirect(existing["from_room_id"])
     database.execute(
-        "UPDATE mud_world_exits SET from_room_id=?,to_room_id=?,name=?,direction=?,key_item_id=? WHERE id=?",
+        "UPDATE mud_world_exits SET from_room_id=?,to_room_id=?,name=?,direction=?,key_item_id=?,"
+        "pick_difficulty=? WHERE id=?",
         (*fields, exit_id),
     )
-    if (existing["key_item_id"] != fields[4] or existing["from_room_id"] != fields[0]
-            or existing["to_room_id"] != fields[1]):
+    if (existing["key_item_id"] != fields[4] or existing["pick_difficulty"] != fields[5]
+            or existing["from_room_id"] != fields[0] or existing["to_room_id"] != fields[1]):
         database.execute("DELETE FROM mud_exit_unlocks WHERE exit_id=?", (exit_id,))
     database.commit()
     flash(f"Exit {fields[2]} updated.", "success")

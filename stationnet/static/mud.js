@@ -180,7 +180,24 @@ for(const mud of document.querySelectorAll("[data-mud]")){
     characterLevel.textContent=`LEVEL ${character.level}`;
     characterTrack.textContent=character.progression_label;
     if(characterOrigin)characterOrigin.textContent=character.race?`${character.race} · ${character.class}`:"";
-    if(characterSkills)characterSkills.textContent=(character.skills||[]).map(skill=>`${skill.name} ${skill.rank}`).join(" · ");
+    if(characterSkills){
+      const points=characterSkills.querySelector("[data-character-skill-points]");
+      points.hidden=!character.skill_points;
+      points.textContent=`${character.skill_points} skill point${character.skill_points===1?"":"s"} — use /skills`;
+      characterSkills.querySelector("ul").replaceChildren(...(character.skills||[]).map(skill=>{
+        const row=document.createElement("li");
+        const label=document.createElement("span");
+        const bar=document.createElement("progress");
+        const maxed=skill.rank>=skill.max_rank;
+        row.className=`mud-skill${skill.active?"":" inactive"}`;
+        row.title=skill.active?skill.effects:"Inactive on this station";
+        label.textContent=`${skill.name} ${skill.rank}`;
+        bar.max=maxed?1:skill.next_rank_at;
+        bar.value=maxed?1:skill.experience;
+        row.append(label,bar);
+        return row;
+      }));
+    }
     if(characterMode)characterMode.textContent=`${character.mode?.replace(/^./,letter=>letter.toUpperCase())||"Current"} mode`;
     characterHealth.textContent=`${character.health} / ${character.maximum_health}`;
     characterHealthBar.max=character.maximum_health;

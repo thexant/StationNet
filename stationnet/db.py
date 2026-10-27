@@ -1366,6 +1366,7 @@ def init_db():
     _migrate_mud_campaign_archives(database)
     _migrate_mud_magic(database)
     _migrate_mud_progression(database)
+    _migrate_mud_skills(database)
     _initialize_mud_characters(database)
     _initialize_mud_world(database)
     _migrate_mud_world_packages(database)
@@ -1604,6 +1605,50 @@ def _migrate_mud_progression(database):
     if "trained_attributes_json" not in columns:
         database.execute("ALTER TABLE mud_character_progression ADD COLUMN trained_attributes_json TEXT "
                          "NOT NULL DEFAULT '{}'")
+
+
+def _migrate_mud_skills(database):
+    """Add the managed skill registry; existing character ranks remain valid."""
+    database.executescript("""
+    CREATE TABLE IF NOT EXISTS mud_skill_definitions (
+      key TEXT PRIMARY KEY,
+      definition_json TEXT,
+      imported INTEGER NOT NULL DEFAULT 0 CHECK(imported IN (0,1)),
+      installed INTEGER NOT NULL DEFAULT 1 CHECK(installed IN (0,1)),
+      enabled INTEGER NOT NULL DEFAULT 1 CHECK(enabled IN (0,1)),
+      CHECK(imported=1 OR definition_json IS NULL));
+    CREATE TABLE IF NOT EXISTS mud_world_skills (
+      world_id TEXT NOT NULL REFERENCES mud_world_packages(id) ON DELETE CASCADE,
+      skill_key TEXT NOT NULL,
+      local_key TEXT NOT NULL,
+      PRIMARY KEY(world_id,skill_key));
+    CREATE TABLE IF NOT EXISTS mud_dungeon_skills (
+      theme_id TEXT NOT NULL,
+      skill_key TEXT NOT NULL,
+      local_key TEXT NOT NULL,
+      PRIMARY KEY(theme_id,skill_key));
+    CREATE TABLE IF NOT EXISTS mud_npc_trainers (
+      id TEXT PRIMARY KEY,
+      npc_definition_id TEXT NOT NULL REFERENCES mud_npc_definitions(id) ON DELETE CASCADE,
+      skill_key TEXT NOT NULL,
+      price INTEGER NOT NULL DEFAULT 0 CHECK(price BETWEEN 0 AND 100000),
+      max_rank INTEGER NOT NULL DEFAULT 5 CHECK(max_rank BETWEEN 1 AND 20),
+      UNIQUE(npc_definition_id,skill_key));
+    """)
+    columns = {row["name"] for row in database.execute("PRAGMA table_info(mud_character_skills)")}
+    if "source" not in columns:
+        database.execute("ALTER TABLE mud_character_skills ADD COLUMN source TEXT NOT NULL DEFAULT 'creation'")
+    if "points_spent" not in columns:
+        database.execute("ALTER TABLE mud_character_skills ADD COLUMN points_spent INTEGER NOT NULL DEFAULT 0 "
+                         "CHECK(points_spent>=0)")
+    columns = {row["name"] for row in database.execute("PRAGMA table_info(mud_world_exits)")}
+    if "pick_difficulty" not in columns:
+        database.execute("ALTER TABLE mud_world_exits ADD COLUMN pick_difficulty INTEGER "
+                         "CHECK(pick_difficulty IS NULL OR pick_difficulty BETWEEN 1 AND 200)")
+    columns = {row["name"] for row in database.execute("PRAGMA table_info(mud_room_discoveries)")}
+    if "difficulty" not in columns:
+        database.execute("ALTER TABLE mud_room_discoveries ADD COLUMN difficulty INTEGER NOT NULL DEFAULT 0 "
+                         "CHECK(difficulty BETWEEN 0 AND 200)")
 
 
 def _initialize_mud_characters(database):

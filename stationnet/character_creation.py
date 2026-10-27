@@ -58,11 +58,18 @@ def catalog(database=None, *, include_removed=False):
 
 
 def options(database=None, *, include_inactive=False, include_removed=False):
+    """Origins plus the enabled skills offered at creation."""
+    from . import mud_skills
+    if database is None:
+        from .db import get_db
+        database = get_db()
     data = _built_in_options()
     entries = catalog(database, include_removed=include_removed)
     for kind in KINDS:
         data[kind] = [entry["definition"] for entry in entries[kind]
                       if include_inactive or entry["enabled"]]
+    data["skills"] = [definition for definition in mud_skills.definitions(database).values()
+                      if definition["starting"]]
     return data
 
 
@@ -94,10 +101,17 @@ def validate_origin(kind, document, database, *, check_key=True):
         ):
             raise ValueError(f"{field} must contain supported keys with integer values within {bound}.")
         definition[field] = values
+    from . import mud_skills
+    skills = {entry["key"] for entry in mud_skills.catalog(database)}
+    grants = document.get("skills", {})
+    if not isinstance(grants, dict) or len(grants) > 10 or any(
+        key not in skills or type(rank) is not int or not 1 <= rank <= 5 for key, rank in grants.items()
+    ):
+        raise ValueError("Granted skills must map installed skill keys to ranks from 1 to 5.")
+    if grants:
+        definition["skills"] = grants
     if kind == "classes":
         from .mud import EQUIPMENT_SLOTS, SPELLS
-        built_in = _built_in_options()
-        skills = {item["key"] for item in built_in["skills"]}
         skill = document.get("skill")
         if not isinstance(skill, str) or skill not in skills:
             raise ValueError("Class favored skill must be a supported skill.")
@@ -120,6 +134,10 @@ def validate_origin(kind, document, database, *, check_key=True):
             parsed_item = {"key": item["key"], "name": _text(item.get("name"), "Equipment name", 80, 2),
                            "description": _text(item.get("description"), "Equipment description", 1000),
                            "slot": item["slot"]}
+            if "category" in item:
+                if not isinstance(item["category"], str) or not KEY_RE.fullmatch(item["category"]):
+                    raise ValueError("Equipment category must be a lowercase key such as blade.")
+                parsed_item["category"] = item["category"]
             for stat in ("attack", "defense"):
                 value = item.get(stat, 0)
                 if type(value) is not int or not 0 <= value <= 100:
@@ -340,17 +358,28 @@ def validate(payload, config):
         raise ValueError("Attribute values are outside the allowed range.")
     if sum(allocations.values()) != point_buy["base"] * len(ATTRIBUTES) + point_buy["points"]:
         raise ValueError("Spend exactly the available attribute points.")
-    skills = payload.get("skills")
-    valid_skills = {item["key"] for item in config["skills"]}
-    if (not isinstance(skills, list) or any(not isinstance(skill, str) for skill in skills)
-            or len(skills) != config["starting_skill_choices"]
-            or len(set(skills)) != len(skills) or not set(skills) <= valid_skills):
-        raise ValueError("Choose the required number of distinct starting skills.")
     final = {key: allocations[key] + race.get("attributes", {}).get(key, 0)
              + archetype.get("attributes", {}).get(key, 0) for key in ATTRIBUTES}
     if any(value < 1 or value > 30 for value in final.values()):
         raise ValueError("An attribute modifier is outside the supported range.")
+    skills = payload.get("skills")
+    eligible = eligible_skills(config, race, archetype, final)
+    required = min(config["starting_skill_choices"], len(eligible))
+    if (not isinstance(skills, list) or any(not isinstance(skill, str) for skill in skills)
+            or len(skills) != required
+            or len(set(skills)) != len(skills) or not set(skills) <= {item["key"] for item in eligible}):
+        raise ValueError("Choose the required number of distinct starting skills.")
     return name, race, archetype, allocations, final, skills
+
+
+def eligible_skills(config, race, archetype, attributes):
+    """Starting skills this race, class, and attribute spread may choose."""
+    from . import mud_skills
+    grants = mud_skills.origin_grants(race, archetype)
+    return [skill for skill in config["skills"] if skill["key"] not in grants and
+            not mud_skills.requirement_problems(skill, level=1, attributes=attributes,
+                                                race_key=race["key"], class_key=archetype["key"],
+                                                ranks=grants)]
 
 
 def complete(database, user_id, payload, possession_mode="traditional"):
@@ -398,11 +427,13 @@ def complete(database, user_id, payload, possession_mode="traditional"):
             (*[attributes[key] for key in ATTRIBUTES], maximum, current,
              maximum_mana, current_mana, progression["attribute_points"] + refund, row["id"], track),
         )
+    from . import mud_skills
     for skill in skills:
         database.execute(
             "INSERT INTO mud_character_skills(character_id,skill_key,rank) VALUES(?,?,?)",
             (row["id"], skill, 2 if archetype.get("skill") == skill else 1),
         )
+    mud_skills.grant(database, row["id"], mud_skills.origin_grants(race, archetype))
     # One grant during creation; legacy possessions and equipment are untouched.
     for item in archetype.get("equipment", []):
         item_hash = hashlib.sha256(json.dumps(item, sort_keys=True).encode()).hexdigest()[:12]
@@ -412,7 +443,8 @@ def complete(database, user_id, payload, possession_mode="traditional"):
             "(id,name,description,item_type,properties_json,equipment_slot) "
             "VALUES(?,?,?,'equipment',?,?)",
             (definition_id, item["name"], item["description"],
-             json.dumps({"attack": item.get("attack", 0), "defense": item.get("defense", 0)}),
+             json.dumps({"attack": item.get("attack", 0), "defense": item.get("defense", 0),
+                        **({"category": item["category"]} if "category" in item else {})}),
              item["slot"]),
         )
         database.execute(
@@ -436,18 +468,10 @@ def skill_ranks(database, character_id):
 
 
 def practice(database, character_id, skill_key, amount=1):
-    row = database.execute(
-        "SELECT rank,experience FROM mud_character_skills WHERE character_id=? AND skill_key=?",
-        (character_id, skill_key),
-    ).fetchone()
-    if row is None or row["rank"] >= 20:
-        return
-    experience = row["experience"] + amount
-    rank = row["rank"]
-    while rank < 20 and experience >= rank * 20:
-        experience -= rank * 20
-        rank += 1
-    database.execute(
-        "UPDATE mud_character_skills SET rank=?,experience=? WHERE character_id=? AND skill_key=?",
-        (rank, experience, character_id, skill_key),
-    )
+    """Practice one known skill as if its first trigger fired; returns notices."""
+    from . import mud_skills
+    definition = mud_skills.definitions(database).get(skill_key)
+    triggers = (definition or {}).get("practice", {}).get("triggers", [])
+    if not triggers:
+        return []
+    return mud_skills.practice(database, character_id, triggers[0], amount, skill_key=skill_key)

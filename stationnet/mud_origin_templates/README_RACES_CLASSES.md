@@ -76,7 +76,8 @@ or [dungeon theme](../dungeon_templates/README_DUNGEON_THEMES.md).
 | `traits` | required | required | 1 to 160 nonblank characters; display text, not a scripted ability. |
 | `attributes` | optional | optional | Object with any of `strength`, `agility`, `intellect`, `vitality`. Each modifier is an integer from -10 to 10; `{}` is valid. |
 | `effects` | optional | optional | Object with any of `attack`, `defense`, `experience_percent`. Each value is an integer from -100 to 100; `{}` is valid. |
-| `skill` | — | required | One key from the active character-options file's `skills` list. Defaults: `arms`, `guard`, `lore`. |
+| `skills` | optional | optional | Object granting starting ranks, such as `{"perception": 1}`. Keys must be installed skills; ranks are 1 to 5. Granted skills do not count toward the player's starting choices. |
+| `skill` | — | required | Favored skill key; any installed skill (default or imported). It starts at rank 2 if the player picks it. |
 | `spells` | — | optional | Array of distinct supported spell keys; `[]` gives no spells. |
 | `equipment` | — | optional | Array of up to eight starter items; `[]` gives none. |
 
@@ -84,8 +85,11 @@ Each equipment entry needs a unique `key` within the class, a `name` of 2 to
 80 characters, a `description` of 1 to 1,000 characters, and a `slot`. Slots
 are `head`, `body`, `hands`, `legs`, `feet`, `main_hand`, `off_hand`, and
 `accessory`. Optional `attack` and `defense` are integers from 0 to 100 and
-default to zero. Origin equipment supports these basic bonuses; its JSON
-cannot specify firearm or consumable properties.
+default to zero. Optional `category` (a lowercase key such as `blade`,
+`axe`, `heavy`, or `shield`) ties the item to weapon and armor proficiency;
+grant a matching skill so the class can use it fully. Origin equipment
+supports these basic bonuses; its JSON cannot specify firearm or consumable
+properties.
 
 Character creation allocates points according to `stationnet/character_options.json`
 (or Flask's `MUD_CHARACTER_OPTIONS` file), then adds race and class modifiers.
@@ -94,8 +98,9 @@ successfully yet produce an invalid race/class/point allocation combination,
 so test combinations players can select. Origin effects add to attack,
 defense, or earned experience percentage. A class's favored skill starts at
 rank 2 if the player selects it among starting skills; other selected skills
-start at rank 1. Individual imports cannot add skill types or change the point
-budget.
+start at rank 1. Skills are managed separately; see the
+[skills guide](../mud_skill_templates/README_SKILLS.md) to add new ones.
+Origin imports cannot change the point budget.
 
 ## Spells and mana
 

@@ -21,6 +21,12 @@
       },
       "additionalProperties": false
     },
+    "skills": {
+      "type": "array",
+      "maxItems": 100,
+      "description": "Optional skills installed with a theme. Definitions are initially inactive; bundled races and classes may reference them by local key.",
+      "items": {"type": "object"}
+    },
     "definitions": {
       "type": "object",
       "description": "Portable definitions owned by this theme. Runtime IDs are namespaced by theme ID and version.",

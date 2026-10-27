@@ -110,6 +110,9 @@ def replace_origins(database, user_id, race_key, class_key):
     database.execute("UPDATE mud_characters SET race_key=?,class_key=?,base_attributes_json=?,"
                      "updated_at=CURRENT_TIMESTAMP WHERE id=?",
                      (race_key, class_key, json.dumps(allocated) if allocated else None, row["id"]))
+    # New origins add their skill grants; earned ranks are never lowered.
+    from . import mud_skills
+    mud_skills.grant(database, row["id"], mud_skills.origin_grants(new["races"], new["classes"]))
 
 
 def _rows(database, table, field, value):

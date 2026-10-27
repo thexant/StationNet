@@ -59,7 +59,7 @@ def test_dungeon_bundled_origins_optional_cleanup_and_fallback(data_dir):
     with app.app_context():
         db = get_db()
         assert dungeons.theme_origin_keys(db, theme["id"]) == {
-            "races": {race_key}, "classes": {class_key}}
+            "races": {race_key}, "classes": {class_key}, "skills": set()}
     preserved = client.post("/sysop/settings/dungeons/remove", data={
         "csrf_token": "test-token", "theme_id": theme["id"],
         "confirm_remove": "on"}, follow_redirects=True)

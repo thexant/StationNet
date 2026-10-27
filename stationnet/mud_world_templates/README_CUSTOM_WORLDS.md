@@ -4,14 +4,14 @@ StationNet stores imported world ZIPs in `data/mud_worlds/` (or
 `<STATIONNET_DATA>/mud_worlds/`). You can build a traditional world with a text
 editor. Put three UTF-8 JSON files at the root of a ZIP archive:
 `manifest.json`, `rooms.json`, and `exits.json`. Add `content.json` for items,
-NPCs, dialogue, quests, and placements. Add `origins.json` for custom races and
-classes. No code or scripts run from a world
-package.
+NPCs, dialogue, quests, trainers, and placements. Add `origins.json` for custom
+races and classes, and `skills.json` for custom skills. No code or scripts run
+from a world package.
 
 Archives are limited to 16 MB, each JSON file to 8 MB, 1000 rooms, and 5000
 exits. `content.json` may have up to 5,000 records in each supported array.
 The ZIP must contain only those three required files and optional
-`content.json` and `origins.json`, all at its root. Imports validate references
+`content.json`, `origins.json`, and `skills.json`, all at its root. Imports validate references
 and reject duplicate world IDs. Standalone race and class imports remain
 available through the [origin guide](../mud_origin_templates/README_RACES_CLASSES.md).
 
@@ -74,8 +74,10 @@ An exit is one-way; add its return route explicitly. `direction` can be
 named exit. Names and nonempty directions must be unique among exits from the
 same room. An empty exit list is valid for a one-room world.
 Add `"key_item_id": "local-key-id"` to require a key item defined in
-`content.json`. Unlocking with `/unlock <exit>` persists per character;
-`/look <exit>` reports the lock state.
+`content.json`. Add `"pick_difficulty": 30` (1–200) to make the lock pickable
+with `/pick <exit>` and the Lockpicking skill; an exit may have a key, a
+pickable lock, or both. Unlocking persists per character; `/look <exit>`
+reports the lock state.
 
 ## 4. Add optional world content
 
@@ -116,6 +118,12 @@ minimum values from 1 to 30. Existing equipment without requirements remains
 usable by all characters. Gear becomes inactive if a character no longer meets
 its requirements on the current progression track. Strength improves equipped melee weapon bonuses,
 Agility improves firearm bonuses, and Vitality improves equipped armor bonuses.
+
+Equipment may also set a proficiency `category`, for example
+`{"attack_bonus": 6, "category": "blade"}`. The default skills cover `blade`,
+`blunt`, `axe`, `firearm`, `light`, `heavy`, and `shield`, and custom skills can
+add more. A character without a matching proficiency skill gets three quarters
+of the item's bonuses; items without a category are never penalized.
 
 ### Firearms and ammunition
 
@@ -219,7 +227,8 @@ The supported arrays are:
 | `mud_npc_shops` | NPC merchant settings | `npc_definition_id`, `buys_items`, `sell_percent` |
 | `mud_shop_stock` | Merchant merchandise and prices | `npc_definition_id`, `item_definition_id`, `price`, optional `quantity` |
 | `mud_item_spawns` | Renewable room-floor items | `definition_id`, `room_id`, `respawn_seconds` |
-| `mud_room_discoveries` | One-time per-character search clues and items | `room_id`, `clue`, optional `item_definition_id` |
+| `mud_room_discoveries` | One-time per-character search clues and items | `room_id`, `clue`, optional `item_definition_id`, optional `difficulty` |
+| `mud_npc_trainers` | Skills an NPC teaches for coins | `npc_definition_id`, `skill_key`, `price`, `max_rank` |
 | `mud_quest_givers` | NPCs that offer quests | `quest_id`, `npc_definition_id` |
 
 Only these fields are accepted for each array; omitted optional fields use
@@ -244,7 +253,8 @@ must point to records in the same package, including room IDs in `rooms.json`.
 | `mud_npc_shops` | `npc_definition_id`, `buys_items`, `sell_percent` (no `id`) |
 | `mud_shop_stock` | `npc_definition_id`, `item_definition_id`, `price`, `quantity` |
 | `mud_item_spawns` | `definition_id`, `room_id`, `respawn_seconds` |
-| `mud_room_discoveries` | `room_id`, `clue`, `item_definition_id` |
+| `mud_room_discoveries` | `room_id`, `clue`, `item_definition_id`, `difficulty` |
+| `mud_npc_trainers` | `npc_definition_id`, `skill_key`, `price`, `max_rank` |
 | `mud_quest_givers` | `quest_id`, `npc_definition_id` (no `id` field) |
 
 `mud_npc_combat_profiles` and `mud_npc_equipment` also have no `id` field;
@@ -297,7 +307,16 @@ Players use `/shop`, `/shop buy <item>`, and `/shop sell <item>` beside the NPC.
 For renewable room-floor resources, add `mud_item_spawns` with a 5–86,400 second
 `respawn_seconds`; do not also place an ordinary item instance for that spawn.
 `mud_room_discoveries` reveals a clue and optional item once per character with
-`/search`.
+`/search`. Set `difficulty` (0–200, default 0 = always found) to hide it
+better; the Perception skill and Intellect improve the odds, and only rooms
+with such hidden discoveries let searching practice Perception.
+
+`mud_npc_trainers` makes an NPC teach a skill. `skill_key` names a skill from
+this package's `skills.json` (by local key) or any skill installed on the
+station, such as `stealth`. `price` (0–100,000 coins) is charged to learn the
+skill and, multiplied by the current rank, for each rank taught with
+`/practice <skill> from <trainer>`, up to `max_rank` (1–20). Players use
+`/learn <skill> from <trainer>` beside the NPC.
 
 NPCs can also have small optional behaviours. These run only for placed NPCs
 in the active traditional world. Existing NPCs remain still unless configured.
@@ -345,6 +364,32 @@ may use the same local key. At most 100 definitions of each kind may be bundled.
 Imported definitions stay installed even when disabled or when the world is
 removed. Importing a world does not activate it or change existing characters.
 
+### Optional skills
+
+`skills.json` holds `{"skills": [...]}` with up to 100 skill definitions in the
+format described in the [skills guide](../mud_skill_templates/README_SKILLS.md).
+
+- **Local keys.** As with origins, keys are local to the world. Races,
+  classes, trainers, and other bundled skills may refer to them by local key,
+  and StationNet rewrites those references to the installed global keys.
+- **Requirements.** A skill's `requirements.races` and `requirements.classes`
+  may name races and classes from the same package.
+- **Availability.** Bundled skills follow the same import or activation mode
+  as races and classes. When a world bundles no skills, the station's current
+  skills are kept.
+- **Export.** Exports include the world's skills plus any imported skills that
+  its exported races, classes, skills, or trainers depend on.
+
+```json
+{
+  "skills": [{"key": "spear-forms", "name": "Spear Forms", "group": "weapon",
+    "description": "Reach and footwork with spears.",
+    "effects": [{"type": "melee_damage", "every": 2, "weapon_category": "spear"}],
+    "proficiencies": {"weapons": ["spear"]},
+    "practice": {"triggers": ["melee_hit"]}}]
+}
+```
+
 ## 6. Import, edit, export, and remove
 
 Download the starter ZIP from **SYSOP Settings → MUD service → Traditional
@@ -359,18 +404,18 @@ Compress-Archive -Path manifest.json,rooms.json,exits.json,content.json -Destina
 zip lantern-isles.zip manifest.json rooms.json exits.json content.json
 ```
 
-If you omit `content.json` or `origins.json`, omit them from the command too. Confirm the ZIP
+If you omit `content.json`, `origins.json`, or `skills.json`, omit them from the command too. Confirm the ZIP
 lists the JSON files directly, without a containing folder. In **SYSOP Settings → MUD service →
 Traditional Worlds**, import the ZIP and select it as the active world. Choose
-whether its bundled races and classes replace, combine with, or are selected
-alongside currently available choices. The same controls are available on
+whether its bundled races, classes, and skills replace, combine with, or are
+selected alongside currently available choices. The same controls are available on
 activation; manual selection can include any installed origin. The
 world builder can then edit its rooms and exits. The **Export World ZIP** button
 downloads the current map, including builder changes. For a station-built
 world, the exported manifest uses `my-world` as a starter ID; change it before
 importing on the same station. The exporter assigns simple room IDs so the
-files remain easy to edit. In sysop settings, choose any installed custom races
-and classes to bundle in an export. The builder export includes the world's
+files remain easy to edit. In sysop settings, choose any installed custom races,
+classes, and skills to bundle in an export. The builder export includes the world's
 linked definitions automatically.
 
 Changing the active world moves traditional-world players to the new starting

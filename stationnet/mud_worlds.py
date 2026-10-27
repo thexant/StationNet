@@ -17,6 +17,7 @@ ID_RE = re.compile(r"^[a-z][a-z0-9-]{0,63}$")
 FILES = {"manifest.json", "rooms.json", "exits.json"}
 CONTENT_FILE = "content.json"
 ORIGINS_FILE = "origins.json"
+SKILLS_FILE = "skills.json"
 # Order follows foreign-key dependencies. Only these authored columns cross
 # the package boundary; player state and generated dungeon data never do.
 CONTENT_TABLES = {
@@ -30,13 +31,14 @@ CONTENT_TABLES = {
     "mud_npc_combat_rewards": ("id", "npc_definition_id", "reward_type", "target_id", "amount", "chance_percent"),
     "mud_npc_shops": ("npc_definition_id", "buys_items", "sell_percent"),
     "mud_shop_stock": ("id", "npc_definition_id", "item_definition_id", "price", "quantity"),
+    "mud_npc_trainers": ("id", "npc_definition_id", "skill_key", "price", "max_rank"),
     "mud_quest_objectives": ("id", "quest_id", "objective_type", "target_id", "description", "required_count", "sort_order"),
     "mud_quest_rewards": ("id", "quest_id", "reward_type", "target_id", "amount"),
     "mud_quest_givers": ("quest_id", "npc_definition_id"),
     "mud_dialogue_responses": ("id", "node_id", "response_text", "next_node_id", "accept_quest_id", "deliver_item_id", "required_state_key", "required_state_value", "state_key", "state_value", "sort_order"),
     "mud_item_instances": ("id", "definition_id", "room_id", "container_id", "is_open", "state_json"),
     "mud_item_spawns": ("id", "definition_id", "room_id", "respawn_seconds"),
-    "mud_room_discoveries": ("id", "room_id", "clue", "item_definition_id"),
+    "mud_room_discoveries": ("id", "room_id", "clue", "item_definition_id", "difficulty"),
     "mud_npc_instances": ("id", "definition_id", "room_id", "state_json"),
 }
 ID_TABLES = {table for table, columns in CONTENT_TABLES.items() if "id" in columns}
@@ -92,8 +94,8 @@ def read_package(payload):
     try:
         with zipfile.ZipFile(BytesIO(payload)) as archive:
             names = archive.namelist()
-            if not FILES <= set(names) or set(names) - FILES - {CONTENT_FILE, ORIGINS_FILE} or len(names) != len(set(names)):
-                raise WorldError("World ZIP must contain manifest.json, rooms.json, and exits.json at its root, with optional content.json and origins.json.")
+            if not FILES <= set(names) or set(names) - FILES - {CONTENT_FILE, ORIGINS_FILE, SKILLS_FILE} or len(names) != len(set(names)):
+                raise WorldError("World ZIP must contain manifest.json, rooms.json, and exits.json at its root, with optional content.json, origins.json, and skills.json.")
             docs = {}
             for name in names:
                 info = archive.getinfo(name)
@@ -156,8 +158,11 @@ def read_package(payload):
         key_item_id = item.get("key_item_id") or None
         if key_item_id is not None and (not isinstance(key_item_id, str) or not ID_RE.fullmatch(key_item_id)):
             raise WorldError("Exit key_item_id must be an item ID.")
+        pick_difficulty = item.get("pick_difficulty")
+        if pick_difficulty is not None and not _whole(pick_difficulty, 1, 200):
+            raise WorldError("Exit pick_difficulty must be a whole number from 1 to 200.")
         clean_exits.append({"from": source, "to": target, "name": label, "direction": direction,
-                            "key_item_id": key_item_id})
+                            "key_item_id": key_item_id, "pick_difficulty": pick_difficulty})
     content = docs.get(CONTENT_FILE, {})
     if not isinstance(content, dict) or set(content) - set(CONTENT_TABLES):
         raise WorldError("content.json must be an object of supported content tables.")
@@ -184,6 +189,9 @@ def read_package(payload):
                     for key in ("heal", "value")
                 ):
                     raise WorldError("Item heal and value must be nonnegative integers.")
+                if "category" in properties and (not isinstance(properties["category"], str)
+                                                 or not ID_RE.fullmatch(properties["category"])):
+                    raise WorldError("Item category must be a lowercase key such as blade.")
             elif table == "mud_quest_objectives":
                 if row.get("objective_type") not in {"talk_npc", "visit_room", "possess_item", "defeat_npc", "deliver_item"} or not _whole(row.get("required_count", 1), 1, 100):
                     raise WorldError("Quest objective type or required_count is invalid.")
@@ -202,12 +210,18 @@ def read_package(payload):
             elif table == "mud_shop_stock":
                 if not _whole(row.get("price"), 1, 100000) or (row.get("quantity") is not None and not _whole(row["quantity"], 0, 100000)):
                     raise WorldError("Merchant stock price or quantity is invalid.")
+            elif table == "mud_npc_trainers":
+                if (not isinstance(row.get("skill_key"), str) or not ID_RE.fullmatch(row["skill_key"])
+                        or not _whole(row.get("price", 0), 0, 100000) or not _whole(row.get("max_rank", 5), 1, 20)):
+                    raise WorldError("Trainer skill_key, price, or max_rank is invalid.")
             elif table == "mud_item_spawns":
                 if not _whole(row.get("respawn_seconds"), 5, 86400):
                     raise WorldError("Item respawn_seconds must be 5 to 86,400.")
             elif table == "mud_room_discoveries":
                 if not isinstance(row.get("clue"), str) or not 1 <= len(row["clue"].strip()) <= 500:
                     raise WorldError("Room discovery clue must be 1 to 500 characters.")
+                if not _whole(row.get("difficulty", 0), 0, 200):
+                    raise WorldError("Room discovery difficulty must be 0 to 200.")
     key_ids = {row.get("id") for row in content.get("mud_item_definitions", []) if row.get("item_type") == "key"}
     if any(item["key_item_id"] and item["key_item_id"] not in key_ids for item in clean_exits):
         raise WorldError("Locked exits must reference a key item definition in content.json.")
@@ -217,8 +231,13 @@ def read_package(payload):
     for kind, definitions in origins.items():
         if not isinstance(definitions, list) or len(definitions) > 100 or any(not isinstance(item, dict) for item in definitions):
             raise WorldError(f"origins.json {kind} must contain at most 100 definition objects.")
+    skills = docs.get(SKILLS_FILE, {"skills": []})
+    if (not isinstance(skills, dict) or set(skills) != {"skills"} or not isinstance(skills["skills"], list)
+            or len(skills["skills"]) > 100 or any(not isinstance(item, dict) for item in skills["skills"])):
+        raise WorldError("skills.json must contain a skills array of at most 100 definition objects.")
     return {"id": world_id, "name": name, "author": author, "start_room": start,
-            "rooms": clean_rooms, "exits": clean_exits, "content": content, "origins": origins}
+            "rooms": clean_rooms, "exits": clean_exits, "content": content, "origins": origins,
+            "skills": skills["skills"]}
 
 
 def package_bytes(document):
@@ -241,6 +260,11 @@ def package_bytes(document):
             if len(encoded) > MAX_FILE_BYTES:
                 raise WorldError("origins.json is too large to export.")
             archive.writestr(ORIGINS_FILE, encoded)
+        if document.get("skills"):
+            encoded = (json.dumps({"skills": document["skills"]}, ensure_ascii=False, indent=2) + "\n").encode("utf-8")
+            if len(encoded) > MAX_FILE_BYTES:
+                raise WorldError("skills.json is too large to export.")
+            archive.writestr(SKILLS_FILE, encoded)
     payload = stream.getvalue()
     if len(payload) > MAX_ZIP_BYTES:
         raise WorldError("World ZIP is too large to export.")
@@ -279,8 +303,10 @@ def _mapped(maps, table, value, column):
         raise WorldError(f"{column} references unknown {table} ID {value!r}.") from None
 
 
-def _insert_content(database, document, installation_key):
+def _insert_content(database, document, installation_key, skill_map=None):
+    from . import mud_skills
     maps = _content_maps(document, installation_key)
+    installed_skills = {entry["key"] for entry in mud_skills.catalog(database)}
     world_id = document["id"]
     quest_prerequisites = {row["id"]: row.get("prerequisite_quest_id")
                            for row in document["content"].get("mud_quests", [])}
@@ -341,6 +367,11 @@ def _insert_content(database, document, installation_key):
                     if ref_table is None:
                         raise WorldError("Quest objective has an unsupported type.")
                     value = _mapped(maps, ref_table, value, column)
+                elif column == "skill_key":
+                    # Trainers name a bundled skill by its local key or an installed skill.
+                    value = (skill_map or {}).get(value, value)
+                    if value not in installed_skills:
+                        raise WorldError(f"Trainer skill {row[column]!r} is not bundled or installed.")
                 elif column.endswith("_json"):
                     if isinstance(value, (dict, list)):
                         value = json.dumps(value, ensure_ascii=False, separators=(",", ":"))
@@ -376,8 +407,51 @@ def bundled_key(world_id, kind, local_key):
     return f"w-{digest}"
 
 
-def _install_origins(database, document):
+def _bundled_origin_map(document):
     from . import character_creation
+    return {(kind, source.get("key")): bundled_key(document["id"], kind, source.get("key"))
+            for kind in character_creation.KINDS for source in document["origins"].get(kind, [])
+            if isinstance(source.get("key"), str)}
+
+
+def _install_skills(database, document):
+    """Install bundled skills before origins and content that reference them."""
+    from . import character_creation, mud_skills
+
+    sources = document.get("skills", [])
+    local_keys = [source.get("key") for source in sources]
+    if any(not isinstance(key, str) or not character_creation.KEY_RE.fullmatch(key) for key in local_keys) \
+            or len(set(local_keys)) != len(local_keys):
+        raise WorldError("Bundled skills need distinct valid local keys.")
+    mapping = {key: bundled_key(document["id"], "skills", key) for key in local_keys}
+    origin_map = _bundled_origin_map(document)
+    extra_origins = {}
+    for (kind, _local_key), key in origin_map.items():
+        extra_origins.setdefault(kind, set()).add(key)
+    for source, local_key in zip(sources, local_keys):
+        key = mapping[local_key]
+        try:
+            definition = mud_skills.validate_skill(
+                mud_skills.remap_origins(mud_skills.remap({**source, "key": key}, mapping), origin_map),
+                database, check_key=False, extra_skills=mapping.values(), extra_origins=extra_origins)
+        except ValueError as error:
+            raise WorldError(f"Invalid bundled skill {local_key}: {error}") from error
+        existing = database.execute("SELECT definition_json,installed FROM mud_skill_definitions WHERE key=?",
+                                    (key,)).fetchone()
+        if existing is not None:
+            if not existing["installed"] or json.loads(existing["definition_json"]) != definition:
+                raise WorldError(f"Bundled skill {local_key} conflicts with an installed definition.")
+        else:
+            database.execute(
+                "INSERT INTO mud_skill_definitions(key,definition_json,imported,installed,enabled) VALUES(?,?,1,1,0)",
+                (key, json.dumps(definition, separators=(",", ":"))))
+        database.execute("INSERT INTO mud_world_skills(world_id,skill_key,local_key) VALUES(?,?,?)",
+                         (document["id"], key, local_key))
+    return mapping
+
+
+def _install_origins(database, document, skill_map=None):
+    from . import character_creation, mud_skills
 
     for kind in character_creation.KINDS:
         seen = set()
@@ -389,7 +463,7 @@ def _install_origins(database, document):
             key = bundled_key(document["id"], kind, local_key)
             try:
                 definition = character_creation.validate_origin(
-                    kind, {**source, "key": key}, database, check_key=False)
+                    kind, mud_skills.remap({**source, "key": key}, skill_map or {}), database, check_key=False)
             except ValueError as error:
                 raise WorldError(f"Invalid bundled {kind[:-1]} {local_key}: {error}") from error
             existing = database.execute(
@@ -412,16 +486,20 @@ def _install_origins(database, document):
 
 
 def world_origin_keys(database, world_id):
-    return {kind: {row["origin_key"] for row in database.execute(
+    keys = {kind: {row["origin_key"] for row in database.execute(
         "SELECT origin_key FROM mud_world_origins WHERE world_id=? AND kind=?", (world_id, kind))}
         for kind in ("races", "classes")}
+    keys["skills"] = {row["skill_key"] for row in database.execute(
+        "SELECT skill_key FROM mud_world_skills WHERE world_id=?", (world_id,))}
+    return keys
 
 
 def set_availability(database, world_id, mode="preserve", selected=None):
-    from . import character_creation
+    from . import character_creation, mud_skills
     chosen = availability_choice(database, world_id, mode, selected)
     if mode == "preserve":
         return
+    mud_skills.set_enabled(database, chosen["skills"])
     entries = character_creation.catalog(database)
     for kind in character_creation.KINDS:
         for entry in entries[kind]:
@@ -436,11 +514,39 @@ def set_availability(database, world_id, mode="preserve", selected=None):
                     (kind, entry["key"], enabled))
 
 
+def _skill_choice(database, world_id, mode, selected):
+    """Skills follow the race/class mode, but worlds without bundled skills keep the current set."""
+    from . import mud_skills
+    entries = mud_skills.catalog(database)
+    available = {entry["key"] for entry in entries}
+    current = {entry["key"] for entry in entries if entry["enabled"]}
+    bundled = world_origin_keys(database, world_id)["skills"] & available
+    if mode == "manual":
+        # Forms that predate skills post no skill choices; keep the current set then.
+        chosen = set((selected or {}).get("skills") or current)
+        if chosen - available:
+            raise WorldError("Choose only installed skills.")
+    elif mode == "only" and bundled:
+        chosen = bundled
+    elif mode in {"only", "combine"}:
+        chosen = current | bundled
+    else:
+        chosen = current
+    station = database.execute(
+        "SELECT mud_enabled,mud_traditional_enabled,mud_procedural_enabled FROM station LIMIT 1").fetchone()
+    if station and any(station):
+        try:
+            mud_skills.require_available(database, chosen)
+        except ValueError as error:
+            raise WorldError(str(error)) from error
+    return chosen
+
+
 def availability_choice(database, world_id, mode="preserve", selected=None):
     from . import character_creation
     if mode not in {"only", "combine", "manual"}:
         if mode != "preserve":
-            raise WorldError("Choose a valid race and class availability mode.")
+            raise WorldError("Choose a valid race, class, and skill availability mode.")
     entries = character_creation.catalog(database)
     available = {kind: {entry["key"] for entry in entries[kind]} for kind in character_creation.KINDS}
     world_keys = world_origin_keys(database, world_id)
@@ -461,6 +567,7 @@ def availability_choice(database, world_id, mode="preserve", selected=None):
         "SELECT mud_enabled,mud_traditional_enabled,mud_procedural_enabled FROM station LIMIT 1").fetchone()
     if station and any(station) and any(not chosen[kind] for kind in character_creation.KINDS):
         raise WorldError("Enable at least one race and one class while a MUD mode is enabled.")
+    chosen["skills"] = _skill_choice(database, world_id, mode, selected)
     return chosen
 
 
@@ -479,20 +586,22 @@ def install(database, payload, *, origin_mode="preserve", selected=None):
         database.execute("BEGIN IMMEDIATE")
         database.execute("INSERT INTO mud_world_packages(id,name,author,start_room_id,imported) VALUES(?,?,?,?,1)",
                          (world_id, document["name"], document["author"], prefix + document["start_room"]))
+        skill_map = _install_skills(database, document)
         for room in document["rooms"]:
             database.execute("INSERT INTO mud_world_rooms(id,name,description,world_id) VALUES(?,?,?,?)",
                              (prefix + room["id"], room["name"], room["description"], world_id))
         for ordinal, item in enumerate(document["exits"]):
-            database.execute("INSERT INTO mud_world_exits(id,from_room_id,to_room_id,name,direction) VALUES(?,?,?,?,?)",
+            database.execute("INSERT INTO mud_world_exits(id,from_room_id,to_room_id,name,direction,pick_difficulty) "
+                             "VALUES(?,?,?,?,?,?)",
                              (f"world:{world_id}:{installation_key}:exit:{ordinal}", prefix + item["from"],
-                              prefix + item["to"], item["name"], item["direction"]))
-        maps = _insert_content(database, document, installation_key)
+                              prefix + item["to"], item["name"], item["direction"], item["pick_difficulty"]))
+        maps = _insert_content(database, document, installation_key, skill_map)
         for ordinal, item in enumerate(document["exits"]):
             if item["key_item_id"]:
                 database.execute("UPDATE mud_world_exits SET key_item_id=? WHERE id=?",
                                  (_mapped(maps, "mud_item_definitions", item["key_item_id"], "key_item_id"),
                                   f"world:{world_id}:{installation_key}:exit:{ordinal}"))
-        _install_origins(database, document)
+        _install_origins(database, document, skill_map)
         set_availability(database, world_id, origin_mode, selected)
         with destination.open("xb") as target:
             created = True
@@ -553,7 +662,8 @@ def _export_content(database, world_id, room_map):
                 table == "mud_conversations" and row["id"] in needed_conversations]
         elif table == "mud_dialogue_nodes":
             rows = [row for row in rows if row["conversation_id"] in selected["mud_conversations"]]
-        elif table in {"mud_npc_combat_profiles", "mud_npc_equipment", "mud_npc_combat_rewards", "mud_npc_shops", "mud_shop_stock"}:
+        elif table in {"mud_npc_combat_profiles", "mud_npc_equipment", "mud_npc_combat_rewards", "mud_npc_shops",
+                       "mud_shop_stock", "mud_npc_trainers"}:
             rows = [row for row in rows if row["npc_definition_id"] in selected["mud_npc_definitions"]]
         elif table in {"mud_quest_objectives", "mud_quest_rewards", "mud_quest_givers"}:
             rows = [row for row in rows if row["quest_id"] in selected["mud_quests"]]
@@ -572,7 +682,7 @@ def _export_content(database, world_id, room_map):
                 "mud_npc_definitions": "npc", "mud_npc_combat_rewards": "combat-reward",
                 "mud_quest_objectives": "objective", "mud_quest_rewards": "quest-reward",
                 "mud_dialogue_responses": "response", "mud_item_instances": "placed-item",
-                "mud_npc_instances": "placed-npc", "mud_shop_stock": "stock",
+                "mud_npc_instances": "placed-npc", "mud_shop_stock": "stock", "mud_npc_trainers": "trainer",
                 "mud_item_spawns": "spawn", "mud_room_discoveries": "discovery"}
     maps = {"rooms": room_map}
     for table in ID_TABLES:
@@ -612,7 +722,24 @@ def _export_content(database, world_id, room_map):
     return content, maps
 
 
-def export(database, world_id, *, origin_keys=None):
+def _skill_closure(skill_entries, origin_definitions, chosen):
+    """Imported skills the exported origins and skills need, plus the chosen ones."""
+    chosen = set(chosen)
+    pending = list(origin_definitions) + [skill_entries[key] for key in chosen if key in skill_entries]
+    while pending:
+        definition = pending.pop()
+        references = set(definition.get("skills", {}))
+        references |= set(definition.get("requirements", {}).get("skills", {}))
+        if definition.get("skill"):
+            references.add(definition["skill"])
+        for key in references:
+            if key in skill_entries and key not in chosen:
+                chosen.add(key)
+                pending.append(skill_entries[key])
+    return chosen
+
+
+def export(database, world_id, *, origin_keys=None, skill_keys=None):
     world = database.execute("SELECT * FROM mud_world_packages WHERE id=?", (world_id,)).fetchone()
     if world is None:
         raise WorldError("World was not found.")
@@ -624,7 +751,7 @@ def export(database, world_id, *, origin_keys=None):
     if world["start_room_id"] not in ids:
         raise WorldError("World starting room is missing.")
     exits = database.execute(
-        "SELECT e.from_room_id,e.to_room_id,e.name,e.direction,e.key_item_id FROM mud_world_exits e "
+        "SELECT e.from_room_id,e.to_room_id,e.name,e.direction,e.key_item_id,e.pick_difficulty FROM mud_world_exits e "
         "JOIN mud_world_rooms r ON r.id=e.from_room_id WHERE r.world_id=? ORDER BY e.id", (world_id,)
     ).fetchall()
     content, maps = _export_content(database, world_id, ids)
@@ -636,7 +763,8 @@ def export(database, world_id, *, origin_keys=None):
                 "exits": [{"from": ids[row["from_room_id"]], "to": ids[row["to_room_id"]],
                            "name": row["name"], "direction": row["direction"],
                            **({"key_item_id": _mapped(maps, "mud_item_definitions", row["key_item_id"], "key_item_id")}
-                              if row["key_item_id"] else {})}
+                              if row["key_item_id"] else {}),
+                           **({"pick_difficulty": row["pick_difficulty"]} if row["pick_difficulty"] else {})}
                           for row in exits if row["to_room_id"] in ids],
                 "content": content}
     from . import character_creation
@@ -648,13 +776,36 @@ def export(database, world_id, *, origin_keys=None):
     chosen = set(associations) if origin_keys is None else set(origin_keys)
     if chosen - set(installed):
         raise WorldError("Choose only installed custom races and classes to export.")
+    from . import mud_skills
+    skill_entries = {entry["key"]: entry["definition"] for entry in mud_skills.catalog(database) if entry["imported"]}
+    skill_links = {row["skill_key"]: row["local_key"] for row in database.execute(
+        "SELECT skill_key,local_key FROM mud_world_skills WHERE world_id=?", (world_id,))}
+    wanted = set(skill_links) if skill_keys is None else set(skill_keys)
+    if wanted - set(skill_entries):
+        raise WorldError("Choose only installed custom skills to export.")
+    trainer_skills = {row["skill_key"] for row in content.get("mud_npc_trainers", [])}
+    wanted |= trainer_skills & set(skill_entries)
+    wanted = _skill_closure(skill_entries, [installed[pair]["definition"] for pair in chosen], wanted)
+    local_skill = {key: skill_links.get(key, key) for key in wanted}
+    if len(set(local_skill.values())) != len(local_skill):
+        raise WorldError("Two exported skills share a local key; rename one before exporting.")
+    origin_local = {(kind, key): associations.get((kind, key), key) for kind, key in chosen}
     origins = {kind: [] for kind in character_creation.KINDS}
     for kind, key in sorted(chosen):
-        definition = dict(installed[(kind, key)]["definition"])
-        definition["key"] = associations.get((kind, key), key)
+        definition = mud_skills.remap(dict(installed[(kind, key)]["definition"]), local_skill)
+        definition["key"] = origin_local[(kind, key)]
         origins[kind].append(definition)
     if any(origins.values()):
         document["origins"] = origins
+    skills = []
+    for key in sorted(wanted, key=lambda item: local_skill[item]):
+        definition = mud_skills.remap_origins(mud_skills.remap(dict(skill_entries[key]), local_skill), origin_local)
+        definition["key"] = local_skill[key]
+        skills.append(definition)
+    if skills:
+        document["skills"] = skills
+    for row in content.get("mud_npc_trainers", []):
+        row["skill_key"] = local_skill.get(row["skill_key"], row["skill_key"])
     return package_bytes(document)
 
 
@@ -693,7 +844,7 @@ def activation_impact(database, world_id, *, origin_mode="preserve", selected=No
               "current_world_id": current["id"] if current else None,
               "world_changed": not bool(world["active"]), "characters": characters,
               "relocated": relocated, "archive": dict(archive) if archive else None,
-              "chosen": {kind: sorted(chosen[kind]) for kind in character_creation.KINDS}}
+              "chosen": {kind: sorted(chosen[kind]) for kind in (*character_creation.KINDS, "skills")}}
     result["fingerprint"] = hashlib.sha256(json.dumps(result, sort_keys=True).encode()).hexdigest()
     return result
 
@@ -763,13 +914,15 @@ def activate(database, world_id, *, origin_mode="preserve", selected=None,
 
 
 def removal_origins(database, world_id):
-    from . import character_creation
-    return character_creation.removable_associations(
-        database, {**world_origin_keys(database, world_id), "world_id": world_id})
+    from . import character_creation, mud_skills
+    linked = world_origin_keys(database, world_id)
+    result = character_creation.removable_associations(database, {**linked, "world_id": world_id})
+    result["skills"] = mud_skills.removable_associations(database, linked["skills"], world_id=world_id)
+    return result
 
 
 def remove(database, world_id, *, remove_origins=False):
-    from . import character_creation
+    from . import character_creation, mud_skills
     world = database.execute("SELECT imported,active FROM mud_world_packages WHERE id=?", (world_id,)).fetchone()
     if world is None or not world["imported"]:
         raise WorldError("Only installed custom worlds can be removed.")
@@ -790,9 +943,7 @@ def remove(database, world_id, *, remove_origins=False):
             associated = removal_origins(database, world_id)
             linked = world_origin_keys(database, world_id)
             selected = {kind: {entry["key"] for entry in associated[kind]}
-                        for kind in character_creation.KINDS}
-            preserved = {kind: len(linked[kind]) - (len(selected[kind]) if remove_origins else 0)
-                         for kind in character_creation.KINDS}
+                        for kind in (*character_creation.KINDS, "skills")}
             # Keep definitions referenced by a player's possessions or quest history,
             # while separating them from a later installation with the same world ID.
             retired_id = f"retired:{world_id}:{uuid.uuid4().hex}"
@@ -812,9 +963,17 @@ def remove(database, world_id, *, remove_origins=False):
                 database.execute("DELETE FROM mud_item_instances WHERE id=?", (item["id"],))
             database.execute("DELETE FROM mud_world_rooms WHERE world_id=?", (world_id,))
             database.execute("DELETE FROM mud_world_packages WHERE id=?", (world_id,))
-            if remove_origins and any(selected.values()):
+            if remove_origins and any(selected[kind] for kind in character_creation.KINDS):
                 character_creation.remove_origins(database, selected)
+            # Skills go last so the origins removed above no longer depend on them.
+            if remove_origins and selected["skills"]:
+                selected["skills"] = {entry["key"] for entry in
+                                      mud_skills.remove_linked(database, associated["skills"])}
+            preserved = {kind: len(linked[kind]) - (len(selected[kind]) if remove_origins else 0)
+                         for kind in selected}
             restored = character_creation.restore_missing_defaults(database)
+            if mud_skills.restore_missing_defaults(database):
+                restored.append("skills")
     except Exception:
         if staged.exists():
             staged.rename(path)
@@ -824,6 +983,6 @@ def remove(database, world_id, *, remove_origins=False):
         file_warning = False
     except OSError:
         file_warning = True
-    return {"removed": selected if remove_origins else {kind: set() for kind in character_creation.KINDS},
+    return {"removed": selected if remove_origins else {kind: set() for kind in selected},
             "preserved": preserved,
             "restored": restored, "file_warning": file_warning}

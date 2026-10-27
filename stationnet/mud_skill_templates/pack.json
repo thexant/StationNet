@@ -1,0 +1,96 @@
+{
+  "skills": [
+    {
+      "key": "spear-fighting",
+      "name": "Spear Fighting",
+      "group": "weapon",
+      "description": "Reach and footwork with spears and polearms. Grants spear proficiency and extra melee damage with spears.",
+      "starting": true,
+      "max_rank": 20,
+      "effects": [
+        {
+          "type": "melee_damage",
+          "per_rank": 1,
+          "every": 2,
+          "max": 8,
+          "weapon_category": "spear"
+        }
+      ],
+      "proficiencies": {
+        "weapons": [
+          "spear"
+        ],
+        "armor": []
+      },
+      "practice": {
+        "triggers": [
+          "melee_hit"
+        ],
+        "rate": 1
+      },
+      "learn": {
+        "cost": 1,
+        "trainer_required": false
+      },
+      "requirements": {
+        "level": 1,
+        "attributes": {
+          "strength": 10
+        },
+        "races": [],
+        "classes": [],
+        "skills": {}
+      }
+    },
+    {
+      "key": "tracking",
+      "name": "Tracking",
+      "group": "exploration",
+      "description": "Reading trails and disturbed ground. Each rank adds 4 to searches for hidden discoveries.",
+      "effects": [
+        {
+          "type": "search",
+          "per_rank": 4
+        }
+      ],
+      "practice": {
+        "triggers": [
+          "search"
+        ]
+      }
+    },
+    {
+      "key": "battle-casting",
+      "name": "Battle Casting",
+      "group": "magic",
+      "starting": false,
+      "description": "Spellwork honed under pressure. Adds spell damage every other rank; must be learned from a trainer once Evocation reaches rank 3.",
+      "effects": [
+        {
+          "type": "spell_power",
+          "per_rank": 1,
+          "every": 2
+        }
+      ],
+      "practice": {
+        "triggers": [
+          "spell_cast"
+        ],
+        "rate": 2
+      },
+      "learn": {
+        "cost": 2,
+        "trainer_required": true
+      },
+      "requirements": {
+        "level": 5,
+        "attributes": {
+          "intellect": 12
+        },
+        "skills": {
+          "evocation": 3
+        }
+      }
+    }
+  ]
+}

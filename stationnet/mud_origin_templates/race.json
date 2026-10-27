@@ -4,5 +4,6 @@
   "description": "Travelers who make their homes beside rivers and marshes.",
   "traits": "Sure footing",
   "attributes": {"agility": 1},
-  "effects": {"defense": 1}
+  "effects": {"defense": 1},
+  "skills": {"evasion": 1}
 }
