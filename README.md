@@ -4,6 +4,8 @@ StationNet is a self-hosted, browser-accessible communications station inspired 
 
 Traditional MUD worlds can be shared as ZIP files in `data/mud_worlds/`. SYSOP Settings can import, select, and remove custom worlds; the world builder exports the active world. Packages include rooms, exits, and optional items, NPCs, dialogue, quests, and placements. See the [file-authored world guide](stationnet/mud_world_templates/README_CUSTOM_WORLDS.md) for the format and a complete example.
 
+Authored worlds can configure quest deliveries and enemy defeats, coin rewards, merchant NPCs with priced stock, probabilistic combat loot, renewable room items, searchable discoveries, and keyed exits. Players use `/quest accept`, `/deliver`, `/shop`, `/search`, and `/unlock` for these interactions. Builder exports include the corresponding settings.
+
 ## Why this stack
 
 - **Python 3.11+ and Flask** are small, readable, and cross-platform.

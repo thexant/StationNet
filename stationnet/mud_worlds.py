@@ -27,21 +27,27 @@ CONTENT_TABLES = {
     "mud_npc_definitions": ("id", "name", "description", "conversation_id", "properties_json", "behaviors_json"),
     "mud_npc_combat_profiles": ("npc_definition_id", "maximum_health", "attack", "defense", "experience_reward", "respawn_seconds"),
     "mud_npc_equipment": ("npc_definition_id", "equipment_slot", "item_definition_id"),
-    "mud_npc_combat_rewards": ("id", "npc_definition_id", "reward_type", "target_id", "amount"),
+    "mud_npc_combat_rewards": ("id", "npc_definition_id", "reward_type", "target_id", "amount", "chance_percent"),
+    "mud_npc_shops": ("npc_definition_id", "buys_items", "sell_percent"),
+    "mud_shop_stock": ("id", "npc_definition_id", "item_definition_id", "price", "quantity"),
     "mud_quest_objectives": ("id", "quest_id", "objective_type", "target_id", "description", "required_count", "sort_order"),
     "mud_quest_rewards": ("id", "quest_id", "reward_type", "target_id", "amount"),
     "mud_quest_givers": ("quest_id", "npc_definition_id"),
-    "mud_dialogue_responses": ("id", "node_id", "response_text", "next_node_id", "accept_quest_id", "required_state_key", "required_state_value", "state_key", "state_value", "sort_order"),
+    "mud_dialogue_responses": ("id", "node_id", "response_text", "next_node_id", "accept_quest_id", "deliver_item_id", "required_state_key", "required_state_value", "state_key", "state_value", "sort_order"),
     "mud_item_instances": ("id", "definition_id", "room_id", "container_id", "is_open", "state_json"),
+    "mud_item_spawns": ("id", "definition_id", "room_id", "respawn_seconds"),
+    "mud_room_discoveries": ("id", "room_id", "clue", "item_definition_id"),
     "mud_npc_instances": ("id", "definition_id", "room_id", "state_json"),
 }
 ID_TABLES = {table for table, columns in CONTENT_TABLES.items() if "id" in columns}
 REFERENCE_TABLE = {
     "conversation_id": "mud_conversations", "node_id": "mud_dialogue_nodes",
     "next_node_id": "mud_dialogue_nodes", "accept_quest_id": "mud_quests",
+    "deliver_item_id": "mud_item_definitions",
     "prerequisite_quest_id": "mud_quests", "npc_definition_id": "mud_npc_definitions",
     "item_definition_id": "mud_item_definitions", "quest_id": "mud_quests",
     "definition_id": None, "room_id": "rooms", "container_id": "mud_item_instances",
+    "key_item_id": "mud_item_definitions",
 }
 
 
@@ -73,6 +79,10 @@ def _label(value, label, minimum, maximum):
     if not isinstance(value, str) or not minimum <= len(value.strip()) <= maximum:
         raise WorldError(f"{label} must contain {minimum} to {maximum} characters.")
     return value.strip()
+
+
+def _whole(value, low, high):
+    return type(value) is int and low <= value <= high
 
 
 def read_package(payload):
@@ -143,7 +153,11 @@ def read_package(payload):
         exit_names.add(name_key)
         if direction:
             exit_directions.add(direction_key)
-        clean_exits.append({"from": source, "to": target, "name": label, "direction": direction})
+        key_item_id = item.get("key_item_id") or None
+        if key_item_id is not None and (not isinstance(key_item_id, str) or not ID_RE.fullmatch(key_item_id)):
+            raise WorldError("Exit key_item_id must be an item ID.")
+        clean_exits.append({"from": source, "to": target, "name": label, "direction": direction,
+                            "key_item_id": key_item_id})
     content = docs.get(CONTENT_FILE, {})
     if not isinstance(content, dict) or set(content) - set(CONTENT_TABLES):
         raise WorldError("content.json must be an object of supported content tables.")
@@ -159,6 +173,44 @@ def read_package(payload):
                     validate_npc_behaviors(value)
                 except (ValueError, json.JSONDecodeError) as problem:
                     raise WorldError(f"Invalid NPC behaviors: {problem}") from problem
+        for row in rows:
+            if table == "mud_item_definitions":
+                properties = row.get("properties_json", {})
+                if isinstance(properties, str):
+                    try: properties = json.loads(properties)
+                    except json.JSONDecodeError as problem: raise WorldError("Item properties must be valid JSON.") from problem
+                if not isinstance(properties, dict) or any(
+                    key in properties and not _whole(properties[key], 0, 100000)
+                    for key in ("heal", "value")
+                ):
+                    raise WorldError("Item heal and value must be nonnegative integers.")
+            elif table == "mud_quest_objectives":
+                if row.get("objective_type") not in {"talk_npc", "visit_room", "possess_item", "defeat_npc", "deliver_item"} or not _whole(row.get("required_count", 1), 1, 100):
+                    raise WorldError("Quest objective type or required_count is invalid.")
+            elif table in {"mud_quest_rewards", "mud_npc_combat_rewards"}:
+                if row.get("reward_type") not in {"experience", "item", "coins"} or not _whole(row.get("amount", 1), 1, 100000):
+                    raise WorldError("Reward type or amount is invalid.")
+                if row["reward_type"] == "item" and (not row.get("target_id") or row.get("amount", 1) > 100):
+                    raise WorldError("Item rewards require a target and quantity up to 100.")
+                if row["reward_type"] != "item" and row.get("target_id"):
+                    raise WorldError("Coin and experience rewards cannot target an item.")
+                if table == "mud_npc_combat_rewards" and not _whole(row.get("chance_percent", 100), 1, 100):
+                    raise WorldError("Combat reward chance_percent must be 1 to 100.")
+            elif table == "mud_npc_shops":
+                if not _whole(row.get("buys_items", 1), 0, 1) or not _whole(row.get("sell_percent", 40), 1, 100):
+                    raise WorldError("Merchant settings are invalid.")
+            elif table == "mud_shop_stock":
+                if not _whole(row.get("price"), 1, 100000) or (row.get("quantity") is not None and not _whole(row["quantity"], 0, 100000)):
+                    raise WorldError("Merchant stock price or quantity is invalid.")
+            elif table == "mud_item_spawns":
+                if not _whole(row.get("respawn_seconds"), 5, 86400):
+                    raise WorldError("Item respawn_seconds must be 5 to 86,400.")
+            elif table == "mud_room_discoveries":
+                if not isinstance(row.get("clue"), str) or not 1 <= len(row["clue"].strip()) <= 500:
+                    raise WorldError("Room discovery clue must be 1 to 500 characters.")
+    key_ids = {row.get("id") for row in content.get("mud_item_definitions", []) if row.get("item_type") == "key"}
+    if any(item["key_item_id"] and item["key_item_id"] not in key_ids for item in clean_exits):
+        raise WorldError("Locked exits must reference a key item definition in content.json.")
     origins = docs.get(ORIGINS_FILE, {})
     if not isinstance(origins, dict) or set(origins) - {"races", "classes"}:
         raise WorldError("origins.json must contain races and/or classes arrays.")
@@ -272,7 +324,7 @@ def _insert_content(database, document, installation_key):
                 elif column in REFERENCE_TABLE:
                     ref_table = REFERENCE_TABLE[column]
                     if ref_table is None:
-                        ref_table = ("mud_item_definitions" if table == "mud_item_instances"
+                        ref_table = ("mud_item_definitions" if table in {"mud_item_instances", "mud_item_spawns"}
                                      else "mud_npc_definitions")
                     if table == "mud_quests" and column == "prerequisite_quest_id":
                         continue
@@ -281,8 +333,9 @@ def _insert_content(database, document, installation_key):
                     if table == "mud_quest_objectives":
                         if not isinstance(row.get("objective_type"), str):
                             raise WorldError("Quest objective has an unsupported type.")
-                        ref_table = {"talk_npc": "mud_npc_definitions", "visit_room": "rooms",
-                                     "possess_item": "mud_item_definitions"}.get(row.get("objective_type"))
+                        ref_table = {"talk_npc": "mud_npc_definitions", "defeat_npc": "mud_npc_definitions",
+                                     "visit_room": "rooms", "possess_item": "mud_item_definitions",
+                                     "deliver_item": "mud_item_definitions"}.get(row.get("objective_type"))
                     else:
                         ref_table = "mud_item_definitions"
                     if ref_table is None:
@@ -303,11 +356,18 @@ def _insert_content(database, document, installation_key):
                 f"INSERT INTO {table}({','.join(names)}) VALUES({','.join('?' for _ in names)})",
                 tuple(fields[name] for name in names),
             )
+            if table == "mud_item_spawns":
+                instance_id = f"{fields['id']}:initial"
+                database.execute("INSERT INTO mud_item_instances(id,definition_id,room_id,spawn_source_id) VALUES(?,?,?,?)",
+                                 (instance_id, fields["definition_id"], fields["room_id"], fields["id"]))
+                database.execute("UPDATE mud_item_spawns SET live_instance_id=? WHERE id=?",
+                                 (instance_id, fields["id"]))
     for row in document["content"].get("mud_quests", []):
         if row.get("prerequisite_quest_id"):
             database.execute("UPDATE mud_quests SET prerequisite_quest_id=? WHERE id=?",
                              (_mapped(maps, "mud_quests", row["prerequisite_quest_id"], "prerequisite_quest_id"),
                               _mapped(maps, "mud_quests", row["id"], "id")))
+    return maps
 
 
 def bundled_key(world_id, kind, local_key):
@@ -426,7 +486,12 @@ def install(database, payload, *, origin_mode="preserve", selected=None):
             database.execute("INSERT INTO mud_world_exits(id,from_room_id,to_room_id,name,direction) VALUES(?,?,?,?,?)",
                              (f"world:{world_id}:{installation_key}:exit:{ordinal}", prefix + item["from"],
                               prefix + item["to"], item["name"], item["direction"]))
-        _insert_content(database, document, installation_key)
+        maps = _insert_content(database, document, installation_key)
+        for ordinal, item in enumerate(document["exits"]):
+            if item["key_item_id"]:
+                database.execute("UPDATE mud_world_exits SET key_item_id=? WHERE id=?",
+                                 (_mapped(maps, "mud_item_definitions", item["key_item_id"], "key_item_id"),
+                                  f"world:{world_id}:{installation_key}:exit:{ordinal}"))
         _install_origins(database, document)
         set_availability(database, world_id, origin_mode, selected)
         with destination.open("xb") as target:
@@ -444,7 +509,8 @@ def install(database, payload, *, origin_mode="preserve", selected=None):
 def _export_content(database, world_id, room_map):
     roots = {"mud_item_definitions", "mud_conversations", "mud_npc_definitions", "mud_quests"}
     all_placed_items = [dict(row) for row in database.execute(
-        "SELECT id,definition_id,room_id,container_id FROM mud_item_instances"
+        "SELECT id,definition_id,room_id,container_id FROM mud_item_instances "
+        "WHERE spawn_source_id IS NULL"
     )]
     placed_item_ids = {row["id"] for row in all_placed_items if row["room_id"] in room_map}
     while True:
@@ -454,6 +520,14 @@ def _export_content(database, world_id, room_map):
             break
         placed_item_ids = expanded
     needed_items = {row["definition_id"] for row in all_placed_items if row["id"] in placed_item_ids}
+    needed_items |= {row["definition_id"] for row in database.execute(
+        "SELECT definition_id FROM mud_item_spawns WHERE room_id IN (SELECT id FROM mud_world_rooms WHERE world_id=?)", (world_id,))}
+    needed_items |= {row["item_definition_id"] for row in database.execute(
+        "SELECT item_definition_id FROM mud_room_discoveries WHERE room_id IN (SELECT id FROM mud_world_rooms WHERE world_id=?) AND item_definition_id IS NOT NULL", (world_id,))}
+    needed_items |= {row["key_item_id"] for row in database.execute(
+        "SELECT e.key_item_id FROM mud_world_exits e JOIN mud_world_rooms r ON r.id=e.from_room_id WHERE r.world_id=? AND e.key_item_id IS NOT NULL", (world_id,))}
+    needed_items |= {row["item_definition_id"] for row in database.execute(
+        "SELECT s.item_definition_id FROM mud_shop_stock s JOIN mud_npc_definitions n ON n.id=s.npc_definition_id WHERE n.world_id=?", (world_id,))}
     needed_npcs = {row["definition_id"] for row in database.execute(
         "SELECT definition_id FROM mud_npc_instances WHERE room_id IN "
         "(SELECT id FROM mud_world_rooms WHERE world_id=?)", (world_id,)
@@ -479,7 +553,7 @@ def _export_content(database, world_id, room_map):
                 table == "mud_conversations" and row["id"] in needed_conversations]
         elif table == "mud_dialogue_nodes":
             rows = [row for row in rows if row["conversation_id"] in selected["mud_conversations"]]
-        elif table in {"mud_npc_combat_profiles", "mud_npc_equipment", "mud_npc_combat_rewards"}:
+        elif table in {"mud_npc_combat_profiles", "mud_npc_equipment", "mud_npc_combat_rewards", "mud_npc_shops", "mud_shop_stock"}:
             rows = [row for row in rows if row["npc_definition_id"] in selected["mud_npc_definitions"]]
         elif table in {"mud_quest_objectives", "mud_quest_rewards", "mud_quest_givers"}:
             rows = [row for row in rows if row["quest_id"] in selected["mud_quests"]]
@@ -487,6 +561,8 @@ def _export_content(database, world_id, room_map):
             rows = [row for row in rows if row["node_id"] in selected["mud_dialogue_nodes"]]
         elif table == "mud_item_instances":
             rows = [row for row in rows if row["id"] in placed_item_ids]
+        elif table in {"mud_item_spawns", "mud_room_discoveries"}:
+            rows = [row for row in rows if row["room_id"] in room_map]
         elif table == "mud_npc_instances":
             rows = [row for row in rows if row["room_id"] in room_map]
         selected[table] = {row["id"]: row for row in rows} if table in ID_TABLES else rows
@@ -496,7 +572,8 @@ def _export_content(database, world_id, room_map):
                 "mud_npc_definitions": "npc", "mud_npc_combat_rewards": "combat-reward",
                 "mud_quest_objectives": "objective", "mud_quest_rewards": "quest-reward",
                 "mud_dialogue_responses": "response", "mud_item_instances": "placed-item",
-                "mud_npc_instances": "placed-npc"}
+                "mud_npc_instances": "placed-npc", "mud_shop_stock": "stock",
+                "mud_item_spawns": "spawn", "mud_room_discoveries": "discovery"}
     maps = {"rooms": room_map}
     for table in ID_TABLES:
         maps[table] = {key: f"{prefixes[table]}-{index}"
@@ -514,12 +591,13 @@ def _export_content(database, world_id, room_map):
                 elif column in REFERENCE_TABLE:
                     ref_table = REFERENCE_TABLE[column]
                     if ref_table is None:
-                        ref_table = ("mud_item_definitions" if table == "mud_item_instances"
+                        ref_table = ("mud_item_definitions" if table in {"mud_item_instances", "mud_item_spawns"}
                                      else "mud_npc_definitions")
                     value = _mapped(maps, ref_table, value, column)
                 elif column == "target_id":
-                    ref_table = ({"talk_npc": "mud_npc_definitions", "visit_room": "rooms",
-                                  "possess_item": "mud_item_definitions"}.get(row["objective_type"])
+                    ref_table = ({"talk_npc": "mud_npc_definitions", "defeat_npc": "mud_npc_definitions",
+                                  "visit_room": "rooms", "possess_item": "mud_item_definitions",
+                                  "deliver_item": "mud_item_definitions"}.get(row["objective_type"])
                                  if table == "mud_quest_objectives" else "mud_item_definitions")
                     value = _mapped(maps, ref_table, value, column)
                 elif column.endswith("_json") and isinstance(value, str):
@@ -531,7 +609,7 @@ def _export_content(database, world_id, room_map):
             output.append(result)
         if output:
             content[table] = output
-    return content
+    return content, maps
 
 
 def export(database, world_id, *, origin_keys=None):
@@ -546,18 +624,21 @@ def export(database, world_id, *, origin_keys=None):
     if world["start_room_id"] not in ids:
         raise WorldError("World starting room is missing.")
     exits = database.execute(
-        "SELECT e.from_room_id,e.to_room_id,e.name,e.direction FROM mud_world_exits e "
+        "SELECT e.from_room_id,e.to_room_id,e.name,e.direction,e.key_item_id FROM mud_world_exits e "
         "JOIN mud_world_rooms r ON r.id=e.from_room_id WHERE r.world_id=? ORDER BY e.id", (world_id,)
     ).fetchall()
+    content, maps = _export_content(database, world_id, ids)
     document = {"id": world_id if world_id != "stationnet" else "my-world",
                 "name": world["name"], "author": world["author"],
                 "start_room": ids[world["start_room_id"]],
                 "rooms": [{"id": ids[room["id"]], "name": room["name"],
                            "description": room["description"]} for room in rooms],
                 "exits": [{"from": ids[row["from_room_id"]], "to": ids[row["to_room_id"]],
-                           "name": row["name"], "direction": row["direction"]}
+                           "name": row["name"], "direction": row["direction"],
+                           **({"key_item_id": _mapped(maps, "mud_item_definitions", row["key_item_id"], "key_item_id")}
+                              if row["key_item_id"] else {})}
                           for row in exits if row["to_room_id"] in ids],
-                "content": _export_content(database, world_id, ids)}
+                "content": content}
     from . import character_creation
     entries = character_creation.catalog(database)
     installed = {(kind, entry["key"]): entry for kind in character_creation.KINDS

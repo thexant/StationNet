@@ -73,6 +73,9 @@ An exit is one-way; add its return route explicitly. `direction` can be
 `northwest`, `up`, `down`, `in`, or `out`. Omit it or set it to `null` for a
 named exit. Names and nonempty directions must be unique among exits from the
 same room. An empty exit list is valid for a one-room world.
+Add `"key_item_id": "local-key-id"` to require a key item defined in
+`content.json`. Unlocking with `/unlock <exit>` persists per character;
+`/look <exit>` reports the lock state.
 
 ## 4. Add optional world content
 
@@ -209,10 +212,14 @@ The supported arrays are:
 | `mud_npc_instances` | NPCs placed in rooms | `definition_id`, `room_id` |
 | `mud_npc_combat_profiles` | Health, attack, defense, XP, respawn | `npc_definition_id` |
 | `mud_npc_equipment` | NPC equipment slots | `npc_definition_id`, `item_definition_id` |
-| `mud_npc_combat_rewards` | Item or XP drops | `npc_definition_id`, `target_id` for items |
+| `mud_npc_combat_rewards` | Probabilistic item, XP, or coin drops | `npc_definition_id`, `target_id` for items |
 | `mud_quests` | Quests and prerequisites | `prerequisite_quest_id` |
-| `mud_quest_objectives` | Talk, visit, or possess objectives | `quest_id`, `target_id` |
-| `mud_quest_rewards` | Quest item or XP rewards | `quest_id`, `target_id` for items |
+| `mud_quest_objectives` | Talk, visit, possess, defeat, or deliver objectives | `quest_id`, `target_id` |
+| `mud_quest_rewards` | Quest item, XP, or coin rewards | `quest_id`, `target_id` for items |
+| `mud_npc_shops` | NPC merchant settings | `npc_definition_id`, `buys_items`, `sell_percent` |
+| `mud_shop_stock` | Merchant merchandise and prices | `npc_definition_id`, `item_definition_id`, `price`, optional `quantity` |
+| `mud_item_spawns` | Renewable room-floor items | `definition_id`, `room_id`, `respawn_seconds` |
+| `mud_room_discoveries` | One-time per-character search clues and items | `room_id`, `clue`, optional `item_definition_id` |
 | `mud_quest_givers` | NPCs that offer quests | `quest_id`, `npc_definition_id` |
 
 Only these fields are accepted for each array; omitted optional fields use
@@ -225,15 +232,19 @@ must point to records in the same package, including room IDs in `rooms.json`.
 | `mud_item_instances` | `definition_id`, `room_id`, `container_id`, `is_open`, `state_json` |
 | `mud_conversations` | `name` |
 | `mud_dialogue_nodes` | `conversation_id`, `node_key`, `body`, `is_start` |
-| `mud_dialogue_responses` | `node_id`, `response_text`, `next_node_id`, `accept_quest_id`, `required_state_key`, `required_state_value`, `state_key`, `state_value`, `sort_order` |
+| `mud_dialogue_responses` | `node_id`, `response_text`, `next_node_id`, `accept_quest_id`, `deliver_item_id`, `required_state_key`, `required_state_value`, `state_key`, `state_value`, `sort_order` |
 | `mud_npc_definitions` | `name`, `description`, `conversation_id`, `properties_json`, `behaviors_json` |
 | `mud_npc_instances` | `definition_id`, `room_id`, `state_json` |
 | `mud_npc_combat_profiles` | `npc_definition_id`, `maximum_health`, `attack`, `defense`, `experience_reward`, `respawn_seconds` |
 | `mud_npc_equipment` | `npc_definition_id`, `equipment_slot`, `item_definition_id` |
-| `mud_npc_combat_rewards` | `npc_definition_id`, `reward_type`, `target_id`, `amount` |
+| `mud_npc_combat_rewards` | `npc_definition_id`, `reward_type`, `target_id`, `amount`, `chance_percent` |
 | `mud_quests` | `name`, `description`, `prerequisite_quest_id` |
 | `mud_quest_objectives` | `quest_id`, `objective_type`, `target_id`, `description`, `required_count`, `sort_order` |
 | `mud_quest_rewards` | `quest_id`, `reward_type`, `target_id`, `amount` |
+| `mud_npc_shops` | `npc_definition_id`, `buys_items`, `sell_percent` (no `id`) |
+| `mud_shop_stock` | `npc_definition_id`, `item_definition_id`, `price`, `quantity` |
+| `mud_item_spawns` | `definition_id`, `room_id`, `respawn_seconds` |
+| `mud_room_discoveries` | `room_id`, `clue`, `item_definition_id` |
 | `mud_quest_givers` | `quest_id`, `npc_definition_id` (no `id` field) |
 
 `mud_npc_combat_profiles` and `mud_npc_equipment` also have no `id` field;
@@ -247,25 +258,30 @@ array; it is installed before its children regardless of JSON order. Set
 For NPC combat, `maximum_health` is 1 to 1,000,000; `attack` is 1 to 100,000;
 `defense` and `experience_reward` are 0 to 100,000; `respawn_seconds` is 5
 to 86,400. A profile makes the NPC fightable; omit it for a purely
-conversational NPC. A combat reward uses `reward_type: "experience"` with no
-`target_id`, or `reward_type: "item"` with an item definition `target_id`.
-`amount` is 1 to 100,000. NPC equipment uses one item definition and one
+conversational NPC. A combat reward uses `reward_type: "experience"` or
+`"coins"` with no `target_id`, or `"item"` with an item definition `target_id`.
+`amount` is 1 to 100,000; `chance_percent` is 1 to 100 and defaults to 100.
+NPC equipment uses one item definition and one
 equipment slot per NPC; the item should be equipment for that slot.
 
 Give each conversation one start node (`is_start: 1`) and a distinct
 `node_key` per node. Responses point to a `node_id` and may name a
 `next_node_id` in the same conversation. `accept_quest_id` starts a quest;
+`deliver_item_id` consumes one carried item for an active delivery objective
+when the speaking NPC is a giver for that quest;
 `required_state_key` / `required_state_value` gate a response, and
 `state_key` / `state_value` save conversation state. `sort_order` controls
 display order. To offer a quest through a character, include both a
 `mud_quest_givers` link and a dialogue response accepting that quest.
 
-Quest objectives support `talk_npc` (target an NPC **definition**),
-`visit_room` (target a room ID), and `possess_item` (target an item
-**definition**). `required_count` is at least 1, and `sort_order` orders
+Quest objectives support `talk_npc` and `defeat_npc` (target an NPC
+**definition**), `visit_room` (target a room ID), and `possess_item` and
+`deliver_item` (target an item **definition**). Deliveries use `/deliver <item>`
+beside one of the quest's giver NPCs and consume the item. `required_count` is
+at least 1, and `sort_order` orders
 objectives. A quest may name another local quest in
 `prerequisite_quest_id`; prerequisite chains cannot form cycles. Quest
-rewards use `reward_type: "experience"` with no `target_id`, or `"item"`
+rewards use `reward_type: "experience"` or `"coins"` with no `target_id`, or `"item"`
 with an item definition `target_id`; `amount` is at least 1.
 
 `properties_json`, `behaviors_json`, and `state_json` may be JSON objects or
@@ -273,6 +289,15 @@ JSON text in the file. Item properties can include `heal`, `value`,
 `reveal_exit`, `use_message`, equipment bonuses, firearm data, attribute
 `requirements`, and timed effects. `behaviors_json` can make a combat-capable
 NPC peaceful with `{"aggressive": false}` or `{"friendly": true}`.
+
+`mud_npc_shops` turns a placed NPC into a merchant. Set `buys_items` to 0 or 1
+and `sell_percent` to 1–100 for player sales. `mud_shop_stock` sets each item's
+coin `price` and optional `quantity` (omit or use `null` for unlimited stock).
+Players use `/shop`, `/shop buy <item>`, and `/shop sell <item>` beside the NPC.
+For renewable room-floor resources, add `mud_item_spawns` with a 5–86,400 second
+`respawn_seconds`; do not also place an ordinary item instance for that spawn.
+`mud_room_discoveries` reveals a clue and optional item once per character with
+`/search`.
 
 NPCs can also have small optional behaviours. These run only for placed NPCs
 in the active traditional world. Existing NPCs remain still unless configured.

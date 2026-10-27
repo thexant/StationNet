@@ -641,7 +641,7 @@ def _room_exits(database, room_id, instance_id=None):
             (instance_id, room_id),
         ).fetchall()]
     return database.execute(
-        "SELECT e.id,e.name,e.direction,e.to_room_id,r.name AS destination_name "
+        "SELECT e.id,e.name,e.direction,e.to_room_id,e.key_item_id,r.name AS destination_name "
         "FROM mud_world_exits AS e JOIN mud_world_rooms AS r ON r.id=e.to_room_id "
         "WHERE e.from_room_id=? ORDER BY "
         "CASE WHEN e.direction IS NULL THEN 1 ELSE 0 END,e.name COLLATE NOCASE,e.id",
@@ -696,6 +696,16 @@ def _room_occupants(database, room_id, viewer_id, instance_id=None):
 def _exit_label(exit_row):
     route = exit_row["direction"] or exit_row["name"]
     return f"{route.upper()} — {exit_row['destination_name']}"
+
+
+def _player_exit_label(database, user_id, exit_row):
+    label = _exit_label(exit_row)
+    if "key_item_id" not in exit_row.keys() or not exit_row["key_item_id"]:
+        return label
+    character = _character_row(database, user_id)
+    unlocked = database.execute("SELECT 1 FROM mud_exit_unlocks WHERE character_id=? AND exit_id=?",
+                                (character["id"], exit_row["id"])).fetchone()
+    return label + (" [unlocked]" if unlocked else " [locked]")
 
 
 def _room_npc_rows(database, room_id, instance_id=None):
@@ -1050,7 +1060,8 @@ def _room_state(database, user_id):
 def _describe_room(database, room, viewer_id=None):
     instance_id = room.get("instance_id") if isinstance(room, dict) else None
     exits = _room_exits(database, room["id"], instance_id)
-    routes = ", ".join(_exit_label(item) for item in exits) if exits else "none"
+    routes = ", ".join(_player_exit_label(database, viewer_id, item) if viewer_id else _exit_label(item)
+                       for item in exits) if exits else "none"
     occupants = _room_occupants(database, room["id"], viewer_id, instance_id) if viewer_id else []
     people = ", ".join(item["display_name"] for item in occupants) if occupants else "none"
     items = ", ".join(label for _, label in _numbered_items(
@@ -1382,6 +1393,13 @@ def _item_value(row):
     return 8 if row["item_type"] == "misc" else 4
 
 
+def _resale_price(database, item, percent):
+    price = max(1, _item_value(item) * percent // 100)
+    floor = database.execute("SELECT MIN(price) FROM mud_shop_stock WHERE item_definition_id=?",
+                             (item["definition_id"],)).fetchone()[0]
+    return min(price, floor) if floor is not None else price
+
+
 def _wallet(database, character_id):
     database.execute(
         "INSERT OR IGNORE INTO mud_character_wallets(character_id) VALUES(?)", (character_id,),
@@ -1419,6 +1437,8 @@ def _require_hub(database, user_id):
 
 
 def _shop_action(database, user, parameters):
+    if _current_room(database, user["id"])["id"] != PORTAL_ROOM_ID:
+        return _world_shop_action(database, user, parameters)
     _require_hub(database, user["id"])
     args = [str(value) for value in parameters.get("arguments", [])]
     operation = str(parameters.get("operation") or (args[0] if args else "list")).casefold()
@@ -1445,7 +1465,8 @@ def _shop_action(database, user, parameters):
         ).rowcount:
             raise ActionError("You do not have enough coins.")
         _grant_item(database, user["id"], row["id"], "shop:item")
-        return [EventDraft(f"You buy {row['name']} for {price} coins.", event_type="shop")]
+        return [EventDraft(f"You buy {row['name']} for {price} coins.", event_type="shop")] + \
+            _set_objective_progress(database, user, "possess_item", row["id"])
     if operation == "sell":
         item = _item_matches(
             list(_inventory_rows(database, user["id"])) +
@@ -1458,7 +1479,7 @@ def _shop_action(database, user, parameters):
         if database.execute("SELECT 1 FROM mud_item_instances WHERE container_id=? LIMIT 1",
                             (item["id"],)).fetchone():
             raise ActionError("Empty this container before selling it.")
-        price = max(1, _item_value(item) * 2 // 5)
+        price = _resale_price(database, item, 40)
         database.execute("DELETE FROM mud_item_instances WHERE id=? AND owner_character_id=?",
                          (item["id"], character["id"]))
         _wallet(database, character["id"])
@@ -1466,6 +1487,82 @@ def _shop_action(database, user, parameters):
                          (price, character["id"]))
         return [EventDraft(f"You sell {item['name']} for {price} coins.", event_type="shop")]
     raise ActionError("Use /shop, /shop buy <name>, or /shop sell <item>.")
+
+
+def _world_shop_action(database, user, parameters):
+    room = _current_room(database, user["id"])
+    if room.get("instance_id"):
+        raise ActionError("There is no merchant here.")
+    args = [str(value) for value in parameters.get("arguments", [])]
+    operation = args[0].casefold() if args and args[0].casefold() in {"buy", "sell", "list", "stock"} else "list"
+    words = args[1:] if operation != "list" or (args and args[0].casefold() in {"list", "stock"}) else args
+    target = " ".join(words).strip()
+    merchant_name = ""
+    if " from " in target.casefold():
+        target, merchant_name = re.split(r"\s+from\s+", target, maxsplit=1, flags=re.I)
+    elif operation == "list" and target:
+        merchant_name = target
+    merchants = []
+    for npc in _room_npc_rows(database, room["id"]):
+        if npc["combat_maximum_health"] is not None and _encounter_row(database, npc)["status"] == "defeated":
+            continue
+        shop = database.execute("SELECT * FROM mud_npc_shops WHERE npc_definition_id=?",
+                                (npc["definition_id"],)).fetchone()
+        if shop and (not merchant_name or npc["name"].casefold() == merchant_name.casefold()):
+            merchants.append((npc, shop))
+    if not merchants:
+        raise ActionError("There is no merchant here" + (f" named {merchant_name}" if merchant_name else "") + ".")
+    if len(merchants) != 1:
+        raise ActionError("Several merchants are here. Add 'from <merchant>' to your command.")
+    npc, shop = merchants[0]
+    character = _character_row(database, user["id"])
+    if operation == "list":
+        stock = database.execute(
+            "SELECT s.*,d.name FROM mud_shop_stock s JOIN mud_item_definitions d ON d.id=s.item_definition_id "
+            "WHERE s.npc_definition_id=? AND (s.quantity IS NULL OR s.quantity>0) ORDER BY d.name COLLATE NOCASE",
+            (npc["definition_id"],)).fetchall()
+        lines = [f"{npc['name']} offers:"] + [f"- {row['name']}: {row['price']} coins" +
+                 (f" ({row['quantity']} left)" if row["quantity"] is not None else "") for row in stock]
+        if not stock:
+            lines.append("No stock available.")
+        lines.append(f"You have {_wallet(database, character['id'])} coins. Use /shop buy <item> or /shop sell <item>.")
+        return [EventDraft("\n".join(lines), event_type="shop")]
+    if operation == "buy":
+        stock = database.execute(
+            "SELECT s.*,d.name FROM mud_shop_stock s JOIN mud_item_definitions d ON d.id=s.item_definition_id "
+            "WHERE s.npc_definition_id=? AND (s.item_definition_id=? OR d.name=? COLLATE NOCASE)",
+            (npc["definition_id"], target, target)).fetchall()
+        if len(stock) != 1:
+            raise ActionError("That item is not sold here." if not stock else "Use a specific item ID.")
+        row = stock[0]
+        if row["quantity"] is not None and not database.execute(
+            "UPDATE mud_shop_stock SET quantity=quantity-1 WHERE id=? AND quantity>0", (row["id"],)).rowcount:
+            raise ActionError("That item is out of stock.")
+        _wallet(database, character["id"])
+        if not database.execute("UPDATE mud_character_wallets SET coins=coins-? WHERE character_id=? AND coins>=?",
+                                (row["price"], character["id"], row["price"])).rowcount:
+            raise ActionError("You do not have enough coins.")
+        _grant_item(database, user["id"], row["item_definition_id"], "shop:item")
+        return [EventDraft(f"You buy {row['name']} for {row['price']} coins.", event_type="shop")] + \
+            _set_objective_progress(database, user, "possess_item", row["item_definition_id"])
+    if operation == "sell":
+        if not shop["buys_items"]:
+            raise ActionError(f"{npc['name']} does not buy items.")
+        item = _item_matches(list(_inventory_rows(database, user["id"])) +
+                             list(_inventory_rows(database, user["id"], True)), target)
+        if item["item_type"] == "key" or item["acquired_run_id"]:
+            raise ActionError("That item cannot be sold here.")
+        if database.execute("SELECT 1 FROM mud_item_instances WHERE container_id=?", (item["id"],)).fetchone():
+            raise ActionError("Empty this container before selling it.")
+        price = _resale_price(database, item, shop["sell_percent"])
+        if database.execute("DELETE FROM mud_item_instances WHERE id=? AND owner_character_id=?",
+                            (item["id"], character["id"])).rowcount != 1:
+            raise ActionError("That item is no longer yours.")
+        _wallet(database, character["id"])
+        database.execute("UPDATE mud_character_wallets SET coins=coins+? WHERE character_id=?",
+                         (price, character["id"]))
+        return [EventDraft(f"You sell {item['name']} for {price} coins.", event_type="shop")]
+    raise ActionError("Use /shop, /shop buy <item>, or /shop sell <item>.")
 
 
 def _storage_action(database, user, parameters):
@@ -1525,6 +1622,8 @@ def _objective_target_name(database, objective):
         "talk_npc": ("mud_npc_definitions", "NPC"),
         "visit_room": ("mud_world_rooms", "room"),
         "possess_item": ("mud_item_definitions", "item"),
+        "deliver_item": ("mud_item_definitions", "item"),
+        "defeat_npc": ("mud_npc_definitions", "NPC"),
     }
     table, fallback = tables[objective["objective_type"]]
     row = database.execute(f"SELECT name FROM {table} WHERE id=?", (objective["target_id"],)).fetchone()
@@ -1585,6 +1684,11 @@ def _award_quest_rewards(database, user, quest_id):
             for _ in range(reward["amount"]):
                 _grant_item(database, user["id"], reward["target_id"])
             messages.append(f"{reward['amount']} × {definition['name']}")
+        elif reward["reward_type"] == "coins":
+            _wallet(database, character["id"])
+            database.execute("UPDATE mud_character_wallets SET coins=coins+? WHERE character_id=?",
+                             (reward["amount"], character["id"]))
+            messages.append(f"{reward['amount']} coins")
     database.execute(
         "UPDATE mud_player_quests SET rewarded_at=CURRENT_TIMESTAMP WHERE character_id=? "
         "AND quest_id=? AND rewarded_at IS NULL", (character["id"], quest_id),
@@ -1618,13 +1722,14 @@ def _finish_ready_quests(database, user):
     return completed
 
 
-def _set_objective_progress(database, user, objective_type, target_id):
+def _set_objective_progress(database, user, objective_type, target_id, objective_id=None):
     character = _character_row(database, user["id"])
     objectives = database.execute(
         "SELECT o.id,o.required_count FROM mud_quest_objectives AS o "
         "JOIN mud_player_quests AS q ON q.quest_id=o.quest_id "
-        "WHERE q.character_id=? AND q.status='active' AND o.objective_type=? AND o.target_id=?",
-        (character["id"], objective_type, target_id),
+        "WHERE q.character_id=? AND q.status='active' AND o.objective_type=? AND o.target_id=? "
+        "AND (? IS NULL OR o.id=?)",
+        (character["id"], objective_type, target_id, objective_id, objective_id),
     ).fetchall()
     for objective in objectives:
         if objective_type == "possess_item":
@@ -1633,7 +1738,10 @@ def _set_objective_progress(database, user, objective_type, target_id):
             count = sum(item["definition_id"] == target_id for item in visible)
             progress = min(count, objective["required_count"])
         else:
-            progress = objective["required_count"]
+            current = database.execute(
+                "SELECT progress FROM mud_player_objectives WHERE character_id=? AND objective_id=?",
+                (character["id"], objective["id"])).fetchone()
+            progress = min(objective["required_count"], (current["progress"] if current else 0) + 1)
         database.execute(
             "INSERT INTO mud_player_objectives(character_id,objective_id,progress,completed_at) "
             "VALUES(?,?,?,CASE WHEN ? THEN CURRENT_TIMESTAMP END) "
@@ -1645,6 +1753,16 @@ def _set_objective_progress(database, user, objective_type, target_id):
              1 if progress >= objective["required_count"] else 0),
         )
     return _finish_ready_quests(database, user)
+
+
+def _available_quests(database, user, room_id):
+    character = _character_row(database, user["id"])
+    return [dict(row) for row in database.execute(
+        "SELECT q.* FROM mud_quests q WHERE NOT EXISTS "
+        "(SELECT 1 FROM mud_player_quests p WHERE p.character_id=? AND p.quest_id=q.id) "
+        "AND EXISTS (SELECT 1 FROM mud_quest_givers g JOIN mud_npc_instances n "
+        "ON n.definition_id=g.npc_definition_id WHERE g.quest_id=q.id AND n.room_id=?) "
+        "ORDER BY q.name COLLATE NOCASE,q.id", (character["id"], room_id))]
 
 
 def _accept_quest(database, user, quest_id):
@@ -1682,7 +1800,7 @@ def _accept_quest(database, user, quest_id):
     )}
     for definition_id in definitions:
         events += _set_objective_progress(database, user, "possess_item", definition_id)
-    return events
+    return events + _finish_ready_quests(database, user)
 
 
 def _describe_item(database, row, user_id=None):
@@ -1782,6 +1900,11 @@ def _examine_exit(database, _user, room, target):
         raise ActionError("More than one exit matches. Use its full name.")
     if matches:
         item = matches[0]
+        if "key_item_id" in item.keys() and item["key_item_id"]:
+            character = _character_row(database, _user["id"])
+            unlocked = database.execute("SELECT 1 FROM mud_exit_unlocks WHERE character_id=? AND exit_id=?",
+                                        (character["id"], item["id"])).fetchone()
+            return f"{item['name']}\nLeads to {item['destination_name']}. " + ("Unlocked." if unlocked else "Locked. Use /unlock <exit> with a key.")
         return f"{item['name']}\nLeads to {item['destination_name']}."
     return None
 
@@ -1832,16 +1955,25 @@ def _encounter_reward_drafts(database, encounter, npc):
         if not claimed:
             continue
         rewards = []
+        rewarded_items = set()
         experience = npc["experience_reward"]
         for reward in configured:
+            if random.randint(1, 100) > reward["chance_percent"]:
+                continue
             if reward["reward_type"] == "experience":
                 experience += reward["amount"]
-            else:
+            elif reward["reward_type"] == "coins":
+                _wallet(database, participant["character_id"])
+                database.execute("UPDATE mud_character_wallets SET coins=coins+? WHERE character_id=?",
+                                 (reward["amount"], participant["character_id"]))
+                rewards.append(f"{reward['amount']} coins")
+            elif reward["reward_type"] == "item":
                 for _ in range(reward["amount"]):
                     _grant_item(
                         database, participant["user_id"], reward["target_id"],
                         "combat:reward",
                     )
+                rewarded_items.add(reward["target_id"])
                 rewards.append(f"{reward['amount']} × {reward['item_name']}")
         if experience:
             result = award_experience(database, participant["user_id"], experience)
@@ -1853,6 +1985,15 @@ def _encounter_reward_drafts(database, encounter, npc):
             f"Victory rewards for defeating {npc['name']}: {summary}.",
             event_type="reward", audience_key=str(participant["user_id"]),
         ))
+        for item_id in rewarded_items:
+            for event in _set_objective_progress(database, {"id": participant["user_id"]},
+                                                 "possess_item", item_id):
+                drafts.append(EventDraft(event.body, event.event_type, "private",
+                                         str(participant["user_id"]), (participant["user_id"],)))
+        for event in _set_objective_progress(database, {"id": participant["user_id"]},
+                                             "defeat_npc", npc["definition_id"]):
+            drafts.append(EventDraft(event.body, event.event_type, "private",
+                                     str(participant["user_id"]), (participant["user_id"],)))
     return drafts
 
 
@@ -2448,6 +2589,32 @@ def _look_action(database, user, parameters):
     return [EventDraft(description, event_type="room")]
 
 
+def _search_action(database, user, parameters):
+    if parameters.get("arguments"):
+        raise ActionError("Use /search to search this room.")
+    room = _current_room(database, user["id"])
+    if room.get("instance_id"):
+        raise ActionError("There is nothing to search here.")
+    character = _character_row(database, user["id"])
+    found = database.execute(
+        "SELECT d.* FROM mud_room_discoveries d WHERE d.room_id=? AND NOT EXISTS "
+        "(SELECT 1 FROM mud_player_discoveries p WHERE p.character_id=? AND p.discovery_id=d.id) "
+        "ORDER BY d.id LIMIT 1", (room["id"], character["id"])).fetchone()
+    if found is None:
+        return [EventDraft("You search carefully but find nothing new.", event_type="room")]
+    database.execute("INSERT INTO mud_player_discoveries(character_id,discovery_id) VALUES(?,?)",
+                     (character["id"], found["id"]))
+    drafts = [EventDraft(found["clue"], event_type="room")]
+    if found["item_definition_id"]:
+        item = database.execute("SELECT name FROM mud_item_definitions WHERE id=?",
+                                (found["item_definition_id"],)).fetchone()
+        if item:
+            _grant_item(database, user["id"], found["item_definition_id"], "discovery:item")
+            drafts.append(EventDraft(f"You discover {item['name']}.", event_type="item"))
+            drafts += _set_objective_progress(database, user, "possess_item", found["item_definition_id"])
+    return drafts
+
+
 def _room_entry_event(database, user):
     return _look_action(database, user, {})[0]
 
@@ -2490,6 +2657,14 @@ def _get_action(database, user, parameters):
             "equipped_slot=NULL,possession_mode=?,updated_at=CURRENT_TIMESTAMP WHERE id=?",
             (character["id"], _current_mode(database, user["id"]), item["id"]),
         )
+        spawn = database.execute("SELECT * FROM mud_item_spawns WHERE live_instance_id=?",
+                                 (item["id"],)).fetchone()
+        if spawn:
+            database.execute("UPDATE mud_item_spawns SET live_instance_id=NULL WHERE id=?", (spawn["id"],))
+            due = _scheduled_now(datetime.now(timezone.utc) + timedelta(seconds=spawn["respawn_seconds"]))
+            database.execute("INSERT INTO mud_scheduled_events(event_kind,entity_id,due_at) VALUES('item_respawn',?,?) "
+                             "ON CONFLICT(event_kind,entity_id) DO UPDATE SET due_at=excluded.due_at",
+                             (spawn["id"], due))
     return [EventDraft(f"You pick up {item['name']}.", event_type="item"),
             _room_item_event(database, user, room, f"{_character_row(database, user['id'])['display_name']} picks up {item['name']}.")] + \
         _set_objective_progress(database, user, "possess_item", item["definition_id"])
@@ -2855,6 +3030,12 @@ def _respond_action(database, user, parameters):
         if existing_quest is None:
             events += _accept_quest(database, user, chosen["accept_quest_id"])
             events += _set_objective_progress(database, user, "talk_npc", session_row["definition_id"])
+    if chosen["deliver_item_id"] and not dungeon_session:
+        matching_items = [item for item in _inventory_rows(database, user["id"])
+                          if item["definition_id"] == chosen["deliver_item_id"]]
+        if not matching_items:
+            raise ActionError("You do not carry the item requested in that response.")
+        events += _deliver_quest_item(database, user, matching_items[0], session_row["definition_id"])
     if chosen["next_node_id"]:
         session_table = ("mud_dungeon_conversation_sessions" if dungeon_session
                          else "mud_conversation_sessions")
@@ -2904,6 +3085,41 @@ def _quests_action(database, user, parameters):
     return [EventDraft(body, event_type="quest")]
 
 
+def _deliver_action(database, user, parameters):
+    target = " ".join(str(value) for value in parameters.get("arguments", [])).strip()
+    if not target:
+        raise ActionError("Use /deliver <item> while a quest giver is nearby.")
+    room = _current_room(database, user["id"])
+    if room.get("instance_id"):
+        raise ActionError("Deliveries are available in traditional worlds.")
+    item = _item_matches(list(_inventory_rows(database, user["id"])), target)
+    return _deliver_quest_item(database, user, item)
+
+
+def _deliver_quest_item(database, user, item, npc_definition_id=None):
+    room = _current_room(database, user["id"])
+    character = _character_row(database, user["id"])
+    objective = database.execute(
+        "SELECT o.id FROM mud_quest_objectives o JOIN mud_player_quests q ON q.quest_id=o.quest_id "
+        "JOIN mud_quest_givers g ON g.quest_id=o.quest_id "
+        "JOIN mud_npc_instances n ON n.definition_id=g.npc_definition_id "
+        "LEFT JOIN mud_player_objectives p ON p.objective_id=o.id AND p.character_id=q.character_id "
+        "WHERE q.character_id=? AND q.status='active' AND o.objective_type='deliver_item' "
+        "AND o.target_id=? AND n.room_id=? AND p.completed_at IS NULL "
+        "AND (? IS NULL OR g.npc_definition_id=?) LIMIT 1",
+        (character["id"], item["definition_id"], room["id"], npc_definition_id, npc_definition_id)).fetchone()
+    if objective is None:
+        raise ActionError("No nearby quest giver is waiting for that item.")
+    if item["acquired_run_id"]:
+        raise ActionError("Extract from the active run before delivering its loot.")
+    if database.execute("SELECT 1 FROM mud_item_instances WHERE container_id=?", (item["id"],)).fetchone():
+        raise ActionError("Empty the container before delivering it.")
+    database.execute("DELETE FROM mud_item_instances WHERE id=? AND owner_character_id=?",
+                     (item["id"], character["id"]))
+    return [EventDraft(f"You deliver {item['name']}.", event_type="quest")] + \
+        _set_objective_progress(database, user, "deliver_item", item["definition_id"], objective["id"])
+
+
 def _exits_action(database, user, parameters):
     if parameters.get("arguments"):
         raise ActionError("The exits command does not accept arguments.")
@@ -2913,7 +3129,7 @@ def _exits_action(database, user, parameters):
         body = f"There are no visible exits from {room['name']}."
     else:
         body = "Available exits:\n" + "\n".join(
-            f"- {_exit_label(exit_row)}" for exit_row in exits
+            f"- {_player_exit_label(database, user['id'], exit_row)}" for exit_row in exits
         )
     return [EventDraft(body, event_type="room")]
 
@@ -3582,6 +3798,32 @@ def _dungeon_entrance_action(_database, _user, parameters):
         raise ActionError("Choose Dungeon of the Day or a Random Expedition.")
 
 
+def _unlock_action(database, user, parameters):
+    target = " ".join(str(value) for value in parameters.get("arguments", [])).strip()
+    if not target:
+        raise ActionError("Use /unlock <exit>.")
+    room = _current_room(database, user["id"])
+    if room.get("instance_id"):
+        raise ActionError("There are no keyed exits here.")
+    matches = [row for row in _room_exits(database, room["id"]) if target.casefold() in
+               {row["id"].casefold(), row["name"].casefold(), (row["direction"] or "").casefold()}]
+    if len(matches) != 1:
+        raise ActionError("Choose a nearby exit by name or direction.")
+    chosen = matches[0]
+    if not chosen["key_item_id"]:
+        return [EventDraft(f"{chosen['name']} is already open.", event_type="room")]
+    character = _character_row(database, user["id"])
+    if database.execute("SELECT 1 FROM mud_exit_unlocks WHERE character_id=? AND exit_id=?",
+                        (character["id"], chosen["id"])).fetchone():
+        return [EventDraft(f"{chosen['name']} is already unlocked.", event_type="room")]
+    keys = list(_inventory_rows(database, user["id"])) + list(_inventory_rows(database, user["id"], True))
+    if not any(item["definition_id"] == chosen["key_item_id"] for item in keys):
+        raise ActionError("You do not have the key for that exit.")
+    database.execute("INSERT INTO mud_exit_unlocks(character_id,exit_id) VALUES(?,?)",
+                     (character["id"], chosen["id"]))
+    return [EventDraft(f"You unlock {chosen['name']}.", event_type="room")]
+
+
 def _go_action(database, user, parameters):
     character = character_state(database, user["id"])
     room = _current_room(database, user["id"])
@@ -3623,6 +3865,11 @@ def _go_action(database, user, parameters):
     if len(matches) > 1:
         raise ActionError(f'More than one exit matches "{destination}". Use an exit name or direction.')
     chosen = matches[0]
+    if not instance_id and chosen["key_item_id"]:
+        unlocked = database.execute("SELECT 1 FROM mud_exit_unlocks WHERE character_id=? AND exit_id=?",
+                                    (_character_row(database, user["id"])["id"], chosen["id"])).fetchone()
+        if not unlocked:
+            raise ActionError("That exit is locked. Use /unlock <exit> with its key.")
     old_recipients = _occupant_ids(database, room["id"], user["id"], instance_id)
     _leave_combat(database, user["id"], "instance" if instance_id else "room",
                   instance_id or room["id"])
@@ -3848,7 +4095,7 @@ actions.register(ActionDefinition(key="put", label="PUT AWAY", description="Put 
 actions.register(ActionDefinition(key="equip", label="EQUIP", description="Equip a carried item.", commands=("equip", "wear"), handler=_equip_action, group="ITEMS", show_context=False))
 actions.register(ActionDefinition(key="unequip", label="UNEQUIP", description="Remove equipped gear.", commands=("unequip", "remove"), handler=_unequip_action, group="ITEMS", show_context=False))
 actions.register(ActionDefinition(key="use", label="USE", description="Use a carried item.", commands=("use",), handler=_use_action, group="ITEMS", show_context=False))
-actions.register(ActionDefinition(key="shop", label="PORTAL TRADER", description="Buy supplies or sell loot in the portal room.", commands=("shop",), handler=_shop_action, group="HUB", show_context=False))
+actions.register(ActionDefinition(key="shop", label="SHOP", description="Browse, buy, or sell with a nearby merchant; the portal trader also serves the hub.", commands=("shop",), handler=_shop_action, group="HUB", show_context=False))
 actions.register(ActionDefinition(key="storage", label="PERSONAL STORAGE", description="Deposit or withdraw personal items in the portal room.", commands=("storage", "stash"), handler=_storage_action, group="HUB", show_context=False))
 actions.register(ActionDefinition(key="talk", label="TALK", description="Talk to a nearby NPC.", commands=("talk", "speak"), handler=_talk_action, group="NPCS", show_context=False))
 actions.register(ActionDefinition(key="respond", label="RESPOND", description="Choose a response in your current NPC conversation.", commands=("respond",), handler=_respond_action, group="DIALOGUE", show_context=False))
@@ -3859,7 +4106,8 @@ actions.register(ActionDefinition(key="who", label="WHO", description="List play
 actions.register(ActionDefinition(key="description", label="DESCRIPTION", description="View or edit your public character description; use clear to remove it.", commands=("description", "describe"), handler=_description_action, group="CHARACTER", show_context=False))
 actions.register(ActionDefinition(key="block", label="BLOCK", description="Block a player from private messages.", commands=("block",), handler=_block_action, group="SOCIAL", show_context=False))
 actions.register(ActionDefinition(key="unblock", label="UNBLOCK", description="Allow a blocked player to send private messages.", commands=("unblock",), handler=_unblock_action, group="SOCIAL", show_context=False))
-actions.register(ActionDefinition(key="quests", label="VIEW QUESTS", description="View your active quest objectives and progress.", commands=("quests", "quest", "objectives"), handler=_quests_action, group="QUESTS"))
+actions.register(ActionDefinition(key="quests", label="QUESTS", description="View progress or use /quest accept <name> beside a quest giver.", commands=("quests", "quest", "objectives"), handler=_quests_action, group="QUESTS"))
+actions.register(ActionDefinition(key="deliver", label="DELIVER ITEM", description="Give a quest item to a nearby quest giver: /deliver <item>.", commands=("deliver",), handler=_deliver_action, group="QUESTS", show_context=False))
 actions.register(ActionDefinition(key="combat", label="COMBAT STATUS", description="View hostile enemies and encounter status.", commands=("combat",), handler=_combat_action, group="COMBAT"))
 actions.register(ActionDefinition(key="spells", label="KNOWN SPELLS", description="List your class spells and their mana costs.", commands=("spells",), handler=_spells_action, group="MAGIC"))
 actions.register(ActionDefinition(key="cast", label="CAST SPELL", description="Cast a known spell, targeting an enemy when required.", commands=("cast",), handler=_cast_action, group="MAGIC", show_context=False))
@@ -3883,6 +4131,8 @@ actions.register(ActionDefinition(
     commands=("go", "move", "walk"), handler=_go_action,
     group="NAVIGATION", show_context=False,
 ))
+actions.register(ActionDefinition(key="unlock", label="UNLOCK EXIT", description="Unlock a nearby keyed exit with a carried key.", commands=("unlock",), handler=_unlock_action, group="NAVIGATION", show_context=False))
+actions.register(ActionDefinition(key="search", label="SEARCH ROOM", description="Search this room for authored discoveries.", commands=("search",), handler=_search_action, group="NAVIGATION", show_context=False))
 actions.register(ActionDefinition(
     key="portal", label="ENTER DUNGEON PORTALS",
     description="Enter the protected procedural gameplay hub.",
@@ -4159,10 +4409,21 @@ def process_scheduled_events(database, now=None, limit=50):
     stamp = _scheduled_now(now)
     rows = database.execute(
         "SELECT * FROM mud_scheduled_events WHERE due_at<=? "
-        "AND event_kind IN ('ambient','wander','patrol','room_message') ORDER BY due_at,id LIMIT ?",
+        "AND event_kind IN ('ambient','wander','patrol','room_message','item_respawn') ORDER BY due_at,id LIMIT ?",
         (stamp, min(50, max(1, limit))),
     ).fetchall()
     for event in rows:
+        if event["event_kind"] == "item_respawn":
+            spawn = database.execute("SELECT * FROM mud_item_spawns WHERE id=?", (event["entity_id"],)).fetchone()
+            if spawn and spawn["live_instance_id"] is None and database.execute(
+                "SELECT 1 FROM mud_world_rooms WHERE id=?", (spawn["room_id"],)).fetchone():
+                instance_id = f"world:respawn:{uuid.uuid4().hex}"
+                database.execute("INSERT INTO mud_item_instances(id,definition_id,room_id,spawn_source_id) VALUES(?,?,?,?)",
+                                 (instance_id, spawn["definition_id"], spawn["room_id"], spawn["id"]))
+                database.execute("UPDATE mud_item_spawns SET live_instance_id=? WHERE id=? AND live_instance_id IS NULL",
+                                 (instance_id, spawn["id"]))
+            database.execute("DELETE FROM mud_scheduled_events WHERE id=?", (event["id"],))
+            continue
         if event["event_kind"] == "room_message":
             payload = _json_properties(event["payload_json"])
             room_id = payload.get("room_id")
@@ -4740,6 +5001,7 @@ def _valid_exit_fields(database, exit_id=None):
     to_room_id = request.form.get("to_room_id", "").strip()
     name = " ".join(request.form.get("name", "").split())
     direction = request.form.get("direction", "").strip().casefold() or None
+    key_item_id = request.form.get("key_item_id", "").strip() or None
     room_ids = {
         row["id"] for row in database.execute(
             "SELECT id FROM mud_world_rooms WHERE id IN (?,?) AND world_id=(SELECT id FROM mud_world_packages WHERE active=1)",
@@ -4752,6 +5014,9 @@ def _valid_exit_fields(database, exit_id=None):
         return None, "Exit names must be between 1 and 80 characters."
     if direction is not None and direction not in DIRECTIONS:
         return None, "Choose a supported direction or leave direction blank for a named exit."
+    if key_item_id and database.execute("SELECT 1 FROM mud_item_definitions WHERE id=? AND item_type='key'",
+                                        (key_item_id,)).fetchone() is None:
+        return None, "Choose an existing key item."
     duplicate = database.execute(
         "SELECT id FROM mud_world_exits WHERE from_room_id=? AND id<>COALESCE(?, '') "
         "AND (name=? COLLATE NOCASE OR (? IS NOT NULL AND direction=? COLLATE NOCASE))",
@@ -4759,7 +5024,7 @@ def _valid_exit_fields(database, exit_id=None):
     ).fetchone()
     if duplicate:
         return None, "That source room already has an exit with this name or direction."
-    return (from_room_id, to_room_id, name, direction), None
+    return (from_room_id, to_room_id, name, direction, key_item_id), None
 
 
 @bp.get("/builder")
@@ -4804,13 +5069,21 @@ def builder():
         item["magazine_size"] = properties.get("magazine_size", 0)
         item["rounds"] = properties.get("rounds", 0)
         item["use_message"] = properties.get("use_message", "")
+        item["heal"] = properties.get("heal", 0)
+        item["value"] = properties.get("value", 0)
         item["on_use_effects_json"] = json.dumps(properties.get("on_use_effects", []))
         item["on_hit_effects_json"] = json.dumps(properties.get("on_hit_effects", []))
         item["requirements_json"] = json.dumps(properties.get("requirements", {}))
         definitions.append(item)
     items_by_room = {room["id"]: [] for room in rooms}
-    for row in database.execute("SELECT i.id,i.room_id,d.name,d.item_type FROM mud_item_instances i JOIN mud_item_definitions d ON d.id=i.definition_id WHERE i.room_id IS NOT NULL ORDER BY d.name COLLATE NOCASE"):
+    for row in database.execute("SELECT i.id,i.room_id,d.name,d.item_type,s.respawn_seconds FROM mud_item_instances i JOIN mud_item_definitions d ON d.id=i.definition_id LEFT JOIN mud_item_spawns s ON s.live_instance_id=i.id WHERE i.room_id IS NOT NULL ORDER BY d.name COLLATE NOCASE"):
         items_by_room.setdefault(row["room_id"], []).append(dict(row))
+    spawns_by_room = {room["id"]: [] for room in rooms}
+    for row in database.execute("SELECT s.*,d.name FROM mud_item_spawns s JOIN mud_item_definitions d ON d.id=s.definition_id ORDER BY s.room_id,d.name"):
+        spawns_by_room.setdefault(row["room_id"], []).append(dict(row))
+    discoveries_by_room = {room["id"]: [] for room in rooms}
+    for row in database.execute("SELECT * FROM mud_room_discoveries ORDER BY room_id,id"):
+        discoveries_by_room.setdefault(row["room_id"], []).append(dict(row))
     conversations = [dict(row) for row in database.execute(
         "SELECT c.* FROM mud_conversations AS c WHERE c.world_id=(SELECT id FROM mud_world_packages WHERE active=1) AND NOT EXISTS "
         "(SELECT 1 FROM mud_dungeon_managed_definitions AS m WHERE m.definition_id=c.id) "
@@ -4835,6 +5108,10 @@ def builder():
     )]
     npc_equipment = {item["id"]: {} for item in npc_definitions}
     npc_combat_rewards = {item["id"]: [] for item in npc_definitions}
+    shop_stock = {item["id"]: [] for item in npc_definitions}
+    npc_shops = {row["npc_definition_id"]: dict(row) for row in database.execute("SELECT * FROM mud_npc_shops")}
+    for row in database.execute("SELECT s.*,d.name AS item_name FROM mud_shop_stock s JOIN mud_item_definitions d ON d.id=s.item_definition_id ORDER BY d.name COLLATE NOCASE"):
+        shop_stock.setdefault(row["npc_definition_id"], []).append(dict(row))
     for row in database.execute("SELECT * FROM mud_npc_equipment"):
         npc_equipment.setdefault(row["npc_definition_id"], {})[row["equipment_slot"]] = row["item_definition_id"]
     for row in database.execute(
@@ -4864,11 +5141,13 @@ def builder():
     return render_template(
         "mud/builder.html", rooms=rooms, exits_by_room=exits_by_room,
         users=users, directions=DIRECTIONS, definitions=definitions, items_by_room=items_by_room,
+        spawns_by_room=spawns_by_room,
         conversations=conversations, nodes_by_conversation=nodes_by_conversation,
         responses_by_node=responses_by_node, npc_definitions=npc_definitions,
         npcs_by_room=npcs_by_room, quests=quests, objectives_by_quest=objectives_by_quest,
         rewards_by_quest=rewards_by_quest, givers_by_quest=givers_by_quest,
         npc_equipment=npc_equipment, npc_combat_rewards=npc_combat_rewards,
+        npc_shops=npc_shops, shop_stock=shop_stock, discoveries_by_room=discoveries_by_room,
     )
 
 
@@ -4901,6 +5180,8 @@ def _item_definition_fields():
     ammo_type = request.form.get("ammo_type", "").strip()
     magazine_size = request.form.get("magazine_size", 0, type=int)
     rounds = request.form.get("rounds", 0, type=int)
+    heal = request.form.get("heal", 0, type=int)
+    value = request.form.get("value", 0, type=int)
     if not 2 <= len(name) <= 80 or not 1 <= len(description) <= 4000:
         return None, "Item names must be 2–80 characters and descriptions 1–4000 characters."
     if item_type not in {"misc", "equipment", "container", "consumable", "key"}:
@@ -4911,6 +5192,10 @@ def _item_definition_fields():
     if len(use_message) > 1000: return None, "Use messages cannot exceed 1000 characters."
     if attack_bonus is None or defense_bonus is None or not 0 <= attack_bonus <= 100000 or not 0 <= defense_bonus <= 100000:
         return None, "Combat bonuses must be between 0 and 100,000."
+    if heal is None or value is None or not 0 <= heal <= 100000 or not 0 <= value <= 100000:
+        return None, "Healing and value must be between 0 and 100,000."
+    if heal and item_type != "consumable":
+        return None, "Healing applies only to consumables."
     properties = {}
     try:
         requirements = json.loads(request.form.get("requirements", "{}") or "{}")
@@ -4924,6 +5209,8 @@ def _item_definition_fields():
     if use_message: properties["use_message"] = use_message
     if attack_bonus: properties["attack_bonus"] = attack_bonus
     if defense_bonus: properties["defense_bonus"] = defense_bonus
+    if heal: properties["heal"] = heal
+    if value: properties["value"] = value
     if firearm:
         properties.update(firearm=True, ammo_type=ammo_type, magazine_size=magazine_size)
     elif ammo_type or rounds:
@@ -5037,7 +5324,7 @@ def builder_create_dialogue_response(node_id):
     validate_csrf(); database = get_db(); node = database.execute("SELECT conversation_id FROM mud_dialogue_nodes WHERE id=?", (node_id,)).fetchone()
     if node is None: abort(404)
     if _managed_dungeon_conversation(database, node["conversation_id"]): abort(404)
-    response_text = " ".join(request.form.get("response_text", "").split()); next_node_id = request.form.get("next_node_id", "").strip() or None; quest_id = request.form.get("accept_quest_id", "").strip() or None
+    response_text = " ".join(request.form.get("response_text", "").split()); next_node_id = request.form.get("next_node_id", "").strip() or None; quest_id = request.form.get("accept_quest_id", "").strip() or None; deliver_item_id = request.form.get("deliver_item_id", "").strip() or None
     required_state_key = " ".join(request.form.get("required_state_key", "").split()) or None; required_state_value = request.form.get("required_state_value", "").strip() or None
     state_key = " ".join(request.form.get("state_key", "").split()) or None; state_value = request.form.get("state_value", "").strip() or None
     sort_order = request.form.get("sort_order", 0, type=int)
@@ -5045,7 +5332,8 @@ def builder_create_dialogue_response(node_id):
     if bool(required_state_key) != bool(required_state_value): flash("A response state requirement needs both a key and value.", "error"); return _builder_redirect()
     if next_node_id and database.execute("SELECT 1 FROM mud_dialogue_nodes WHERE id=? AND conversation_id=?", (next_node_id, node["conversation_id"])).fetchone() is None: flash("The next node must belong to this conversation.", "error"); return _builder_redirect()
     if quest_id and database.execute("SELECT 1 FROM mud_quests WHERE id=?", (quest_id,)).fetchone() is None: flash("Choose an existing quest.", "error"); return _builder_redirect()
-    database.execute("INSERT INTO mud_dialogue_responses(id,node_id,response_text,next_node_id,accept_quest_id,required_state_key,required_state_value,state_key,state_value,sort_order) VALUES(?,?,?,?,?,?,?,?,?,?)", (f"world:dialogue-response:{uuid.uuid4().hex}", node_id, response_text, next_node_id, quest_id, required_state_key, required_state_value, state_key, state_value, sort_order)); database.commit()
+    if deliver_item_id and database.execute("SELECT 1 FROM mud_item_definitions WHERE id=?", (deliver_item_id,)).fetchone() is None: flash("Choose an existing delivery item.", "error"); return _builder_redirect()
+    database.execute("INSERT INTO mud_dialogue_responses(id,node_id,response_text,next_node_id,accept_quest_id,deliver_item_id,required_state_key,required_state_value,state_key,state_value,sort_order) VALUES(?,?,?,?,?,?,?,?,?,?,?)", (f"world:dialogue-response:{uuid.uuid4().hex}", node_id, response_text, next_node_id, quest_id, deliver_item_id, required_state_key, required_state_value, state_key, state_value, sort_order)); database.commit()
     flash("Dialogue response added.", "success"); return _builder_redirect()
 
 
@@ -5136,6 +5424,21 @@ def _save_npc_combat(database, npc_id, profile, equipment):
     )
 
 
+def _save_npc_shop(database, npc_id):
+    if request.form.get("is_merchant") != "1":
+        database.execute("DELETE FROM mud_npc_shops WHERE npc_definition_id=?", (npc_id,))
+        return None
+    sell_percent = request.form.get("sell_percent", 40, type=int)
+    if sell_percent is None or not 1 <= sell_percent <= 100:
+        return "Merchant buyback percentage must be 1 to 100."
+    database.execute(
+        "INSERT INTO mud_npc_shops(npc_definition_id,buys_items,sell_percent) VALUES(?,?,?) "
+        "ON CONFLICT(npc_definition_id) DO UPDATE SET buys_items=excluded.buys_items,"
+        "sell_percent=excluded.sell_percent",
+        (npc_id, int(request.form.get("buys_items") == "1"), sell_percent))
+    return None
+
+
 @bp.post("/builder/npcs")
 @builder_required
 def builder_create_npc_definition():
@@ -5144,7 +5447,10 @@ def builder_create_npc_definition():
     profile, equipment, error = _npc_combat_fields(database)
     if error: flash(error, "error"); return _builder_redirect()
     if fields[2] and database.execute("SELECT 1 FROM mud_conversations WHERE id=?", (fields[2],)).fetchone() is None: flash("Choose an existing conversation.", "error"); return _builder_redirect()
-    npc_id = f"world:npc-definition:{uuid.uuid4().hex}"; database.execute("INSERT INTO mud_npc_definitions(id,name,description,conversation_id,properties_json,behaviors_json,created_by,world_id) VALUES(?,?,?,?,?,?,?,(SELECT id FROM mud_world_packages WHERE active=1))", (npc_id, *fields, g.user["id"])); _save_npc_combat(database, npc_id, profile, equipment); database.commit()
+    npc_id = f"world:npc-definition:{uuid.uuid4().hex}"; database.execute("INSERT INTO mud_npc_definitions(id,name,description,conversation_id,properties_json,behaviors_json,created_by,world_id) VALUES(?,?,?,?,?,?,?,(SELECT id FROM mud_world_packages WHERE active=1))", (npc_id, *fields, g.user["id"])); _save_npc_combat(database, npc_id, profile, equipment)
+    shop_error = _save_npc_shop(database, npc_id)
+    if shop_error: database.rollback(); flash(shop_error, "error"); return _builder_redirect()
+    database.commit()
     flash(f"NPC definition {fields[0]} created.", "success"); return _builder_redirect()
 
 
@@ -5158,7 +5464,41 @@ def builder_update_npc_definition(npc_id):
     profile, equipment, error = _npc_combat_fields(database)
     if error: flash(error, "error"); return _builder_redirect()
     if fields[2] and database.execute("SELECT 1 FROM mud_conversations WHERE id=?", (fields[2],)).fetchone() is None: flash("Choose an existing conversation.", "error"); return _builder_redirect()
-    database.execute("UPDATE mud_npc_definitions SET name=?,description=?,conversation_id=?,properties_json=?,behaviors_json=?,updated_at=CURRENT_TIMESTAMP WHERE id=?", (*fields, npc_id)); _save_npc_combat(database, npc_id, profile, equipment); database.commit(); flash("NPC definition updated.", "success"); return _builder_redirect()
+    database.execute("UPDATE mud_npc_definitions SET name=?,description=?,conversation_id=?,properties_json=?,behaviors_json=?,updated_at=CURRENT_TIMESTAMP WHERE id=?", (*fields, npc_id)); _save_npc_combat(database, npc_id, profile, equipment)
+    shop_error = _save_npc_shop(database, npc_id)
+    if shop_error: database.rollback(); flash(shop_error, "error"); return _builder_redirect()
+    database.commit(); flash("NPC definition updated.", "success"); return _builder_redirect()
+
+
+@bp.post("/builder/npcs/<path:npc_id>/stock")
+@builder_required
+def builder_add_shop_stock(npc_id):
+    validate_csrf(); database = get_db()
+    if _managed_dungeon_definition(database, npc_id): abort(404)
+    if database.execute("SELECT 1 FROM mud_npc_shops WHERE npc_definition_id=?", (npc_id,)).fetchone() is None: abort(404)
+    item_id = request.form.get("item_definition_id", "").strip()
+    price = request.form.get("price", type=int)
+    quantity_raw = request.form.get("quantity", "").strip()
+    try: quantity = int(quantity_raw) if quantity_raw else None
+    except ValueError: quantity = -1
+    if (database.execute("SELECT 1 FROM mud_item_definitions WHERE id=?", (item_id,)).fetchone() is None or
+            price is None or not 1 <= price <= 100000 or
+            (quantity is not None and not 0 <= quantity <= 100000)):
+        flash("Choose an item, valid price, and optional nonnegative stock quantity.", "error"); return _builder_redirect()
+    database.execute(
+        "INSERT INTO mud_shop_stock(id,npc_definition_id,item_definition_id,price,quantity) VALUES(?,?,?,?,?) "
+        "ON CONFLICT(npc_definition_id,item_definition_id) DO UPDATE SET price=excluded.price,quantity=excluded.quantity",
+        (f"world:stock:{uuid.uuid4().hex}", npc_id, item_id, price, quantity))
+    database.commit(); flash("Merchant stock saved.", "success"); return _builder_redirect()
+
+
+@bp.post("/builder/shop-stock/<path:stock_id>/delete")
+@builder_required
+def builder_delete_shop_stock(stock_id):
+    validate_csrf(); database = get_db()
+    if request.form.get("confirmation") != "delete": abort(400)
+    if database.execute("DELETE FROM mud_shop_stock WHERE id=?", (stock_id,)).rowcount != 1: abort(404)
+    database.commit(); flash("Merchant stock removed.", "success"); return _builder_redirect()
 
 
 @bp.post("/builder/npcs/<path:npc_id>/combat-rewards")
@@ -5171,7 +5511,8 @@ def builder_create_npc_combat_reward(npc_id):
     reward_type = request.form.get("reward_type", "item")
     target_id = request.form.get("target_id", "").strip() or None
     amount = request.form.get("amount", 1, type=int)
-    if reward_type not in {"experience", "item"} or amount is None or not 1 <= amount <= 100000:
+    chance = request.form.get("chance_percent", 100, type=int)
+    if reward_type not in {"experience", "item", "coins"} or amount is None or not 1 <= amount <= 100000 or chance is None or not 1 <= chance <= 100:
         flash("Choose a valid combat reward.", "error"); return _builder_redirect()
     if reward_type == "item":
         if amount > 100 or database.execute(
@@ -5181,9 +5522,9 @@ def builder_create_npc_combat_reward(npc_id):
     else:
         target_id = None
     database.execute(
-        "INSERT INTO mud_npc_combat_rewards(id,npc_definition_id,reward_type,target_id,amount) "
-        "VALUES(?,?,?,?,?)", (f"world:combat-reward:{uuid.uuid4().hex}", npc_id,
-                              reward_type, target_id, amount),
+        "INSERT INTO mud_npc_combat_rewards(id,npc_definition_id,reward_type,target_id,amount,chance_percent) "
+        "VALUES(?,?,?,?,?,?)", (f"world:combat-reward:{uuid.uuid4().hex}", npc_id,
+                              reward_type, target_id, amount, chance),
     )
     database.commit(); flash("Combat reward added.", "success"); return _builder_redirect()
 
@@ -5268,7 +5609,7 @@ def builder_set_quest_givers(quest_id):
 @builder_required
 def builder_create_quest_objective(quest_id):
     validate_csrf(); database = get_db(); objective_type = request.form.get("objective_type", ""); target_id = request.form.get("target_id", "").strip(); description = request.form.get("description", "").strip(); required_count = request.form.get("required_count", 1, type=int)
-    target_tables = {"talk_npc": "mud_npc_definitions", "visit_room": "mud_world_rooms", "possess_item": "mud_item_definitions"}
+    target_tables = {"talk_npc": "mud_npc_definitions", "visit_room": "mud_world_rooms", "possess_item": "mud_item_definitions", "defeat_npc": "mud_npc_definitions", "deliver_item": "mud_item_definitions"}
     if database.execute("SELECT 1 FROM mud_quests WHERE id=?", (quest_id,)).fetchone() is None: abort(404)
     if objective_type not in target_tables or database.execute(f"SELECT 1 FROM {target_tables.get(objective_type, 'mud_quests')} WHERE id=?", (target_id,)).fetchone() is None: flash("Choose a valid objective type and target.", "error"); return _builder_redirect()
     sort_order = request.form.get("sort_order", 0, type=int)
@@ -5290,9 +5631,9 @@ def builder_delete_quest_objective(objective_id):
 def builder_create_quest_reward(quest_id):
     validate_csrf(); database = get_db(); reward_type = request.form.get("reward_type", ""); target_id = request.form.get("target_id", "").strip() or None; amount = request.form.get("amount", 1, type=int)
     if database.execute("SELECT 1 FROM mud_quests WHERE id=?", (quest_id,)).fetchone() is None: abort(404)
-    if reward_type not in {"experience", "item"} or amount is None or not 1 <= amount <= 100000 or (reward_type == "item" and amount > 100): flash("Choose a valid reward amount (up to 100 items or 100,000 XP).", "error"); return _builder_redirect()
+    if reward_type not in {"experience", "item", "coins"} or amount is None or not 1 <= amount <= 100000 or (reward_type == "item" and amount > 100): flash("Choose a valid reward amount (up to 100 items or 100,000 XP/coins).", "error"); return _builder_redirect()
     if reward_type == "item" and database.execute("SELECT 1 FROM mud_item_definitions WHERE id=?", (target_id,)).fetchone() is None: flash("Choose an item definition for an item reward.", "error"); return _builder_redirect()
-    if reward_type == "experience": target_id = None
+    if reward_type in {"experience", "coins"}: target_id = None
     database.execute("INSERT INTO mud_quest_rewards(id,quest_id,reward_type,target_id,amount) VALUES(?,?,?,?,?)", (f"world:quest-reward:{uuid.uuid4().hex}", quest_id, reward_type, target_id, amount)); database.commit(); flash("Quest reward added.", "success"); return _builder_redirect()
 
 
@@ -5303,6 +5644,31 @@ def builder_delete_quest_reward(reward_id):
     if request.form.get("confirmation") != "delete": flash("Reward removal was not confirmed.", "error"); return _builder_redirect()
     if database.execute("DELETE FROM mud_quest_rewards WHERE id=?", (reward_id,)).rowcount == 0: abort(404)
     database.commit(); flash("Quest reward removed.", "success"); return _builder_redirect()
+
+
+@bp.post("/builder/rooms/<path:room_id>/discoveries")
+@builder_required
+def builder_add_discovery(room_id):
+    validate_csrf(); database = get_db()
+    if database.execute("SELECT 1 FROM mud_world_rooms WHERE id=? AND world_id=(SELECT id FROM mud_world_packages WHERE active=1)", (room_id,)).fetchone() is None: abort(404)
+    clue = request.form.get("clue", "").strip()
+    item_id = request.form.get("item_definition_id", "").strip() or None
+    if not 1 <= len(clue) <= 500 or (item_id and database.execute("SELECT 1 FROM mud_item_definitions WHERE id=?", (item_id,)).fetchone() is None):
+        flash("Write a short clue and choose a valid optional item.", "error"); return _builder_redirect(room_id)
+    database.execute("INSERT INTO mud_room_discoveries(id,room_id,clue,item_definition_id) VALUES(?,?,?,?)",
+                     (f"world:discovery:{uuid.uuid4().hex}", room_id, clue, item_id))
+    database.commit(); flash("Room discovery added.", "success"); return _builder_redirect(room_id)
+
+
+@bp.post("/builder/discoveries/<path:discovery_id>/delete")
+@builder_required
+def builder_delete_discovery(discovery_id):
+    validate_csrf(); database = get_db()
+    if request.form.get("confirmation") != "delete": abort(400)
+    row = database.execute("SELECT room_id FROM mud_room_discoveries WHERE id=?", (discovery_id,)).fetchone()
+    if row is None: abort(404)
+    database.execute("DELETE FROM mud_room_discoveries WHERE id=?", (discovery_id,))
+    database.commit(); flash("Room discovery removed.", "success"); return _builder_redirect(row["room_id"])
 
 
 @bp.post("/builder/items")
@@ -5340,6 +5706,11 @@ def builder_place_selected_item():
 
 def _builder_place_item(item_id):
     validate_csrf(); database = get_db(); room_id = request.form.get("room_id", "").strip(); container_id = request.form.get("container_id", "").strip()
+    respawn = request.form.get("respawn_seconds", 0, type=int)
+    if respawn is None or respawn < 0 or (respawn and not 5 <= respawn <= 86400):
+        flash("Respawn must be 5 seconds to 24 hours, or zero for a one-time placement.", "error"); return _builder_redirect(room_id)
+    if respawn and container_id:
+        flash("Renewable placements must be on the room floor.", "error"); return _builder_redirect(room_id)
     if _managed_dungeon_definition(database, item_id): abort(404)
     definition = database.execute("SELECT name FROM mud_item_definitions WHERE id=?", (item_id,)).fetchone()
     if definition is None or database.execute("SELECT 1 FROM mud_world_rooms WHERE id=?", (room_id,)).fetchone() is None: abort(404)
@@ -5352,8 +5723,28 @@ def _builder_place_item(item_id):
         database.execute("INSERT INTO mud_item_instances(id,definition_id,container_id) VALUES(?,?,?)", (instance_id, item_id, container_id))
     else:
         database.execute("INSERT INTO mud_item_instances(id,definition_id,room_id) VALUES(?,?,?)", (instance_id, item_id, room_id))
+    if respawn:
+        spawn_id = f"world:spawn:{uuid.uuid4().hex}"
+        database.execute("INSERT INTO mud_item_spawns(id,definition_id,room_id,respawn_seconds,live_instance_id) VALUES(?,?,?,?,?)",
+                         (spawn_id, item_id, room_id, respawn, instance_id))
+        database.execute("UPDATE mud_item_instances SET spawn_source_id=? WHERE id=?", (spawn_id, instance_id))
     database.commit()
     flash(f"Placed {definition['name']} in the room.", "success"); return _builder_redirect(room_id)
+
+
+@bp.post("/builder/item-spawns/<path:spawn_id>/delete")
+@builder_required
+def builder_delete_item_spawn(spawn_id):
+    validate_csrf(); database = get_db()
+    if request.form.get("confirmation") != "delete": abort(400)
+    spawn = database.execute("SELECT * FROM mud_item_spawns WHERE id=?", (spawn_id,)).fetchone()
+    if spawn is None: abort(404)
+    database.execute("DELETE FROM mud_scheduled_events WHERE event_kind='item_respawn' AND entity_id=?", (spawn_id,))
+    if spawn["live_instance_id"]:
+        database.execute("DELETE FROM mud_item_instances WHERE id=? AND room_id=?",
+                         (spawn["live_instance_id"], spawn["room_id"]))
+    database.execute("DELETE FROM mud_item_spawns WHERE id=?", (spawn_id,))
+    database.commit(); flash("Renewable placement removed.", "success"); return _builder_redirect(spawn["room_id"])
 
 
 @bp.post("/builder/item-instances/<path:instance_id>/delete")
@@ -5365,6 +5756,7 @@ def builder_delete_item_instance(instance_id):
     # Never silently destroy items currently held or containing items.
     if item["room_id"] is None or database.execute("SELECT 1 FROM mud_item_instances WHERE container_id=?", (instance_id,)).fetchone():
         flash("Only empty room items can be removed from the builder.", "error"); return _builder_redirect(item["room_id"])
+    database.execute("DELETE FROM mud_item_spawns WHERE live_instance_id=?", (instance_id,))
     database.execute("DELETE FROM mud_item_instances WHERE id=?", (instance_id,)); database.commit(); flash(f"Removed {item['name']}.", "success"); return _builder_redirect(item["room_id"])
 
 
@@ -5487,8 +5879,8 @@ def builder_create_exit():
         return _builder_redirect(request.form.get("from_room_id"))
     exit_id = f"world:exit:{uuid.uuid4().hex}"
     database.execute(
-        "INSERT INTO mud_world_exits(id,from_room_id,to_room_id,name,direction) "
-        "VALUES(?,?,?,?,?)", (exit_id, *fields),
+        "INSERT INTO mud_world_exits(id,from_room_id,to_room_id,name,direction,key_item_id) "
+        "VALUES(?,?,?,?,?,?)", (exit_id, *fields),
     )
     database.commit()
     flash(f"Exit {fields[2]} created.", "success")
@@ -5501,7 +5893,7 @@ def builder_update_exit(exit_id):
     validate_csrf()
     database = get_db()
     existing = database.execute(
-        "SELECT e.id,e.from_room_id FROM mud_world_exits e JOIN mud_world_rooms r "
+        "SELECT e.id,e.from_room_id,e.to_room_id,e.key_item_id FROM mud_world_exits e JOIN mud_world_rooms r "
         "ON r.id=e.from_room_id WHERE e.id=? "
         "AND r.world_id=(SELECT id FROM mud_world_packages WHERE active=1)", (exit_id,)
     ).fetchone()
@@ -5512,9 +5904,12 @@ def builder_update_exit(exit_id):
         flash(error, "error")
         return _builder_redirect(existing["from_room_id"])
     database.execute(
-        "UPDATE mud_world_exits SET from_room_id=?,to_room_id=?,name=?,direction=? WHERE id=?",
+        "UPDATE mud_world_exits SET from_room_id=?,to_room_id=?,name=?,direction=?,key_item_id=? WHERE id=?",
         (*fields, exit_id),
     )
+    if (existing["key_item_id"] != fields[4] or existing["from_room_id"] != fields[0]
+            or existing["to_room_id"] != fields[1]):
+        database.execute("DELETE FROM mud_exit_unlocks WHERE exit_id=?", (exit_id,))
     database.commit()
     flash(f"Exit {fields[2]} updated.", "success")
     return _builder_redirect(fields[0])

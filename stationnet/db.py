@@ -660,6 +660,7 @@ CREATE TABLE IF NOT EXISTS mud_world_exits (
  to_room_id TEXT NOT NULL REFERENCES mud_world_rooms(id) ON DELETE CASCADE,
  name TEXT NOT NULL COLLATE NOCASE,
  direction TEXT COLLATE NOCASE,
+ key_item_id TEXT REFERENCES mud_item_definitions(id) ON DELETE RESTRICT,
  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
  UNIQUE(from_room_id,name),
  UNIQUE(from_room_id,direction));
@@ -926,6 +927,7 @@ CREATE TABLE IF NOT EXISTS mud_item_instances (
  possession_mode TEXT NOT NULL DEFAULT 'traditional'
  CHECK(possession_mode IN ('traditional','procedural')),
  acquired_run_id TEXT REFERENCES mud_procedural_instances(id) ON DELETE RESTRICT,
+ spawn_source_id TEXT,
  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
  CHECK((room_id IS NOT NULL) + (owner_character_id IS NOT NULL AND equipped_slot IS NULL) + (container_id IS NOT NULL) + (owner_character_id IS NOT NULL AND equipped_slot IS NOT NULL) = 1),
@@ -1007,11 +1009,12 @@ CREATE TABLE IF NOT EXISTS mud_npc_equipment (
 CREATE TABLE IF NOT EXISTS mud_npc_combat_rewards (
  id TEXT PRIMARY KEY,
  npc_definition_id TEXT NOT NULL REFERENCES mud_npc_definitions(id) ON DELETE CASCADE,
- reward_type TEXT NOT NULL CHECK(reward_type IN ('experience','item')),
+ reward_type TEXT NOT NULL CHECK(reward_type IN ('experience','item','coins')),
  target_id TEXT REFERENCES mud_item_definitions(id) ON DELETE RESTRICT,
  amount INTEGER NOT NULL DEFAULT 1 CHECK(amount BETWEEN 1 AND 100000),
+ chance_percent INTEGER NOT NULL DEFAULT 100 CHECK(chance_percent BETWEEN 1 AND 100),
  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
- CHECK((reward_type='experience' AND target_id IS NULL) OR
+ CHECK((reward_type IN ('experience','coins') AND target_id IS NULL) OR
        (reward_type='item' AND target_id IS NOT NULL)));
 CREATE INDEX IF NOT EXISTS idx_mud_npc_combat_rewards_definition
  ON mud_npc_combat_rewards(npc_definition_id,id);
@@ -1059,7 +1062,7 @@ CREATE INDEX IF NOT EXISTS idx_mud_quests_name ON mud_quests(name);
 CREATE TABLE IF NOT EXISTS mud_quest_objectives (
  id TEXT PRIMARY KEY,
  quest_id TEXT NOT NULL REFERENCES mud_quests(id) ON DELETE CASCADE,
- objective_type TEXT NOT NULL CHECK(objective_type IN ('talk_npc','visit_room','possess_item')),
+ objective_type TEXT NOT NULL CHECK(objective_type IN ('talk_npc','visit_room','possess_item','defeat_npc','deliver_item')),
  target_id TEXT NOT NULL,
  description TEXT NOT NULL,
  required_count INTEGER NOT NULL DEFAULT 1 CHECK(required_count>=1),
@@ -1070,7 +1073,7 @@ CREATE INDEX IF NOT EXISTS idx_mud_quest_objectives_quest
 CREATE TABLE IF NOT EXISTS mud_quest_rewards (
  id TEXT PRIMARY KEY,
  quest_id TEXT NOT NULL REFERENCES mud_quests(id) ON DELETE CASCADE,
- reward_type TEXT NOT NULL CHECK(reward_type IN ('experience','item')),
+ reward_type TEXT NOT NULL CHECK(reward_type IN ('experience','item','coins')),
  target_id TEXT,
  amount INTEGER NOT NULL DEFAULT 1 CHECK(amount>=1),
  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);
@@ -1085,6 +1088,7 @@ CREATE TABLE IF NOT EXISTS mud_dialogue_responses (
  response_text TEXT NOT NULL,
  next_node_id TEXT REFERENCES mud_dialogue_nodes(id) ON DELETE SET NULL,
  accept_quest_id TEXT REFERENCES mud_quests(id) ON DELETE SET NULL,
+ deliver_item_id TEXT REFERENCES mud_item_definitions(id) ON DELETE SET NULL,
  required_state_key TEXT,
  required_state_value TEXT,
  state_key TEXT,
@@ -1201,9 +1205,91 @@ def _migrate_office(database):
         )
 
 
+def _migrate_mud_authored_features(database):
+    """Expand old CHECK constrained content tables while retaining player progress."""
+    updates = {
+        "mud_quest_objectives": ("'defeat_npc'", "'possess_item'", "'possess_item','defeat_npc','deliver_item'"),
+        "mud_quest_rewards": ("'coins'", "'experience','item'", "'experience','item','coins'"),
+        "mud_npc_combat_rewards": ("chance_percent", "'experience','item'", "'experience','item','coins'"),
+    }
+    for table, (marker, old, new) in updates.items():
+        sql = database.execute("SELECT sql FROM sqlite_master WHERE type='table' AND name=?", (table,)).fetchone()["sql"]
+        if marker in sql:
+            continue
+        indexes = [row["sql"] for row in database.execute(
+            "SELECT sql FROM sqlite_master WHERE type='index' AND tbl_name=? AND sql IS NOT NULL", (table,))]
+        replacement = sql.replace(f"CREATE TABLE IF NOT EXISTS {table}",
+                                  f"CREATE TABLE {table}_new", 1).replace(
+                                      f"CREATE TABLE {table}", f"CREATE TABLE {table}_new", 1).replace(old, new)
+        if table == "mud_npc_combat_rewards":
+            replacement = replacement.replace(
+                "created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,",
+                "chance_percent INTEGER NOT NULL DEFAULT 100 CHECK(chance_percent BETWEEN 1 AND 100),\n created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,",
+            ).replace("reward_type='experience' AND target_id IS NULL", "reward_type IN ('experience','coins') AND target_id IS NULL")
+        columns = [row["name"] for row in database.execute(f"PRAGMA table_info({table})")]
+        database.commit()
+        database.execute("PRAGMA foreign_keys=OFF")
+        try:
+            database.execute(replacement)
+            names = ",".join(columns)
+            database.execute(f"INSERT INTO {table}_new({names}) SELECT {names} FROM {table}")
+            database.execute(f"DROP TABLE {table}")
+            database.execute(f"ALTER TABLE {table}_new RENAME TO {table}")
+            for index in indexes:
+                database.execute(index)
+            database.commit()
+        finally:
+            database.execute("PRAGMA foreign_keys=ON")
+    columns = {row["name"] for row in database.execute("PRAGMA table_info(mud_world_exits)")}
+    if "key_item_id" not in columns:
+        database.execute("ALTER TABLE mud_world_exits ADD COLUMN key_item_id TEXT REFERENCES mud_item_definitions(id) ON DELETE RESTRICT")
+    item_columns = {row["name"] for row in database.execute("PRAGMA table_info(mud_item_instances)")}
+    if "spawn_source_id" not in item_columns:
+        database.execute("ALTER TABLE mud_item_instances ADD COLUMN spawn_source_id TEXT")
+    response_columns = {row["name"] for row in database.execute("PRAGMA table_info(mud_dialogue_responses)")}
+    if "deliver_item_id" not in response_columns:
+        database.execute("ALTER TABLE mud_dialogue_responses ADD COLUMN deliver_item_id TEXT REFERENCES mud_item_definitions(id) ON DELETE SET NULL")
+    database.executescript("""
+    CREATE TABLE IF NOT EXISTS mud_exit_unlocks (
+      character_id TEXT NOT NULL REFERENCES mud_characters(id) ON DELETE CASCADE,
+      exit_id TEXT NOT NULL REFERENCES mud_world_exits(id) ON DELETE CASCADE,
+      PRIMARY KEY(character_id,exit_id));
+    CREATE TABLE IF NOT EXISTS mud_npc_shops (
+      npc_definition_id TEXT PRIMARY KEY REFERENCES mud_npc_definitions(id) ON DELETE CASCADE,
+      buys_items INTEGER NOT NULL DEFAULT 1 CHECK(buys_items IN (0,1)),
+      sell_percent INTEGER NOT NULL DEFAULT 40 CHECK(sell_percent BETWEEN 1 AND 100));
+    CREATE TABLE IF NOT EXISTS mud_shop_stock (
+      id TEXT PRIMARY KEY,
+      npc_definition_id TEXT NOT NULL REFERENCES mud_npc_shops(npc_definition_id) ON DELETE CASCADE,
+      item_definition_id TEXT NOT NULL REFERENCES mud_item_definitions(id) ON DELETE RESTRICT,
+      price INTEGER NOT NULL CHECK(price BETWEEN 1 AND 100000),
+      quantity INTEGER CHECK(quantity IS NULL OR quantity BETWEEN 0 AND 100000),
+      UNIQUE(npc_definition_id,item_definition_id));
+    CREATE TABLE IF NOT EXISTS mud_item_spawns (
+      id TEXT PRIMARY KEY,
+      definition_id TEXT NOT NULL REFERENCES mud_item_definitions(id) ON DELETE RESTRICT,
+      room_id TEXT NOT NULL REFERENCES mud_world_rooms(id) ON DELETE CASCADE,
+      respawn_seconds INTEGER NOT NULL CHECK(respawn_seconds BETWEEN 5 AND 86400),
+      live_instance_id TEXT UNIQUE);
+    CREATE TABLE IF NOT EXISTS mud_room_discoveries (
+      id TEXT PRIMARY KEY,
+      room_id TEXT NOT NULL REFERENCES mud_world_rooms(id) ON DELETE CASCADE,
+      clue TEXT NOT NULL,
+      item_definition_id TEXT REFERENCES mud_item_definitions(id) ON DELETE RESTRICT);
+    CREATE TABLE IF NOT EXISTS mud_player_discoveries (
+      character_id TEXT NOT NULL REFERENCES mud_characters(id) ON DELETE CASCADE,
+      discovery_id TEXT NOT NULL REFERENCES mud_room_discoveries(id) ON DELETE CASCADE,
+      PRIMARY KEY(character_id,discovery_id));
+    """)
+    database.execute("UPDATE mud_item_instances SET spawn_source_id=(SELECT id FROM mud_item_spawns "
+                     "WHERE live_instance_id=mud_item_instances.id) WHERE spawn_source_id IS NULL "
+                     "AND id IN (SELECT live_instance_id FROM mud_item_spawns WHERE live_instance_id IS NOT NULL)")
+
+
 def init_db():
     database = get_db()
     database.executescript(SCHEMA)
+    _migrate_mud_authored_features(database)
     if "description" not in {row["name"] for row in database.execute("PRAGMA table_info(mud_characters)")}:
         database.execute("ALTER TABLE mud_characters ADD COLUMN description TEXT NOT NULL DEFAULT ''")
     _migrate_events(database)
