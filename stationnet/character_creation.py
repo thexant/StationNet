@@ -12,6 +12,8 @@ ATTRIBUTES = ("strength", "agility", "intellect", "vitality")
 KINDS = ("races", "classes")
 KIND_NAMES = {"races": "race", "classes": "class"}
 MAX_ORIGIN_BYTES = 32 * 1024
+MAX_ORIGIN_PACK_BYTES = 1024 * 1024
+MAX_ORIGINS_PER_PACK_KIND = 100
 KEY_RE = re.compile(r"^[a-z][a-z0-9-]{1,39}$")
 
 
@@ -140,12 +142,116 @@ def import_origin(database, kind, payload):
     except (UnicodeDecodeError, json.JSONDecodeError) as error:
         raise ValueError("The origin file must contain valid UTF-8 JSON.") from error
     definition = validate_origin(kind, document, database)
+    if any(entry["installed"] and
+           entry["definition"]["name"].casefold() == definition["name"].casefold()
+           for entry in catalog(database, include_removed=True)[kind]):
+        raise ValueError(f"A {KIND_NAMES[kind]} with that name is already installed.")
     database.execute(
         "INSERT INTO mud_origin_definitions(kind,key,definition_json,imported,installed,enabled) "
         "VALUES(?,?,?,1,1,1)",
         (kind, definition["key"], json.dumps(definition, separators=(",", ":"))),
     )
     return definition
+
+
+def import_pack(database, payload):
+    """Validate and install a races/classes document as one atomic unit."""
+    if not payload or len(payload) > MAX_ORIGIN_PACK_BYTES:
+        raise ValueError("Choose a JSON pack no larger than 1 MB.")
+    try:
+        document = json.loads(payload.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as error:
+        raise ValueError("The origin pack must contain valid UTF-8 JSON.") from error
+    if not isinstance(document, dict) or not document or set(document) - set(KINDS):
+        raise ValueError("An origin pack must contain only races and/or classes arrays.")
+
+    existing = catalog(database, include_removed=True)
+    existing_names = {
+        kind: {entry["definition"]["name"].casefold() for entry in existing[kind]
+               if entry["installed"]}
+        for kind in KINDS
+    }
+    definitions = {kind: [] for kind in KINDS}
+    for kind in KINDS:
+        sources = document.get(kind, [])
+        if not isinstance(sources, list) or len(sources) > MAX_ORIGINS_PER_PACK_KIND:
+            raise ValueError(
+                f"Pack {kind} must be an array of at most {MAX_ORIGINS_PER_PACK_KIND} objects."
+            )
+        seen_keys = set()
+        seen_names = set()
+        for index, source in enumerate(sources, 1):
+            try:
+                definition = validate_origin(kind, source, database)
+            except ValueError as error:
+                raise ValueError(f"Invalid {KIND_NAMES[kind]} at {kind}[{index}]: {error}") from error
+            folded_name = definition["name"].casefold()
+            if definition["key"] in seen_keys:
+                raise ValueError(
+                    f"Duplicate {KIND_NAMES[kind]} key in pack: {definition['key']}."
+                )
+            if folded_name in seen_names:
+                raise ValueError(
+                    f"Duplicate {KIND_NAMES[kind]} name in pack: {definition['name']}."
+                )
+            if folded_name in existing_names[kind]:
+                raise ValueError(
+                    f"A {KIND_NAMES[kind]} named {definition['name']} is already installed."
+                )
+            seen_keys.add(definition["key"])
+            seen_names.add(folded_name)
+            definitions[kind].append(definition)
+    if not any(definitions.values()):
+        raise ValueError("The origin pack does not contain any races or classes.")
+
+    for kind in KINDS:
+        for definition in definitions[kind]:
+            database.execute(
+                "INSERT INTO mud_origin_definitions(kind,key,definition_json,imported,installed,enabled) "
+                "VALUES(?,?,?,1,1,1)",
+                (kind, definition["key"], json.dumps(definition, separators=(",", ":"))),
+            )
+    return definitions
+
+
+def remove_origins(database, selected, *, require_active=False):
+    """Remove installed custom origins, retaining definitions used by characters."""
+    entries = catalog(database)
+    removable = {
+        (kind, entry["key"]): entry
+        for kind in KINDS for entry in entries[kind] if entry["imported"]
+    }
+    requested = {(kind, key) for kind in KINDS for key in selected.get(kind, set())}
+    if not requested:
+        raise ValueError("Select at least one imported race or class to remove.")
+    unknown = requested - set(removable)
+    if unknown:
+        raise ValueError("Select only installed imported races and classes to remove.")
+
+    removed = []
+    for kind in KINDS:
+        for key in sorted(selected.get(kind, set())):
+            entry = removable[(kind, key)]
+            column = "race_key" if kind == "races" else "class_key"
+            used = database.execute(
+                f"SELECT 1 FROM mud_characters WHERE {column}=? LIMIT 1", (key,)
+            ).fetchone()
+            if used:
+                database.execute(
+                    "UPDATE mud_origin_definitions SET installed=0,enabled=0 WHERE kind=? AND key=?",
+                    (kind, key),
+                )
+            else:
+                database.execute(
+                    "DELETE FROM mud_origin_definitions WHERE kind=? AND key=?", (kind, key)
+                )
+            database.execute(
+                "DELETE FROM mud_world_origins WHERE kind=? AND origin_key=?", (kind, key)
+            )
+            removed.append(entry)
+    if require_active:
+        require_available(database)
+    return removed
 
 
 def active_counts(database):

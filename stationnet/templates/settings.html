@@ -6,7 +6,7 @@
   <label>Tagline text<input name="tagline_text" maxlength="160" required value="{{ entry.text }}" placeholder="★ YOUR STATION MESSAGE ★" data-tagline-text></label>
   <div class="tagline-editor-options">
     <label>Text color<select name="tagline_color_mode" data-tagline-color-mode><option value="inherit" {% if not entry.color %}selected{% endif %}>Inherit station theme</option><option value="custom" {% if entry.color %}selected{% endif %}>Custom color</option></select></label>
-    <label>Custom color<input type="color" name="tagline_color_value" value="{{ entry.color or '#e6a431' }}" data-tagline-color-value><small>Picking a color automatically selects Custom color.</small></label>
+    <label>Custom color<input type="color" name="tagline_color_value" value="{{ entry.color or '#e6a431' }}" data-tagline-color-value></label>
     <label>Animation<select name="tagline_effect" data-tagline-effect><option value="none" {% if entry.effect == 'none' %}selected{% endif %}>None (static)</option><option value="blink" {% if entry.effect == 'blink' %}selected{% endif %}>Blink</option><option value="rainbow" {% if entry.effect == 'rainbow' %}selected{% endif %}>Rainbow / Color Cycle</option><option value="glow" {% if entry.effect == 'glow' %}selected{% endif %}>Glow / Pulse</option><option value="typewriter" {% if entry.effect == 'typewriter' %}selected{% endif %}>Typewriter</option></select></label>
   </div>
   <div class="button-row tagline-editor-actions"><button type="button" class="secondary" data-tagline-preview-button>PREVIEW</button><button type="button" class="secondary" data-tagline-up aria-label="Move tagline up">↑ UP</button><button type="button" class="secondary" data-tagline-down aria-label="Move tagline down">↓ DOWN</button><button type="button" class="text-button" data-tagline-delete>DELETE</button></div>
@@ -437,17 +437,32 @@
   </form>
   <section id="mud-origins" aria-labelledby="mud-origins-heading">
     <h3 id="mud-origins-heading">Races and Classes</h3>
-    <p class="muted">Import a JSON definition for a new race or class. Enabled choices appear in character creation for both MUD modes. Characters using a disabled or removed choice must select a replacement on their next visit.</p>
-    <form method="post" action="{{ url_for('station.mud_origin_availability') }}" class="form-grid">
+    <p class="muted">Import individual JSON definitions or a pack containing races, classes, or both. Enabled choices appear in character creation for both MUD modes. Characters using a disabled or removed choice retain their saved progress and choose a replacement on their next visit.</p>
+    <form method="post" action="{{ url_for('station.mud_origin_availability') }}" class="form-grid" id="mud-origin-availability">
       <input type="hidden" name="csrf_token" value="{{ session.csrf_token }}">
       {% for kind in ('races', 'classes') %}
+      <div class="origin-group" data-origin-group="{{ kind }}">
       <div class="divider">{{ kind|upper }}</div>
+      <div class="button-row origin-shortcuts" aria-label="{{ kind|title }} selection shortcuts">
+        <button type="button" class="secondary" data-origin-selection="all">SELECT ALL</button>
+        <button type="button" class="secondary" data-origin-selection="none">SELECT NONE</button>
+        <button type="button" class="secondary" data-origin-selection="default">SELECT DEFAULT</button>
+        <button type="button" class="secondary" data-origin-selection="imported">SELECT IMPORTED</button>
+      </div>
       {% for entry in mud_origins[kind] %}
-      <label class="switch"><input type="checkbox" name="{{ kind }}" value="{{ entry.key }}" {% if entry.enabled %}checked{% endif %}> {{ entry.definition.name }}{% if entry.imported %} (imported){% endif %}</label>
+      <label class="switch origin-choice"><input type="checkbox" name="{{ kind }}" value="{{ entry.key }}" data-origin-source="{{ 'imported' if entry.imported else 'default' }}" {% if entry.enabled %}checked{% endif %}> <span>{{ entry.definition.name }}</span><span class="origin-badge {{ 'imported' if entry.imported else 'default' }}">{{ 'IMPORTED' if entry.imported else 'DEFAULT' }}</span></label>
       {% endfor %}
+      </div>
       {% endfor %}
       <small>At least one race and one class must remain enabled while either MUD mode is on.</small>
       <button>SAVE RACES AND CLASSES</button>
+    </form>
+    <h4>Origin Pack</h4>
+    <p><a href="{{ url_for('station.download_mud_origin_pack_template') }}">DOWNLOAD PACK TEMPLATE</a></p>
+    <form method="post" action="{{ url_for('station.import_mud_origin_pack') }}" enctype="multipart/form-data" class="form-grid">
+      <input type="hidden" name="csrf_token" value="{{ session.csrf_token }}">
+      <label>Race/Class Pack JSON<input type="file" name="origin_pack" accept=".json,application/json" required><small>A pack may contain up to 100 races and 100 classes. The entire pack is rejected if any entry is invalid or conflicts with an installed key or name.</small></label>
+      <button>IMPORT ORIGIN PACK</button>
     </form>
     {% for kind in ('races', 'classes') %}
     {% set singular = 'race' if kind == 'races' else 'class' %}
@@ -458,15 +473,62 @@
       <label>{{ singular|title }} JSON<input type="file" name="origin_file" accept=".json,application/json" required></label>
       <button>IMPORT {{ singular|upper }}</button>
     </form>
-    {% if mud_origins[kind]|selectattr('imported')|list %}
-    <form method="post" action="{{ url_for('station.remove_mud_origin', kind=kind) }}" class="form-grid">
+    {% endfor %}
+    {% if (mud_origins.races|selectattr('imported')|list) or (mud_origins.classes|selectattr('imported')|list) %}
+    <form method="post" action="{{ url_for('station.remove_mud_origins') }}" class="form-grid origin-removal" id="mud-origin-removal">
       <input type="hidden" name="csrf_token" value="{{ session.csrf_token }}">
-      <label>Remove imported {{ singular }}<select name="key" required><option value="">Select {{ singular }}</option>{% for entry in mud_origins[kind] if entry.imported %}<option value="{{ entry.key }}">{{ entry.definition.name }}</option>{% endfor %}</select></label>
-      <label class="switch"><input type="checkbox" name="confirm_remove" required> Confirm removal</label>
-      <button class="secondary">REMOVE {{ singular|upper }}</button>
+      <div class="divider">REMOVE IMPORTED CHOICES</div>
+      <p class="muted">Select any imported races and classes to remove together. Defaults cannot be removed.</p>
+      {% for kind in ('races', 'classes') %}
+      {% if mud_origins[kind]|selectattr('imported')|list %}
+      <fieldset>
+        <legend>{{ kind|upper }}</legend>
+        {% for entry in mud_origins[kind] if entry.imported %}
+        <label class="switch"><input type="checkbox" name="{{ kind }}" value="{{ entry.key }}" data-remove-name="{{ entry.definition.name }}" data-remove-kind="{{ 'Race' if kind == 'races' else 'Class' }}"> {{ entry.definition.name }} <span class="origin-badge imported">IMPORTED</span></label>
+        {% endfor %}
+      </fieldset>
+      {% endif %}
+      {% endfor %}
+      <div class="deletion-alert origin-removal-summary" aria-live="polite">No imported choices selected.</div>
+      <label class="deletion-checkbox"><input type="checkbox" name="confirm_remove" required> I reviewed the summary and confirm removal</label>
+      <button class="danger">REMOVE SELECTED CHOICES</button>
     </form>
     {% endif %}
-    {% endfor %}
+    <script>
+      (() => {
+        document.querySelectorAll('[data-origin-group]').forEach(group => {
+          const boxes = [...group.querySelectorAll('input[type="checkbox"][data-origin-source]')];
+          group.querySelectorAll('[data-origin-selection]').forEach(button => {
+            button.addEventListener('click', () => {
+              const action = button.dataset.originSelection;
+              boxes.forEach(box => {
+                box.checked = action === 'all' || box.dataset.originSource === action;
+              });
+            });
+          });
+        });
+        const removal = document.getElementById('mud-origin-removal');
+        if (removal) {
+          const boxes = [...removal.querySelectorAll('[data-remove-name]')];
+          const summary = removal.querySelector('.origin-removal-summary');
+          const confirmation = removal.querySelector('[name="confirm_remove"]');
+          const update = () => {
+            const chosen = boxes.filter(box => box.checked);
+            summary.textContent = chosen.length
+              ? `Remove ${chosen.length} choice${chosen.length === 1 ? '' : 's'}: ${chosen.map(box => `${box.dataset.removeKind}: ${box.dataset.removeName}`).join('; ')}`
+              : 'No imported choices selected.';
+            confirmation.checked = false;
+          };
+          boxes.forEach(box => box.addEventListener('change', update));
+          removal.addEventListener('submit', event => {
+            if (!boxes.some(box => box.checked)) {
+              event.preventDefault();
+              summary.textContent = 'Select at least one imported race or class.';
+            }
+          });
+        }
+      })();
+    </script>
   </section>
   <section id="mud-worlds" aria-labelledby="mud-worlds-heading">
     <h3 id="mud-worlds-heading">Traditional Worlds</h3>

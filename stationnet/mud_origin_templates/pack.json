@@ -1,0 +1,25 @@
+{
+  "races": [
+    {
+      "key": "riverfolk",
+      "name": "Riverfolk",
+      "description": "Travelers who make their homes beside rivers and marshes.",
+      "traits": "Sure footing",
+      "attributes": {"agility": 1},
+      "effects": {"defense": 1}
+    }
+  ],
+  "classes": [
+    {
+      "key": "pathfinder",
+      "name": "Pathfinder",
+      "description": "A guide practiced at crossing uncertain ground.",
+      "traits": "Trail craft",
+      "attributes": {"agility": 1},
+      "effects": {"defense": 1},
+      "spells": ["ward"],
+      "skill": "guard",
+      "equipment": []
+    }
+  ]
+}

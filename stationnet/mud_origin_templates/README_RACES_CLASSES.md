@@ -1,10 +1,28 @@
 # Custom MUD races and classes
 
-StationNet accepts **one race or one class per UTF-8 JSON file** in SYSOP
-Settings > MUD service. Download a template there, or start with the complete
-examples below. Import a race in the Races control and a class in the Classes
-control. The same choices appear in traditional and procedural character
-creation. Each file is limited to 32 KB.
+StationNet accepts individual race or class UTF-8 JSON files and combined
+origin packs in SYSOP Settings > MUD service. Download a template there, or
+start with the complete examples below. The same choices appear in traditional
+and procedural character creation. Each individual file is limited to 32 KB.
+
+## Origin packs
+
+A pack uses the same `origins.json` object convention as a bundled MUD world:
+it contains a `races` array, a `classes` array, or both. Each entry is an
+ordinary definition in the formats documented below.
+
+```json
+{
+  "races": [{"key": "riverfolk", "name": "Riverfolk", "description": "Travelers from the riverlands.", "traits": "Sure footing", "attributes": {"agility": 1}, "effects": {"defense": 1}}],
+  "classes": [{"key": "pathfinder", "name": "Pathfinder", "description": "A guide on uncertain ground.", "traits": "Trail craft", "attributes": {}, "effects": {}, "skill": "guard", "spells": [], "equipment": []}]
+}
+```
+
+Packs are limited to 1 MB, 100 races, and 100 classes. Keys and names must be
+distinct within each type and cannot conflict with installed choices. Import
+is atomic: if one entry is invalid or conflicts, nothing in the pack is
+installed. A pack may omit either array, but it must contain at least one
+definition.
 
 ## Complete race example
 
@@ -53,7 +71,7 @@ or [dungeon theme](../dungeon_templates/README_DUNGEON_THEMES.md).
 | Field | Race | Class | Rules |
 | --- | --- | --- | --- |
 | `key` | required | required | 2 to 40 lowercase letters, digits, or hyphens; starts with a letter. Unique within its choice type, including removed choices still used by characters. |
-| `name` | required | required | 2 to 80 nonblank characters. |
+| `name` | required | required | 2 to 80 nonblank characters. Must be unique within its choice type among installed choices. |
 | `description` | required | required | 1 to 1,000 nonblank characters. |
 | `traits` | required | required | 1 to 160 nonblank characters; display text, not a scripted ability. |
 | `attributes` | optional | optional | Object with any of `strength`, `agility`, `intellect`, `vitality`. Each modifier is an integer from -10 to 10; `{}` is valid. |
@@ -102,8 +120,10 @@ Adding an unknown spell name to JSON cannot create a new spell implementation.
 
 ## Install and maintain choices
 
-1. Pick a stable key. Save one valid UTF-8 JSON object in a file under 32 KB.
-2. Import it in the matching SYSOP control. Correct any validation error, then
+1. Pick stable keys. Save one valid UTF-8 JSON object under 32 KB, or group
+   definitions into a pack under 1 MB.
+2. Import it in the matching individual control or the Origin Pack control.
+   Correct any validation error, then
    create a test character to check its combinations, gear, and spells.
 3. Imported choices start enabled. Disabling one hides it from new character
    creation. At least one race and class must stay enabled while either MUD
@@ -118,4 +138,7 @@ for the point budget, skill list, and built-in races/classes. If you provide
 one through `MUD_CHARACTER_OPTIONS`, it must include `id`, `point_buy`,
 `attribute_descriptions`, `races`, `classes`, `skills`, and
 `starting_skill_choices`; see `stationnet/character_options.json` for that
-advanced format. The import UI adds one race or class without replacing it.
+advanced format. Imports add choices without replacing existing definitions.
+Selection shortcuts in SYSOP Settings can enable all, none, default, or
+imported choices. Imported choices can also be selected and removed together;
+the confirmation summary lists every affected race and class before submission.

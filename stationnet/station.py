@@ -586,6 +586,30 @@ def import_mud_origin(kind):
     return redirect(destination)
 
 
+@bp.post("/sysop/settings/mud-origins/pack/import")
+@admin_required
+def import_mud_origin_pack():
+    validate_csrf()
+    destination = url_for("station.settings") + "#mud-origins"
+    uploaded = request.files.get("origin_pack")
+    if uploaded is None or not uploaded.filename or not uploaded.filename.lower().endswith(".json"):
+        flash("Choose a race and class pack JSON file to import.", "error")
+        return redirect(destination)
+    database = get_db()
+    try:
+        definitions = character_creation.import_pack(
+            database, uploaded.read(character_creation.MAX_ORIGIN_PACK_BYTES + 1))
+        database.commit()
+    except (ValueError, sqlite3.Error) as error:
+        database.rollback()
+        flash(f"Pack import failed: {error}", "error")
+    else:
+        counts = [f"{len(definitions[kind])} {kind}" for kind in character_creation.KINDS
+                  if definitions[kind]]
+        flash(f"Imported origin pack: {', '.join(counts)}.", "success")
+    return redirect(destination)
+
+
 @bp.get("/sysop/settings/mud-origins/<kind>/template")
 @admin_required
 def download_mud_origin_template(kind):
@@ -594,6 +618,16 @@ def download_mud_origin_template(kind):
     return send_file(
         Path(__file__).with_name("mud_origin_templates") / f"{character_creation.KIND_NAMES[kind]}.json",
         as_attachment=True, download_name=f"mud-{character_creation.KIND_NAMES[kind]}-template.json",
+        mimetype="application/json",
+    )
+
+
+@bp.get("/sysop/settings/mud-origins/pack/template")
+@admin_required
+def download_mud_origin_pack_template():
+    return send_file(
+        Path(__file__).with_name("mud_origin_templates") / "pack.json",
+        as_attachment=True, download_name="mud-origin-pack-template.json",
         mimetype="application/json",
     )
 
@@ -656,28 +690,46 @@ def remove_mud_origin(kind):
     if entry is None:
         flash("Select an imported race or class to remove.", "error")
         return redirect(destination)
-    column = "race_key" if kind == "races" else "class_key"
     try:
-        used = database.execute(
-            f"SELECT 1 FROM mud_characters WHERE {column}=? LIMIT 1", (key,)
-        ).fetchone()
-        if used:
-            database.execute(
-                "UPDATE mud_origin_definitions SET installed=0,enabled=0 WHERE kind=? AND key=?",
-                (kind, key),
-            )
-        else:
-            database.execute("DELETE FROM mud_origin_definitions WHERE kind=? AND key=?", (kind, key))
-        database.execute("DELETE FROM mud_world_origins WHERE kind=? AND origin_key=?", (kind, key))
-        if (g.station["mud_enabled"] or g.station["mud_traditional_enabled"] or
-                g.station["mud_procedural_enabled"]):
-            character_creation.require_available(database)
+        character_creation.remove_origins(
+            database, {kind: {key}},
+            require_active=bool(g.station["mud_enabled"] or
+                                g.station["mud_traditional_enabled"] or
+                                g.station["mud_procedural_enabled"]),
+        )
         database.commit()
     except (ValueError, sqlite3.Error) as error:
         database.rollback()
         flash(str(error), "error")
     else:
         flash(f"Removed {character_creation.KIND_NAMES[kind]} {entry['definition']['name']}.", "success")
+    return redirect(destination)
+
+
+@bp.post("/sysop/settings/mud-origins/remove")
+@admin_required
+def remove_mud_origins():
+    validate_csrf()
+    destination = url_for("station.settings") + "#mud-origin-removal"
+    if request.form.get("confirm_remove") != "on":
+        flash("Review the selected items and confirm bulk removal.", "error")
+        return redirect(destination)
+    selected = {kind: set(request.form.getlist(kind)) for kind in character_creation.KINDS}
+    database = get_db()
+    try:
+        removed = character_creation.remove_origins(
+            database, selected,
+            require_active=bool(g.station["mud_enabled"] or
+                                g.station["mud_traditional_enabled"] or
+                                g.station["mud_procedural_enabled"]),
+        )
+        database.commit()
+    except (ValueError, sqlite3.Error) as error:
+        database.rollback()
+        flash(f"Bulk removal failed: {error}", "error")
+    else:
+        names = ", ".join(entry["definition"]["name"] for entry in removed)
+        flash(f"Removed {len(removed)} imported choices: {names}.", "success")
     return redirect(destination)
 
 
