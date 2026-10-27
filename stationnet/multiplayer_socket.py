@@ -181,6 +181,9 @@ def create_asgi_app(flask_app):
             user_id = session.get("user_id")
             with flask_app.app_context():
                 database = get_db()
+                station = database.execute("SELECT applications_enabled FROM station WHERE id=1").fetchone()
+                if station is None or not station["applications_enabled"]:
+                    raise MultiplayerError("Real-time access denied.", 403)
                 application = applications.find(slug)
                 membership = database.execute(
                     "SELECT m.connection_id,m.connected,u.username,u.connection_id AS account_connection,s.host_user_id FROM application_multiplayer_members m "

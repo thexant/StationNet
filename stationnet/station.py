@@ -536,10 +536,12 @@ def mud_settings():
         except ValueError as error:
             flash(str(error), "error")
             return redirect(url_for("station.settings") + "#mud-origins")
+    master_enabled = (bool(g.station["mud_enabled"] and (traditional or procedural))
+                      if "mud_mode_form" in request.form else traditional or procedural)
     database.execute(
         "UPDATE station SET mud_enabled=?,mud_traditional_enabled=?,"
         "mud_procedural_enabled=? WHERE id=1",
-        (traditional or procedural, traditional, procedural),
+        (master_enabled, traditional, procedural),
     )
     database.execute(
         "INSERT INTO mud_portal_settings(id,name,description) VALUES(1,?,?) "
@@ -1154,6 +1156,17 @@ def save_library_user_quota(user_id):
 def settings():
     if request.method == "POST":
         validate_csrf()
+        if request.form.get("settings_section") == "modules":
+            from .modules import ALL_MODULES
+
+            values = [int(request.form.get(f"{name}_enabled") == "on")
+                      for name, _label in ALL_MODULES]
+            assignments = ",".join(f"{name}_enabled=?" for name, _label in ALL_MODULES)
+            database = get_db()
+            database.execute(f"UPDATE station SET {assignments} WHERE id=1", values)
+            database.commit()
+            flash("Module availability updated.", "success")
+            return redirect(url_for("station.settings") + "#module-availability")
         if request.form.get("settings_section") == "header_taglines":
             try:
                 entries = header_taglines.parse_form(request.form)
@@ -1469,7 +1482,9 @@ def settings():
         "FROM mud_dungeon_generation_log WHERE status='failure' ORDER BY id DESC LIMIT 10"
     ).fetchall()
     event_creation_groups = {row["group_id"] for row in database.execute("SELECT group_id FROM event_creation_groups")}
+    from .modules import ALL_MODULES
     return render_template("settings.html", header_fonts=header_fonts,
+                           available_modules=ALL_MODULES,
                            **arcade.settings_data(),
                            header_taglines=header_taglines.configured(g.station),
                            site_themes=themes.options("site"), masthead_themes=themes.options("masthead"),

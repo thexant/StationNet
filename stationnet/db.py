@@ -50,6 +50,16 @@ CREATE TABLE IF NOT EXISTS station (
  events_enabled INTEGER NOT NULL DEFAULT 0 CHECK(events_enabled IN (0,1)),
  office_enabled INTEGER NOT NULL DEFAULT 0 CHECK(office_enabled IN (0,1)),
  office_nav_links_enabled INTEGER NOT NULL DEFAULT 1 CHECK(office_nav_links_enabled IN (0,1)),
+ station_enabled INTEGER NOT NULL DEFAULT 1 CHECK(station_enabled IN (0,1)),
+ board_enabled INTEGER NOT NULL DEFAULT 1 CHECK(board_enabled IN (0,1)),
+ announcements_enabled INTEGER NOT NULL DEFAULT 1 CHECK(announcements_enabled IN (0,1)),
+ chat_enabled INTEGER NOT NULL DEFAULT 1 CHECK(chat_enabled IN (0,1)),
+ mail_enabled INTEGER NOT NULL DEFAULT 1 CHECK(mail_enabled IN (0,1)),
+ radio_enabled INTEGER NOT NULL DEFAULT 1 CHECK(radio_enabled IN (0,1)),
+ archive_enabled INTEGER NOT NULL DEFAULT 1 CHECK(archive_enabled IN (0,1)),
+ users_enabled INTEGER NOT NULL DEFAULT 1 CHECK(users_enabled IN (0,1)),
+ applications_enabled INTEGER NOT NULL DEFAULT 1 CHECK(applications_enabled IN (0,1)),
+ moderation_enabled INTEGER NOT NULL DEFAULT 1 CHECK(moderation_enabled IN (0,1)),
  events_create_permission TEXT NOT NULL DEFAULT 'sysops' CHECK(events_create_permission IN ('sysops','groups','members')),
  videos_mode TEXT NOT NULL DEFAULT 'community' CHECK(videos_mode IN ('community','curated')),
  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);
@@ -1296,9 +1306,23 @@ def _migrate_mud_authored_features(database):
                      "AND id IN (SELECT live_instance_id FROM mud_item_spawns WHERE live_instance_id IS NOT NULL)")
 
 
+def _migrate_module_switches(database):
+    from .modules import ADDITIONAL_MODULES
+
+    columns = {row["name"] for row in database.execute("PRAGMA table_info(station)")}
+    for module, _label in ADDITIONAL_MODULES:
+        column = f"{module}_enabled"
+        if column not in columns:
+            database.execute(
+                f"ALTER TABLE station ADD COLUMN {column} INTEGER NOT NULL DEFAULT 1 "
+                f"CHECK({column} IN (0,1))"
+            )
+
+
 def init_db():
     database = get_db()
     database.executescript(SCHEMA)
+    _migrate_module_switches(database)
     _migrate_mud_authored_features(database)
     if "description" not in {row["name"] for row in database.execute("PRAGMA table_info(mud_characters)")}:
         database.execute("ALTER TABLE mud_characters ADD COLUMN description TEXT NOT NULL DEFAULT ''")

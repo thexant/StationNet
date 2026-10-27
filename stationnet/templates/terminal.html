@@ -47,12 +47,13 @@
     {% endif %}
   {% endif %}
   <div class="service-list">
+    {% set visible_services = namespace(count=0) %}
     {% for endpoint, name, description in services %}
-    <a href="{{ url_for(endpoint) }}">
-      <span class="service-number">[{{ '%02d'|format(loop.index) }}]</span>
+    {% if module_enabled(endpoint.split('.')[0]) %}{% set visible_services.count = visible_services.count + 1 %}<a href="{{ url_for(endpoint) }}">
+      <span class="service-number">[{{ '%02d'|format(visible_services.count) }}]</span>
       <span class="service-copy"><strong>{{ name }}</strong><small>{{ description }}</small></span>
       <span class="service-state">* ONLINE</span>
-    </a>
+    </a>{% endif %}
     {% endfor %}
   </div>
 
@@ -61,7 +62,7 @@
       <h2>&gt; CURRENT OPERATOR</h2>
       {% if g.user %}
       <div class="operator-summary"><strong>{{ g.user.username }}</strong><span>{{ g.user.callsign }} / {{ 'SYSOP' if g.user.is_admin else 'MEMBER' }}</span><small class="positive">* AUTHENTICATED</small></div>
-      <div class="operator-actions"><a href="{{ url_for('users.profile',user_id=g.user.id) }}">[ PROFILE ]</a><form method="post" action="{{ url_for('auth.logout') }}"><input type="hidden" name="csrf_token" value="{{ session.csrf_token }}"><button class="text-button">[ DISCONNECT ]</button></form></div>
+      <div class="operator-actions">{% if module_enabled('users') %}<a href="{{ url_for('users.profile',user_id=g.user.id) }}">[ PROFILE ]</a>{% endif %}<form method="post" action="{{ url_for('auth.logout') }}"><input type="hidden" name="csrf_token" value="{{ session.csrf_token }}"><button class="text-button">[ DISCONNECT ]</button></form></div>
       {% else %}
       <div class="operator-summary"><strong>UNASSIGNED</strong><span>READ ONLY</span><small class="warning-text">* ANONYMOUS</small></div>
       <a class="button compact-button" href="{{ url_for('auth.login') }}">&gt; AUTHENTICATE</a>
@@ -72,39 +73,39 @@
     <aside class="activity-panel" aria-labelledby="activity-heading">
       <h2 id="activity-heading">&gt; STATION ACTIVITY</h2>
       <div class="activity-list">
-        <a class="activity-item" href="{{ url_for('board.thread',post_id=activity.bulletin.id) if activity.bulletin else url_for('board.index') }}">
+        {% if module_enabled('board') %}<a class="activity-item" href="{{ url_for('board.thread',post_id=activity.bulletin.id) if activity.bulletin else url_for('board.index') }}">
           <span>MOST RECENT BULLETIN</span>
           {% if activity.bulletin %}<strong>{{ activity.bulletin.title }}</strong><small>{{ activity.bulletin.username }} / {{ activity.bulletin.callsign }}</small><time datetime="{{ activity.bulletin.created_at|replace(' ', 'T') }}Z" data-local-time>{{ activity.bulletin.created_at }} UTC</time>{% else %}<em>NO BULLETINS POSTED</em>{% endif %}
         </a>
         {% if activity.reply %}<a class="activity-item" href="{{ url_for('board.thread',post_id=activity.reply.bulletin_id) }}#reply-{{ activity.reply.id }}">
           <span>MOST RECENT REPLY</span>
           <strong>RE: {{ activity.reply.bulletin_title }}</strong><p>{{ activity.reply.body|truncate(120) }}</p><small>{{ activity.reply.username }} / {{ activity.reply.callsign }}</small><time datetime="{{ activity.reply.created_at|replace(' ', 'T') }}Z" data-local-time>{{ activity.reply.created_at }} UTC</time>
-        </a>{% else %}<a class="activity-item" href="{{ url_for('board.index') }}"><span>MOST RECENT REPLY</span><em>NO REPLIES POSTED</em></a>{% endif %}
-        <a class="activity-item" href="{{ url_for('chat.station_chat') }}">
+        </a>{% else %}<a class="activity-item" href="{{ url_for('board.index') }}"><span>MOST RECENT REPLY</span><em>NO REPLIES POSTED</em></a>{% endif %}{% endif %}
+        {% if module_enabled('chat') %}<a class="activity-item" href="{{ url_for('chat.station_chat') }}">
           <span>MOST RECENT CHAT MESSAGE</span>
           {% if activity.chat %}<time datetime="{{ activity.chat.created_at|replace(' ', 'T') }}Z" data-local-time>{{ activity.chat.created_at }} UTC</time>{% else %}<em>NO CHAT MESSAGES</em>{% endif %}
-        </a>
-        <a class="activity-item" href="{{ url_for('archive.index') }}{% if activity.file %}#file-{{ activity.file.id }}{% endif %}">
+        </a>{% endif %}
+        {% if module_enabled('archive') %}<a class="activity-item" href="{{ url_for('archive.index') }}{% if activity.file %}#file-{{ activity.file.id }}{% endif %}">
           <span>NEWEST FILE</span>
           {% if activity.file %}<strong>{{ activity.file.display_name }}</strong><time datetime="{{ activity.file.created_at|replace(' ', 'T') }}Z" data-local-time>{{ activity.file.created_at }} UTC</time>{% else %}<em>NO FILES UPLOADED</em>{% endif %}
-        </a>
-        {% if activity.member %}<a class="activity-item" href="{{ url_for('users.profile', user_id=activity.member.id) }}">
+        </a>{% endif %}
+        {% if module_enabled('users') %}{% if activity.member %}<a class="activity-item" href="{{ url_for('users.profile', user_id=activity.member.id) }}">
           <span>NEWEST MEMBER</span>
           <strong>{{ activity.member.username }}</strong><time datetime="{{ activity.member.created_at|replace(' ', 'T') }}Z" data-local-time>{{ activity.member.created_at }} UTC</time>
         </a>{% else %}<div class="activity-item">
           <span>NEWEST MEMBER</span><em>NO REGISTERED MEMBERS</em>
-        </div>{% endif %}
-        <a class="activity-item activity-count" href="{{ url_for('mail.inbox') }}">
+        </div>{% endif %}{% endif %}
+        {% if module_enabled('mail') %}<a class="activity-item activity-count" href="{{ url_for('mail.inbox') }}">
           <span>UNOPENED MESSAGES</span><strong>{{ activity.unread_mail }}</strong><small>{{ 'UNREAD MESSAGE' if activity.unread_mail == 1 else 'UNREAD MESSAGES' }}</small>
-        </a>
-        <div class="activity-broadcasts" data-activity-broadcasts>
+        </a>{% endif %}
+        {% if module_enabled('radio') %}<div class="activity-broadcasts" data-activity-broadcasts>
           <a class="activity-item activity-broadcast-link" id="activity-broadcast-list" href="{{ url_for('radio.console') }}">
             <span>ACTIVE BROADCASTS</span>
             {% for broadcast in activity.broadcasts %}<div class="activity-broadcast"{% if loop.index > 5 %} hidden{% endif %}><strong>{{ broadcast.name }}</strong><small>{{ broadcast.frequency }} MHz / {% if broadcast.automated %}STATION AUTOMATION{% else %}{{ broadcast.username }} - [{{ broadcast.callsign }}]{% endif %}</small>{% if broadcast.message %}<p>{{ broadcast.message }}</p>{% endif %}<em>{{ broadcast.track_title }}{% if broadcast.track_artist %} / {{ broadcast.track_artist }}{% endif %}</em></div>{% else %}<em>NO AUTHORIZED BROADCASTS ON AIR</em>{% endfor %}
             {% if activity.broadcasts|length > 5 %}<small class="activity-broadcast-more" data-activity-broadcast-more>and {{ activity.broadcasts|length - 5 }} more</small>{% endif %}
           </a>
           {% if activity.broadcasts|length > 5 %}<button class="activity-broadcast-toggle" type="button" aria-label="Show all active broadcasts" aria-controls="activity-broadcast-list" aria-expanded="false" data-activity-broadcast-toggle><span aria-hidden="true">&#9662;</span></button>{% endif %}
-        </div>
+        </div>{% endif %}
       </div>
     </aside>
     {% endif %}

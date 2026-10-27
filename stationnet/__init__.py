@@ -3,12 +3,13 @@ import os
 import secrets
 from datetime import timedelta
 from pathlib import Path
-from flask import Flask, g, jsonify, redirect, render_template, request, url_for
+from flask import Flask, abort, g, jsonify, redirect, render_template, request, url_for
 from . import announcements, applications, arcade, archive, auth, board, broadcast, chat, db, downloads, dungeons, events, feeds, header_taglines, imageboard, kiwix, library, mail, moderation, mud, mud_worlds, office, programs, pwa, radio, station, themes, users, videos
 from .ansi import station_banner
 from .realtime import DirectChatStore
 from .radio import RadioStore
 from .security import ensure_csrf_token
+from . import modules
 
 def _secret(data_dir):
     path = data_dir / "secret.key"
@@ -91,7 +92,7 @@ def create_app(test_config=None):
         g.station_midi_version = midi_path.stat().st_mtime_ns if g.station_midi_exists else 0
         g.site_theme, g.masthead_theme = themes.effective(g.station, g.user)
         g.theme_background = themes.palette(g.site_theme)["black"]
-        if g.station is not None and g.station["mud_procedural_enabled"]:
+        if g.station is not None and g.station["mud_enabled"] and g.station["mud_procedural_enabled"]:
             # Lazy midnight rotation: the first request after local midnight
             # materializes the immutable station-wide design. The persisted
             # day key makes this restart-safe and idempotent across workers.
@@ -137,6 +138,9 @@ def create_app(test_config=None):
             return redirect(url_for("auth.setup"))
         if g.station is not None and endpoint == "auth.setup":
             return redirect(url_for("station.index"))
+        module = modules.request_module(request)
+        if g.station is not None and module and not modules.enabled(g.station, module):
+            abort(404)
         if (g.station is not None and g.user is None and not g.station["guest_access"]
                 and (endpoint == "station.terminal"
                      or request.blueprint in {"board", "announcements", "kiwix", "videos", "library", "arcade"})):
@@ -144,7 +148,10 @@ def create_app(test_config=None):
 
     @app.context_processor
     def tagline_context():
-        return {"station_header_tagline": lambda: header_taglines.pick_for_page(g.station)}
+        return {
+            "station_header_tagline": lambda: header_taglines.pick_for_page(g.station),
+            "module_enabled": lambda name: modules.enabled(g.station, name),
+        }
 
     @app.after_request
     def headers(response):

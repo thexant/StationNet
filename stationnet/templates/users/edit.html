@@ -12,7 +12,7 @@
       <small>PNG, JPEG, GIF, or WebP. Images are resized to fit within 128 × 128 pixels. A new upload replaces the current photo.</small>
     </label>
     {% if profile.profile_photo_filename %}<img class="profile-photo profile-photo-preview" src="{{ url_for('users.profile_photo',user_id=profile.id) }}" alt="Current profile photo" width="128" height="128">{% endif %}
-    <label>Tagline<input name="tagline" maxlength="120" value="{{ profile.tagline }}"></label>
+    <label>Status<input name="tagline" maxlength="120" value="{{ profile.tagline }}"></label>
     <label>About me<textarea name="about" maxlength="2000" rows="8">{{ profile.about }}</textarea></label>
     <label>Birthday<input type="text" name="birthday" value="{{ profile.birthday or '' }}" maxlength="10" inputmode="numeric" pattern="(?:\d{2}/\d{2}|\d{4}-\d{2}-\d{2})" placeholder="MM/DD or YYYY-MM-DD"><small>Year optional: enter MM/DD, or YYYY-MM-DD for a full birth date.</small></label>
     <label>Gender<input name="gender" maxlength="40" value="{{ profile.gender }}"></label>
