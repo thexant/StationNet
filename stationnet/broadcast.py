@@ -26,6 +26,7 @@ bp = Blueprint("broadcast", __name__, url_prefix="/radio/manage")
 MIB = 1024 * 1024
 MAX_AUDIO_FILE_BYTES = 64 * MIB
 MAX_AUDIO_BATCH_FILES = 20
+AUDIO_LIBRARY_PAGE_SIZE = 25
 AUDIO_FORMATS = {
     ".mp3": "audio/mpeg",
     ".ogg": "audio/ogg",
@@ -1025,6 +1026,16 @@ def _redirect(playlist_id=None):
     return redirect(url_for("broadcast.manage") + f"#{anchor}")
 
 
+def _library_redirect():
+    """Return to the filtered library view after removing audio."""
+    search = request.form.get("return_q", "").strip()[:100]
+    sort = request.form.get("return_sort", "newest")
+    if sort not in {"newest", "oldest", "name", "name_desc", "size"}:
+        sort = "newest"
+    page = max(1, request.form.get("return_page", 1, type=int) or 1)
+    return redirect(url_for("broadcast.manage", q=search, sort=sort, page=page) + "#audio-library")
+
+
 def _owned_playlist(database, playlist_id):
     item = database.execute(
         "SELECT * FROM radio_playlists WHERE id=? AND owner_id=?",
@@ -1394,8 +1405,34 @@ def manage():
     assignment = database.execute(
         "SELECT * FROM radio_broadcast_assignments WHERE user_id=?", (g.user["id"],),
     ).fetchone()
+    search = request.args.get("q", "").strip()[:100]
+    sort = request.args.get("sort", "newest")
+    order = {
+        "newest": "created_at DESC,id DESC",
+        "oldest": "created_at ASC,id ASC",
+        "name": "display_name COLLATE NOCASE ASC,id ASC",
+        "name_desc": "display_name COLLATE NOCASE DESC,id DESC",
+        "size": "size_bytes DESC,id DESC",
+    }.get(sort)
+    if order is None:
+        sort, order = "newest", "created_at DESC,id DESC"
+    filters = "owner_id=?"
+    params = [g.user["id"]]
+    if search:
+        filters += " AND (instr(lower(display_name),lower(?))>0 OR instr(lower(title),lower(?))>0 OR instr(lower(artist),lower(?))>0)"
+        params.extend([search] * 3)
+    audio_total = database.execute(
+        f"SELECT COUNT(*) FROM radio_audio_files WHERE {filters}", params,
+    ).fetchone()[0]
+    audio_pages = max(1, (audio_total + AUDIO_LIBRARY_PAGE_SIZE - 1) // AUDIO_LIBRARY_PAGE_SIZE)
+    audio_page = min(max(request.args.get("page", 1, type=int) or 1, 1), audio_pages)
     audio_files = database.execute(
-        "SELECT * FROM radio_audio_files WHERE owner_id=? ORDER BY created_at DESC,id DESC",
+        f"SELECT * FROM radio_audio_files WHERE {filters} ORDER BY {order} LIMIT ? OFFSET ?",
+        (*params, AUDIO_LIBRARY_PAGE_SIZE, (audio_page - 1) * AUDIO_LIBRARY_PAGE_SIZE),
+    ).fetchall()
+    # Playlist editing always offers the whole library, regardless of the current view.
+    playlist_audio_files = database.execute(
+        "SELECT id,display_name FROM radio_audio_files WHERE owner_id=? ORDER BY display_name COLLATE NOCASE,id",
         (g.user["id"],),
     ).fetchall()
     playlists = database.execute(
@@ -1410,10 +1447,18 @@ def manage():
         playlist["id"]: [track for track in tracks if track["playlist_id"] == playlist["id"]]
         for playlist in playlists
     }
-    used = sum(item["size_bytes"] for item in audio_files)
+    used = database.execute(
+        "SELECT COALESCE(SUM(size_bytes),0) FROM radio_audio_files WHERE owner_id=?",
+        (g.user["id"],),
+    ).fetchone()[0]
     quota_mb = _quota(database, g.user["id"])
     return render_template(
-        "radio/manage.html", assignment=assignment, audio_files=audio_files, playlists=playlists,
+        "radio/manage.html", assignment=assignment, audio_files=audio_files,
+        playlist_audio_files=playlist_audio_files, playlists=playlists,
+        audio_search=search, audio_sort=sort, audio_total=audio_total,
+        audio_page=audio_page, audio_pages=audio_pages,
+        audio_first=(audio_page - 1) * AUDIO_LIBRARY_PAGE_SIZE + 1 if audio_total else 0,
+        audio_last=min(audio_page * AUDIO_LIBRARY_PAGE_SIZE, audio_total),
         tracks_by_playlist=tracks_by_playlist, used_bytes=used,
         quota_bytes=quota_mb * MIB, available_bytes=max(0, quota_mb * MIB - used),
         quota_mb=quota_mb,
@@ -1566,13 +1611,59 @@ def delete_audio(file_id):
         (_audio_dir(g.user["id"]) / item["stored_name"]).unlink(missing_ok=True)
     except PermissionError:
         flash("Audio file is currently in use and could not be removed.", "error")
-        return _redirect()
+        return _library_redirect()
     database.execute("DELETE FROM radio_audio_files WHERE id=?", (file_id,))
     database.commit()
     for playlist_id in playlist_ids:
         _sync_playlist(database, playlist_id)
     flash("Audio file removed. Playlist references are marked missing.", "success")
-    return _redirect()
+    return _library_redirect()
+
+
+@bp.post("/audio/bulk-delete")
+@host_required
+def bulk_delete_audio():
+    validate_csrf()
+    raw_ids = request.form.getlist("file_ids")
+    if not raw_ids or len(raw_ids) > AUDIO_LIBRARY_PAGE_SIZE or any(not value.isdecimal() for value in raw_ids):
+        flash("Select up to 25 audio files from this page.", "error")
+        return _library_redirect()
+    ids = list(dict.fromkeys(int(value) for value in raw_ids))
+    database = get_db()
+    placeholders = ",".join("?" for _ in ids)
+    files = database.execute(
+        f"SELECT id,stored_name FROM radio_audio_files WHERE owner_id=? AND id IN ({placeholders})",
+        (g.user["id"], *ids),
+    ).fetchall()
+    if len(files) != len(ids):
+        abort(404)
+    playlists_by_file = {}
+    for row in database.execute(
+        f"SELECT DISTINCT audio_file_id,playlist_id FROM radio_playlist_tracks WHERE audio_file_id IN ({placeholders})",
+        ids,
+    ):
+        playlists_by_file.setdefault(row["audio_file_id"], set()).add(row["playlist_id"])
+    playlist_ids = set()
+    removed = 0
+    failed = 0
+    for item in files:
+        try:
+            (_audio_dir(g.user["id"]) / item["stored_name"]).unlink(missing_ok=True)
+        except OSError:
+            failed += 1
+            continue
+        database.execute("DELETE FROM radio_audio_files WHERE id=? AND owner_id=?",
+                         (item["id"], g.user["id"]))
+        playlist_ids.update(playlists_by_file.get(item["id"], ()))
+        removed += 1
+    database.commit()
+    for playlist_id in playlist_ids:
+        _sync_playlist(database, playlist_id)
+    if removed:
+        flash(f"{removed} audio {'file' if removed == 1 else 'files'} removed. Playlist references are marked missing.", "success")
+    if failed:
+        flash(f"{failed} audio {'file' if failed == 1 else 'files'} could not be removed because they are in use.", "error")
+    return _library_redirect()
 
 
 @bp.post("/playlists")
