@@ -99,10 +99,13 @@ def test_catalogue_filters_metadata_and_permissions(tmp_path):
     game = client.get("/arcade/1").get_data(as_text=True)
     assert "Test Studio" in game and "1992" in game and "Updated description" in game
     assert "data-player-url" in game and "data-play" in game
+    assert "arcade-fullscreen" not in game
     player = client.get("/arcade/1/player")
     assert player.status_code == 200
     assert b'EJS_core = "gambatte"' in player.data
     assert b'EJS_gameUrl = "/arcade/1/rom"' in player.data
+    assert b"'mame2003-plus_skip_warnings': 'enabled'" in player.data
+    assert b"'mame2003-plus_skip_disclaimer': 'enabled'" in player.data
     assert player.headers["X-Frame-Options"] == "SAMEORIGIN"
     assert "connect-src 'self'" in player.headers["Content-Security-Policy"]
     assert client.get("/arcade/emulatorjs/data/loader.js").status_code == 200

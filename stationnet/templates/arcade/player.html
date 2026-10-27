@@ -9,5 +9,10 @@ window.EJS_startOnLoaded = true;
 window.EJS_DEBUG_XX = true;
 window.EJS_disableAutoLang = true;
 window.EJS_disableLocalStorage = true;
-window.EJS_defaultOptions = {retroarch_core: {{ core|tojson }}, ejs_threads: 'disabled'};
+window.EJS_defaultOptions = {
+  retroarch_core: {{ core|tojson }},
+  ejs_threads: 'disabled',
+  'mame2003-plus_skip_warnings': 'enabled',
+  'mame2003-plus_skip_disclaimer': 'enabled'
+};
 </script><script src="{{ url_for('arcade.asset',asset='loader.js') }}"></script></body></html>
