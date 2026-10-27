@@ -38,6 +38,16 @@ const portal = {...state,room:{...state.room,id:"stationnet:portal",mode:"proced
 assert.deepEqual(values("/exp",portal), ["/expeditions", "/expedition"]);
 assert.deepEqual(values("/shop b",portal), ["/shop buy Health Potion"]);
 
+const socialAndItems = {...state,room:{...state.room,
+  occupants:[{character_name:"Bea Two"}], dialogue_responses:[{number:1,text:"Ask about town"}],
+  items:[{id:"chest",name:"Oak Chest",display_name:"Oak Chest",item_type:"container",is_open:true,
+    contents:[{name:"Red Apple",display_name:"Red Apple"}]}]},
+  inventory:{inventory:[{id:"apple",name:"Blue Apple",item_type:"misc"}],equipment:[]}};
+assert.deepEqual(values("/get Red",socialAndItems), ["/get Red Apple from Oak Chest"]);
+assert.deepEqual(values("/put Blue",socialAndItems), ["/put Blue Apple in Oak Chest"]);
+assert.deepEqual(values("/respond",socialAndItems), ["/respond 1"]);
+assert.deepEqual(values("/tell",socialAndItems), ['/tell "Bea Two" ']);
+
 const history = ["/look", "/attack Rat 1"];
 assert.deepEqual(historyStep(history,-1,"unfinished",1),{index:0,value:"/attack Rat 1"});
 assert.deepEqual(historyStep(history,0,"unfinished",1),{index:1,value:"/look"});

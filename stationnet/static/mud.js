@@ -167,7 +167,7 @@ for(const mud of document.querySelectorAll("[data-mud]")){
       entity.className="mud-entity";
       entity.dataset.playerId=player.id;
       entity.dataset.characterId=player.character_id||"";
-      entity.textContent=player.character_name||"Adventurer";
+      entity.textContent=player.display_name||player.character_name||"Adventurer";
       occupants.append(entity);
     }
   };

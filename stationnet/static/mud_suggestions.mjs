@@ -8,6 +8,10 @@ function targetName(item) {
   return label.replace(/ \((\d+)\)$/, " $1");
 }
 
+function quoteName(name) {
+  return `"${name.replaceAll("\\", "\\\\").replaceAll('"', '\\"')}"`;
+}
+
 function available(command, state) {
   const room = state.room || {};
   const enemies = (state.combat?.enemies || []).filter(enemy => enemy.status !== "defeated");
@@ -25,7 +29,7 @@ function available(command, state) {
     case "attack": case "fire": case "melee": case "hide":
     case "defend": case "flee": return enemies.length > 0;
     case "talk": return (room.npcs || []).some(npc => !npc.hostile);
-    case "get": return (room.items || []).length > 0;
+    case "get": return (room.items || []).length > 0 || (room.items || []).some(item => item.contents?.length);
     case "drop": case "equip": case "use": return (state.inventory?.inventory || []).length > 0;
     case "unequip": return (state.inventory?.equipment || []).length > 0;
     default: return true;
@@ -53,17 +57,35 @@ export function commandSuggestions(value, state, catalog, limit = 6) {
     if (!npc.hostile) add(`/talk ${targetName(npc)}`, "Nearby NPC");
     add(`/look ${targetName(npc)}`, "Inspect NPC");
   }
+  for (const response of room.dialogue_responses || []) {
+    add(`/respond ${response.number}`, `Dialogue: ${response.text}`);
+  }
+  for (const player of room.occupants || []) {
+    const name = quoteName(targetName({name:player.character_name,display_name:player.display_name}));
+    add(`/look ${name}`, "Inspect player");
+    add(`/tell ${name} `, "Private message");
+  }
   for (const item of room.items || []) {
     add(`/get ${targetName(item)}`, "Item in room");
     add(`/look ${targetName(item)}`, "Inspect item");
+    if (item.item_type === "container") {
+      add(`/${item.is_open ? "close" : "open"} ${targetName(item)}`, "Container");
+      for (const child of item.contents || []) add(`/get ${targetName(child)} from ${targetName(item)}`, "Container contents");
+    }
   }
   for (const exit of room.exits || []) {
     const direction = exit.direction || exit.name;
     if (direction) add(`/go ${direction}`, "Room exit");
+    if (direction) add(`/look ${direction}`, "Inspect exit");
   }
   for (const item of inventory.inventory || []) {
     const name = targetName(item);
     for (const [verb, detail] of [["equip", "Carried item"], ["use", "Carried item"], ["drop", "Carried item"]]) add(`/${verb} ${name}`, detail);
+    if (item.item_type === "container") add(`/${item.is_open ? "close" : "open"} ${name}`, "Carried container");
+    for (const container of [...(room.items || []), ...(inventory.inventory || [])]) {
+      if (container.item_type === "container" && container.is_open && container.id !== item.id)
+        add(`/put ${name} in ${targetName(container)}`, "Open container");
+    }
   }
   for (const item of inventory.equipment || []) add(`/unequip ${targetName(item)}`, "Equipped item");
   if (room.id === PORTAL) {

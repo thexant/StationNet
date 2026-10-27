@@ -530,6 +530,7 @@ CREATE TABLE IF NOT EXISTS mud_characters (
  id TEXT PRIMARY KEY,
  user_id INTEGER NOT NULL UNIQUE REFERENCES users(id) ON DELETE CASCADE,
  display_name TEXT NOT NULL COLLATE NOCASE,
+ description TEXT NOT NULL DEFAULT '',
  creation_state TEXT NOT NULL DEFAULT 'pending' CHECK(creation_state IN ('pending','legacy','complete')),
  race_key TEXT,
  class_key TEXT,
@@ -613,6 +614,22 @@ CREATE INDEX IF NOT EXISTS idx_mud_event_recipients_user
 CREATE TABLE IF NOT EXISTS mud_event_views (
  user_id INTEGER PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
  cleared_through_id INTEGER NOT NULL DEFAULT 0);
+CREATE TABLE IF NOT EXISTS mud_tell_history (
+ user_id INTEGER PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+ other_user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE);
+CREATE TABLE IF NOT EXISTS mud_user_blocks (
+ user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+ blocked_user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+ PRIMARY KEY(user_id,blocked_user_id));
+CREATE TABLE IF NOT EXISTS mud_scheduled_events (
+ id INTEGER PRIMARY KEY AUTOINCREMENT,
+ event_kind TEXT NOT NULL,
+ entity_id TEXT NOT NULL,
+ due_at TEXT NOT NULL,
+ interval_seconds INTEGER CHECK(interval_seconds IS NULL OR interval_seconds BETWEEN 5 AND 86400),
+ payload_json TEXT NOT NULL DEFAULT '{}',
+ UNIQUE(event_kind,entity_id));
+CREATE INDEX IF NOT EXISTS idx_mud_scheduled_due ON mud_scheduled_events(due_at,id);
 CREATE TABLE IF NOT EXISTS mud_world_rooms (
  id TEXT PRIMARY KEY,
  name TEXT NOT NULL,
@@ -1187,6 +1204,8 @@ def _migrate_office(database):
 def init_db():
     database = get_db()
     database.executescript(SCHEMA)
+    if "description" not in {row["name"] for row in database.execute("PRAGMA table_info(mud_characters)")}:
+        database.execute("ALTER TABLE mud_characters ADD COLUMN description TEXT NOT NULL DEFAULT ''")
     _migrate_events(database)
     _migrate_office(database)
     _migrate_mud_dungeon_content_types(database)

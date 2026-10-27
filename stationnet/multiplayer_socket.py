@@ -7,7 +7,7 @@ import time
 
 from uvicorn.middleware.wsgi import WSGIMiddleware
 
-from . import applications, moderation
+from . import applications, moderation, mud
 from .realtime import utc_now
 from .db import get_db
 from .multiplayer import MAX_EVENT_BYTES, MultiplayerError, _emit, _promote_connected_host
@@ -101,13 +101,29 @@ def create_asgi_app(flask_app):
     flask_app.extensions["multiplayer_relay"] = relay
     http = WSGIMiddleware(flask_app)
 
+    async def mud_timer():
+        while True:
+            try:
+                await asyncio.to_thread(mud.run_scheduled_tick, flask_app)
+            except Exception:
+                flask_app.logger.exception("MUD scheduled event tick failed")
+            await asyncio.sleep(2)
+
     async def app(scope, receive, send):
         if scope["type"] == "lifespan":
+            timer = None
             while True:
                 message = await receive()
                 if message["type"] == "lifespan.startup":
+                    timer = asyncio.create_task(mud_timer())
                     await send({"type": "lifespan.startup.complete"})
                 elif message["type"] == "lifespan.shutdown":
+                    if timer:
+                        timer.cancel()
+                        try:
+                            await timer
+                        except asyncio.CancelledError:
+                            pass
                     await send({"type": "lifespan.shutdown.complete"})
                     return
             return

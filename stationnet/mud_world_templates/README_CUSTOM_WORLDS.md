@@ -273,6 +273,28 @@ JSON text in the file. Item properties can include `heal`, `value`,
 `reveal_exit`, `use_message`, equipment bonuses, firearm data, attribute
 `requirements`, and timed effects. `behaviors_json` can make a combat-capable
 NPC peaceful with `{"aggressive": false}` or `{"friendly": true}`.
+
+NPCs can also have small optional behaviours. These run only for placed NPCs
+in the active traditional world. Existing NPCs remain still unless configured.
+For example:
+
+```json
+{
+  "ambient": {"interval_seconds": 60, "lines": ["Mind the tide.", "Welcome ashore."]},
+  "wander": {"interval_seconds": 120},
+  "reactions": {"enter": "Welcome, traveler.", "say": "I hear you.", "get": "Take care with that."}
+}
+```
+
+`wander` chooses a room exit. To follow specific exits, use `patrol` instead:
+`{"patrol":{"interval_seconds":90,"directions":["north","south"]}}`.
+The directions are attempted in order; a missing exit leaves the NPC in place
+for that turn. Use either `wander` or `patrol`, never both. Intervals must be
+5–86400 seconds. `ambient.lines` accepts 1–20 lines of up to 300 characters;
+`reactions` accepts `enter`, `say`, `emote`, `get`, `drop`, `open`, `close`, and `put` with text up to 300
+characters each. Invalid or unknown behaviour keys are rejected on import.
+The server stores pending ticks in the database and resumes them after a
+restart; missed ticks run once instead of replaying indefinitely.
 The ZIP contains authored definitions and placements; it does not carry
 characters, inventories, quest progress, or procedural dungeon runs.
 

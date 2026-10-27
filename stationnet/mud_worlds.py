@@ -150,6 +150,15 @@ def read_package(payload):
     for table, rows in content.items():
         if not isinstance(rows, list) or len(rows) > 5000 or any(not isinstance(row, dict) for row in rows):
             raise WorldError(f"{table} must be an array of at most 5000 objects.")
+        if table == "mud_npc_definitions":
+            from .mud import validate_npc_behaviors
+            for row in rows:
+                value = row.get("behaviors_json", {})
+                try:
+                    value = json.loads(value) if isinstance(value, str) else value
+                    validate_npc_behaviors(value)
+                except (ValueError, json.JSONDecodeError) as problem:
+                    raise WorldError(f"Invalid NPC behaviors: {problem}") from problem
     origins = docs.get(ORIGINS_FILE, {})
     if not isinstance(origins, dict) or set(origins) - {"races", "classes"}:
         raise WorldError("origins.json must contain races and/or classes arrays.")

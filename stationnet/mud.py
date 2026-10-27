@@ -10,6 +10,7 @@ import re
 import secrets
 import shlex
 import sqlite3
+import random
 import uuid
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
@@ -17,7 +18,7 @@ from flask import Blueprint, abort, flash, g, jsonify, redirect, render_template
 
 from .auth import admin_required, login_required
 from .db import get_db
-from . import dungeons, character_creation, mud_effects, mud_firearms, mud_compat
+from . import dungeons, character_creation, mud_effects, mud_firearms, mud_compat, moderation
 from .security import validate_csrf
 
 bp = Blueprint("mud", __name__, url_prefix="/mud")
@@ -375,31 +376,36 @@ def _character_action(database, user, parameters):
 
 
 def _help_action(_database, _user, parameters):
-    if parameters.get("arguments"):
-        raise ActionError("The help action does not accept arguments.")
-    return [EventDraft(
-        "Available commands:\n"
-        "/look (or /l, /examine, /x) — examine your surroundings\n"
-        "/exits — list routes from this room\n"
-        "/go <exit> (or /move, /walk) — travel through an exit\n"
-        "/get <item> [from <container>], /drop <item>, /open <container>\n"
-        "/put <item> in <container>, /equip <item>, /unequip <item>, /use <item>\n"
-        "/combat, /hide, /attack <enemy>, /fire <enemy>, /melee <enemy>, /reload [gun], /defend, /flee - turn-based combat\n"
-        "/spells, /cast <spell> [enemy], /rest - magic and recovery\n"
-        "/talk <npc>, /respond <number or response> — converse with an NPC\n"
-        "/quests, /quest accept <name> — view or accept available quests\n"
-        "/north, /south, /east, /west, /up, /down, /in, /out — direction shortcuts\n"
-        "/status — check the MUD service\n"
-        "/character (or /stats) — view your character and progression\n"
-        "/inventory (or /inv) — list carried and equipped items\n"
-        "/portal enters the portal hub; /world returns when available\n"
-        "/expeditions lists themes; /expedition <theme> [difficulty] [size], /join <code>, /run\n"
-        "/daily, /daily enter, /daily join <code> — today's station challenge\n"
-        "/shop buy <name>, /shop sell <item>, /storage deposit|withdraw <item> at the hub\n"
-        "/complete at the exit keeps loot; /abandon loses this run's loot\n"
-        "For duplicate NPC names, use a number: /attack Rat 2.\n"
-        "Text without a leading slash is spoken to everyone in your room."
-    )]
+    args = parameters.get("arguments", [])
+    if args:
+        name = str(args[0]).lstrip("/").casefold()
+        entry = actions._commands.get(name)
+        if entry is None:
+            raise ActionError(f'No help for "{name}".')
+        definition, prefix = entry
+        aliases = [alias for alias, (action, _prefix) in actions._commands.items()
+                   if action.key == definition.key and not _prefix]
+        examples = {
+            "get": '/get "Red Apple" from "Oak Chest"', "put": '/put "Red Apple" into "Oak Chest"',
+            "open": '/open "Oak Chest"', "close": '/close "Oak Chest"',
+            "look": '/look "Oak Chest"', "tell": '/tell "Player Name" hello',
+            "reply_player": '/reply hello', "respond": '/respond 1',
+            "description": '/description A traveler in a blue coat',
+        }
+        body = f"/{name}: {definition.description}\nAliases: " + ", ".join(f"/{alias}" for alias in aliases)
+        if definition.key in examples:
+            body += f"\nExample: {examples[definition.key]}"
+        if definition.key in {"look", "get", "put", "open", "close"}:
+            body += "\nQuote multiword targets. For duplicates use a number: Apple 2 or Apple (2)."
+        return [EventDraft(body)]
+    lines = ["Available commands:"]
+    for definition in actions._actions.values():
+        if definition.commands and _authorized(definition, _user):
+            lines.append(f"/{definition.commands[0]} — {definition.description}")
+    lines.append('Use /help <command> for details. Quote multiword names; use "Name 2" or "Name (2)" for duplicates.')
+    lines.append('Use /get <item> from <container>, /put <item> in|into <container>, and /open or /close <container>.')
+    lines.append('Direction shortcuts include /n, /s, /e, /w, /u, and /d. Plain text speaks to the room.')
+    return [EventDraft("\n".join(lines))]
 
 
 START_ROOM_ID = "stationnet:start"
@@ -671,7 +677,7 @@ def _occupant_ids(database, room_id, exclude_user_id=None, instance_id=None):
 def _room_occupants(database, room_id, viewer_id, instance_id=None):
     location_type = ("dungeon_instance" if instance_id else
                      "portal" if room_id == PORTAL_ROOM_ID else "world_room")
-    return [dict(row) for row in database.execute(
+    rows = [dict(row) for row in database.execute(
         "SELECT DISTINCT u.id,c.id AS character_id,"
         "COALESCE(c.display_name,u.callsign) AS character_name FROM mud_presence AS p "
         "JOIN users AS u ON u.id=p.user_id "
@@ -681,6 +687,10 @@ def _room_occupants(database, room_id, viewer_id, instance_id=None):
         "ORDER BY character_name COLLATE NOCASE,u.id",
         (location_type, room_id, viewer_id, instance_id, instance_id),
     ).fetchall()]
+    labels = list(_numbered_items([{"id": row["id"], "name": row["character_name"]} for row in rows]))
+    for row, (_, label) in zip(rows, labels):
+        row["display_name"] = label
+    return rows
 
 
 def _exit_label(exit_row):
@@ -963,6 +973,28 @@ def _room_state(database, user_id):
     room = _current_room(database, user_id)
     portal = room["id"] == PORTAL_ROOM_ID
     instance_id = room.get("instance_id")
+    dialogue_responses = []
+    character = _character_row(database, user_id)
+    if instance_id:
+        session_row = database.execute(
+            "SELECT s.node_id,s.content_id AS npc_id FROM mud_dungeon_conversation_sessions s "
+            "JOIN mud_dungeon_content c ON c.id=s.content_id "
+            "WHERE s.character_id=? AND s.instance_id=? AND c.room_key=?",
+            (character["id"], instance_id, room["id"]),
+        ).fetchone()
+    else:
+        session_row = database.execute(
+            "SELECT s.node_id,s.npc_instance_id AS npc_id FROM mud_conversation_sessions s "
+            "JOIN mud_npc_instances i ON i.id=s.npc_instance_id "
+            "WHERE s.character_id=? AND i.room_id=?",
+            (character["id"], room["id"]),
+        ).fetchone()
+    if session_row:
+        _, responses = _available_dialogue_responses(
+            database, character["id"], session_row["npc_id"], session_row["node_id"], bool(instance_id),
+        )
+        dialogue_responses = [{"number": index, "text": response["response_text"]}
+                              for index, response in enumerate(responses, 1)]
     npcs = []
     for npc, display_name in _numbered_npcs(_room_npc_rows(database, room["id"], instance_id)):
         entry = {"id": npc["id"], "definition_id": npc["definition_id"],
@@ -1004,9 +1036,14 @@ def _room_state(database, user_id):
         "exits": exits,
         "occupants": _room_occupants(database, room["id"], user_id, instance_id),
         "items": [{"id": item["id"], "name": item["name"], "display_name": label,
-                   "item_type": item["item_type"]} for item, label in _numbered_items(
+                   "item_type": item["item_type"], "is_open": bool(item["is_open"]),
+                   "contents": [{"name": child["name"], "display_name": child_label}
+                                for child, child_label in _numbered_items(_container_rows(database, item["id"], user_id))]
+                   if item["item_type"] == "container" and item["is_open"] and not instance_id else []}
+                  for item, label in _numbered_items(
                        _room_item_rows(database, room["id"], instance_id))],
         "npcs": npcs,
+        "dialogue_responses": dialogue_responses,
     }
 
 
@@ -1015,7 +1052,7 @@ def _describe_room(database, room, viewer_id=None):
     exits = _room_exits(database, room["id"], instance_id)
     routes = ", ".join(_exit_label(item) for item in exits) if exits else "none"
     occupants = _room_occupants(database, room["id"], viewer_id, instance_id) if viewer_id else []
-    people = ", ".join(item["character_name"] for item in occupants) if occupants else "none"
+    people = ", ".join(item["display_name"] for item in occupants) if occupants else "none"
     items = ", ".join(label for _, label in _numbered_items(
         _room_item_rows(database, room["id"], instance_id))) or "none"
     npcs = ", ".join(label for _, label in _numbered_npcs(
@@ -1238,6 +1275,29 @@ def _visible_container(database, user_id, room, item_id):
     if row["room_id"] != room["id"] and not owned_visible:
         raise ActionError("That container is not available to you.")
     return row
+
+
+def _accessible_containers(database, user_id, room):
+    return [item for item in (
+        list(_room_item_rows(database, room["id"], room.get("instance_id")))
+        + list(_inventory_rows(database, user_id))
+        + list(_inventory_rows(database, user_id, True))
+    ) if _is_container(item) and not isinstance(item, dict)]
+
+
+def _container_target(database, user_id, room, target):
+    candidates = _accessible_containers(database, user_id, room)
+    if not candidates:
+        raise ActionError("There is no available container here.")
+    return _visible_container(database, user_id, room, _item_matches(candidates, target)["id"])
+
+
+def _room_item_event(database, user, room, message):
+    instance_id = room.get("instance_id")
+    return EventDraft(message, event_type="item",
+                      audience_type="instance" if instance_id else "room",
+                      audience_key=instance_id or room["id"],
+                      recipient_ids=_occupant_ids(database, room["id"], user["id"], instance_id))
 
 
 def inventory_state(database, user_id):
@@ -1640,7 +1700,7 @@ def _describe_item(database, row, user_id=None):
     if _is_container(row):
         contents = _container_rows(database, row["id"], user_id)
         if row["is_open"]:
-            body += "\nContents: " + (", ".join(child["name"] for child in contents) or "empty")
+            body += "\nContents: " + (", ".join(label for _, label in _numbered_items(contents)) or "empty")
         else:
             body += "\nIt is closed."
     return body
@@ -1649,7 +1709,7 @@ def _describe_item(database, row, user_id=None):
 def _examine_item(database, user, room, target):
     instance_id = room.get("instance_id") if isinstance(room, dict) else None
     candidates = list(_room_item_rows(database, room["id"], instance_id)) + list(_inventory_rows(database, user["id"])) + list(_inventory_rows(database, user["id"], True))
-    for container in _room_item_rows(database, room["id"], instance_id):
+    for container in _accessible_containers(database, user["id"], room):
         if _is_container(container) and container["is_open"]:
             candidates.extend(_container_rows(database, container["id"], user["id"]))
     key = " ".join(target.casefold().split())
@@ -1684,6 +1744,49 @@ def _examine_npc(_database, _user, room, target):
 
 
 examinations.register(_examine_npc)
+
+
+def _examine_player(database, user, room, target):
+    candidates = _room_occupants(database, room["id"], user["id"], room.get("instance_id"))
+    key = " ".join(target.casefold().split())
+    if not any(entry["character_name"].casefold() == key or entry["display_name"].casefold() == key
+               or entry["display_name"].removesuffix(")").replace(" (", " ").casefold() == key
+               for entry in candidates):
+        return None
+    try:
+        match = _item_matches([{"id": entry["id"], "name": entry["character_name"], "entry": entry}
+                               for entry in candidates], target)["entry"]
+    except ActionError as problem:
+        raise ActionError(str(problem).replace("item", "player")) from problem
+    row = database.execute("SELECT description FROM mud_characters WHERE id=?", (match["character_id"],)).fetchone()
+    state = character_state(database, match["id"])
+    return (f"{match['character_name']} — Level {state['level']}\n"
+            f"Origin: {state['race'] or 'Unchosen'} / {state['class'] or 'Unchosen'}\n"
+            f"{row['description'] or 'No description provided.'}")
+
+
+examinations.register(_examine_player)
+
+
+def _examine_exit(database, _user, room, target):
+    modes = _mode_settings(database)
+    if room["id"] == PORTAL_ROOM_ID and modes["traditional"] and target.casefold() in {"out", "world", "traditional world"}:
+        return "Traditional World\nReturns to your last traditional-world location."
+    if room["id"] != PORTAL_ROOM_ID and modes["procedural"] and room["id"] == _start_room(database)["id"] and target.casefold() in {"portals", "dungeon portals"}:
+        return "Dungeon Portals\nLeads to the protected procedural hub."
+    exits = _room_exits(database, room["id"], room.get("instance_id"))
+    matches = [entry for entry in exits if target.casefold() in {
+        entry["id"].casefold(), entry["name"].casefold(),
+        (entry["direction"] or "").casefold()}]
+    if len(matches) > 1:
+        raise ActionError("More than one exit matches. Use its full name.")
+    if matches:
+        item = matches[0]
+        return f"{item['name']}\nLeads to {item['destination_name']}."
+    return None
+
+
+examinations.register(_examine_exit)
 
 
 def _combat_target(parameters):
@@ -1751,6 +1854,39 @@ def _encounter_reward_drafts(database, encounter, npc):
             event_type="reward", audience_key=str(participant["user_id"]),
         ))
     return drafts
+
+
+def validate_npc_behaviors(value):
+    """Validate the small, supported authored behavior schema."""
+    if not isinstance(value, dict) or set(value) - {"aggressive", "friendly", "neutral", "passive", "ambient", "wander", "patrol", "reactions"}:
+        raise ValueError("NPC behaviors contain an unsupported key.")
+    if any(type(value[key]) is not bool for key in ("aggressive", "friendly", "neutral", "passive") if key in value):
+        raise ValueError("aggressive, friendly, neutral, and passive must be true or false.")
+    for key in ("ambient", "wander", "patrol"):
+        if key not in value:
+            continue
+        spec = value[key]
+        expected = {"interval_seconds", "lines"} if key == "ambient" else ({"interval_seconds"} if key == "wander" else {"interval_seconds", "directions"})
+        if not isinstance(spec, dict) or set(spec) != expected:
+            raise ValueError(f"{key} requires {', '.join(sorted(expected))}.")
+        interval = spec["interval_seconds"]
+        if type(interval) is not int or not 5 <= interval <= 86400:
+            raise ValueError(f"{key} interval_seconds must be 5 to 86400.")
+        if key == "ambient" and (not isinstance(spec["lines"], list) or not 1 <= len(spec["lines"]) <= 20 or
+                                  any(not isinstance(line, str) or not 1 <= len(line.strip()) <= 300 for line in spec["lines"])):
+            raise ValueError("ambient lines must contain 1 to 20 short strings.")
+        if key == "patrol" and (not isinstance(spec["directions"], list) or not 1 <= len(spec["directions"]) <= 20 or
+                                 any(direction not in DIRECTIONS for direction in spec["directions"])):
+            raise ValueError("patrol directions must be supported exit directions.")
+    if "wander" in value and "patrol" in value:
+        raise ValueError("Choose either wander or patrol.")
+    if "reactions" in value:
+        reactions = value["reactions"]
+        if not isinstance(reactions, dict) or not reactions or set(reactions) - {"enter", "say", "emote", "get", "drop", "open", "close", "put"} or any(
+            not isinstance(line, str) or not 1 <= len(line.strip()) <= 300 for line in reactions.values()
+        ):
+            raise ValueError("reactions accepts short text for enter, say, emote, get, drop, open, close, and put.")
+    return value
 
 
 def _npc_aggressive(npc):
@@ -2327,11 +2463,10 @@ def _get_action(database, user, parameters):
     room = _current_room(database, user["id"])
     if _active_hostiles(database, room):
         raise ActionError("A hostile enemy blocks the loot. Fight or flee first.", 409)
-    container_id = str(parameters.get("container_id", "")).strip()
-    if not container_id and " from " in target.casefold():
+    container_name = str(parameters.get("container_id", "")).strip()
+    if not container_name and re.search(r"\s+from\s+", target, re.I):
         target, container_name = re.split(r"\s+from\s+", target, maxsplit=1, flags=re.I)
-        container_id = _item_matches(_room_item_rows(database, room["id"]), container_name)["id"]
-    container = _visible_container(database, user["id"], room, container_id) if container_id else None
+    container = _container_target(database, user["id"], room, container_name) if container_name else None
     source = (_container_rows(database, container["id"], user["id"]) if container else
               _room_item_rows(database, room["id"], room.get("instance_id")))
     if container and not container["is_open"]:
@@ -2355,7 +2490,8 @@ def _get_action(database, user, parameters):
             "equipped_slot=NULL,possession_mode=?,updated_at=CURRENT_TIMESTAMP WHERE id=?",
             (character["id"], _current_mode(database, user["id"]), item["id"]),
         )
-    return [EventDraft(f"You pick up {item['name']}.", event_type="item")] + \
+    return [EventDraft(f"You pick up {item['name']}.", event_type="item"),
+            _room_item_event(database, user, room, f"{_character_row(database, user['id'])['display_name']} picks up {item['name']}.")] + \
         _set_objective_progress(database, user, "possess_item", item["definition_id"])
 
 
@@ -2369,32 +2505,49 @@ def _drop_action(database, user, parameters):
         raise ActionError("Items cannot be dropped in protected procedural locations.")
     database.execute("DELETE FROM mud_character_equipment WHERE item_instance_id=?", (item["id"],))
     database.execute("UPDATE mud_item_instances SET room_id=?,owner_character_id=NULL,container_id=NULL,equipped_slot=NULL,updated_at=CURRENT_TIMESTAMP WHERE id=?", (room["id"], item["id"]))
-    return [EventDraft(f"You drop {item['name']}.", event_type="item")]
+    return [EventDraft(f"You drop {item['name']}.", event_type="item"),
+            _room_item_event(database, user, room, f"{_character_row(database, user['id'])['display_name']} drops {item['name']}.")]
 
 
 def _open_action(database, user, parameters):
     target = _item_target(parameters)
     room = _current_room(database, user["id"])
-    item = _visible_container(database, user["id"], room, target)
+    if not target:
+        raise ActionError("Open what?")
+    item = _container_target(database, user["id"], room, target)
     if item["is_open"]:
         return [EventDraft(f"{item['name']} is already open.\n" + _describe_item(database, item, user["id"]), event_type="item")]
     database.execute("UPDATE mud_item_instances SET is_open=1,updated_at=CURRENT_TIMESTAMP WHERE id=?", (item["id"],))
     refreshed = _item_row(database, item["id"])
-    return [EventDraft(f"You open {item['name']}.\n" + _describe_item(database, refreshed, user["id"]), event_type="item")]
+    return [EventDraft(f"You open {item['name']}.\n" + _describe_item(database, refreshed, user["id"]), event_type="item"),
+            _room_item_event(database, user, room, f"{_character_row(database, user['id'])['display_name']} opens {item['name']}.")]
+
+
+def _close_action(database, user, parameters):
+    target = _item_target(parameters)
+    if not target:
+        raise ActionError("Close what?")
+    room = _current_room(database, user["id"])
+    item = _container_target(database, user["id"], room, target)
+    if not item["is_open"]:
+        return [EventDraft(f"{item['name']} is already closed.", event_type="item")]
+    database.execute("UPDATE mud_item_instances SET is_open=0,updated_at=CURRENT_TIMESTAMP WHERE id=?", (item["id"],))
+    return [EventDraft(f"You close {item['name']}.", event_type="item"),
+            _room_item_event(database, user, room, f"{_character_row(database, user['id'])['display_name']} closes {item['name']}.")]
 
 
 def _put_action(database, user, parameters):
     args = parameters.get("arguments", [])
-    target = str(parameters.get("item_id") or (args[0] if args else "")).strip()
-    container_id = str(parameters.get("container_id", "")).strip()
-    if not container_id and " in " in target.casefold():
-        target, container_name = re.split(r"\s+in(?:to)?\s+", target, maxsplit=1, flags=re.I)
-        room = _current_room(database, user["id"])
-        container_id = _item_matches(_room_item_rows(database, room["id"]), container_name)["id"]
-    if not target or not container_id:
-        raise ActionError("Put an inventory item into an available container.")
+    target = str(parameters.get("item_id") or " ".join(str(arg) for arg in args)).strip()
+    container_name = str(parameters.get("container_id", "")).strip()
+    if not container_name:
+        match = re.fullmatch(r"(.+?)\s+in(?:to)?\s+(.+)", target, re.I)
+        if match:
+            target, container_name = match.group(1), match.group(2)
+    if not target or not container_name:
+        raise ActionError("Use /put <item> in <container>.")
     room = _current_room(database, user["id"])
-    container = _visible_container(database, user["id"], room, container_id)
+    container = _container_target(database, user["id"], room, container_name)
     if not container["is_open"]:
         raise ActionError("Open that container first.")
     item = _item_matches(_inventory_rows(database, user["id"]), target)
@@ -2404,7 +2557,8 @@ def _put_action(database, user, parameters):
         raise ActionError("An item cannot contain itself.")
     database.execute("DELETE FROM mud_character_equipment WHERE item_instance_id=?", (item["id"],))
     database.execute("UPDATE mud_item_instances SET room_id=NULL,owner_character_id=NULL,container_id=?,equipped_slot=NULL,updated_at=CURRENT_TIMESTAMP WHERE id=?", (container["id"], item["id"]))
-    return [EventDraft(f"You put {item['name']} in {container['name']}.", event_type="item")]
+    return [EventDraft(f"You put {item['name']} in {container['name']}.", event_type="item"),
+            _room_item_event(database, user, room, f"{_character_row(database, user['id'])['display_name']} puts {item['name']} in {container['name']}.")]
 
 
 def _equip_action(database, user, parameters):
@@ -2434,7 +2588,9 @@ def _equip_action(database, user, parameters):
         "INSERT INTO mud_character_equipment(character_id,loadout_key,slot,item_instance_id) "
         "VALUES(?,?,?,?)", (character["id"], loadout, slot, item["id"]),
     )
-    return [EventDraft(f"You equip {item['name']} ({slot.replace('_', ' ')}).", event_type="item")]
+    room = _current_room(database, user["id"])
+    return [EventDraft(f"You equip {item['name']} ({slot.replace('_', ' ')}).", event_type="item"),
+            _room_item_event(database, user, room, f"{character['display_name']} equips {item['name']}.")]
 
 
 def _unequip_action(database, user, parameters):
@@ -2448,7 +2604,9 @@ def _unequip_action(database, user, parameters):
         "DELETE FROM mud_character_equipment WHERE character_id=? AND loadout_key=? "
         "AND item_instance_id=?", (character["id"], loadout, item["id"]),
     )
-    return [EventDraft(f"You unequip {item['name']}.", event_type="item")]
+    room = _current_room(database, user["id"])
+    return [EventDraft(f"You unequip {item['name']}.", event_type="item"),
+            _room_item_event(database, user, room, f"{character['display_name']} unequips {item['name']}.")]
 
 
 def _use_action(database, user, parameters):
@@ -3506,9 +3664,11 @@ def _go_action(database, user, parameters):
 
 
 def _say_action(database, user, parameters):
-    body = str(parameters.get("message", "")).strip()
+    body = str(parameters.get("message") or " ".join(str(arg) for arg in parameters.get("arguments", []))).strip()
     if not 1 <= len(body) <= 1000:
         raise ActionError("Messages must be between 1 and 1000 characters.")
+    if moderation.active_restriction(user["id"], ("mute",)):
+        raise ActionError("You cannot communicate while muted.", 403)
     room = _current_room(database, user["id"])
     instance_id = room.get("instance_id") if isinstance(room, dict) else None
     location_type = ("dungeon_instance" if instance_id else
@@ -3531,6 +3691,121 @@ def _say_action(database, user, parameters):
     )]
 
 
+def _emote_action(database, user, parameters):
+    text = " ".join(str(arg) for arg in parameters.get("arguments", [])).strip()
+    if not 1 <= len(text) <= 500:
+        raise ActionError("Use /emote <action> (up to 500 characters).")
+    if moderation.active_restriction(user["id"], ("mute",)):
+        raise ActionError("You cannot communicate while muted.", 403)
+    room = _current_room(database, user["id"])
+    instance_id = room.get("instance_id")
+    recipients = set(_occupant_ids(database, room["id"], instance_id=instance_id))
+    recipients.add(user["id"])
+    _set_hidden(database, user["id"], False)
+    return [EventDraft(f"{_character_row(database, user['id'])['display_name']} {text}",
+                       event_type="emote", audience_type="instance" if instance_id else "room",
+                       audience_key=instance_id or room["id"], recipient_ids=tuple(sorted(recipients)))]
+
+
+def _present_players(database):
+    return database.execute(
+        "SELECT u.id,COALESCE(c.display_name,u.callsign) AS name FROM users u "
+        "LEFT JOIN mud_characters c ON c.user_id=u.id "
+        "WHERE EXISTS (SELECT 1 FROM mud_presence p WHERE p.user_id=u.id) "
+        "ORDER BY name COLLATE NOCASE,u.id"
+    ).fetchall()
+
+
+def _who_action(database, _user, parameters):
+    if parameters.get("arguments"):
+        raise ActionError("Use /who without arguments.")
+    players = _present_players(database)
+    return [EventDraft("Players present: " + (", ".join(label for _, label in _numbered_items(players)) or "none"), event_type="social")]
+
+
+def _tell_to(database, user, target_id, message):
+    if moderation.active_restriction(user["id"], ("mute",)):
+        raise ActionError("You cannot communicate while muted.", 403)
+    if not 1 <= len(message) <= 500:
+        raise ActionError("Private messages must be between 1 and 500 characters.")
+    target = next((row for row in _present_players(database) if row["id"] == target_id), None)
+    if target is None or target_id == user["id"]:
+        raise ActionError("That player is not currently available.")
+    if database.execute("SELECT 1 FROM mud_user_blocks WHERE (user_id=? AND blocked_user_id=?) OR (user_id=? AND blocked_user_id=?)",
+                        (target_id, user["id"], user["id"], target_id)).fetchone():
+        raise ActionError("That player is not available for private messages.", 403)
+    sender = _character_row(database, user["id"])["display_name"]
+    database.execute("INSERT INTO mud_tell_history(user_id,other_user_id) VALUES(?,?) "
+                     "ON CONFLICT(user_id) DO UPDATE SET other_user_id=excluded.other_user_id", (target_id, user["id"]))
+    return [EventDraft(f"You tell {target['name']}: {message}", event_type="tell"),
+            EventDraft(f"{sender} tells you: {message}", event_type="tell", audience_key=str(target_id))]
+
+
+def _tell_action(database, user, parameters):
+    args = parameters.get("arguments", [])
+    if len(args) < 2:
+        raise ActionError('Use /tell "player name" <message>.')
+    name = args[0]
+    try:
+        player = _item_matches(_present_players(database), name)
+    except ActionError as problem:
+        raise ActionError(str(problem).replace("item", "player") + " Quote multiword names.") from problem
+    return _tell_to(database, user, player["id"], " ".join(args[1:]))
+
+
+def _reply_player_action(database, user, parameters):
+    message = " ".join(parameters.get("arguments", [])).strip()
+    has_dialogue = database.execute(
+        "SELECT 1 FROM mud_conversation_sessions WHERE character_id=(SELECT id FROM mud_characters WHERE user_id=?) "
+        "UNION SELECT 1 FROM mud_dungeon_conversation_sessions WHERE character_id=(SELECT id FROM mud_characters WHERE user_id=?)",
+        (user["id"], user["id"]),
+    ).fetchone()
+    if has_dialogue:
+        try:
+            return _respond_action(database, user, parameters)
+        except ActionError:
+            if message.isdigit():
+                raise
+    row = database.execute("SELECT other_user_id FROM mud_tell_history WHERE user_id=?", (user["id"],)).fetchone()
+    if row is None:
+        return _respond_action(database, user, parameters)
+    return _tell_to(database, user, row["other_user_id"], message)
+
+
+def _description_action(database, user, parameters):
+    args = parameters.get("arguments", [])
+    if not args:
+        row = database.execute("SELECT description FROM mud_characters WHERE user_id=?", (user["id"],)).fetchone()
+        return [EventDraft("Description: " + (row["description"] or "none"), event_type="character")]
+    description = " ".join(args).strip()
+    if description.casefold() == "clear":
+        description = ""
+    if len(description) > 500:
+        raise ActionError("Descriptions cannot exceed 500 characters.")
+    database.execute("UPDATE mud_characters SET description=?,updated_at=CURRENT_TIMESTAMP WHERE user_id=?", (description, user["id"]))
+    return [EventDraft("Description updated." if description else "Description cleared.", event_type="character")]
+
+
+def _block_action(database, user, parameters):
+    name = " ".join(parameters.get("arguments", [])).strip()
+    if not name:
+        raise ActionError("Use /block <player> or /unblock <player>.")
+    row = database.execute("SELECT c.user_id FROM mud_characters c WHERE c.display_name=? COLLATE NOCASE", (name,)).fetchone()
+    if row is None or row["user_id"] == user["id"]:
+        raise ActionError("No such player.")
+    database.execute("INSERT OR IGNORE INTO mud_user_blocks(user_id,blocked_user_id) VALUES(?,?)", (user["id"], row["user_id"]))
+    return [EventDraft(f"Blocked {name} from private messages.", event_type="social")]
+
+
+def _unblock_action(database, user, parameters):
+    name = " ".join(parameters.get("arguments", [])).strip()
+    row = database.execute("SELECT c.user_id FROM mud_characters c WHERE c.display_name=? COLLATE NOCASE", (name,)).fetchone()
+    if row is None:
+        raise ActionError("No such player.")
+    database.execute("DELETE FROM mud_user_blocks WHERE user_id=? AND blocked_user_id=?", (user["id"], row["user_id"]))
+    return [EventDraft(f"Unblocked {name}.", event_type="social")]
+
+
 actions = ActionRegistry()
 actions.register(ActionDefinition(
     key="status", label="SYSTEM STATUS",
@@ -3539,7 +3814,7 @@ actions.register(ActionDefinition(
 ))
 actions.register(ActionDefinition(
     key="character", label="VIEW STATS",
-    description="View your character identity, health, attributes, and progression.",
+    description="View your character identity, health, mana, active effects, attributes, and progression.",
     commands=("character", "stats"), handler=_character_action,
     group="CHARACTER",
 ))
@@ -3552,7 +3827,7 @@ actions.register(ActionDefinition(
 actions.register(ActionDefinition(
     key="say", label="SAY",
     description="Speak to the other players in this room.",
-    handler=_say_action, show_context=False,
+    commands=("say",), handler=_say_action, show_context=False,
 ))
 actions.register(ActionDefinition(
     key="help", label="COMMAND HELP",
@@ -3568,6 +3843,7 @@ actions.register(ActionDefinition(
 actions.register(ActionDefinition(key="get", label="PICK UP", description="Pick up an item in this room or an open container.", commands=("get", "take"), handler=_get_action, group="ITEMS", show_context=False))
 actions.register(ActionDefinition(key="drop", label="DROP", description="Drop a carried item in this room.", commands=("drop",), handler=_drop_action, group="ITEMS", show_context=False))
 actions.register(ActionDefinition(key="open", label="OPEN", description="Open an available container.", commands=("open",), handler=_open_action, group="ITEMS", show_context=False))
+actions.register(ActionDefinition(key="close", label="CLOSE", description="Close an available container.", commands=("close",), handler=_close_action, group="ITEMS", show_context=False))
 actions.register(ActionDefinition(key="put", label="PUT AWAY", description="Put a carried item in an open container.", commands=("put",), handler=_put_action, group="ITEMS", show_context=False))
 actions.register(ActionDefinition(key="equip", label="EQUIP", description="Equip a carried item.", commands=("equip", "wear"), handler=_equip_action, group="ITEMS", show_context=False))
 actions.register(ActionDefinition(key="unequip", label="UNEQUIP", description="Remove equipped gear.", commands=("unequip", "remove"), handler=_unequip_action, group="ITEMS", show_context=False))
@@ -3575,7 +3851,14 @@ actions.register(ActionDefinition(key="use", label="USE", description="Use a car
 actions.register(ActionDefinition(key="shop", label="PORTAL TRADER", description="Buy supplies or sell loot in the portal room.", commands=("shop",), handler=_shop_action, group="HUB", show_context=False))
 actions.register(ActionDefinition(key="storage", label="PERSONAL STORAGE", description="Deposit or withdraw personal items in the portal room.", commands=("storage", "stash"), handler=_storage_action, group="HUB", show_context=False))
 actions.register(ActionDefinition(key="talk", label="TALK", description="Talk to a nearby NPC.", commands=("talk", "speak"), handler=_talk_action, group="NPCS", show_context=False))
-actions.register(ActionDefinition(key="respond", label="RESPOND", description="Choose a response in your current NPC conversation.", commands=("respond", "reply"), handler=_respond_action, group="DIALOGUE", show_context=False))
+actions.register(ActionDefinition(key="respond", label="RESPOND", description="Choose a response in your current NPC conversation.", commands=("respond",), handler=_respond_action, group="DIALOGUE", show_context=False))
+actions.register(ActionDefinition(key="reply_player", label="REPLY", description="Reply to your latest private message; numeric replies still work in NPC dialogue.", commands=("reply",), handler=_reply_player_action, group="SOCIAL", show_context=False))
+actions.register(ActionDefinition(key="tell", label="TELL", description="Send a private message to a present player.", commands=("tell",), handler=_tell_action, group="SOCIAL", show_context=False))
+actions.register(ActionDefinition(key="emote", label="EMOTE", description="Describe an action to players in your room.", commands=("emote",), handler=_emote_action, group="SOCIAL", show_context=False))
+actions.register(ActionDefinition(key="who", label="WHO", description="List players currently connected to the MUD.", commands=("who",), handler=_who_action, group="SOCIAL", show_context=False))
+actions.register(ActionDefinition(key="description", label="DESCRIPTION", description="View or edit your public character description; use clear to remove it.", commands=("description", "describe"), handler=_description_action, group="CHARACTER", show_context=False))
+actions.register(ActionDefinition(key="block", label="BLOCK", description="Block a player from private messages.", commands=("block",), handler=_block_action, group="SOCIAL", show_context=False))
+actions.register(ActionDefinition(key="unblock", label="UNBLOCK", description="Allow a blocked player to send private messages.", commands=("unblock",), handler=_unblock_action, group="SOCIAL", show_context=False))
 actions.register(ActionDefinition(key="quests", label="VIEW QUESTS", description="View your active quest objectives and progress.", commands=("quests", "quest", "objectives"), handler=_quests_action, group="QUESTS"))
 actions.register(ActionDefinition(key="combat", label="COMBAT STATUS", description="View hostile enemies and encounter status.", commands=("combat",), handler=_combat_action, group="COMBAT"))
 actions.register(ActionDefinition(key="spells", label="KNOWN SPELLS", description="List your class spells and their mana costs.", commands=("spells",), handler=_spells_action, group="MAGIC"))
@@ -3813,6 +4096,196 @@ def _register_presence(database, user, client_id):
         ))
 
 
+def _scheduled_now(now=None):
+    return (now or datetime.now(timezone.utc)).replace(microsecond=0).isoformat()
+
+
+def schedule_room_message(database, room_id, message, due_at, interval_seconds=None):
+    """Persist a bounded one-shot or recurring room announcement."""
+    if not isinstance(message, str) or not 1 <= len(message.strip()) <= 500:
+        raise ValueError("Scheduled room messages must be 1 to 500 characters.")
+    if due_at.tzinfo is None:
+        raise ValueError("Scheduled times must include a timezone.")
+    if interval_seconds is not None and (type(interval_seconds) is not int or not 5 <= interval_seconds <= 86400):
+        raise ValueError("Intervals must be 5 to 86400 seconds.")
+    if database.execute("SELECT 1 FROM mud_world_rooms WHERE id=?", (room_id,)).fetchone() is None:
+        raise ValueError("Scheduled room does not exist.")
+    event_key = uuid.uuid4().hex
+    database.execute(
+        "INSERT INTO mud_scheduled_events(event_kind,entity_id,due_at,interval_seconds,payload_json) "
+        "VALUES('room_message',?,?,?,?)",
+        (event_key, _scheduled_now(due_at.astimezone(timezone.utc)), interval_seconds,
+         json.dumps({"room_id": room_id, "message": message.strip()})),
+    )
+    return event_key
+
+
+def sync_npc_schedule(database, now=None):
+    """Reconcile persistent timers with currently active authored NPCs."""
+    active = set()
+    rows = database.execute(
+        "SELECT i.id,d.behaviors_json FROM mud_npc_instances i "
+        "JOIN mud_npc_definitions d ON d.id=i.definition_id "
+        "JOIN mud_world_rooms r ON r.id=i.room_id "
+        "WHERE r.world_id=(SELECT id FROM mud_world_packages WHERE active=1)"
+    ).fetchall()
+    for row in rows:
+        try:
+            behavior = validate_npc_behaviors(_json_properties(row["behaviors_json"]))
+        except ValueError:
+            continue  # Legacy malformed data remains inert, without preventing startup.
+        for kind in ("ambient", "wander", "patrol"):
+            if kind not in behavior:
+                continue
+            active.add((kind, row["id"]))
+            interval = behavior[kind]["interval_seconds"]
+            due = _scheduled_now((now or datetime.now(timezone.utc)) + timedelta(seconds=interval))
+            database.execute(
+                "INSERT INTO mud_scheduled_events(event_kind,entity_id,due_at,interval_seconds) VALUES(?,?,?,?) "
+                "ON CONFLICT(event_kind,entity_id) DO UPDATE SET "
+                "due_at=CASE WHEN interval_seconds<>excluded.interval_seconds THEN excluded.due_at ELSE due_at END,"
+                "interval_seconds=excluded.interval_seconds",
+                (kind, row["id"], due, interval),
+            )
+    for row in database.execute(
+        "SELECT event_kind,entity_id FROM mud_scheduled_events WHERE event_kind IN ('ambient','wander','patrol')"
+    ).fetchall():
+        if (row["event_kind"], row["entity_id"]) not in active:
+            database.execute("DELETE FROM mud_scheduled_events WHERE event_kind=? AND entity_id=?", row)
+
+
+def process_scheduled_events(database, now=None, limit=50):
+    """Call inside a write transaction. Advancing a timer and its effects commit together."""
+    stamp = _scheduled_now(now)
+    rows = database.execute(
+        "SELECT * FROM mud_scheduled_events WHERE due_at<=? "
+        "AND event_kind IN ('ambient','wander','patrol','room_message') ORDER BY due_at,id LIMIT ?",
+        (stamp, min(50, max(1, limit))),
+    ).fetchall()
+    for event in rows:
+        if event["event_kind"] == "room_message":
+            payload = _json_properties(event["payload_json"])
+            room_id = payload.get("room_id")
+            message = payload.get("message")
+            if database.execute("SELECT 1 FROM mud_world_rooms WHERE id=?", (room_id,)).fetchone() is None:
+                database.execute("DELETE FROM mud_scheduled_events WHERE id=?", (event["id"],))
+                continue
+            active_room = database.execute(
+                "SELECT 1 FROM mud_world_rooms WHERE id=? AND world_id=(SELECT id FROM mud_world_packages WHERE active=1)",
+                (room_id,),
+            ).fetchone()
+            if active_room and isinstance(message, str) and message:
+                recipients = _occupant_ids(database, room_id)
+                if recipients:
+                    _insert_event(database, EventDraft(message, "world", "room", room_id, recipients))
+            if event["interval_seconds"] is None:
+                database.execute("DELETE FROM mud_scheduled_events WHERE id=?", (event["id"],))
+            else:
+                next_due = _scheduled_now((now or datetime.now(timezone.utc)) + timedelta(seconds=event["interval_seconds"]))
+                database.execute("UPDATE mud_scheduled_events SET due_at=? WHERE id=?", (next_due, event["id"]))
+            continue
+        next_due = _scheduled_now((now or datetime.now(timezone.utc)) + timedelta(seconds=event["interval_seconds"]))
+        database.execute("UPDATE mud_scheduled_events SET due_at=? WHERE id=?", (next_due, event["id"]))
+        npc = database.execute(
+            "SELECT i.*,d.name,d.behaviors_json FROM mud_npc_instances i "
+            "JOIN mud_npc_definitions d ON d.id=i.definition_id WHERE i.id=?",
+            (event["entity_id"],),
+        ).fetchone()
+        if npc is None:
+            database.execute("DELETE FROM mud_scheduled_events WHERE id=?", (event["id"],))
+            continue
+        busy = database.execute(
+            "SELECT 1 FROM mud_combat_encounters WHERE npc_instance_id=? AND status='active' LIMIT 1",
+            (npc["id"],),
+        ).fetchone()
+        if busy:
+            continue
+        live_npc = next((row for row in _room_npc_rows(database, npc["room_id"]) if row["id"] == npc["id"]), None)
+        if live_npc and live_npc["combat_maximum_health"] is not None:
+            if _encounter_row(database, live_npc)["status"] == "defeated":
+                continue
+        try:
+            behavior = validate_npc_behaviors(_json_properties(npc["behaviors_json"]))
+        except ValueError:
+            database.execute("DELETE FROM mud_scheduled_events WHERE id=?", (event["id"],))
+            continue
+        spec = behavior.get(event["event_kind"])
+        if not isinstance(spec, dict):
+            database.execute("DELETE FROM mud_scheduled_events WHERE id=?", (event["id"],))
+            continue
+        room_id = npc["room_id"]
+        if event["event_kind"] == "ambient":
+            line = random.choice(spec["lines"])
+            recipients = _occupant_ids(database, room_id)
+            if recipients:
+                _insert_event(database, EventDraft(f"{npc['name']} says: {line}", "npc", "room", room_id, recipients))
+            continue
+        state = _json_properties(npc["state_json"])
+        exits = _room_exits(database, room_id)
+        if event["event_kind"] == "patrol":
+            directions = spec["directions"]
+            index = state.get("patrol_index", 0)
+            if type(index) is not int or index < 0:
+                index = 0
+            direction = directions[index % len(directions)]
+            state["patrol_index"] = index + 1
+            choices = [exit_row for exit_row in exits if exit_row["direction"] == direction]
+        else:
+            choices = exits
+        if not choices:
+            database.execute("UPDATE mud_npc_instances SET state_json=? WHERE id=?", (json.dumps(state), npc["id"]))
+            continue
+        route = random.choice(choices)
+        old_recipients = _occupant_ids(database, room_id)
+        new_recipients = _occupant_ids(database, route["to_room_id"])
+        database.execute("UPDATE mud_npc_instances SET room_id=?,state_json=?,updated_at=CURRENT_TIMESTAMP WHERE id=?",
+                         (route["to_room_id"], json.dumps(state), npc["id"]))
+        database.execute("UPDATE mud_combat_encounters SET scope_key=?,updated_at=CURRENT_TIMESTAMP "
+                         "WHERE npc_instance_id=? AND scope_type='room' AND status='ready'",
+                         (route["to_room_id"], npc["id"]))
+        if old_recipients:
+            _insert_event(database, EventDraft(f"{npc['name']} leaves via {_exit_label(route)}.", "npc", "room", room_id, old_recipients))
+        if new_recipients:
+            _insert_event(database, EventDraft(f"{npc['name']} arrives.", "npc", "room", route["to_room_id"], new_recipients))
+    return len(rows)
+
+
+def run_scheduled_tick(app, now=None):
+    with app.app_context():
+        database = get_db()
+        settings = database.execute("SELECT mud_enabled,mud_traditional_enabled FROM station WHERE id=1").fetchone()
+        if settings is None or not settings["mud_enabled"] or not settings["mud_traditional_enabled"]:
+            return 0
+        try:
+            database.execute("BEGIN IMMEDIATE")
+            sync_npc_schedule(database, now)
+            count = process_scheduled_events(database, now)
+            database.commit()
+            return count
+        except Exception:
+            database.rollback()
+            raise
+
+
+def _npc_reactions(database, user, action_key):
+    trigger = {"go": "enter", "say": "say", "emote": "emote", "get": "get",
+               "drop": "drop", "open": "open", "close": "close", "put": "put"}.get(action_key)
+    if not trigger:
+        return []
+    room = _current_room(database, user["id"])
+    if room.get("instance_id"):
+        return []
+    drafts = []
+    for npc in _room_npc_rows(database, room["id"]):
+        reactions = _json_properties(npc["behaviors_json"]).get("reactions")
+        response = reactions.get(trigger) if isinstance(reactions, dict) else None
+        if response:
+            recipients = set(_occupant_ids(database, room["id"]))
+            recipients.add(user["id"])
+            drafts.append(EventDraft(f"{npc['name']} says: {response}", "npc", "room", room["id"], tuple(sorted(recipients))))
+    return drafts
+
+
 class MudService:
     """Normalizes, authorizes, executes, and records MUD actions atomically."""
 
@@ -3879,9 +4352,22 @@ class MudService:
             if pending_death and action_request.definition.key != "continue":
                 raise ActionError("Enter /continue to leave the death summary screen.")
 
+            used_item = None
+            use_room = None
+            if action_request.definition.key == "use":
+                use_room = _current_room(database, user["id"])
+                target = _item_target(action_request.parameters)
+                used_item = _item_matches(
+                    list(_inventory_rows(database, user["id"])) + list(_inventory_rows(database, user["id"], True)),
+                    target,
+                )["name"]
             drafts = action_request.definition.handler(
                 database, user, action_request.parameters
             )
+            if used_item:
+                drafts.append(_room_item_event(database, user, use_room,
+                                               f"{_character_row(database, user['id'])['display_name']} uses {used_item}."))
+            drafts += _npc_reactions(database, user, action_request.definition.key)
             cursor = database.execute(
                 "INSERT INTO mud_action_log(request_id,actor_id,action_key,input_method,parameters_json) "
                 "VALUES(?,?,?,?,?)",
@@ -4584,6 +5070,10 @@ def _npc_definition_fields():
     if error: return None, error
     behaviors, error = _json_object_field("behaviors_json")
     if error: return None, error
+    try:
+        validate_npc_behaviors(json.loads(behaviors))
+    except ValueError as problem:
+        return None, str(problem)
     if not 2 <= len(name) <= 80 or not 1 <= len(description) <= 4000: return None, "NPC names must be 2–80 characters and descriptions 1–4000 characters."
     return (name, description, conversation_id, properties, behaviors), None
 
