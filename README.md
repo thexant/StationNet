@@ -122,7 +122,7 @@ Under **SYSOP CONTROL → Station settings**, the ASCII banner editor lists ever
 
 SYSOPs can also upload a station icon and use **Display station icon** to place it on both sides of the masthead throughout the site. The icon remains stored when display is turned off, and existing stations default to hiding it.
 
-Under **SYSOP CONTROL → Station settings → Header taglines**, SYSOPs can add, edit, reorder, preview, and delete up to 32 header messages. Each message can inherit the current site theme's tagline color or use a custom hexadecimal color, and can be static, blinking, rainbow cycling, glowing, or typewritten. One message is chosen per page view; consecutive views avoid repeating the same text when another message is available. Existing single taglines are preserved as the first entry, Unicode symbols are supported, and animation stops for visitors who prefer reduced motion.
+Under **SYSOP CONTROL → Station settings → Header taglines**, SYSOPs can add, edit, reorder, preview, and delete up to 32 header messages. Each message can inherit the current site theme's tagline color or use a custom hexadecimal color, and independently select a visual effect: static, blink, rainbow, glow, typewriter, marquee/ticker, scramble/decode, CRT flicker, glitch/interference, scanline sweep, ANSI color steps, reverse video, block reveal, wave/ripple, slide in/out, shimmer, phosphor fade, character jitter, letter spacing pulse, terminal scroll, or neon buzz. One message is chosen per page view; consecutive views avoid repeating the same text when another message is available. Existing single taglines are preserved as the first entry, Unicode symbols are supported, and animation stops for visitors who prefer reduced motion.
 
 ### Installable web app
 

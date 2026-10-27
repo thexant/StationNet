@@ -258,12 +258,19 @@ const localTimestamp=value=>{
 for(const time of document.querySelectorAll("[data-local-time]"))time.textContent=localTimestamp(time.dateTime||time.textContent);
 const reducedTaglineMotion=window.matchMedia("(prefers-reduced-motion: reduce)");
 const taglineTimers=new WeakMap();
-const typeTagline=(element,value)=>{
+const taglineCharacters=value=>typeof Intl.Segmenter==="function"?[...new Intl.Segmenter(undefined,{granularity:"grapheme"}).segment(value)].map(part=>part.segment):Array.from(value);
+const stopTagline=element=>{
+  if(!element)return;
   clearInterval(taglineTimers.get(element));
+  taglineTimers.delete(element);
+};
+const typeTagline=(element,value)=>{
+  stopTagline(element);
   element.dataset.taglineFullText=value;
   element.textContent=value;
   if(reducedTaglineMotion.matches)return;
-  const characters=typeof Intl.Segmenter==="function"?[...new Intl.Segmenter(undefined,{granularity:"grapheme"}).segment(value)].map(part=>part.segment):Array.from(value);
+  const characters=taglineCharacters(value);
+  element.parentElement.style.minHeight=`${element.parentElement.getBoundingClientRect().height}px`;
   element.textContent="";
   let position=0;
   const timer=setInterval(()=>{
@@ -273,15 +280,74 @@ const typeTagline=(element,value)=>{
   },Math.max(25,Math.min(70,2400/Math.max(characters.length,1))));
   taglineTimers.set(element,timer);
 };
-for(const tagline of document.querySelectorAll("[data-tagline-typewriter]")){
-  const visible=tagline.querySelector("[data-typewriter-visible]");
-  if(visible)typeTagline(visible,visible.textContent);
+const scrambleTagline=(element,value)=>{
+  stopTagline(element);
+  element.dataset.taglineFullText=value;
+  element.textContent=value;
+  if(reducedTaglineMotion.matches)return;
+  const characters=taglineCharacters(value);
+  const glyphs="ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
+  let frame=0;
+  const timer=setInterval(()=>{
+    frame++;
+    const resolved=Math.min(characters.length,Math.floor(frame/18*characters.length));
+    element.textContent=characters.map((character,index)=>index<resolved||!/[A-Za-z0-9]/.test(character)?character:glyphs[Math.floor(Math.random()*glyphs.length)]).join("");
+    if(frame>=18){element.textContent=value;stopTagline(element)}
+  },80);
+  taglineTimers.set(element,timer);
+};
+const renderTagline=(container,value,effect)=>{
+  stopTagline(container.querySelector("[data-tagline-full-text]"));
+  container.style.minHeight="";
+  container.replaceChildren();
+  const visible=document.createElement("span");
+  visible.className="tagline-visible";
+  visible.textContent=value;
+  container.append(visible);
+  if(["typewriter","scramble","wave","jitter"].includes(effect)){
+    visible.setAttribute("aria-hidden","true");
+    const readable=document.createElement("span");
+    readable.className="tagline-screenreader";
+    readable.textContent=value;
+    container.append(readable);
+  }
+  if(effect==="typewriter")typeTagline(visible,value);
+  else if(effect==="scramble")scrambleTagline(visible,value);
+  else if((effect==="wave"||effect==="jitter")&&!reducedTaglineMotion.matches){
+    const fragment=document.createDocumentFragment();
+    taglineCharacters(value).forEach((character,index)=>{
+      const span=document.createElement("span");
+      span.className="tagline-char";
+      span.style.setProperty("--char-index",index);
+      span.textContent=character;
+      fragment.append(span);
+    });
+    visible.replaceChildren(fragment);
+  }
+};
+for(const tagline of document.querySelectorAll(".brand-tag[data-tagline-effect]")){
+  const effect=tagline.dataset.taglineEffect;
+  if(["typewriter","scramble","wave","jitter"].includes(effect)){
+    const value=tagline.querySelector(".tagline-visible")?.textContent||"";
+    renderTagline(tagline,value,effect);
+  }
 }
 reducedTaglineMotion.addEventListener?.("change",()=>{
   if(reducedTaglineMotion.matches){
     for(const element of document.querySelectorAll("[data-tagline-full-text]")){
-      clearInterval(taglineTimers.get(element));
+      stopTagline(element);
       element.textContent=element.dataset.taglineFullText;
+    }
+    for(const element of document.querySelectorAll(".tagline-effect-wave .tagline-visible, .tagline-effect-jitter .tagline-visible")){
+      if(element.querySelector(".tagline-char"))element.textContent=element.parentElement.querySelector(".tagline-screenreader")?.textContent||"";
+    }
+  }else{
+    for(const tagline of document.querySelectorAll(".brand-tag[data-tagline-effect]")){
+      const effect=tagline.dataset.taglineEffect;
+      if(["typewriter","scramble","wave","jitter"].includes(effect)){
+        const value=tagline.querySelector(".tagline-screenreader")?.textContent||"";
+        renderTagline(tagline,value,effect);
+      }
     }
   }
 });
@@ -296,11 +362,11 @@ for(const editor of document.querySelectorAll("[data-tagline-editor]")){
     const effect=row.querySelector("[data-tagline-effect]").value;
     const mode=row.querySelector("[data-tagline-color-mode]").value;
     const color=row.querySelector("[data-tagline-color-value]").value;
-    clearInterval(taglineTimers.get(output));
+    stopTagline(output.querySelector("[data-tagline-full-text]"));
     output.className=`brand-tag tagline-effect-${effect}${mode==="custom"?" tagline-preview-current":""}`;
-    style.textContent=mode==="custom"?`.tagline-preview-current { color: ${color}; }`:"";
-    if(effect==="typewriter")typeTagline(output,value);
-    else output.textContent=value;
+    output.dataset.taglineEffect=effect;
+    style.textContent=mode==="custom"?`.tagline-preview-current { color: ${color}; --tagline-ink: ${color}; }`:"";
+    renderTagline(output,value,effect);
   };
   editor.querySelector("[data-tagline-add]").addEventListener("click",()=>{
     if(list.children.length>=32){editor.querySelector("[data-tagline-status]").textContent="A station can have up to 32 taglines.";return}
@@ -314,7 +380,7 @@ for(const editor of document.querySelectorAll("[data-tagline-editor]")){
     const row=button?.closest("[data-tagline-row]");
     if(!row)return;
     if(button.matches("[data-tagline-preview-button]"))preview(row);
-    else if(button.matches("[data-tagline-delete]")){row.remove();output.className="brand-tag";output.textContent="Choose PREVIEW on a tagline to see its current text, color, and effect.";style.textContent=""}
+    else if(button.matches("[data-tagline-delete]")){row.remove();stopTagline(output.querySelector("[data-tagline-full-text]"));output.className="brand-tag";output.style.minHeight="";delete output.dataset.taglineEffect;output.textContent="Choose PREVIEW on a tagline to see its current text, color, and effect.";style.textContent=""}
     else if(button.matches("[data-tagline-up]")&&row.previousElementSibling)list.insertBefore(row,row.previousElementSibling);
     else if(button.matches("[data-tagline-down]")&&row.nextElementSibling)list.insertBefore(row.nextElementSibling,row);
   });
@@ -324,8 +390,10 @@ for(const editor of document.querySelectorAll("[data-tagline-editor]")){
   });
   editor.addEventListener("reset",()=>setTimeout(()=>{
     list.innerHTML=original;
-    clearInterval(taglineTimers.get(output));
+    stopTagline(output.querySelector("[data-tagline-full-text]"));
     output.className="brand-tag";
+    output.style.minHeight="";
+    delete output.dataset.taglineEffect;
     output.textContent="Choose PREVIEW on a tagline to see its current text, color, and effect.";
     style.textContent="";
     editor.querySelector("[data-tagline-status]").textContent="Changes canceled.";

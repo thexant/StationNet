@@ -1,8 +1,11 @@
 import json
 import sqlite3
 
+from werkzeug.datastructures import MultiDict
+
 from stationnet import create_app
 from stationnet.db import _migrate_header_taglines, get_db
+from stationnet.header_taglines import EFFECTS, configured, parse_form
 
 
 def _client(tmp_path):
@@ -75,7 +78,7 @@ def test_save_reorder_delete_and_unicode_preview_controls(tmp_path):
         ]
     page = client.get("/").get_data(as_text=True)
     assert "tagline-effect-typewriter" in page
-    assert ".brand-tag-current { color: #ab12cd; }" in page
+    assert "color: #ab12cd; --tagline-ink: #ab12cd;" in page
     assert "data-typewriter-visible" in page
 
     _save(client, [])
@@ -110,6 +113,40 @@ def test_css_respects_reduced_motion(tmp_path):
     css = client.get("/static/station.css").get_data(as_text=True)
     assert "@media (prefers-reduced-motion: reduce)" in css
     assert ".tagline-effect-blink, .tagline-effect-rainbow, .tagline-effect-glow { animation: none; }" in css
+    assert '.brand-tag[class*="tagline-effect-"] .tagline-visible' in css
+    assert ".tagline-effect-marquee .tagline-visible" in css
+
+
+def test_extended_effects_are_selectable_and_survive_storage(tmp_path):
+    app, client = _client(tmp_path)
+    additions = (
+        "marquee", "scramble", "crt-flicker", "glitch", "scanline", "ansi-steps",
+        "reverse-video", "block-reveal", "wave", "slide", "shimmer", "phosphor",
+        "jitter", "spacing-pulse", "terminal-scroll", "neon-buzz",
+    )
+    settings = client.get("/sysop/settings").get_data(as_text=True)
+    for effect in additions:
+        assert effect in EFFECTS
+        assert f'<option value="{effect}"' in settings
+    form = MultiDict()
+    for index, effect in enumerate(additions):
+        form.add("tagline_text", f"Message {index}")
+        form.add("tagline_color_mode", "custom")
+        form.add("tagline_color_value", "#12AB34")
+        form.add("tagline_effect", effect)
+    entries = parse_form(form)
+    assert [entry["effect"] for entry in entries] == list(additions)
+    assert all(entry["color"] == "#12ab34" for entry in entries)
+    with app.app_context():
+        station = dict(get_db().execute("SELECT * FROM station").fetchone())
+        station["header_taglines_json"] = json.dumps(entries)
+        assert configured(station) == entries
+    _save(client, ["Signal locked"], effects=["scramble"], modes=["custom"], colors=["#12AB34"])
+    page = client.get("/").get_data(as_text=True)
+    assert "tagline-effect-scramble" in page
+    assert 'data-tagline-effect="scramble"' in page
+    assert "color: #12ab34; --tagline-ink: #12ab34;" in page
+    assert '<span class="tagline-screenreader">Signal locked</span>' in page
 
 
 def test_color_picker_activates_custom_mode_and_preview_style_is_found(tmp_path):

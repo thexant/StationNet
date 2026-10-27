@@ -7,7 +7,20 @@
   <div class="tagline-editor-options">
     <label>Text color<select name="tagline_color_mode" data-tagline-color-mode><option value="inherit" {% if not entry.color %}selected{% endif %}>Inherit station theme</option><option value="custom" {% if entry.color %}selected{% endif %}>Custom color</option></select></label>
     <label>Custom color<input type="color" name="tagline_color_value" value="{{ entry.color or '#e6a431' }}" data-tagline-color-value></label>
-    <label>Animation<select name="tagline_effect" data-tagline-effect><option value="none" {% if entry.effect == 'none' %}selected{% endif %}>None (static)</option><option value="blink" {% if entry.effect == 'blink' %}selected{% endif %}>Blink</option><option value="rainbow" {% if entry.effect == 'rainbow' %}selected{% endif %}>Rainbow / Color Cycle</option><option value="glow" {% if entry.effect == 'glow' %}selected{% endif %}>Glow / Pulse</option><option value="typewriter" {% if entry.effect == 'typewriter' %}selected{% endif %}>Typewriter</option></select></label>
+    <label>Animation<select name="tagline_effect" data-tagline-effect>
+      {% for value, label in [
+        ('none', 'None (static)'), ('blink', 'Blink'), ('rainbow', 'Rainbow / Color Cycle'),
+        ('glow', 'Glow / Pulse'), ('typewriter', 'Typewriter'), ('marquee', 'Marquee / Ticker'),
+        ('scramble', 'Scramble / Decode'), ('crt-flicker', 'CRT Flicker'),
+        ('glitch', 'Glitch / Interference'), ('scanline', 'Scanline Sweep'),
+        ('ansi-steps', 'ANSI Color Steps'), ('reverse-video', 'Reverse Video'),
+        ('block-reveal', 'Block Reveal'), ('wave', 'Wave / Ripple'),
+        ('slide', 'Slide In / Out'), ('shimmer', 'Shimmer'),
+        ('phosphor', 'Phosphor Fade'), ('jitter', 'Character Jitter'),
+        ('spacing-pulse', 'Letter Spacing Pulse'), ('terminal-scroll', 'Terminal Scroll'),
+        ('neon-buzz', 'Neon Buzz')
+      ] %}<option value="{{ value }}" {% if entry.effect == value %}selected{% endif %}>{{ label }}</option>{% endfor %}
+    </select></label>
   </div>
   <div class="button-row tagline-editor-actions"><button type="button" class="secondary" data-tagline-preview-button>PREVIEW</button><button type="button" class="secondary" data-tagline-up aria-label="Move tagline up">↑ UP</button><button type="button" class="secondary" data-tagline-down aria-label="Move tagline down">↓ DOWN</button><button type="button" class="text-button" data-tagline-delete>DELETE</button></div>
 </div>
@@ -73,7 +86,7 @@
   <form method="post" action="{{ url_for('station.settings') }}" class="form-grid tagline-editor" id="header-taglines" data-tagline-editor>
     <input type="hidden" name="csrf_token" value="{{ session.csrf_token }}"><input type="hidden" name="settings_section" value="header_taglines">
     <div class="divider">HEADER TAGLINES</div>
-    <p class="muted">One message is picked when each page opens. The same message is avoided on the next page when possible. Symbols and Unicode text are welcome. Rainbow cycles colors while active; the selected color appears when motion is reduced.</p>
+    <p class="muted">One message is picked when each page opens. The same message is avoided on the next page when possible. Symbols and Unicode text are welcome. Picking a color automatically selects Custom color. Rainbow cycles colors while active; the selected color appears when motion is reduced.</p>
     <div class="tagline-editor-list" data-tagline-list>{% for entry in header_taglines %}{{ tagline_row(entry) }}{% endfor %}</div>
     <template data-tagline-template>{{ tagline_row({'text': '', 'color': '', 'effect': 'none'}) }}</template>
     <div class="button-row"><button type="button" class="secondary" data-tagline-add>ADD TAGLINE</button><small data-tagline-status role="status"></small></div>

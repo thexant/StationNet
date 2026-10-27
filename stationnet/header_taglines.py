@@ -6,7 +6,12 @@ import secrets
 from flask import session
 
 
-EFFECTS = frozenset({"none", "blink", "rainbow", "glow", "typewriter"})
+EFFECTS = frozenset({
+    "none", "blink", "rainbow", "glow", "typewriter", "marquee", "scramble",
+    "crt-flicker", "glitch", "scanline", "ansi-steps", "reverse-video",
+    "block-reveal", "wave", "slide", "shimmer", "phosphor", "jitter",
+    "spacing-pulse", "terminal-scroll", "neon-buzz",
+})
 HEX_COLOR = re.compile(r"#[0-9a-fA-F]{6}\Z")
 MAX_TAGLINES = 32
 

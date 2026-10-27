@@ -8,12 +8,12 @@
   <link rel="icon" type="image/png" href="{{ url_for('pwa.icon', size=192) }}">
   <link rel="apple-touch-icon" href="{{ url_for('pwa.icon', size=192) }}">
   <title>{% block title %}StationNet{% endblock %}{% if g.station %} :: {{ g.station.name }}{% endif %}</title>
-  <link rel="stylesheet" href="{{ url_for('static',filename='station.css',v='broadcast-library-1') }}">
+  <link rel="stylesheet" href="{{ url_for('static',filename='station.css',v='tagline-effects-1') }}">
   <link rel="stylesheet" href="{{ url_for('station.masthead_css') }}">
   {% set header_tagline = station_header_tagline() if g.station else none %}
-  {% if header_tagline and header_tagline.color %}<style nonce="{{ g.style_nonce }}">.brand-tag-current { color: {{ header_tagline.color }}; }</style>{% endif %}
+  {% if header_tagline and header_tagline.color %}<style nonce="{{ g.style_nonce }}">.brand-tag-current { color: {{ header_tagline.color }}; --tagline-ink: {{ header_tagline.color }}; }</style>{% endif %}
   {% block extra_styles %}{% endblock %}
-  <script src="{{ url_for('static',filename='station.js',v='tagline-custom-color-2') }}" defer></script>
+  <script src="{{ url_for('static',filename='station.js',v='tagline-effects-1') }}" defer></script>
   <script src="{{ url_for('static',filename='account-deletion.js',v='1') }}" defer></script>
   <script src="{{ url_for('static',filename='pwa.js',v='1') }}" defer></script>
   <script src="{{ url_for('static',filename='feeds.js',v='1') }}" defer></script>
@@ -33,7 +33,7 @@
         {% else %}
         <pre class="ansi-logo" aria-hidden="true"><span class="ansi-logo-art">{{ g.station_banner }}</span></pre>
         {% endif %}
-        {% if header_tagline %}<span class="brand-tag{% if header_tagline.color %} brand-tag-current{% endif %} tagline-effect-{{ header_tagline.effect }}"{% if header_tagline.effect == 'typewriter' %} data-tagline-typewriter{% endif %}>{% if header_tagline.effect == 'typewriter' %}<span data-typewriter-visible aria-hidden="true">{{ header_tagline.text }}</span><span class="tagline-screenreader">{{ header_tagline.text }}</span>{% else %}{{ header_tagline.text }}{% endif %}</span>{% elif not g.station %}<span class="brand-tag">// YOUR COMMUNITY STATION //</span>{% endif %}
+        {% if header_tagline %}<span class="brand-tag{% if header_tagline.color %} brand-tag-current{% endif %} tagline-effect-{{ header_tagline.effect }}" data-tagline-effect="{{ header_tagline.effect }}"{% if header_tagline.effect == 'typewriter' %} data-tagline-typewriter{% endif %}><span class="tagline-visible"{% if header_tagline.effect in ('typewriter', 'scramble', 'wave', 'jitter') %} aria-hidden="true"{% endif %}{% if header_tagline.effect == 'typewriter' %} data-typewriter-visible{% endif %}>{{ header_tagline.text }}</span>{% if header_tagline.effect in ('typewriter', 'scramble', 'wave', 'jitter') %}<span class="tagline-screenreader">{{ header_tagline.text }}</span>{% endif %}</span>{% elif not g.station %}<span class="brand-tag">// YOUR COMMUNITY STATION //</span>{% endif %}
       </a>
 
       {% if g.station %}
