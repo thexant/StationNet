@@ -60,14 +60,16 @@ a:hover { color: var(--magenta); }
 .station-brand:hover { color: var(--cyan); }
 .masthead-row { display: grid; grid-template-columns: auto minmax(0,1fr) auto; align-items: center; gap: clamp(.4rem,2vw,1.25rem); width: 100%; }
 .masthead-icon { display: block; width: clamp(2.5rem,10vw,8rem); height: clamp(2.5rem,10vw,8rem); object-fit: cover; }
-.ansi-logo { justify-self: center; width: max-content; max-width: 100%; margin: 0; overflow-x: auto; color: var(--masthead-color); font-family: var(--mono); font-size: clamp(.4rem, 1.55vw, .88rem); font-weight: 700; line-height: 1.08; letter-spacing: .02em; text-align: left; text-shadow: .13em .1em 0 var(--masthead-shadow); white-space: pre; }
+/* Center the art as one inline block so unequal FIGlet rows keep their columns. */
+.ansi-logo { justify-self: center; width: max-content; max-width: 100%; margin: 0 auto; overflow-x: auto; color: var(--masthead-color); font-family: var(--mono); font-size: clamp(.4rem, 1.55vw, .88rem); font-weight: 700; line-height: 1.08; letter-spacing: .02em; text-align: center; direction: ltr; unicode-bidi: isolate; text-shadow: .13em .1em 0 var(--masthead-shadow); white-space: pre; }
+.ansi-logo-art { display: inline-block; text-align: left; white-space: pre; }
 .banner-color-controls { display: flex; gap: .5rem; align-items: center; }
 .banner-color-controls select { flex: 1; }
 .banner-color-controls input[type="color"] { flex: 0 0 3rem; min-height: 2.25rem; padding: .15rem; }
 .banner-preview { grid-column: 1 / -1; min-width: 0; padding: .8rem; border: 1px dotted var(--cyan); background: var(--black); }
 .banner-preview > div { display: flex; justify-content: space-between; gap: .8rem; align-items: baseline; }
 .banner-preview small { color: var(--grey); font-size: var(--text-xs); text-align: right; }
-.banner-preview pre { max-width: 100%; max-height: 21rem; margin: .65rem 0 0; overflow: auto; color: var(--banner-preview-color, var(--masthead-color)); font-family: var(--mono); font-size: clamp(.32rem, 1.1vw, .65rem); font-weight: 700; line-height: 1.08; white-space: pre; text-shadow: .1em .08em 0 var(--masthead-shadow); }
+.banner-preview pre { max-width: 100%; max-height: 21rem; margin: .65rem 0 0; overflow: auto; color: var(--banner-preview-color, var(--masthead-color)); font-family: var(--mono); font-size: clamp(.32rem, 1.1vw, .65rem); font-weight: 700; line-height: 1.08; text-align: center; direction: ltr; unicode-bidi: isolate; white-space: pre; text-shadow: .1em .08em 0 var(--masthead-shadow); }
 .theme-preview { display: flex; align-items: center; flex-wrap: wrap; gap: .45rem .8rem; min-height: 4rem; padding: .75rem; border: 1px solid var(--swatch-accent); color: var(--swatch-fg); background: var(--swatch-bg); font-size: .68rem; }
 .theme-preview strong { padding: .3rem .55rem; border: 1px solid var(--swatch-fg); font-weight: 400; }
 .theme-preview em { color: var(--swatch-accent); font-style: normal; text-decoration: underline; }

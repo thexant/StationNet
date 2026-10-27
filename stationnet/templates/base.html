@@ -8,7 +8,7 @@
   <link rel="icon" type="image/png" href="{{ url_for('pwa.icon', size=192) }}">
   <link rel="apple-touch-icon" href="{{ url_for('pwa.icon', size=192) }}">
   <title>{% block title %}StationNet{% endblock %}{% if g.station %} :: {{ g.station.name }}{% endif %}</title>
-  <link rel="stylesheet" href="{{ url_for('static',filename='station.css',v='header-taglines-1') }}">
+  <link rel="stylesheet" href="{{ url_for('static',filename='station.css',v='figlet-centered-2') }}">
   <link rel="stylesheet" href="{{ url_for('station.masthead_css') }}">
   {% set header_tagline = station_header_tagline() if g.station else none %}
   {% if header_tagline and header_tagline.color %}<style nonce="{{ g.style_nonce }}">.brand-tag-current { color: {{ header_tagline.color }}; }</style>{% endif %}
@@ -27,11 +27,11 @@
         {% if g.station and g.station.display_station_icon and g.station_icon_exists %}
         <div class="masthead-row">
           <img class="masthead-icon" src="{{ url_for('station.station_icon') }}" alt="" aria-hidden="true" width="128" height="128">
-          <pre class="ansi-logo" aria-hidden="true">{{ g.station_banner }}</pre>
+          <pre class="ansi-logo" aria-hidden="true"><span class="ansi-logo-art">{{ g.station_banner }}</span></pre>
           <img class="masthead-icon" src="{{ url_for('station.station_icon') }}" alt="" aria-hidden="true" width="128" height="128">
         </div>
         {% else %}
-        <pre class="ansi-logo" aria-hidden="true">{{ g.station_banner }}</pre>
+        <pre class="ansi-logo" aria-hidden="true"><span class="ansi-logo-art">{{ g.station_banner }}</span></pre>
         {% endif %}
         {% if header_tagline %}<span class="brand-tag{% if header_tagline.color %} brand-tag-current{% endif %} tagline-effect-{{ header_tagline.effect }}"{% if header_tagline.effect == 'typewriter' %} data-tagline-typewriter{% endif %}>{% if header_tagline.effect == 'typewriter' %}<span data-typewriter-visible aria-hidden="true">{{ header_tagline.text }}</span><span class="tagline-screenreader">{{ header_tagline.text }}</span>{% else %}{{ header_tagline.text }}{% endif %}</span>{% elif not g.station %}<span class="brand-tag">// YOUR COMMUNITY STATION //</span>{% endif %}
       </a>
