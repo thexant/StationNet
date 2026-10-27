@@ -128,11 +128,13 @@ def valid(theme_id, kind="site"):
 
 def effective(station, user):
     """Resolve each independent user preference against its station default."""
+    allow_personal = (station is None or "personal_themes_enabled" not in station.keys()
+                      or station["personal_themes_enabled"])
     def selected(column):
         kind = "site" if column == "site_theme" else "masthead"
         station_choice = station[column] if station else "cyan"
         default = station_choice if valid(station_choice, kind) else "cyan"
-        user_choice = user[column] if user else None
+        user_choice = user[column] if user and allow_personal else None
         return user_choice if user_choice and valid(user_choice, kind) else default
     return selected("site_theme"), selected("masthead_theme")
 

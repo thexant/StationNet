@@ -26,6 +26,7 @@ CREATE TABLE IF NOT EXISTS station (
  header_color TEXT NOT NULL DEFAULT '',
  site_theme TEXT NOT NULL DEFAULT 'cyan',
  masthead_theme TEXT NOT NULL DEFAULT 'cyan',
+ personal_themes_enabled INTEGER NOT NULL DEFAULT 1 CHECK(personal_themes_enabled IN (0,1)),
  upload_permission TEXT NOT NULL DEFAULT 'members',
  file_storage_limit_mb INTEGER NOT NULL DEFAULT 100,
  file_size_limit_mb INTEGER NOT NULL DEFAULT 10,
@@ -1922,6 +1923,12 @@ def _migrate_themes(database):
         for column in ("site_theme", "masthead_theme"):
             if column not in columns:
                 database.execute(f"ALTER TABLE {table} ADD COLUMN {column} {defaults}")
+    station_columns = {row["name"] for row in database.execute("PRAGMA table_info(station)")}
+    if "personal_themes_enabled" not in station_columns:
+        database.execute(
+            "ALTER TABLE station ADD COLUMN personal_themes_enabled INTEGER NOT NULL DEFAULT 1 "
+            "CHECK(personal_themes_enabled IN (0,1))"
+        )
 
 
 def _migrate_station_customization(database):

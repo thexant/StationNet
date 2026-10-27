@@ -100,11 +100,14 @@
       <small>Supports headings, lists, links, emphasis, quotes, and code. Leave blank to use the automatic welcome message.</small>
     </label>
     <div class="divider">STATION THEMES</div>
+    <input type="hidden" name="personal_themes_control" value="1">
+    <label class="switch"><input type="checkbox" name="personal_themes_enabled" {% if g.station.personal_themes_enabled %}checked{% endif %}> Allow users to choose their own site and masthead themes</label>
+    <p class="muted">When off, everyone uses the station themes. Saved member choices are kept and apply again if this is turned on.</p>
     <label>Site-wide theme
       <select name="site_theme" data-theme-selector="site">
         {% for id, theme in site_themes.items() %}<option value="{{ id }}" {% if g.station.site_theme==id %}selected{% endif %}>{{ '[CUSTOM] ' if theme.custom else '' }}{{ theme.name }}{% if theme.custom %} — {{ theme.author }}{% endif %}</option>{% endfor %}
       </select>
-      <small>Sets the station palette for pages, navigation, panels, controls, and interactive states. Members can override it.</small>
+      <small>Sets the station palette for pages, navigation, panels, controls, and interactive states.</small>
     </label>
     <div class="theme-preview theme-swatch--{{ g.station.site_theme }}" data-theme-preview="site" aria-hidden="true"><span>STATION</span><strong>PREVIEW PANEL</strong><em>ACTIVE LINK</em><b>BUTTON</b></div>
     <label>Masthead theme
@@ -139,7 +142,7 @@
         <option value="">Selected masthead theme</option><option value="#00ed45">Terminal green</option><option value="#71ff8a">Bright green</option><option value="#00d8cf">Cyan</option><option value="#e6a431">Amber</option><option value="#d829be">Magenta</option><option value="custom">Custom…</option>
       </select><input type="color" value="{{ g.station.header_color or '#00d8cf' }}" data-banner-color-picker aria-label="Custom banner colour"></span>
       <input type="hidden" name="header_color" value="{{ g.station.header_color }}" data-banner-color>
-      <small>Optional legacy/custom banner colour. Clear it to use the selected masthead palette. A personal masthead choice takes precedence.</small>
+      <small>Optional legacy/custom banner colour. Clear it to use the selected masthead palette. An allowed personal masthead choice takes precedence.</small>
     </label>
     <section class="banner-preview" aria-labelledby="banner-preview-heading" data-banner-preview>
       <div><span class="eyebrow" id="banner-preview-heading">LIVE BANNER PREVIEW</span><small data-banner-preview-status aria-live="polite">Matches the saved masthead renderer.</small></div>

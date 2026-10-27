@@ -20,6 +20,7 @@
   </form>
 </section>
 
+{% if g.station.personal_themes_enabled %}
 <section class="narrow terminal-card settings-section" id="theme-preferences">
   <p class="eyebrow">USER PROFILE / APPEARANCE</p>
   <h2>Theme preferences</h2>
@@ -43,6 +44,7 @@
     <div class="button-row"><button>SAVE THEME PREFERENCES</button></div>
   </form>
 </section>
+{% endif %}
 
 <section class="narrow terminal-card settings-section" id="change-password">
   <p class="eyebrow">USER PROFILE / SECURITY</p>

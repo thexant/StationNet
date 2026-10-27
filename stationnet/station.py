@@ -262,7 +262,7 @@ def masthead_css():
     size = g.masthead_font_size
     color = _header_color(g.station["header_color"] if g.station else "")
     site_theme, masthead_theme = themes.effective(g.station, g.user)
-    if g.user and g.user["masthead_theme"]:
+    if g.user and g.station["personal_themes_enabled"] and g.user["masthead_theme"]:
         color = ""
     stylesheet = (
         themes.css(site_theme, masthead_theme, color)
@@ -1311,6 +1311,9 @@ def settings():
         header_color = request.form.get("header_color", g.station["header_color"]).strip()
         site_theme = request.form.get("site_theme", g.station["site_theme"])
         masthead_theme = request.form.get("masthead_theme", g.station["masthead_theme"])
+        personal_themes_enabled = g.station["personal_themes_enabled"]
+        if "personal_themes_control" in request.form:
+            personal_themes_enabled = request.form.get("personal_themes_enabled") == "on"
         if masthead_theme != g.station["masthead_theme"] and header_color == g.station["header_color"]:
             header_color = ""
         header_font_size = request.form.get(
@@ -1349,7 +1352,7 @@ def settings():
                 )
             database.execute(
                 "UPDATE station SET name=?,description=?,landing_message=?,landing_heading=?,"
-                "landing_message_enabled=?,brand_tagline=?,header_font=?,header_font_size=?,header_text=?,header_color=?,site_theme=?,masthead_theme=?,"
+                "landing_message_enabled=?,brand_tagline=?,header_font=?,header_font_size=?,header_text=?,header_color=?,site_theme=?,masthead_theme=?,personal_themes_enabled=?,"
                 "upload_permission=?,file_storage_limit_mb=?,file_size_limit_mb=?"
                 + access_update + " WHERE id=1",
                 (
@@ -1365,6 +1368,7 @@ def settings():
                     header_color,
                     site_theme,
                     masthead_theme,
+                    personal_themes_enabled,
                     upload_permission,
                     storage_limit,
                     file_limit,

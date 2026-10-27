@@ -71,6 +71,65 @@ def test_custom_theme_import_and_member_selection(tmp_path):
         assert tuple(row) == ("custom-ocean-night", "custom-ocean-night")
 
 
+def test_station_theme_policy_preserves_and_restores_custom_preferences(tmp_path):
+    app, client, sysop, member = _client(tmp_path)
+    assert b"Imported theme" in _import(client, _theme()).data
+    with app.app_context():
+        db = get_db()
+        db.execute("UPDATE station SET site_theme='amber',masthead_theme='violet',header_color='#123456'")
+        db.commit()
+    with client.session_transaction() as session:
+        session["user_id"] = member
+    assert client.post(f"/users/{member}/themes", data={
+        "csrf_token": "test-token", "site_theme": "custom-ocean-night",
+        "masthead_theme": "custom-ocean-night",
+    }).status_code == 302
+    css = client.get("/masthead.css").get_data(as_text=True)
+    assert "--green:#123456" in css
+    assert "--masthead-color:#abcdef" in css
+
+    with client.session_transaction() as session:
+        session["user_id"] = sysop
+    response = client.post("/sysop/settings", data={
+        "csrf_token": "test-token", "name": "Test Station",
+        "personal_themes_control": "1", "site_theme": "amber",
+        "masthead_theme": "violet", "header_color": "#123456",
+    }, follow_redirects=True)
+    assert b"Station parameters updated" in response.data
+    with client.session_transaction() as session:
+        session["user_id"] = member
+    edit = client.get(f"/users/{member}/edit")
+    assert b"Theme preferences" not in edit.data
+    assert b'name="site_theme"' not in edit.data
+    css = client.get("/masthead.css").get_data(as_text=True)
+    with app.app_context():
+        assert "--green:" + themes.palette("amber")["green"] in css
+    assert "--masthead-color:#123456" in css
+    assert client.post(f"/users/{member}/themes", data={
+        "csrf_token": "test-token", "site_theme": "cyan", "masthead_theme": "cyan",
+    }).status_code == 403
+    with app.app_context():
+        row = get_db().execute("SELECT site_theme,masthead_theme FROM users WHERE id=?", (member,)).fetchone()
+        assert tuple(row) == ("custom-ocean-night", "custom-ocean-night")
+
+    with client.session_transaction() as session:
+        session["user_id"] = sysop
+    response = client.post("/sysop/settings", data={
+        "csrf_token": "test-token", "name": "Test Station",
+        "personal_themes_control": "1", "personal_themes_enabled": "on",
+        "site_theme": "amber", "masthead_theme": "violet",
+        "header_color": "#123456",
+    }, follow_redirects=True)
+    assert b"Station parameters updated" in response.data
+    with client.session_transaction() as session:
+        session["user_id"] = member
+    edit = client.get(f"/users/{member}/edit")
+    assert b"Theme preferences" in edit.data
+    css = client.get("/masthead.css").get_data(as_text=True)
+    assert "--green:#123456" in css
+    assert "--masthead-color:#abcdef" in css
+
+
 def test_partial_themes_and_invalid_uploads(tmp_path):
     app, client, _, _ = _client(tmp_path)
     site = json.loads(_theme(id="site-only"))

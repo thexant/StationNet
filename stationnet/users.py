@@ -303,6 +303,8 @@ def save_themes(user_id):
     if user_id != g.user["id"]:
         abort(403)
     validate_csrf()
+    if not g.station["personal_themes_enabled"]:
+        abort(403)
     site_theme = request.form.get("site_theme", "")
     masthead_theme = request.form.get("masthead_theme", "")
     if ((site_theme and not themes.valid(site_theme, "site")) or
