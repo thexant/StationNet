@@ -177,6 +177,13 @@ Intellect raises starting mana, mana gained on level up, and spell strength.
 Spells spend mana from the active traditional or procedural progression track.
 Adding an unknown spell name to JSON cannot create a new spell implementation.
 
+A traditional world may rename mana (for example to Energy) or disable it; see
+the [world guide](../mud_world_templates/README_CUSTOM_WORLDS.md#rename-or-disable-mana).
+Renaming changes only the wording. In a world without the resource, spells are
+unavailable and mana growth is hidden, but `progression` mana values still
+apply, so they take effect again in procedural dungeons or if the world turns
+the resource back on.
+
 ## Install and maintain choices
 
 1. Pick stable keys. Save one valid UTF-8 JSON object under 32 KB, or group

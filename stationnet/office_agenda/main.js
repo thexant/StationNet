@@ -210,7 +210,7 @@ function initialize() {
     for (const item of todayItems) todayPanel.append(detailRow(item));
     const openDay = dateButton(current, 'OPEN DAILY PLANNER →', 'secondary'); todayPanel.append(openDay);
     const tasksPanel = el('section'); tasksPanel.append(el('h2', '', 'OPEN TASKS'));
-    const openTasks = [...data.tasks].filter(task => !task.done).sort((a, b) => (a.dueDate || '9999').localeCompare(b.dueDate || '9999')).slice(0, 8);
+    const openTasks = [...data.tasks].filter(task => !task.done && task.showOnCalendar !== false).sort((a, b) => (a.dueDate || '9999').localeCompare(b.dueDate || '9999')).slice(0, 8);
     if (!openTasks.length) tasksPanel.append(el('p', 'agenda-empty', 'No open tasks.'));
     for (const task of openTasks) tasksPanel.append(taskRow(task, true));
     overview.append(todayPanel, tasksPanel); content.append(overview);
@@ -271,7 +271,7 @@ function initialize() {
   function renderSearch() {
     const query = $('#agenda-search').value, area = $('#agenda-search-results'), list = $('#agenda-results-list'); list.replaceChildren();
     if (!query.trim()) { area.hidden = true; return; }
-    area.hidden = false; const results = searchable(data, query);
+    area.hidden = false; const results = searchable(data, query).filter(result => view === 'tasks' || result.kind !== 'task' || result.item.showOnCalendar !== false);
     if (!results.length) list.append(el('p', 'agenda-empty', 'No matches.'));
     for (const result of results) {
       const button = el('button', 'agenda-search-result'); button.type = 'button'; button.dataset.kind = result.kind; button.dataset.id = result.item.id;
@@ -299,9 +299,11 @@ function initialize() {
       fillLinks($('#agenda-task-event'), data.events, item?.eventId); fillLinks($('#agenda-task-contact'), data.contacts, item?.contactId);
       form.elements.title.value = item?.title || ''; form.elements.dueDate.value = item?.dueDate || (view === 'day' ? selected : '');
       form.elements.dueTime.value = item?.dueTime || ''; form.elements.priority.value = item?.priority || 'normal'; form.elements.reminder.value = item?.reminder ?? '';
+      form.elements.showOnCalendar.checked = item?.showOnCalendar !== false;
       form.elements.notes.value = item?.notes || ''; const rows = $('#agenda-subtask-rows'); rows.replaceChildren();
-      for (const sub of item?.subtasks || []) addSubtaskRow(sub);
+      for (const sub of item?.subtasks || []) addSubtaskRow(sub, false);
       $('#agenda-task-dialog').showModal();
+      $('.agenda-task-scroll').scrollTop = 0;
     } else {
       const form = $('#agenda-contact-form'); form.reset(); $('#agenda-contact-heading').textContent = item ? 'EDIT CONTACT' : 'NEW CONTACT'; $('#agenda-delete-contact').hidden = !item;
       for (const field of ['name', 'email', 'phone', 'birthday', 'anniversary', 'notes']) form.elements[field].value = item?.[field] || '';
@@ -314,12 +316,12 @@ function initialize() {
     form.elements.interval.disabled = !repeating; form.elements.until.disabled = !repeating;
     $('.agenda-weekdays').hidden = form.elements.frequency.value !== 'weekly';
   }
-  function addSubtaskRow(sub = {}) {
+  function addSubtaskRow(sub = {}, focus = true) {
     const row = el('div', 'agenda-subtask-row'); row.dataset.id = sub.id || crypto.randomUUID();
     const check = document.createElement('input'); check.type = 'checkbox'; check.checked = !!sub.done; check.setAttribute('aria-label', 'Subtask complete');
     const input = document.createElement('input'); input.type = 'text'; input.maxLength = 160; input.value = sub.title || ''; input.placeholder = 'Subtask'; input.setAttribute('aria-label', 'Subtask title');
     const remove = el('button', 'secondary', '×'); remove.type = 'button'; remove.setAttribute('aria-label', 'Remove subtask'); remove.onclick = () => row.remove();
-    row.append(check, input, remove); $('#agenda-subtask-rows').append(row); input.focus();
+    row.append(check, input, remove); $('#agenda-subtask-rows').append(row); if (focus) input.focus();
   }
   function saveEvent(event) {
     event.preventDefault(); const form = event.currentTarget, fields = form.elements;
@@ -342,7 +344,7 @@ function initialize() {
     if (fields.reminder.value !== '' && !fields.dueDate.value) return message('Set a deadline for this reminder.');
     const subtasks = [...$('#agenda-subtask-rows').children].map(row => ({ id: row.dataset.id, title: row.querySelector('input[type=text]').value.trim(), done: row.querySelector('input[type=checkbox]').checked })).filter(sub => sub.title);
     const entry = { id: old?.id || crypto.randomUUID(), title: fields.title.value.trim(), dueDate: fields.dueDate.value, dueTime: fields.dueTime.value,
-      priority: fields.priority.value, reminder: fields.reminder.value, eventId: fields.eventId.value, contactId: fields.contactId.value,
+      priority: fields.priority.value, reminder: fields.reminder.value, showOnCalendar: fields.showOnCalendar.checked, eventId: fields.eventId.value, contactId: fields.contactId.value,
       notes: fields.notes.value.trim(), subtasks, done: old?.done || false };
     if (!entry.title) return;
     if (old) Object.assign(old, entry); else data.tasks.push(entry);
@@ -372,7 +374,7 @@ function initialize() {
   function checkReminders() {
     if (!key || !data.settings.notifications || !('Notification' in window) || Notification.permission !== 'granted') return;
     const now = Date.now(), from = addDays(today(), -2), to = addDays(today(), 2);
-    for (const item of occurrences(data, from, to)) {
+    for (const item of occurrences(data, from, to, { includeHiddenTasks: true })) {
       const minutes = item.source.reminder;
       if (minutes === '' || minutes == null || item.kind === 'contact' || (item.kind === 'task' && item.source.done)) continue;
       const time = item.kind === 'task' ? item.source.dueTime || '09:00' : item.startTime || '09:00';

@@ -104,7 +104,7 @@ for(const creator of document.querySelectorAll("[data-character-creator]")){
       `Skills: ${Object.entries(ranks).map(([key,rank])=>`${skillName(key)} ${rank}`).join(" · ")||"—"}`,
       `Equipment: ${[...race?.equipment||[],...archetype?.equipment||[]].map(item=>item.name).join(", ")||"—"}`,
       `Traits: ${unique([...race?.tags||[],...archetype?.tags||[]]).join(", ")||"—"}`,
-      `Abilities: ${unique([...archetype?.spells||[],...race?.spells||[]]).join(", ")||"—"}`,
+      `Abilities: ${unique([...archetype?.spells||[],...race?.spells||[]]).join(", ")||"—"}${config.resource?.enabled===false?" (unavailable in this world)":""}`,
       `Trained with: ${unique([race,archetype].flatMap(origin=>[...origin?.proficiencies?.weapons||[],...origin?.proficiencies?.armor||[]])).join(", ")||"skills only"}`,
       `Resists: ${resistances.join(" · ")||"—"}`];
     for(const line of lines){const p=document.createElement("p");p.textContent=line;review.append(p)}

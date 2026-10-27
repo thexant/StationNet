@@ -61,7 +61,7 @@ export function occurrenceStarts(event, from, to) {
   return result;
 }
 
-export function occurrences(data, from, to) {
+export function occurrences(data, from, to, { includeHiddenTasks = false } = {}) {
   const items = [];
   for (const event of data.events || []) {
     const span = Math.max(0, daysBetween(event.startDate, event.endDate || event.startDate));
@@ -85,6 +85,7 @@ export function occurrences(data, from, to) {
     }
   }
   for (const task of data.tasks || []) {
+    if (task.showOnCalendar === false && !includeHiddenTasks) continue;
     if (parseDay(task.dueDate) && task.dueDate >= from && task.dueDate <= to)
       items.push({ kind: 'task', id: task.id, title: task.title, startDate: task.dueDate,
         endDate: task.dueDate, startTime: task.dueTime || '', allDay: !task.dueTime,

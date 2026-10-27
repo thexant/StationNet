@@ -75,6 +75,34 @@ def test_agenda_calendar_and_shared_unlock(tmp_path):
                 page.locator('#agenda-task-form button[type="submit"]').click()
                 page.locator("#agenda-status").get_by_text("SAVED", exact=True).wait_for(timeout=15000)
 
+                page.locator("#agenda-add-task").click()
+                assert page.locator('#agenda-task-form [name="showOnCalendar"]').is_checked()
+                page.locator('#agenda-task-form [name="title"]').fill("Internal checklist")
+                page.locator('#agenda-task-form [name="dueDate"]').fill(date)
+                page.locator('#agenda-task-form [name="showOnCalendar"]').uncheck()
+                page.locator('#agenda-task-form button[type="submit"]').click()
+                page.locator("#agenda-status").get_by_text("SAVED", exact=True).wait_for(timeout=15000)
+                assert page.locator("#agenda-content").get_by_text("Internal checklist").count() == 0
+                page.locator("#agenda-search").fill("Internal checklist")
+                assert page.locator("#agenda-results-list").get_by_text("Internal checklist").count() == 0
+                for calendar_view in ("month", "week", "day"):
+                    page.locator(f'[data-view="{calendar_view}"]').click()
+                    page.locator("#agenda-current").click()
+                    assert page.locator("#agenda-content").get_by_text("Internal checklist").count() == 0
+                page.locator('[data-view="tasks"]').click()
+                assert page.locator("#agenda-results-list").get_by_text("Internal checklist").count() == 1
+                page.locator("#agenda-search").fill("")
+                page.locator("#agenda-content").get_by_text("Internal checklist").click()
+                assert not page.locator('#agenda-task-form [name="showOnCalendar"]').is_checked()
+                page.locator('#agenda-task-form [name="showOnCalendar"]').check()
+                page.locator('#agenda-task-form button[type="submit"]').click()
+                page.locator('[data-view="today"]').click()
+                assert page.locator("#agenda-content").get_by_text("Internal checklist").count() >= 1
+                page.locator('#agenda-content [data-kind="task"]').filter(has_text="Internal checklist").first.click()
+                page.locator('#agenda-task-form [name="showOnCalendar"]').uncheck()
+                page.locator('#agenda-task-form button[type="submit"]').click()
+                assert page.locator("#agenda-content").get_by_text("Internal checklist").count() == 0
+
                 page.locator('[data-view="month"]').click()
                 page.locator("#agenda-current").click()
                 assert page.locator("#agenda-content .agenda-month-cell").filter(has_text="Planning meeting").count() == 1
@@ -120,6 +148,27 @@ def test_agenda_calendar_and_shared_unlock(tmp_path):
                 assert page.locator("#agenda-content").get_by_text("Planning meeting").count() == 1
                 page.set_viewport_size({"width": 390, "height": 844})
                 assert page.locator("#agenda-content").evaluate("element => element.scrollWidth <= element.clientWidth + 2")
+                page.locator('[data-view="tasks"]').click()
+                page.locator('#agenda-content [data-kind="task"]').filter(has_text="Prepare brief").click()
+                for index in range(18):
+                    page.locator("#agenda-add-subtask").click()
+                    page.locator("#agenda-subtask-rows input[type=text]").last.fill(f"Step {index + 1}")
+                page.locator('#agenda-task-form button[type="submit"]').click()
+                page.locator("#agenda-content").get_by_text("Prepare brief").click()
+                assert page.locator("#agenda-subtask-rows input[type=text]").count() == 19
+                geometry = page.locator("#agenda-task-dialog").evaluate("""dialog => {
+                    const scroll = dialog.querySelector('.agenda-task-scroll');
+                    const save = dialog.querySelector('button[type=submit]').getBoundingClientRect();
+                    const bounds = dialog.getBoundingClientRect();
+                    return { top: bounds.top, bottom: bounds.bottom, scrollable: scroll.scrollHeight > scroll.clientHeight,
+                        saveTop: save.top, saveBottom: save.bottom, scrollTop: scroll.scrollTop, viewport: innerHeight };
+                }""")
+                assert geometry["top"] >= 0 and geometry["bottom"] <= geometry["viewport"] + 1, geometry
+                assert geometry["scrollable"] and geometry["scrollTop"] == 0, geometry
+                assert geometry["saveTop"] >= 0 and geometry["saveBottom"] <= geometry["viewport"], geometry
+                page.locator(".agenda-task-scroll").evaluate("element => element.scrollTop = element.scrollHeight")
+                assert page.locator(".agenda-task-scroll").evaluate("element => element.scrollTop > 0")
+                page.locator('#agenda-task-dialog [data-close]').click()
                 page.goto(base + "/office/documents")
                 page.locator("#document-workspace").wait_for(state="visible", timeout=15000)
                 page.locator("#document-lock").click()

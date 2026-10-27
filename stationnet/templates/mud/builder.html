@@ -14,7 +14,20 @@
     </div>
   </header>
 
-  <nav class="subnav settings-jump-nav" aria-label="World builder sections"><a href="#create-room-heading">ROOMS</a><a href="#create-item-heading">ITEMS</a><a href="#npc-heading">NPCS</a><a href="#quest-heading">QUESTS</a><a href="#builder-rooms">EDIT ROOMS</a></nav>
+  <nav class="subnav settings-jump-nav" aria-label="World builder sections"><a href="#world-resource-heading">RESOURCE</a><a href="#create-room-heading">ROOMS</a><a href="#create-item-heading">ITEMS</a><a href="#npc-heading">NPCS</a><a href="#quest-heading">QUESTS</a><a href="#builder-rooms">EDIT ROOMS</a></nav>
+
+  <section class="terminal-card builder-settings" aria-labelledby="world-resource-heading">
+    <p class="eyebrow">WORLD SETTINGS / CHARACTER RESOURCE</p>
+    <h2 id="world-resource-heading">Resource</h2>
+    <p class="muted">Rename mana to suit this world, such as Energy, Stamina, or Power. Renaming changes only the wording. Turning it off hides the resource and makes spells unavailable in this world; characters keep their values. Procedural dungeons always use Mana. The setting is saved in world exports.</p>
+    <form method="post" action="{{ url_for('mud.builder_set_resource') }}" class="builder-inline-form">
+      <input type="hidden" name="csrf_token" value="{{ session.csrf_token }}">
+      <label class="check"><input type="checkbox" name="enabled" value="1" {% if resource.enabled %}checked{% endif %}> World uses a resource</label>
+      <label for="resource-name">Resource name</label>
+      <input id="resource-name" name="name" maxlength="20" placeholder="Mana" value="{{ resource.name }}">
+      <button>SAVE RESOURCE</button>
+    </form>
+  </section>
 
   {% if g.user.is_admin %}
   <section class="terminal-card builder-settings" aria-labelledby="world-settings-heading">

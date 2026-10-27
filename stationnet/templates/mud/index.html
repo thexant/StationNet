@@ -123,8 +123,8 @@
             <span><span>HEALTH</span><output data-character-health>{{ character.health }} / {{ character.maximum_health }}</output></span>
             <progress data-character-health-bar value="{{ character.health }}" max="{{ character.maximum_health }}">{{ character.health }} / {{ character.maximum_health }}</progress>
           </div>
-          <div class="mud-character-meter mud-character-mana">
-            <span><span>MANA</span><output data-character-mana>{{ character.mana }} / {{ character.maximum_mana }}</output></span>
+          <div class="mud-character-meter mud-character-mana" data-character-mana-meter {% if not character.resource.enabled %}hidden{% endif %}>
+            <span><span data-character-mana-label>{{ character.resource.name|upper }}</span><output data-character-mana>{{ character.mana }} / {{ character.maximum_mana }}</output></span>
             <progress data-character-mana-bar value="{{ character.mana }}" max="{{ character.maximum_mana }}">{{ character.mana }} / {{ character.maximum_mana }}</progress>
           </div>
           <div class="mud-character-meter">

@@ -64,6 +64,8 @@ CONDITION_COLUMNS = {"mud_quests": ("conditions_json",),
 CONDITION_TABLES = {"item": "mud_item_definitions", "quest": "mud_quests",
                     "objective": "mud_quest_objectives"}
 ORIGIN_KINDS = {"race": "races", "class": "classes"}
+DEFAULT_RESOURCE = {"enabled": True, "name": "Mana"}
+RESOURCE_NAME_RE = re.compile(r"^[^\W\d_][^\W\d_ '-]*(?:[ '-][^\W\d_]+)*$")
 
 
 class WorldError(ValueError):
@@ -100,6 +102,22 @@ def _whole(value, low, high):
     return type(value) is int and low <= value <= high
 
 
+def validate_resource(value):
+    """Return a world's mana settings; a missing value keeps Mana."""
+    if value is None:
+        return dict(DEFAULT_RESOURCE)
+    if not isinstance(value, dict) or set(value) - {"enabled", "name"}:
+        raise WorldError("resource must be an object with optional enabled and name.")
+    enabled = value.get("enabled", True)
+    if type(enabled) is not bool:
+        raise WorldError("resource enabled must be true or false.")
+    name = value.get("name", DEFAULT_RESOURCE["name"])
+    name = " ".join(name.split()) if isinstance(name, str) else None
+    if not name or len(name) > 20 or not RESOURCE_NAME_RE.fullmatch(name):
+        raise WorldError("Resource name must be 1-20 letters, with single spaces, hyphens, or apostrophes between words.")
+    return {"enabled": enabled, "name": name}
+
+
 def read_package(payload):
     """Read a bounded ZIP without extracting paths or accepting hidden extras."""
     if not payload or len(payload) > MAX_ZIP_BYTES:
@@ -126,6 +144,7 @@ def read_package(payload):
         raise WorldError("World ID must be lowercase letters, digits, and hyphens, starting with a letter; 'stationnet' is reserved.")
     name = _label(manifest.get("name"), "World name", 2, 80)
     author = _label(manifest.get("author"), "World author", 1, 80)
+    resource = validate_resource(manifest.get("resource"))
     start = manifest.get("start_room")
     if not isinstance(start, str) or not ID_RE.fullmatch(start):
         raise WorldError("start_room must name a room ID in rooms.json.")
@@ -280,7 +299,7 @@ def read_package(payload):
     if (not isinstance(skills, dict) or set(skills) != {"skills"} or not isinstance(skills["skills"], list)
             or len(skills["skills"]) > 100 or any(not isinstance(item, dict) for item in skills["skills"])):
         raise WorldError("skills.json must contain a skills array of at most 100 definition objects.")
-    return {"id": world_id, "name": name, "author": author, "start_room": start,
+    return {"id": world_id, "name": name, "author": author, "start_room": start, "resource": resource,
             "rooms": clean_rooms, "exits": clean_exits, "content": content, "origins": origins,
             "skills": skills["skills"]}
 
@@ -289,6 +308,8 @@ def package_bytes(document):
     stream = BytesIO()
     with zipfile.ZipFile(stream, "w", compression=zipfile.ZIP_DEFLATED) as archive:
         manifest = {key: document[key] for key in ("id", "name", "author", "start_room")}
+        if document.get("resource", DEFAULT_RESOURCE) != DEFAULT_RESOURCE:
+            manifest["resource"] = document["resource"]
         for filename, data in (("manifest.json", manifest), ("rooms.json", document["rooms"]),
                                ("exits.json", document["exits"])):
             encoded = (json.dumps(data, ensure_ascii=False, indent=2) + "\n").encode("utf-8")
@@ -673,8 +694,10 @@ def install(database, payload, *, origin_mode="preserve", selected=None):
     created = False
     try:
         database.execute("BEGIN IMMEDIATE")
-        database.execute("INSERT INTO mud_world_packages(id,name,author,start_room_id,imported) VALUES(?,?,?,?,1)",
-                         (world_id, document["name"], document["author"], prefix + document["start_room"]))
+        database.execute("INSERT INTO mud_world_packages(id,name,author,start_room_id,imported,"
+                         "resource_enabled,resource_name) VALUES(?,?,?,?,1,?,?)",
+                         (world_id, document["name"], document["author"], prefix + document["start_room"],
+                          int(document["resource"]["enabled"]), document["resource"]["name"]))
         skill_map = _install_skills(database, document)
         for room in document["rooms"]:
             database.execute("INSERT INTO mud_world_rooms(id,name,description,world_id) VALUES(?,?,?,?)",
@@ -885,6 +908,7 @@ def export(database, world_id, *, origin_keys=None, skill_keys=None):
     document = {"id": world_id if world_id != "stationnet" else "my-world",
                 "name": world["name"], "author": world["author"],
                 "start_room": ids[world["start_room_id"]],
+                "resource": {"enabled": bool(world["resource_enabled"]), "name": world["resource_name"]},
                 "rooms": [{"id": ids[room["id"]], "name": room["name"],
                            "description": room["description"]} for room in rooms],
                 "exits": [{"from": ids[row["from_room_id"]], "to": ids[row["to_room_id"]],

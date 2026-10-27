@@ -34,6 +34,33 @@ starting with a letter. `stationnet` is reserved for the original builder
 world. `name` is 2 to 80 characters; `author` is 1 to 80. `start_room` must
 match a room ID in `rooms.json`.
 
+### Rename or disable mana
+
+An optional `resource` object sets what this world calls mana, or turns it off:
+
+```json
+{
+  "id": "rust-wastes",
+  "name": "Rust Wastes",
+  "author": "Your name",
+  "start_room": "gate",
+  "resource": {"enabled": true, "name": "Stamina"}
+}
+```
+
+`name` is 1 to 20 letters, with single spaces, hyphens, or apostrophes between
+words (for example `Energy`, `Power`, `Ki`, or `Soul Power`). Renaming changes
+only the wording. The character sheet, sidebar meter, character creation, spell
+costs, `/rest`, and help text use the new name, while costs, recovery, and
+growth stay the same. With `"enabled": false`, the resource is hidden, and
+`/spells` and `/cast` are unavailable in this world, so it suits settings
+without magic. Characters keep their stored values, and races and classes that
+grant spells or mana growth still install and play normally. A missing
+`resource` means `{"enabled": true, "name": "Mana"}`. Builders can also change
+this under **Resource** in the World Builder. Exports include the setting
+whenever it differs from the default. Procedural dungeons always use the usual
+Mana.
+
 ## 2. Write rooms
 
 `rooms.json`:
@@ -112,7 +139,9 @@ implementations. Supported spells are `ember` (8 mana), `venom` (7), `rend`
 (6), `hex` (7), `mend` (7), `ward` (6), and `might` (6). The first four target
 an enemy; the last three target the caster. Players use `/spells`,
 `/cast <spell> [enemy]`, and `/rest` to recover mana outside combat when no
-hostile enemy is nearby. Intellect improves mana and spell strength. See the
+hostile enemy is nearby. Intellect improves mana and spell strength. Worlds
+can rename mana or disable it and its spells; see
+[Rename or disable mana](#rename-or-disable-mana). See the
 [race and class guide](../mud_origin_templates/README_RACES_CLASSES.md) for class setup.
 
 `content.json` is an object whose keys are authored MUD table names and whose

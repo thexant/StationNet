@@ -242,6 +242,48 @@ def _current_mode(database, user_id):
     return "traditional" if modes["traditional"] else "procedural"
 
 
+# Commands that only exist to spend the resource; worlds without it hide them.
+RESOURCE_ACTIONS = frozenset({"spells", "cast"})
+RESOURCE_DISABLED_DESCRIPTIONS = {
+    "character": "View your character identity, health, active effects, attributes, and progression.",
+    "rest": "Recover health outside combat.",
+}
+_RESOURCE_WORD_RE = re.compile(r"\b(mana|Mana|MANA)\b")
+
+
+def resource_settings(database, user_id=None):
+    """The active world's name for mana, or whether it has one; procedural mode keeps Mana."""
+    from .mud_worlds import DEFAULT_RESOURCE
+    row = None
+    if user_id is None or _current_mode(database, user_id) == "traditional":
+        row = database.execute(
+            "SELECT resource_enabled,resource_name FROM mud_world_packages WHERE active=1"
+        ).fetchone()
+    enabled = DEFAULT_RESOURCE["enabled"] if row is None else bool(row["resource_enabled"])
+    name = DEFAULT_RESOURCE["name"] if row is None else row["resource_name"]
+    # Words with inner capitals (PSI, Ki-Force) read better unchanged mid-sentence.
+    noun = " ".join(word if word[1:] != word[1:].lower() else word.lower() for word in name.split())
+    return {"enabled": enabled, "name": name, "noun": noun}
+
+
+def resource_text(text, resource):
+    """Rename every mention of mana in player-facing text."""
+    forms = {"mana": resource["noun"], "Mana": resource["name"], "MANA": resource["name"].upper()}
+    return _RESOURCE_WORD_RE.sub(lambda match: forms[match.group(1)], text)
+
+
+def _action_description(definition, resource):
+    if not resource["enabled"] and definition.key in RESOURCE_DISABLED_DESCRIPTIONS:
+        return RESOURCE_DISABLED_DESCRIPTIONS[definition.key]
+    return resource_text(definition.description, resource)
+
+
+def _attribute_summary(key, resource):
+    if key == "intellect" and not resource["enabled"]:
+        return "spell power, healing and experience"
+    return resource_text(ATTRIBUTE_SUMMARIES[key], resource)
+
+
 def _progression_track(database, user_id):
     settings = _crossover_settings(database)
     return "shared" if settings["progression_shared"] else _current_mode(database, user_id)
@@ -342,6 +384,7 @@ def character_state(database, user_id, track_key=None):
         "maximum_health": row["maximum_health"],
         "mana": row["current_mana"],
         "maximum_mana": row["maximum_mana"],
+        "resource": resource_settings(database, user_id),
         "effects": mud_effects.list_effects(database, "character", row["id"]),
         "attributes": {
             "strength": row["strength"],
@@ -587,7 +630,8 @@ def _character_action(database, user, parameters):
         f"Origin: {character['race'] or 'Unchosen'} / {character['class'] or 'Unchosen'}",
         *character["origin"]["summary"],
         f"Health: {character['health']}/{character['maximum_health']}",
-        f"Mana: {character['mana']}/{character['maximum_mana']}",
+        *([f"{character['resource']['name']}: {character['mana']}/{character['maximum_mana']}"]
+          if character["resource"]["enabled"] else []),
         experience,
     ]
     if character["attribute_points"]:
@@ -642,7 +686,8 @@ def _train_action(database, user, parameters):
     if not args:
         lines = [f"Attribute points available: {points}. Each level grants 1 point (2 at every fifth level)."]
         for key in character_creation.ATTRIBUTES:
-            lines.append(f"- {key.title()} {character['attributes'][key]}/{ATTRIBUTE_CAP}: {ATTRIBUTE_SUMMARIES[key]}")
+            lines.append(f"- {key.title()} {character['attributes'][key]}/{ATTRIBUTE_CAP}: "
+                         f"{_attribute_summary(key, character['resource'])}")
         lines.append("Spend points with /train <attribute> [points], for example /train str 2.")
         return [EventDraft("\n".join(lines), event_type="character")]
     attribute = _resolve_attribute(args[0])
@@ -675,8 +720,8 @@ def _train_action(database, user, parameters):
     changes = [f"{attribute.title()} {old[attribute]} → {new[attribute]}"]
     if health_delta:
         changes.append(f"maximum health {health_delta:+d}")
-    if mana_delta:
-        changes.append(f"maximum mana {mana_delta:+d}")
+    if mana_delta and character["resource"]["enabled"]:
+        changes.append(f"maximum {character['resource']['noun']} {mana_delta:+d}")
     remaining = points - amount
     return [EventDraft(
         f"You train {attribute}: {', '.join(changes)}. "
@@ -876,6 +921,7 @@ def _practice_skill_action(database, user, parameters):
 
 
 def _help_action(_database, _user, parameters):
+    resource = resource_settings(_database, _user["id"])
     args = parameters.get("arguments", [])
     if args:
         name = str(args[0]).lstrip("/").casefold()
@@ -883,6 +929,8 @@ def _help_action(_database, _user, parameters):
         if entry is None:
             raise ActionError(f'No help for "{name}".')
         definition, prefix = entry
+        if definition.key in RESOURCE_ACTIONS and not resource["enabled"]:
+            raise ActionError(f'No help for "{name}".')
         aliases = [alias for alias, (action, _prefix) in actions._commands.items()
                    if action.key == definition.key and not _prefix]
         examples = {
@@ -895,7 +943,7 @@ def _help_action(_database, _user, parameters):
             "learn": '/learn lockpicking from "Old Thief"', "practice_skill": '/practice blades',
             "pick": '/pick north',
         }
-        body = f"/{name}: {definition.description}\nAliases: " + ", ".join(f"/{alias}" for alias in aliases)
+        body = f"/{name}: {_action_description(definition, resource)}\nAliases: " + ", ".join(f"/{alias}" for alias in aliases)
         if definition.key in examples:
             body += f"\nExample: {examples[definition.key]}"
         if definition.key in {"look", "get", "put", "open", "close"}:
@@ -903,8 +951,9 @@ def _help_action(_database, _user, parameters):
         return [EventDraft(body)]
     lines = ["Available commands:"]
     for definition in actions._actions.values():
-        if definition.commands and _authorized(definition, _user):
-            lines.append(f"/{definition.commands[0]} — {definition.description}")
+        if (definition.commands and _authorized(definition, _user)
+                and (resource["enabled"] or definition.key not in RESOURCE_ACTIONS)):
+            lines.append(f"/{definition.commands[0]} — {_action_description(definition, resource)}")
     lines.append('Use /help <command> for details. Quote multiword names; use "Name 2" or "Name (2)" for duplicates.')
     lines.append('Use /get <item> from <container>, /put <item> in|into <container>, and /open or /close <container>.')
     lines.append('Direction shortcuts include /n, /s, /e, /w, /u, and /d. Plain text speaks to the room.')
@@ -3207,6 +3256,8 @@ def _defeat_player(database, user, encounter, npc):
     # Procedural deaths already cost the run's loot; world deaths cost some level progress instead.
     lost_experience = 0 if old_room.get("instance_id") else mud_combat.death_experience_loss(
         character["experience"], experience_for_level(character["level"]))
+    if not resource_settings(database, user["id"])["enabled"]:
+        mana = character["current_mana"]
     database.execute(
         "UPDATE mud_character_progression SET current_health=?,current_mana=?,experience=experience-?,"
         "updated_at=CURRENT_TIMESTAMP WHERE character_id=? AND track_key=?",
@@ -3554,16 +3605,25 @@ def _known_spells(database, character_id):
     return tuple(_origin_profile(database, character_id)["spells"])
 
 
+def _require_resource(database, user):
+    resource = resource_settings(database, user["id"])
+    if not resource["enabled"]:
+        raise ActionError("This world does not use spells.")
+    return resource
+
+
 def _spells_action(database, user, parameters):
     if parameters.get("arguments"):
         raise ActionError("The spells command does not accept arguments.")
+    resource = _require_resource(database, user)
     character = _character_row(database, user["id"])
     known = _known_spells(database, character["id"])
-    lines = [f"{name}: {SPELLS[name]['cost']} mana" for name in known if name in SPELLS]
+    lines = [f"{name}: {SPELLS[name]['cost']} {resource['noun']}" for name in known if name in SPELLS]
     return [EventDraft("Known spells:\n" + ("\n".join(lines) or "none"), event_type="character")]
 
 
 def _cast_action(database, user, parameters):
+    resource = _require_resource(database, user)
     args = parameters.get("arguments") or []
     if not args:
         raise ActionError("Cast which spell? Use /spells to see known spells.")
@@ -3573,7 +3633,7 @@ def _cast_action(database, user, parameters):
         raise ActionError("You do not know that spell.")
     spell = SPELLS[name]
     if character["current_mana"] < spell["cost"]:
-        raise ActionError("You do not have enough mana.")
+        raise ActionError(f"You do not have enough {resource['noun']}.")
     target = " ".join(args[1:])
     if "damage" in spell:
         if not target:
@@ -3617,8 +3677,9 @@ def _rest_action(database, user, parameters):
     if _active_hostiles(database, _current_room(database, user["id"]), user["id"]):
         raise ActionError("You cannot rest while enemies are nearby.")
     character = _character_row(database, user["id"])
+    resource = resource_settings(database, user["id"])
     if (character["current_health"] >= character["maximum_health"]
-            and character["current_mana"] >= character["maximum_mana"]):
+            and (not resource["enabled"] or character["current_mana"] >= character["maximum_mana"])):
         raise ActionError("You are already fully rested.")
     wait = database.execute(
         "SELECT CAST(? - (julianday('now') - julianday(last_rested_at)) * 86400 AS INTEGER) "
@@ -3633,7 +3694,7 @@ def _rest_action(database, user, parameters):
     health = min(character["maximum_health"] - character["current_health"],
                  mud_combat.recovery_amount(character["maximum_health"], health_percent))
     mana = min(character["maximum_mana"] - character["current_mana"],
-               mud_combat.recovery_amount(character["maximum_mana"], mana_percent))
+               mud_combat.recovery_amount(character["maximum_mana"], mana_percent)) if resource["enabled"] else 0
     database.execute(
         "UPDATE mud_character_progression SET current_health=current_health+?,current_mana=current_mana+?,"
         "last_rested_at=CURRENT_TIMESTAMP,updated_at=CURRENT_TIMESTAMP WHERE character_id=? AND track_key=?",
@@ -3648,11 +3709,14 @@ def _rest_action(database, user, parameters):
             "WHERE character_id=? AND track_key=?", (harm, character["id"], character["track_key"]),
         )
     rested = _character_row(database, user["id"])
+    noun = resource["noun"]
+    summary = (f"You rest and recover {health} health and {mana} {noun} "
+               f"({rested['current_health']}/{rested['maximum_health']} health, "
+               f"{rested['current_mana']}/{rested['maximum_mana']} {noun})." if resource["enabled"] else
+               f"You rest and recover {health} health "
+               f"({rested['current_health']}/{rested['maximum_health']} health).")
     return [EventDraft(
-        f"You rest and recover {health} health and {mana} mana "
-        f"({rested['current_health']}/{rested['maximum_health']} health, "
-        f"{rested['current_mana']}/{rested['maximum_mana']} mana)."
-        + (f" Lingering effects cost you {harm} health." if harm else ""),
+        summary + (f" Lingering effects cost you {harm} health." if harm else ""),
         event_type="character")]
 
 
@@ -5486,7 +5550,7 @@ actions.register(ActionDefinition(key="deliver", label="DELIVER ITEM", descripti
 actions.register(ActionDefinition(key="combat", label="COMBAT STATUS", description="View hostile enemies and encounter status.", commands=("combat",), handler=_combat_action, group="COMBAT"))
 actions.register(ActionDefinition(key="spells", label="KNOWN SPELLS", description="List your class spells and their mana costs.", commands=("spells",), handler=_spells_action, group="MAGIC"))
 actions.register(ActionDefinition(key="cast", label="CAST SPELL", description="Cast a known spell, targeting an enemy when required.", commands=("cast",), handler=_cast_action, group="MAGIC", show_context=False))
-actions.register(ActionDefinition(key="rest", label="REST", description="Recover mana outside combat.", commands=("rest",), handler=_rest_action, group="MAGIC"))
+actions.register(ActionDefinition(key="rest", label="REST", description="Recover health and mana outside combat.", commands=("rest",), handler=_rest_action, group="MAGIC"))
 actions.register(ActionDefinition(key="hide", label="HIDE", description="Hide from enemies using Agility against their awareness; your next attack gains surprise damage.", commands=("hide",), handler=_hide_action, group="COMBAT", show_context=False))
 actions.register(ActionDefinition(key="attack", label="ATTACK", description="Attack a hostile enemy; fire an equipped loaded gun, otherwise use melee.", commands=("attack", "hit"), handler=_attack_action, group="COMBAT", show_context=False))
 actions.register(ActionDefinition(key="fire", label="FIRE", description="Fire an equipped loaded firearm at a hostile enemy.", commands=("fire", "shoot"), handler=_fire_action, group="COMBAT", show_context=False))
@@ -6088,9 +6152,11 @@ def index():
         room=room, character=character, inventory=inventory,
         quests=quests, combat=combat, hub=hub,
         command_catalog=[
-            {"name": name, "key": definition.key, "description": definition.description}
+            {"name": name, "key": definition.key,
+             "description": _action_description(definition, character["resource"])}
             for name, (definition, prefix) in actions._commands.items()
             if not prefix and _authorized(definition, g.user)
+            and (character["resource"]["enabled"] or definition.key not in RESOURCE_ACTIONS)
         ],
     )
 
@@ -6173,6 +6239,13 @@ def create_character():
     config["skill_names"] = {key: definition["name"]
                              for key, definition in mud_skills.definitions(database).items()}
     config["effect_names"] = mud_skills.EFFECT_TYPES
+    config["resource"] = resource = resource_settings(database, g.user["id"])
+    # Without the resource, the built-in Intellect text would promise mana that does not exist.
+    config["attribute_descriptions"] = {
+        key: ("Raises healing and experience earned."
+              if key == "intellect" and not resource["enabled"] and _RESOURCE_WORD_RE.search(text)
+              else resource_text(text, resource))
+        for key, text in config["attribute_descriptions"].items()}
     error = None
     selected = {}
     if request.method == "POST":
@@ -6230,7 +6303,8 @@ def character_compatibility():
     entries = character_creation.catalog(database, include_removed=True)
     current = {"races": character["race_key"], "classes": character["class_key"]}
     return render_template("mud/compatibility.html", character=character, missing=missing,
-                           entries=entries, current=current, error=error)
+                           entries=entries, current=current, error=error,
+                           resource=resource_settings(database, g.user["id"]))
 
 
 @bp.route("/character/delete", methods=["GET", "POST"])
@@ -6555,6 +6629,7 @@ def builder():
         skill_entries=[{**entry, "summary": mud_skills.describe_effects(entry["definition"])}
                        for entry in skill_entries],
         npc_trainers=npc_trainers, item_categories=item_categories,
+        resource=resource_settings(database),
     )
 
 
@@ -7462,6 +7537,28 @@ def builder_delete_exit(exit_id):
     database.commit()
     flash(f"Exit {exit_row['name']} removed.", "success")
     return _builder_redirect(exit_row["from_room_id"])
+
+
+@bp.post("/builder/resource")
+@builder_required
+def builder_set_resource():
+    from . import mud_worlds
+    validate_csrf()
+    try:
+        resource = mud_worlds.validate_resource({
+            "enabled": request.form.get("enabled") == "1",
+            "name": request.form.get("name", "").strip() or mud_worlds.DEFAULT_RESOURCE["name"],
+        })
+    except mud_worlds.WorldError as error:
+        flash(str(error), "error")
+        return _builder_redirect()
+    database = get_db()
+    database.execute("UPDATE mud_world_packages SET resource_enabled=?,resource_name=? WHERE active=1",
+                     (int(resource["enabled"]), resource["name"]))
+    database.commit()
+    flash(f"{resource['name']} is now this world's resource." if resource["enabled"]
+          else "This world no longer uses a resource; spells are unavailable here.", "success")
+    return _builder_redirect()
 
 
 @bp.post("/builder/start")

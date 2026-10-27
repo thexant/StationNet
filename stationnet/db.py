@@ -663,7 +663,9 @@ CREATE TABLE IF NOT EXISTS mud_world_packages (
  author TEXT NOT NULL,
  start_room_id TEXT NOT NULL,
  imported INTEGER NOT NULL DEFAULT 1 CHECK(imported IN (0,1)),
- active INTEGER NOT NULL DEFAULT 0 CHECK(active IN (0,1)));
+ active INTEGER NOT NULL DEFAULT 0 CHECK(active IN (0,1)),
+ resource_enabled INTEGER NOT NULL DEFAULT 1 CHECK(resource_enabled IN (0,1)),
+ resource_name TEXT NOT NULL DEFAULT 'Mana');
 CREATE TABLE IF NOT EXISTS mud_world_origins (
  world_id TEXT NOT NULL REFERENCES mud_world_packages(id) ON DELETE CASCADE,
  kind TEXT NOT NULL CHECK(kind IN ('races','classes')),
@@ -1422,6 +1424,7 @@ def init_db():
     _initialize_mud_characters(database)
     _initialize_mud_world(database)
     _migrate_mud_world_packages(database)
+    _migrate_mud_world_resource(database)
     database.execute("INSERT OR IGNORE INTO mud_portal_settings(id) VALUES(1)")
     database.execute("INSERT OR IGNORE INTO mud_crossover_settings(id) VALUES(1)")
     database.execute(
@@ -1793,6 +1796,16 @@ def _migrate_mud_world_packages(database):
             "UPDATE mud_world_packages SET start_room_id=? WHERE id='stationnet' AND active=1",
             (start["id"],),
         )
+
+
+def _migrate_mud_world_resource(database):
+    """Let each world rename or disable mana; existing worlds keep Mana."""
+    columns = {row["name"] for row in database.execute("PRAGMA table_info(mud_world_packages)")}
+    if "resource_enabled" not in columns:
+        database.execute("ALTER TABLE mud_world_packages ADD COLUMN resource_enabled INTEGER NOT NULL DEFAULT 1 "
+                         "CHECK(resource_enabled IN (0,1))")
+    if "resource_name" not in columns:
+        database.execute("ALTER TABLE mud_world_packages ADD COLUMN resource_name TEXT NOT NULL DEFAULT 'Mana'")
 
 
 def _migrate_radio_capability_columns(database):

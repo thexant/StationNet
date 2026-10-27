@@ -41,6 +41,8 @@ for(const mud of document.querySelectorAll("[data-mud]")){
   const characterExperienceRemaining=mud.querySelector("[data-character-experience-remaining]");
   const characterMana=mud.querySelector("[data-character-mana]");
   const characterManaBar=mud.querySelector("[data-character-mana-bar]");
+  const characterManaMeter=mud.querySelector("[data-character-mana-meter]");
+  const characterManaLabel=mud.querySelector("[data-character-mana-label]");
   const characterPoints=mud.querySelector("[data-character-points]");
   const carried=mud.querySelector("[data-mud-carried]");
   const equipped=mud.querySelector("[data-mud-equipped]");
@@ -207,6 +209,9 @@ for(const mud of document.querySelectorAll("[data-mud]")){
     characterHealthBar.max=character.maximum_health;
     characterHealthBar.value=character.health;
     if(characterMana){
+      // Worlds may rename the resource or go without it; procedural mode always shows mana.
+      characterManaMeter.hidden=!character.resource.enabled;
+      characterManaLabel.textContent=character.resource.name.toUpperCase();
       characterMana.textContent=`${character.mana} / ${character.maximum_mana}`;
       characterManaBar.max=character.maximum_mana;
       characterManaBar.value=character.mana;
