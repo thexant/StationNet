@@ -4,11 +4,12 @@ import hashlib
 from io import BytesIO
 import json
 import tarfile
+import zipfile
 
 from PIL import Image
 
 from stationnet import create_app
-from stationnet.arcade import ASSETS, DEFAULT_CORES
+from stationnet.arcade import ASSETS, AVAILABLE_CORES, DEFAULT_CORES, PLATFORMS
 from stationnet.account_deletion import delete_account
 from stationnet.db import get_db
 
@@ -33,10 +34,16 @@ def _signin(client, user_id):
 
 
 def _upload(client, title, platform, genre, *, station=False, cover=False):
+    rom_data = b"NES\x1a" + b"\0" * 100
+    rom_name = title + {"gb": ".gb", "gbc": ".gbc", "gba": ".gba"}.get(platform, ".nes")
+    if platform == "arcade":
+        archive = BytesIO()
+        with zipfile.ZipFile(archive, "w") as rom_set:
+            rom_set.writestr("game.rom", b"test arcade rom")
+        rom_data, rom_name = archive.getvalue(), title + ".zip"
     payload = {"csrf_token": "arcade-test", "title": title, "platform": platform,
                "genre": genre, "description": "A test game", "release_year": "1992",
-               "developer": "Test Studio", "rom": (BytesIO(b"NES\x1a" + b"\0" * 100),
-                                            title + {"gb": ".gb", "gbc": ".gbc", "gba": ".gba"}.get(platform, ".nes"))}
+               "developer": "Test Studio", "rom": (BytesIO(rom_data), rom_name)}
     if cover:
         image = Image.new("RGB", (64, 80), "red")
         data = BytesIO()
@@ -48,12 +55,19 @@ def _upload(client, title, platform, genre, *, station=False, cover=False):
 
 
 def test_default_cores_are_bundled_for_offline_play():
-    for core in set(DEFAULT_CORES.values()):
+    bundled_defaults = {core for platform, core in DEFAULT_CORES.items() if platform != "arcade"}
+    for core in bundled_defaults:
         for suffix in ("-wasm.data", "-legacy-wasm.data"):
             assert (ASSETS / "cores" / (core + suffix)).is_file()
     for asset in ("loader.js", "emulator.css", "src/emulator.js",
                   "src/gamepad.js", "compression/extractzip.js"):
         assert (ASSETS / asset).is_file()
+
+
+def test_mame_arcade_platform_offers_downloadable_cores():
+    assert PLATFORMS["arcade"][0] == "MAME / Arcade"
+    assert PLATFORMS["arcade"][2] == (".zip",)
+    assert {"mame2003_plus", "mame2003", "fbneo"}.issubset(AVAILABLE_CORES)
 
 
 def test_catalogue_filters_metadata_and_permissions(tmp_path):
@@ -123,7 +137,7 @@ def test_catalogue_filters_metadata_and_permissions(tmp_path):
     assert not any((tmp_path / "arcade" / "roms").glob("*.gb*"))
 
 
-def test_core_install_is_pinned_verified_and_selected(tmp_path, monkeypatch):
+def test_mame_core_install_is_pinned_verified_and_selected(tmp_path, monkeypatch):
     app, client, admin, member = _setup(tmp_path)
     with app.app_context():
         db = get_db()
@@ -131,22 +145,25 @@ def test_core_install_is_pinned_verified_and_selected(tmp_path, monkeypatch):
         db.commit()
     _signin(client, member)
     assert client.post("/arcade/cores/install", data={"csrf_token": "arcade-test",
-                "core": "nestopia"}).status_code == 403
+                "core": "mame2003_plus"}).status_code == 403
     _signin(client, admin)
-    assert _upload(client, "NES Game", "nes", "Action", station=True).status_code == 302
+    settings = client.get("/sysop/settings").get_data(as_text=True)
+    assert "MAME / Arcade" in settings
+    assert "DOWNLOAD MISSING CORE: mame2003_plus" in settings
+    assert _upload(client, "Arcade Game", "arcade", "Action", station=True).status_code == 302
     package = BytesIO()
     with tarfile.open(fileobj=package, mode="w:gz") as archive:
-        for name in ("nestopia-wasm.data", "nestopia-legacy-wasm.data"):
+        for name in ("mame2003_plus-wasm.data", "mame2003_plus-legacy-wasm.data"):
             data = b"core" * 512
             entry = tarfile.TarInfo("package/" + name)
             entry.size = len(data)
             archive.addfile(entry, BytesIO(data))
-        report = b'{"core":"nestopia","buildStart":"test","options":{}}'
-        entry = tarfile.TarInfo("package/reports/nestopia.json")
+        report = b'{"core":"mame2003_plus","buildStart":"test","options":{}}'
+        entry = tarfile.TarInfo("package/reports/mame2003_plus.json")
         entry.size = len(report)
         archive.addfile(entry, BytesIO(report))
     blob = package.getvalue()
-    package_url = "https://registry.npmjs.org/@emulatorjs/core-nestopia/-/core-nestopia-4.2.3.tgz"
+    package_url = "https://registry.npmjs.org/@emulatorjs/core-mame2003_plus/-/core-mame2003_plus-4.2.3.tgz"
     metadata = {"dist": {"tarball": package_url,
                          "integrity": "sha512-" + base64.b64encode(hashlib.sha512(blob).digest()).decode()}}
 
@@ -161,12 +178,12 @@ def test_core_install_is_pinned_verified_and_selected(tmp_path, monkeypatch):
 
     monkeypatch.setattr("stationnet.arcade.urllib.request.urlopen", fake_open)
     result = client.post("/arcade/cores/install", data={"csrf_token": "arcade-test",
-                            "core": "nestopia"}, follow_redirects=True)
+                            "core": "mame2003_plus"}, follow_redirects=True)
     assert b"installed locally" in result.data
-    assert (tmp_path / "arcade" / "cores" / "nestopia-wasm.data").is_file()
+    assert (tmp_path / "arcade" / "cores" / "mame2003_plus-wasm.data").is_file()
     result = client.post("/arcade/cores/preference", data={"csrf_token": "arcade-test",
-                            "platform": "nes", "core": "nestopia"})
+                            "platform": "arcade", "core": "mame2003_plus"})
     assert result.status_code == 302
-    assert b'EJS_core = "nestopia"' in client.get("/arcade/1/player").data
-    assert client.get("/arcade/emulatorjs/data/cores/nestopia-wasm.data").data == b"core" * 512
-    assert b'"core":"nestopia"' in client.get("/arcade/emulatorjs/data/cores/reports/nestopia.json").data
+    assert b'EJS_core = "mame2003_plus"' in client.get("/arcade/1/player").data
+    assert client.get("/arcade/emulatorjs/data/cores/mame2003_plus-wasm.data").data == b"core" * 512
+    assert b'"core":"mame2003_plus"' in client.get("/arcade/emulatorjs/data/cores/reports/mame2003_plus.json").data

@@ -23,6 +23,8 @@ bp = Blueprint("arcade", __name__, url_prefix="/arcade")
 
 # EmulatorJS 4.2.3 platform names and compatible core names.
 PLATFORMS = {
+    "arcade": ("MAME / Arcade", ("mame2003_plus", "mame2003", "fbneo",
+                                  "fbalpha2012_cps1", "fbalpha2012_cps2"), (".zip",)),
     "nes": ("Nintendo Entertainment System", ("fceumm", "nestopia"), (".nes", ".zip")),
     "snes": ("Super Nintendo", ("snes9x",), (".sfc", ".smc", ".zip")),
     "gb": ("Game Boy", ("gambatte",), (".gb", ".zip")),
@@ -40,6 +42,7 @@ PLATFORMS = {
     "n64": ("Nintendo 64", ("mupen64plus_next", "parallel_n64"), (".n64", ".z64", ".v64", ".zip")),
 }
 DEFAULT_CORES = {name: info[1][0] for name, info in PLATFORMS.items()}
+AVAILABLE_CORES = frozenset(core for info in PLATFORMS.values() for core in info[1])
 ASSETS = Path(__file__).parent / "static" / "emulatorjs" / "data"
 MAX_ROM_BYTES = 96 * 1024 * 1024
 MAX_COVER_BYTES = 8 * 1024 * 1024
@@ -111,7 +114,7 @@ def settings_data():
     ).fetchall()
     return {"arcade_platforms": PLATFORMS, "arcade_games": games,
             "arcade_core_preferences": {p: _preferred_core(p) for p in PLATFORMS},
-            "arcade_installed_cores": {c for p in PLATFORMS for c in PLATFORMS[p][1] if _core_available(c)}}
+            "arcade_installed_cores": {core for core in AVAILABLE_CORES if _core_available(core)}}
 
 
 def _metadata():
@@ -150,10 +153,11 @@ def _validate_rom(upload, platform):
         from io import BytesIO
         try:
             with zipfile.ZipFile(BytesIO(data)) as archive:
-                if len(archive.infolist()) > 100 or not any(
-                    Path(item.filename).suffix.lower() in PLATFORMS[platform][2][:-1]
-                    and not item.is_dir() for item in archive.infolist()
-                ):
+                members = archive.infolist()
+                has_rom = (any(not item.is_dir() for item in members) if platform == "arcade" else
+                           any(Path(item.filename).suffix.lower() in PLATFORMS[platform][2][:-1]
+                               and not item.is_dir() for item in members))
+                if len(members) > 100 or not has_rom:
                     raise ValueError("ZIP must contain a ROM for the selected platform.")
         except zipfile.BadZipFile as exc:
             raise ValueError("Invalid ZIP archive.") from exc
@@ -255,7 +259,7 @@ def asset(asset):
     # Only packaged player resources and exact allowlisted core files are served.
     if asset.startswith("cores/reports/"):
         name = asset.removeprefix("cores/reports/")
-        if name.endswith(".json") and name[:-5] in {c for p in PLATFORMS for c in PLATFORMS[p][1]}:
+        if name.endswith(".json") and name[:-5] in AVAILABLE_CORES:
             installed = _root() / "cores" / "reports" / name
             if installed.is_file():
                 return send_file(installed, mimetype="application/json", conditional=True)
@@ -264,7 +268,7 @@ def asset(asset):
     if asset.startswith("cores/"):
         name = asset.removeprefix("cores/")
         match = re.fullmatch(r"([a-z][a-z0-9_]*)(-legacy)?-wasm\.data", name)
-        if match and match.group(1) in {c for p in PLATFORMS for c in PLATFORMS[p][1]}:
+        if match and match.group(1) in AVAILABLE_CORES:
             path = _core_path(match.group(1), bool(match.group(2)))
             if path.is_file():
                 return send_file(path, mimetype="application/octet-stream", conditional=True)
@@ -450,7 +454,7 @@ def install_core():
         abort(403)
     validate_csrf()
     core = request.form.get("core", "")
-    if not CORE_RE.fullmatch(core) or core not in {c for p in PLATFORMS for c in PLATFORMS[p][1]}:
+    if not CORE_RE.fullmatch(core) or core not in AVAILABLE_CORES:
         abort(400)
     folder = _root() / "cores"
     folder.mkdir(parents=True, exist_ok=True)

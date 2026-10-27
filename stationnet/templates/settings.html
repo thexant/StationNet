@@ -357,12 +357,12 @@
     <h3>Upload a station game</h3>
     {% with action=url_for('arcade.station_upload'), game=none, platforms=arcade_platforms, station_post=true %}{% include 'arcade/_fields.html' %}{% endwith %}
     <h3>Core management</h3>
-    <p class="muted">Installed cores work offline. Downloads use official EmulatorJS 4.2.3 npm packages when this station has internet access.</p>
+    <p class="muted">Installed cores work offline. If a system or compatible alternative is not installed, download its official EmulatorJS 4.2.3 core while this station has internet access.</p>
     <div class="arcade-core-list">
       {% for platform, info in arcade_platforms.items() %}
       <div class="arcade-core-row"><strong>{{ info[0] }}</strong>
         <form method="post" action="{{ url_for('arcade.set_core') }}" class="inline-form"><input type="hidden" name="csrf_token" value="{{ session.csrf_token }}"><input type="hidden" name="platform" value="{{ platform }}"><label>Preferred core<select name="core">{% for core in info[1] %}<option value="{{ core }}" {% if arcade_core_preferences[platform] == core %}selected{% endif %} {% if core not in arcade_installed_cores %}disabled{% endif %}>{{ core }}{% if core not in arcade_installed_cores %} (download required){% endif %}</option>{% endfor %}</select></label><button class="secondary">SAVE</button></form>
-        {% for core in info[1] if core not in arcade_installed_cores %}<form method="post" action="{{ url_for('arcade.install_core') }}" class="inline-form"><input type="hidden" name="csrf_token" value="{{ session.csrf_token }}"><input type="hidden" name="core" value="{{ core }}"><button class="secondary">DOWNLOAD {{ core }}</button></form>{% endfor %}
+        {% for core in info[1] if core not in arcade_installed_cores %}<form method="post" action="{{ url_for('arcade.install_core') }}" class="inline-form"><input type="hidden" name="csrf_token" value="{{ session.csrf_token }}"><input type="hidden" name="core" value="{{ core }}"><button class="secondary">DOWNLOAD MISSING CORE: {{ core }}</button></form>{% endfor %}
       </div>
       {% endfor %}
     </div>
