@@ -288,6 +288,32 @@ def test_dungeon_themes_bundle_skills_for_their_origins(station):
     assert b"1 skills" in removed.data and key not in _installed(app)
 
 
+def test_world_builder_saves_optional_npc_accuracy_and_evasion(station):
+    app, _path, admin, _player = station
+    client = _client(app, admin)
+    combat = {"csrf_token": "test-token", "description": "Fights.", "properties_json": "{}",
+              "behaviors_json": "{}", "is_hostile": "1", "maximum_health": "30", "combat_attack": "6",
+              "combat_defense": "2", "experience_reward": "10", "respawn_seconds": "60"}
+    client.post("/mud/builder/npcs", data={**combat, "name": "Duelist", "combat_accuracy": "15",
+                                          "combat_evasion": ""})
+    rejected = client.post("/mud/builder/npcs", data={**combat, "name": "Ghost", "combat_evasion": "150"},
+                           follow_redirects=True)
+    assert b"Accuracy and evasion must be whole numbers" in rejected.data
+    with app.app_context():
+        db = get_db()
+        npc_id = db.execute("SELECT id FROM mud_npc_definitions WHERE name='Duelist'").fetchone()[0]
+        profile = lambda: tuple(db.execute("SELECT accuracy,evasion FROM mud_npc_combat_profiles "
+                                           "WHERE npc_definition_id=?", (npc_id,)).fetchone())
+        assert profile() == (15, None)
+        assert db.execute("SELECT 1 FROM mud_npc_definitions WHERE name='Ghost'").fetchone() is None
+    assert b'name="combat_accuracy" min="0" max="100" value="15"' in client.get("/mud/builder").data
+    client.post(f"/mud/builder/npcs/{npc_id}", data={**combat, "name": "Duelist", "combat_accuracy": "",
+                                                    "combat_evasion": "9"})
+    with app.app_context():
+        assert tuple(get_db().execute("SELECT accuracy,evasion FROM mud_npc_combat_profiles "
+                                      "WHERE npc_definition_id=?", (npc_id,)).fetchone()) == (None, 9)
+
+
 def test_world_builder_edits_categories_trainers_locks_and_discoveries(station):
     app, _path, admin, _player = station
     client = _client(app, admin)

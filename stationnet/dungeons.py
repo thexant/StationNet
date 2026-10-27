@@ -442,15 +442,16 @@ def _validate_embedded_definitions(errors, template, database=None):
                 else:
                     limits = {"maximum_health": (1, 1_000_000), "attack": (1, 100_000),
                               "defense": (0, 100_000), "experience_reward": (0, 100_000),
-                              "respawn_seconds": (5, 86_400)}
+                              "respawn_seconds": (5, 86_400), "accuracy": (0, 100), "evasion": (0, 100)}
                     defaults = {"maximum_health": 30, "attack": 6, "defense": 2,
-                                "experience_reward": 10, "respawn_seconds": 60}
+                                "experience_reward": 10, "respawn_seconds": 60, "accuracy": 0, "evasion": 0}
                     for field, (low, high) in limits.items():
                         if not _is_int(combat.get(field, defaults[field]), low, high):
                             errors.append(f"{here}.combat.{field}: must be an integer from {low} to {high}")
             conversation = definition.get("conversation")
             if conversation is not None:
-                _validate_conversation(errors, conversation, f"{here}.conversation")
+                _validate_conversation(errors, conversation, f"{here}.conversation",
+                                       ids["items"], database)
             equipment = definition.get("equipment", [])
             if not isinstance(equipment, list):
                 errors.append(f"{here}.equipment: must be an array")
@@ -509,7 +510,41 @@ def _validate_item_reference(errors, value, path, local_items, item_slots, datab
             errors.append(f"{path}.item_definition_id: item must use equipment slot {expected_slot!r}")
 
 
-def _validate_conversation(errors, value, path):
+def _validate_response_rules(errors, response, path, local_items, database):
+    """Dungeon responses may use conditions/outcomes, but there are no quests here."""
+    from . import mud_conditions
+    entries = []
+    for field, validate in (("conditions", lambda value: mud_conditions.validate_conditions(
+            value, allow_quests=False)), ("outcomes", mud_conditions.validate_outcomes)):
+        if field not in response:
+            continue
+        try:
+            entries.append(validate(response[field]))
+        except ValueError as problem:
+            errors.append(f"{path}.{field}: {problem}")
+    for kind, ref in mud_conditions.references(*entries):
+        if kind != "item" or ref in local_items:
+            continue
+        if database is None or database.execute(
+                "SELECT 1 FROM mud_item_definitions WHERE id=?", (ref,)).fetchone() is None:
+            errors.append(f"{path}: item {ref!r} is neither an embedded item nor an existing definition")
+
+
+def _response_rules_json(template, response):
+    """Store a response's conditions/outcomes with embedded item IDs resolved."""
+    from . import mud_conditions
+    local_items = {item["id"] for item in template.get("definitions", {}).get("items", [])}
+
+    def resolve(kind, ref):
+        return local_definition_id(template, "item", ref) if kind == "item" and ref in local_items else ref
+
+    conditions = mud_conditions.validate_conditions(response.get("conditions", []), allow_quests=False)
+    outcomes = mud_conditions.validate_outcomes(response.get("outcomes", []))
+    return (canonical_json(mud_conditions.remap(conditions, resolve)),
+            canonical_json(mud_conditions.remap(outcomes, resolve)))
+
+
+def _validate_conversation(errors, value, path, local_items=(), database=None):
     if not isinstance(value, dict):
         errors.append(f"{path}: must be an object"); return
     nodes = value.get("nodes")
@@ -545,6 +580,7 @@ def _validate_conversation(errors, value, path):
                     response_ids.add(response_id)
                 if not isinstance(response.get("text"), str) or not response["text"].strip():
                     errors.append(f"{response_path}.text: must be a non-empty string")
+                _validate_response_rules(errors, response, response_path, set(local_items), database)
     if starts != 1:
         errors.append(f"{path}.nodes: exactly one node must have start true")
     for index, node in enumerate(nodes):
@@ -927,7 +963,7 @@ def _definition_snapshot(database, kind, definition_id):
     if kind in {"npc", "enemy"}:
         row = database.execute(
             "SELECT d.id,d.name,d.description,d.conversation_id,d.properties_json,d.behaviors_json,"
-            "p.maximum_health,p.attack,p.defense,p.experience_reward,p.respawn_seconds "
+            "p.maximum_health,p.attack,p.defense,p.accuracy,p.evasion,p.experience_reward,p.respawn_seconds "
             "FROM mud_npc_definitions AS d LEFT JOIN mud_npc_combat_profiles AS p "
             "ON p.npc_definition_id=d.id WHERE d.id=?", (definition_id,),
         ).fetchone()
@@ -970,6 +1006,7 @@ def _embedded_snapshot(template, kind, definition):
             snapshot.update({
                 "maximum_health": combat.get("maximum_health", 30),
                 "attack": combat.get("attack", 6), "defense": combat.get("defense", 2),
+                "accuracy": combat.get("accuracy", 0), "evasion": combat.get("evasion", 0),
                 "experience_reward": combat.get("experience_reward", 10),
                 "respawn_seconds": combat.get("respawn_seconds", 60),
             })
@@ -1128,6 +1165,9 @@ def generate_manifest(template, seed, size=None, layout=None, difficulty=None, d
                     snapshot["maximum_health"] += scale * 8
                     snapshot["attack"] += scale * 2
                     snapshot["defense"] += scale // 2
+                    # Deeper foes also aim and move better, so evasive builds stay tested.
+                    snapshot["accuracy"] = (snapshot.get("accuracy") or 0) + scale * 2
+                    snapshot["evasion"] = (snapshot.get("evasion") or 0) + scale
                     snapshot["experience_reward"] += scale * 5
         rooms.append({
             "key": f"room-{index:04d}", "ordinal": index, "x": position[0], "y": position[1],
@@ -1259,16 +1299,18 @@ def _install_embedded_definitions(database, template):
                     )
                 for node in conversation["nodes"]:
                     for order, response in enumerate(node.get("responses", [])):
+                        conditions_json, outcomes_json = _response_rules_json(template, response)
                         database.execute(
                             "INSERT INTO mud_dialogue_responses"
                             "(id,node_id,response_text,next_node_id,required_state_key,"
-                            "required_state_value,state_key,state_value,sort_order) "
-                            "VALUES(?,?,?,?,?,?,?,?,?)",
+                            "required_state_value,state_key,state_value,sort_order,"
+                            "conditions_json,outcomes_json) "
+                            "VALUES(?,?,?,?,?,?,?,?,?,?,?)",
                             (f"{node_ids[node['id']]}:response:{response['id']}", node_ids[node["id"]],
                              response["text"], node_ids.get(response.get("next_node_id")),
                              response.get("required_state_key"), response.get("required_state_value"),
                              response.get("state_key"), response.get("state_value"),
-                             response.get("sort_order", order)),
+                             response.get("sort_order", order), conditions_json, outcomes_json),
                         )
             registry_kind = "enemy" if kind == "enemies" else "npc"
             if not _claim_managed_definition(
@@ -1285,11 +1327,11 @@ def _install_embedded_definitions(database, template):
             if combat:
                 database.execute(
                     "INSERT INTO mud_npc_combat_profiles"
-                    "(npc_definition_id,maximum_health,attack,defense,experience_reward,respawn_seconds) "
-                    "VALUES(?,?,?,?,?,?)",
+                    "(npc_definition_id,maximum_health,attack,defense,experience_reward,respawn_seconds,"
+                    "accuracy,evasion) VALUES(?,?,?,?,?,?,?,?)",
                     (definition_id, combat.get("maximum_health", 30), combat.get("attack", 6),
                      combat.get("defense", 2), combat.get("experience_reward", 10),
-                     combat.get("respawn_seconds", 60)),
+                     combat.get("respawn_seconds", 60), combat.get("accuracy"), combat.get("evasion")),
                 )
             for equipment in npc.get("equipment", []):
                 database.execute(

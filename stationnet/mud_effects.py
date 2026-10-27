@@ -12,6 +12,10 @@ EFFECTS = {
     "weakness": {"kind": "attack", "sign": -1},
     "ward": {"kind": "defense", "sign": 1},
     "vulnerability": {"kind": "defense", "sign": -1},
+    "focus": {"kind": "accuracy", "sign": 1},
+    "blinded": {"kind": "accuracy", "sign": -1},
+    "evasive": {"kind": "evasion", "sign": 1},
+    "snared": {"kind": "evasion", "sign": -1},
 }
 
 

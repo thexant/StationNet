@@ -1085,6 +1085,11 @@ CREATE TABLE IF NOT EXISTS mud_quests (
  name TEXT NOT NULL COLLATE NOCASE,
  description TEXT NOT NULL,
  prerequisite_quest_id TEXT REFERENCES mud_quests(id) ON DELETE SET NULL,
+ completion_mode TEXT NOT NULL DEFAULT 'auto' CHECK(completion_mode IN ('auto','turn_in')),
+ turn_in_npc_definition_id TEXT REFERENCES mud_npc_definitions(id) ON DELETE SET NULL,
+ sequential INTEGER NOT NULL DEFAULT 0 CHECK(sequential IN (0,1)),
+ abandonable INTEGER NOT NULL DEFAULT 1 CHECK(abandonable IN (0,1)),
+ conditions_json TEXT NOT NULL DEFAULT '[]',
  created_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);
@@ -1097,6 +1102,9 @@ CREATE TABLE IF NOT EXISTS mud_quest_objectives (
  description TEXT NOT NULL,
  required_count INTEGER NOT NULL DEFAULT 1 CHECK(required_count>=1),
  sort_order INTEGER NOT NULL DEFAULT 0,
+ optional INTEGER NOT NULL DEFAULT 0 CHECK(optional IN (0,1)),
+ consume_on_turn_in INTEGER NOT NULL DEFAULT 0 CHECK(consume_on_turn_in IN (0,1)),
+ recipient_npc_definition_id TEXT REFERENCES mud_npc_definitions(id) ON DELETE SET NULL,
  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);
 CREATE INDEX IF NOT EXISTS idx_mud_quest_objectives_quest
  ON mud_quest_objectives(quest_id,sort_order,id);
@@ -1123,6 +1131,9 @@ CREATE TABLE IF NOT EXISTS mud_dialogue_responses (
  required_state_value TEXT,
  state_key TEXT,
  state_value TEXT,
+ conditions_json TEXT NOT NULL DEFAULT '[]',
+ outcomes_json TEXT NOT NULL DEFAULT '[]',
+ turn_in_quest_id TEXT REFERENCES mud_quests(id) ON DELETE SET NULL,
  sort_order INTEGER NOT NULL DEFAULT 0,
  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);
 CREATE INDEX IF NOT EXISTS idx_mud_dialogue_responses_node
@@ -1145,6 +1156,7 @@ CREATE TABLE IF NOT EXISTS mud_player_quests (
  accepted_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
  completed_at TEXT,
  rewarded_at TEXT,
+ ready_at TEXT,
  PRIMARY KEY(character_id,quest_id));
 CREATE INDEX IF NOT EXISTS idx_mud_player_quests_status
  ON mud_player_quests(character_id,status,accepted_at);
@@ -1155,6 +1167,11 @@ CREATE TABLE IF NOT EXISTS mud_player_objectives (
  completed_at TEXT,
  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
  PRIMARY KEY(character_id,objective_id));
+CREATE TABLE IF NOT EXISTS mud_player_dialogue_claims (
+ character_id TEXT NOT NULL REFERENCES mud_characters(id) ON DELETE CASCADE,
+ response_id TEXT NOT NULL,
+ claimed_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+ PRIMARY KEY(character_id,response_id));
 CREATE TRIGGER IF NOT EXISTS radio_default_membership_after_user_insert
 AFTER INSERT ON users
 BEGIN
@@ -1316,6 +1333,37 @@ def _migrate_mud_authored_features(database):
                      "AND id IN (SELECT live_instance_id FROM mud_item_spawns WHERE live_instance_id IS NOT NULL)")
 
 
+def _migrate_mud_quest_dialogue(database):
+    """Add turn-in, staged objective, and conditional dialogue columns."""
+    additions = {
+        "mud_quests": (
+            ("completion_mode", "TEXT NOT NULL DEFAULT 'auto' CHECK(completion_mode IN ('auto','turn_in'))"),
+            ("turn_in_npc_definition_id", "TEXT REFERENCES mud_npc_definitions(id) ON DELETE SET NULL"),
+            ("sequential", "INTEGER NOT NULL DEFAULT 0 CHECK(sequential IN (0,1))"),
+            ("abandonable", "INTEGER NOT NULL DEFAULT 1 CHECK(abandonable IN (0,1))"),
+            ("conditions_json", "TEXT NOT NULL DEFAULT '[]'"),
+        ),
+        "mud_quest_objectives": (
+            ("optional", "INTEGER NOT NULL DEFAULT 0 CHECK(optional IN (0,1))"),
+            ("consume_on_turn_in", "INTEGER NOT NULL DEFAULT 0 CHECK(consume_on_turn_in IN (0,1))"),
+            ("recipient_npc_definition_id", "TEXT REFERENCES mud_npc_definitions(id) ON DELETE SET NULL"),
+        ),
+        "mud_player_quests": (("ready_at", "TEXT"),),
+        "mud_dialogue_responses": (
+            ("conditions_json", "TEXT NOT NULL DEFAULT '[]'"),
+            ("outcomes_json", "TEXT NOT NULL DEFAULT '[]'"),
+            ("turn_in_quest_id", "TEXT REFERENCES mud_quests(id) ON DELETE SET NULL"),
+        ),
+    }
+    for table, columns in additions.items():
+        existing = {row["name"] for row in database.execute(f"PRAGMA table_info({table})")}
+        if not existing:
+            continue
+        for column, definition in columns:
+            if column not in existing:
+                database.execute(f"ALTER TABLE {table} ADD COLUMN {column} {definition}")
+
+
 def _migrate_module_switches(database):
     from .modules import ADDITIONAL_MODULES
 
@@ -1334,6 +1382,7 @@ def init_db():
     database.executescript(SCHEMA)
     _migrate_module_switches(database)
     _migrate_mud_authored_features(database)
+    _migrate_mud_quest_dialogue(database)
     if "description" not in {row["name"] for row in database.execute("PRAGMA table_info(mud_characters)")}:
         database.execute("ALTER TABLE mud_characters ADD COLUMN description TEXT NOT NULL DEFAULT ''")
     _migrate_events(database)
@@ -1368,6 +1417,7 @@ def init_db():
     _migrate_mud_magic(database)
     _migrate_mud_progression(database)
     _migrate_mud_skills(database)
+    _migrate_mud_combat_balance(database)
     _initialize_mud_characters(database)
     _initialize_mud_world(database)
     _migrate_mud_world_packages(database)
@@ -1606,6 +1656,26 @@ def _migrate_mud_progression(database):
     if "trained_attributes_json" not in columns:
         database.execute("ALTER TABLE mud_character_progression ADD COLUMN trained_attributes_json TEXT "
                          "NOT NULL DEFAULT '{}'")
+
+
+def _migrate_mud_combat_balance(database):
+    """Add resting, guarding, contribution, and accuracy/evasion columns; NULL means 0."""
+    additions = {
+        "mud_character_progression": {"last_rested_at": "TEXT"},
+        "mud_combat_participants": {
+            "damage_taken": "INTEGER NOT NULL DEFAULT 0 CHECK(damage_taken>=0)",
+            "guarding_until": "TEXT",
+        },
+        "mud_npc_combat_profiles": {
+            "accuracy": "INTEGER CHECK(accuracy IS NULL OR accuracy BETWEEN 0 AND 100)",
+            "evasion": "INTEGER CHECK(evasion IS NULL OR evasion BETWEEN 0 AND 100)",
+        },
+    }
+    for table, columns in additions.items():
+        existing = {row["name"] for row in database.execute(f"PRAGMA table_info({table})")}
+        for column, definition in columns.items():
+            if column not in existing:
+                database.execute(f"ALTER TABLE {table} ADD COLUMN {column} {definition}")
 
 
 def _migrate_mud_skills(database):

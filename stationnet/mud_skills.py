@@ -14,6 +14,8 @@ EFFECT_TYPES = {
     "spell_power": "spell damage",
     "healing": "healing spells",
     "defense": "damage mitigation",
+    "accuracy": "chance to hit",
+    "evasion": "chance to dodge attacks",
     "experience_percent": "% experience earned",
     "stealth": "% hiding and sneaking chance",
     "flee": "% escape chance",
@@ -21,7 +23,7 @@ EFFECT_TYPES = {
     "lockpick": "lockpicking score",
     "shop_discount": "% merchant discount",
 }
-WEAPON_FILTERED = {"attack", "melee_damage", "firearm_damage"}
+WEAPON_FILTERED = {"attack", "melee_damage", "firearm_damage", "accuracy"}
 ARMOR_FILTERED = {"defense"}
 EFFECT_CAPS = {"shop_discount": 50}
 TRIGGERS = {
@@ -31,6 +33,7 @@ TRIGGERS = {
     "heal_cast": "casting healing spells",
     "damage_taken": "taking damage in combat",
     "defend": "bracing with /defend",
+    "dodge": "dodging attacks",
     "hide": "hiding",
     "flee": "fleeing combat",
     "search": "searching rooms",
@@ -118,7 +121,7 @@ def normalize(document, *, known_skills=None, known_origins=None):
             parsed["max"] = _whole(effect["max"], 1, 1000, "Effect max")
         if "weapon_category" in effect:
             if effect["type"] not in WEAPON_FILTERED:
-                raise ValueError("weapon_category only applies to attack, melee_damage, or firearm_damage.")
+                raise ValueError("weapon_category only applies to attack, melee_damage, firearm_damage, or accuracy.")
             parsed["weapon_category"] = _key(effect["weapon_category"], "weapon_category")
         if "armor_category" in effect:
             if effect["type"] not in ARMOR_FILTERED:

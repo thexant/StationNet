@@ -286,8 +286,10 @@ for(const mud of document.querySelectorAll("[data-mud]")){
       const title=document.createElement("strong");title.textContent=quest.name;
       const description=document.createElement("p");description.textContent=quest.description;
       const list=document.createElement("ul");
-      for(const objective of quest.objectives||[]){const row=document.createElement("li");if(objective.completed_at)row.className="complete";row.append(`${objective.completed_at?"✓":"·"} ${objective.description} `);const progress=document.createElement("span");progress.textContent=`${objective.progress}/${objective.required_count}`;row.append(progress);list.append(row)}
-      article.append(title,description,list);quests.append(article);
+      for(const objective of quest.objectives||[]){const row=document.createElement("li");row.className=objective.completed_at?"complete":objective.locked?"locked":"";row.append(`${objective.completed_at?"✓":objective.locked?"🔒":"·"} ${objective.description}${objective.optional?" (optional)":""} `);const progress=document.createElement("span");progress.textContent=`${objective.progress}/${objective.required_count}`;row.append(progress);list.append(row)}
+      article.append(title,description);
+      if(quest.ready){const ready=document.createElement("p");ready.className="mud-quest-ready";ready.textContent=`READY — return to ${quest.turn_in_npc_name}`;article.append(ready)}
+      article.append(list);quests.append(article);
     }
   };
   const setBusy=value=>{

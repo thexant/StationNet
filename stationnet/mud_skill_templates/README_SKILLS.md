@@ -108,6 +108,8 @@ bonus at rank *r* is `(r // every) × per_rank`, capped at `max` if given.
 | `spell_power` | Damage from offensive spells. |
 | `healing` | Health restored by healing spells. |
 | `defense` | Mitigation against enemy hits. Optional `armor_category` limits it to equipped gear of that category. |
+| `accuracy` | Added to the chance to hit with melee, firearms, and spells. Optional `weapon_category` applies it only while a weapon of that category is equipped. |
+| `evasion` | Subtracted from enemies' chance to hit you. Evasion above 20 counts half, and enemies always keep at least a 30% chance. |
 | `experience_percent` | Percentage bonus to experience earned. |
 | `stealth` | Percentage points added to hiding and sneaking past enemies (total chance at most 95%). |
 | `flee` | Percentage points added to escape chance (total at most 95%). |
@@ -123,9 +125,10 @@ Builders set difficulties in the World Builder.
 
 | Trigger | Fires when |
 | --- | --- |
-| `melee_hit` | The character lands a melee attack. |
+| `melee_hit` | The character lands a melee attack (misses and dodged attacks do not count). |
 | `firearm_hit` | The character lands a firearm shot. |
-| `spell_cast` | The character casts an offensive spell. |
+| `spell_cast` | The character lands an offensive spell. |
+| `dodge` | The character's evasion turns an enemy attack aside. |
 | `heal_cast` | The character casts a healing spell. |
 | `damage_taken` | An enemy hit actually deals damage (reloads and fully blocked hits do not count). |
 | `defend` | The character braces with `/defend`. |

@@ -10,6 +10,8 @@ import zipfile
 
 from flask import current_app
 
+from . import mud_conditions
+
 
 MAX_ZIP_BYTES = 16 * 1024 * 1024
 MAX_FILE_BYTES = 8 * 1024 * 1024
@@ -24,18 +26,21 @@ CONTENT_TABLES = {
     "mud_item_definitions": ("id", "name", "description", "item_type", "properties_json", "behaviors_json", "equipment_slot"),
     "mud_conversations": ("id", "name"),
     "mud_dialogue_nodes": ("id", "conversation_id", "node_key", "body", "is_start"),
-    "mud_quests": ("id", "name", "description", "prerequisite_quest_id"),
+    "mud_quests": ("id", "name", "description", "prerequisite_quest_id", "completion_mode",
+                   "turn_in_npc_definition_id", "sequential", "abandonable", "conditions_json"),
     "mud_npc_definitions": ("id", "name", "description", "conversation_id", "properties_json", "behaviors_json"),
-    "mud_npc_combat_profiles": ("npc_definition_id", "maximum_health", "attack", "defense", "experience_reward", "respawn_seconds"),
+    "mud_npc_combat_profiles": ("npc_definition_id", "maximum_health", "attack", "defense", "experience_reward", "respawn_seconds", "accuracy", "evasion"),
     "mud_npc_equipment": ("npc_definition_id", "equipment_slot", "item_definition_id"),
     "mud_npc_combat_rewards": ("id", "npc_definition_id", "reward_type", "target_id", "amount", "chance_percent"),
     "mud_npc_shops": ("npc_definition_id", "buys_items", "sell_percent"),
     "mud_shop_stock": ("id", "npc_definition_id", "item_definition_id", "price", "quantity"),
     "mud_npc_trainers": ("id", "npc_definition_id", "skill_key", "price", "max_rank"),
-    "mud_quest_objectives": ("id", "quest_id", "objective_type", "target_id", "description", "required_count", "sort_order"),
+    "mud_quest_objectives": ("id", "quest_id", "objective_type", "target_id", "description", "required_count", "sort_order",
+                             "optional", "consume_on_turn_in", "recipient_npc_definition_id"),
     "mud_quest_rewards": ("id", "quest_id", "reward_type", "target_id", "amount"),
     "mud_quest_givers": ("quest_id", "npc_definition_id"),
-    "mud_dialogue_responses": ("id", "node_id", "response_text", "next_node_id", "accept_quest_id", "deliver_item_id", "required_state_key", "required_state_value", "state_key", "state_value", "sort_order"),
+    "mud_dialogue_responses": ("id", "node_id", "response_text", "next_node_id", "accept_quest_id", "deliver_item_id", "required_state_key", "required_state_value", "state_key", "state_value", "sort_order",
+                               "conditions_json", "outcomes_json", "turn_in_quest_id"),
     "mud_item_instances": ("id", "definition_id", "room_id", "container_id", "is_open", "state_json"),
     "mud_item_spawns": ("id", "definition_id", "room_id", "respawn_seconds"),
     "mud_room_discoveries": ("id", "room_id", "clue", "item_definition_id", "difficulty"),
@@ -50,7 +55,15 @@ REFERENCE_TABLE = {
     "item_definition_id": "mud_item_definitions", "quest_id": "mud_quests",
     "definition_id": None, "room_id": "rooms", "container_id": "mud_item_instances",
     "key_item_id": "mud_item_definitions",
+    "turn_in_npc_definition_id": "mud_npc_definitions",
+    "recipient_npc_definition_id": "mud_npc_definitions", "turn_in_quest_id": "mud_quests",
 }
+# Quests and dialogue responses carry condition/outcome lists that name content.
+CONDITION_COLUMNS = {"mud_quests": ("conditions_json",),
+                     "mud_dialogue_responses": ("conditions_json", "outcomes_json")}
+CONDITION_TABLES = {"item": "mud_item_definitions", "quest": "mud_quests",
+                    "objective": "mud_quest_objectives"}
+ORIGIN_KINDS = {"race": "races", "class": "classes"}
 
 
 class WorldError(ValueError):
@@ -192,9 +205,24 @@ def read_package(payload):
                 if "category" in properties and (not isinstance(properties["category"], str)
                                                  or not ID_RE.fullmatch(properties["category"])):
                     raise WorldError("Item category must be a lowercase key such as blade.")
+            elif table == "mud_npc_combat_profiles":
+                if any(row.get(key) is not None and not _whole(row[key], 0, 100)
+                       for key in ("accuracy", "evasion")):
+                    raise WorldError("NPC combat accuracy and evasion must be whole numbers from 0 to 100.")
             elif table == "mud_quest_objectives":
                 if row.get("objective_type") not in {"talk_npc", "visit_room", "possess_item", "defeat_npc", "deliver_item"} or not _whole(row.get("required_count", 1), 1, 100):
                     raise WorldError("Quest objective type or required_count is invalid.")
+                if not _whole(row.get("optional", 0), 0, 1) or not _whole(row.get("consume_on_turn_in", 0), 0, 1):
+                    raise WorldError("Quest objective optional and consume_on_turn_in must be 0 or 1.")
+                if row.get("consume_on_turn_in") and row["objective_type"] != "possess_item":
+                    raise WorldError("Only possess_item objectives can consume items on turn-in.")
+                if row.get("recipient_npc_definition_id") and row["objective_type"] != "deliver_item":
+                    raise WorldError("Only deliver_item objectives can name a recipient NPC.")
+            elif table == "mud_quests":
+                if row.get("completion_mode", "auto") not in {"auto", "turn_in"}:
+                    raise WorldError("Quest completion_mode must be auto or turn_in.")
+                if not _whole(row.get("sequential", 0), 0, 1) or not _whole(row.get("abandonable", 1), 0, 1):
+                    raise WorldError("Quest sequential and abandonable must be 0 or 1.")
             elif table in {"mud_quest_rewards", "mud_npc_combat_rewards"}:
                 if row.get("reward_type") not in {"experience", "item", "coins"} or not _whole(row.get("amount", 1), 1, 100000):
                     raise WorldError("Reward type or amount is invalid.")
@@ -222,6 +250,11 @@ def read_package(payload):
                     raise WorldError("Room discovery clue must be 1 to 500 characters.")
                 if not _whole(row.get("difficulty", 0), 0, 200):
                     raise WorldError("Room discovery difficulty must be 0 to 200.")
+            for column in CONDITION_COLUMNS.get(table, ()):
+                try:
+                    _condition_validator(column)(row.get(column))
+                except ValueError as problem:
+                    raise WorldError(f"Invalid {table} {column}: {problem}") from problem
     key_ids = {row.get("id") for row in content.get("mud_item_definitions", []) if row.get("item_type") == "key"}
     if any(item["key_item_id"] and item["key_item_id"] not in key_ids for item in clean_exits):
         raise WorldError("Locked exits must reference a key item definition in content.json.")
@@ -308,6 +341,15 @@ def _insert_content(database, document, installation_key, skill_map=None):
     maps = _content_maps(document, installation_key)
     installed_skills = {entry["key"] for entry in mud_skills.catalog(database)}
     world_id = document["id"]
+    origin_map = _bundled_origin_map(document)
+
+    def condition_mapper(kind, value):
+        if kind in ORIGIN_KINDS:
+            return origin_map.get((ORIGIN_KINDS[kind], value), value)
+        if kind == "skill":
+            return (skill_map or {}).get(value, value)
+        return _mapped(maps, CONDITION_TABLES[kind], value, f"{kind} condition")
+
     quest_prerequisites = {row["id"]: row.get("prerequisite_quest_id")
                            for row in document["content"].get("mud_quests", [])}
     if any(value is not None and not isinstance(value, str)
@@ -352,7 +394,8 @@ def _insert_content(database, document, installation_key, skill_map=None):
                     if ref_table is None:
                         ref_table = ("mud_item_definitions" if table in {"mud_item_instances", "mud_item_spawns"}
                                      else "mud_npc_definitions")
-                    if table == "mud_quests" and column == "prerequisite_quest_id":
+                    if table == "mud_quests" and column in ("prerequisite_quest_id", "turn_in_npc_definition_id"):
+                        # Linked after every quest and NPC definition exists.
                         continue
                     value = _mapped(maps, ref_table, value, column)
                 elif column == "target_id":
@@ -372,6 +415,9 @@ def _insert_content(database, document, installation_key, skill_map=None):
                     value = (skill_map or {}).get(value, value)
                     if value not in installed_skills:
                         raise WorldError(f"Trainer skill {row[column]!r} is not bundled or installed.")
+                elif column in CONDITION_COLUMNS.get(table, ()):
+                    value = json.dumps(mud_conditions.remap(_condition_validator(column)(value), condition_mapper),
+                                       ensure_ascii=False, separators=(",", ":"))
                 elif column.endswith("_json"):
                     if isinstance(value, (dict, list)):
                         value = json.dumps(value, ensure_ascii=False, separators=(",", ":"))
@@ -397,6 +443,11 @@ def _insert_content(database, document, installation_key, skill_map=None):
         if row.get("prerequisite_quest_id"):
             database.execute("UPDATE mud_quests SET prerequisite_quest_id=? WHERE id=?",
                              (_mapped(maps, "mud_quests", row["prerequisite_quest_id"], "prerequisite_quest_id"),
+                              _mapped(maps, "mud_quests", row["id"], "id")))
+        if row.get("turn_in_npc_definition_id"):
+            database.execute("UPDATE mud_quests SET turn_in_npc_definition_id=? WHERE id=?",
+                             (_mapped(maps, "mud_npc_definitions", row["turn_in_npc_definition_id"],
+                                      "turn_in_npc_definition_id"),
                               _mapped(maps, "mud_quests", row["id"], "id")))
     return maps
 
@@ -615,6 +666,19 @@ def install(database, payload, *, origin_mode="preserve", selected=None):
     return document
 
 
+def _condition_validator(column):
+    return (mud_conditions.validate_outcomes if column == "outcomes_json"
+            else mud_conditions.validate_conditions)
+
+
+def _stored_conditions(value, column):
+    """Stored condition/outcome JSON as a normalized list; unreadable values export as []."""
+    try:
+        return _condition_validator(column)(value)
+    except ValueError:
+        return []
+
+
 def _export_content(database, world_id, room_map):
     roots = {"mud_item_definitions", "mud_conversations", "mud_npc_definitions", "mud_quests"}
     all_placed_items = [dict(row) for row in database.execute(
@@ -646,6 +710,15 @@ def _export_content(database, world_id, room_map):
         "(SELECT definition_id FROM mud_npc_instances WHERE room_id IN "
         "(SELECT id FROM mud_world_rooms WHERE world_id=?))", (world_id,)
     ) if row["conversation_id"]}
+    for row in database.execute(
+        "SELECT r.conditions_json,r.outcomes_json FROM mud_dialogue_responses r "
+        "JOIN mud_dialogue_nodes n ON n.id=r.node_id JOIN mud_conversations c ON c.id=n.conversation_id "
+        "WHERE c.world_id=? UNION ALL SELECT conditions_json,'[]' FROM mud_quests WHERE world_id=?",
+        (world_id, world_id),
+    ):
+        needed_items |= {ref for kind, ref in mud_conditions.references(
+            _stored_conditions(row["conditions_json"], "conditions_json"),
+            _stored_conditions(row["outcomes_json"], "outcomes_json")) if kind == "item"}
     selected = {}
     for table, columns in CONTENT_TABLES.items():
         rows = [dict(row) for row in database.execute(
@@ -710,6 +783,12 @@ def _export_content(database, world_id, room_map):
                                   "deliver_item": "mud_item_definitions"}.get(row["objective_type"])
                                  if table == "mud_quest_objectives" else "mud_item_definitions")
                     value = _mapped(maps, ref_table, value, column)
+                elif column in CONDITION_COLUMNS.get(table, ()):
+                    # Origins and skills are renamed in export() once their local keys are known.
+                    value = mud_conditions.remap(
+                        _stored_conditions(value, column),
+                        lambda kind, ref: ref if kind not in CONDITION_TABLES
+                        else _mapped(maps, CONDITION_TABLES[kind], ref, f"{kind} condition"))
                 elif column.endswith("_json") and isinstance(value, str):
                     try:
                         value = json.loads(value)
@@ -806,6 +885,16 @@ def export(database, world_id, *, origin_keys=None, skill_keys=None):
         document["skills"] = skills
     for row in content.get("mud_npc_trainers", []):
         row["skill_key"] = local_skill.get(row["skill_key"], row["skill_key"])
+
+    def local_reference(kind, ref):
+        if kind in ORIGIN_KINDS:
+            return origin_local.get((ORIGIN_KINDS[kind], ref), ref)
+        return local_skill.get(ref, ref) if kind == "skill" else ref
+
+    for table, columns in CONDITION_COLUMNS.items():
+        for row in content.get(table, []):
+            for column in columns:
+                row[column] = mud_conditions.remap(row[column], local_reference)
     return package_bytes(document)
 
 

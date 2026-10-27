@@ -18,7 +18,7 @@ from flask import Blueprint, abort, flash, g, jsonify, redirect, render_template
 
 from .auth import admin_required, login_required
 from .db import get_db
-from . import dungeons, character_creation, mud_effects, mud_firearms, mud_compat, mud_skills, moderation
+from . import dungeons, character_creation, mud_combat, mud_conditions, mud_effects, mud_firearms, mud_compat, mud_skills, moderation
 from .security import validate_csrf
 
 bp = Blueprint("mud", __name__, url_prefix="/mud")
@@ -33,8 +33,8 @@ MAX_EXPERIENCE = 2**63 - 1
 MAX_LEVEL = 50
 ATTRIBUTE_CAP = 30
 ATTRIBUTE_SUMMARIES = {
-    "strength": "melee damage",
-    "agility": "firearm damage, mitigation, flee and stealth",
+    "strength": "melee damage and accuracy",
+    "agility": "accuracy, evasion, firearm damage, flee and stealth",
     "intellect": "spell power, healing, experience and mana per level",
     "vitality": "health per level, mitigation and defending",
 }
@@ -173,6 +173,8 @@ def level_bonuses(level):
         "spell_power": (level - 1) // 3,
         "healing": (level - 1) // 2,
         "defense": (level - 1) // 5,
+        "accuracy": (level - 1) // 2,
+        "evasion": (level - 1) // 4,
     }
 
 
@@ -415,7 +417,7 @@ def _character_effects(database, character_id, gear=None):
         for key, value in (origin or {}).get("effects", {}).items():
             if key in totals:
                 totals[key] += value
-    for key in ("attack", "defense"):
+    for key in ("attack", "defense", "accuracy", "evasion"):
         totals[key] += mud_effects.modifier(database, "character", character_id, key)
     return totals
 
@@ -430,21 +432,65 @@ def _flee_chance(agility, bonus=0):
     return min(95, max(35, min(75, 50 + (agility - 10) * 2) + bonus))
 
 
+def _player_mitigation(character, gear, effects):
+    """Flat damage reduction on hits that land; Vitality and armor drive it, not Agility."""
+    return (3 + (character["vitality"] - 10) // 3 + gear["defense"]
+            + _equipment_stat_bonus(gear, character["vitality"], "defense")
+            + effects["defense"] + level_bonuses(character["level"])["defense"])
+
+
+def _player_accuracy(character, gear, effects, kind):
+    """Accuracy for melee, firearm, or spell attacks before the target's evasion."""
+    agility, strength = character["agility"], character["strength"]
+    base = {"melee": (agility - 10) + (strength - 10) // 2,
+            "firearm": (agility - 10) * 3 // 2 + gear["firearm_accuracy"],
+            "spell": character["intellect"] - 10 + mud_combat.SPELL_ACCURACY_BONUS}[kind]
+    return base + gear["accuracy"] + effects["accuracy"] + level_bonuses(character["level"])["accuracy"]
+
+
+def _player_evasion(character, gear, effects, guarding=False):
+    """Agility, level, skills, gear, and effects help a character dodge; bracing helps more."""
+    return (2 * (character["agility"] - 10) + level_bonuses(character["level"])["evasion"]
+            + gear["evasion"] + effects["evasion"] + (mud_combat.DEFEND_EVASION if guarding else 0))
+
+
+def _npc_hit_stat(database, npc, encounter, gear, stat):
+    """An NPC's authored accuracy or evasion plus its gear and active effects; missing means 0."""
+    authored = npc[f"combat_{stat}"] if f"combat_{stat}" in npc.keys() else None
+    return ((authored or 0) + gear[stat]
+            + mud_effects.modifier(database, "encounter", encounter["id"], stat))
+
+
+def _hit_roll():
+    """A 0-99 roll used only for hit checks, separate from stealth, flee, and loot rolls."""
+    return _COMBAT_RNG.randrange(100)
+
+
+_COMBAT_RNG = random.SystemRandom()
+
+
 def _combat_profile(database, row, creation_state):
     """Summarize how attributes, level, gear, and skills shape combat before enemy defense."""
     gear = _equipment_combat_totals(database, character_id=row["id"])
     effects = _character_effects(database, row["id"], gear)
     bonuses = level_bonuses(row["level"])
     strength, agility = row["strength"], row["agility"]
-    intellect, vitality = row["intellect"], row["vitality"]
+    intellect = row["intellect"]
+    evasion = _player_evasion(row, gear, effects)
     return {
         "melee_damage": 4 + strength // 2 + gear["attack"] + _equipment_stat_bonus(gear, strength, "attack")
                         + effects["attack"] + effects["melee_damage"] + bonuses["attack"],
         "firearm_damage": 6 + agility // 2 + effects["attack"] + effects["firearm_damage"] + bonuses["attack"],
         "spell_power": intellect // 3 + effects["spell_power"] + bonuses["spell_power"],
         "healing_bonus": intellect // 2 + effects["healing"] + bonuses["healing"],
-        "mitigation": vitality // 10 + agility // 5 + gear["defense"]
-                      + _equipment_stat_bonus(gear, vitality, "defense") + effects["defense"] + bonuses["defense"],
+        "mitigation": _player_mitigation(row, gear, effects),
+        "melee_accuracy": _player_accuracy(row, gear, effects, "melee"),
+        "firearm_accuracy": _player_accuracy(row, gear, effects, "firearm"),
+        "spell_accuracy": _player_accuracy(row, gear, effects, "spell"),
+        "evasion": evasion,
+        # Chances against an average foe with no accuracy or evasion of its own.
+        "melee_hit_chance": mud_combat.hit_chance(_player_accuracy(row, gear, effects, "melee"), 0),
+        "chance_to_be_hit": mud_combat.hit_chance(0, evasion),
         "flee_chance": _flee_chance(agility, effects["flee"]),
         "stealth_chance": _stealth_chance(agility, 5, effects["stealth"]),
         "search_bonus": effects["search"],
@@ -502,13 +548,18 @@ def _character_action(database, user, parameters):
     lines += [
         f"Combat: melee {combat['melee_damage']} · firearm {combat['firearm_damage']} + weapon · "
         f"spell power +{combat['spell_power']} · healing +{combat['healing_bonus']}",
+        f"Accuracy: melee {combat['melee_accuracy']:+d} · firearm {combat['firearm_accuracy']:+d} · "
+        f"spells {combat['spell_accuracy']:+d} · evasion {combat['evasion']:+d} "
+        f"(vs. an average foe: you hit {combat['melee_hit_chance']}% in melee, "
+        f"it hits you {combat['chance_to_be_hit']}%)",
         f"Defense: mitigation {combat['mitigation']} · flee {combat['flee_chance']}% · "
         f"stealth {combat['stealth_chance']}% · experience +{combat['experience_bonus']}%",
         *([f"Skills: search +{combat['search_bonus']} · lockpicking +{combat['lockpick_bonus']} · "
            f"merchant discount {combat['shop_discount']}%"]
           if combat["search_bonus"] or combat["lockpick_bonus"] or combat["shop_discount"] else []),
         f"Level bonuses: attack +{bonuses['attack']} · spells +{bonuses['spell_power']} · "
-        f"healing +{bonuses['healing']} · mitigation +{bonuses['defense']}",
+        f"healing +{bonuses['healing']} · mitigation +{bonuses['defense']} · "
+        f"accuracy +{bonuses['accuracy']} · evasion +{bonuses['evasion']}",
         f"Skills: {skills or 'none'}" + (f" · {character['skill_points']} skill point"
                                          f"{'s' if character['skill_points'] != 1 else ''} — use /skills"
                                          if character["skill_points"] else ""),
@@ -1138,6 +1189,8 @@ def _room_npc_rows(database, room_id, instance_id=None):
                 "combat_maximum_health": snapshot.get("maximum_health"),
                 "combat_attack": snapshot.get("attack"),
                 "combat_defense": snapshot.get("defense"),
+                "combat_accuracy": snapshot.get("accuracy"),
+                "combat_evasion": snapshot.get("evasion"),
                 "experience_reward": snapshot.get("experience_reward", 0),
                 "respawn_seconds": snapshot.get("respawn_seconds", 86400),
             })
@@ -1146,7 +1199,8 @@ def _room_npc_rows(database, room_id, instance_id=None):
         "SELECT i.id,i.definition_id,i.room_id,i.state_json,d.name,d.description,"
         "d.conversation_id,d.properties_json,d.behaviors_json,"
         "p.maximum_health AS combat_maximum_health,p.attack AS combat_attack,"
-        "p.defense AS combat_defense,p.experience_reward,p.respawn_seconds "
+        "p.defense AS combat_defense,p.accuracy AS combat_accuracy,p.evasion AS combat_evasion,"
+        "p.experience_reward,p.respawn_seconds "
         "FROM mud_npc_instances AS i JOIN mud_npc_definitions AS d "
         "ON d.id=i.definition_id LEFT JOIN mud_npc_combat_profiles AS p "
         "ON p.npc_definition_id=d.id WHERE i.room_id=? "
@@ -1258,25 +1312,34 @@ def _equipment_combat_totals(database, character_id=None, npc_definition_id=None
             "JOIN mud_item_definitions AS d ON d.id=e.item_definition_id "
             "WHERE e.npc_definition_id=?", (npc_definition_id,),
         ).fetchall()
-    attack = defense = 0
+    attack = defense = accuracy = firearm_accuracy = evasion = 0
     categories, unproficient = set(), []
     known = mud_skills.proficiencies(database, character_id) if character_id is not None else set()
+    limit = mud_combat.ITEM_EVASION_LIMIT
     for row in rows:
         properties = _json_properties(row["properties_json"])
         if character_id is not None and not _meets_item_requirements(properties, character):
             continue
         item_attack = max(0, _integer_property(properties, "damage", "attack", "attack_bonus"))
         item_defense = max(0, _integer_property(properties, "armor", "defense", "defense_bonus"))
+        item_accuracy = max(-limit, min(limit, _integer_property(properties, "accuracy")))
         category = _item_category(properties)
         if character_id is not None and category:
             categories.add(category)
             if category not in known:
                 unproficient.append(row["name"])
                 item_attack, item_defense = _untrained(item_attack), _untrained(item_defense)
+        # Heavy gear may carry a negative evasion; a firearm's accuracy only helps its own shots.
+        evasion += max(-limit, min(limit, _integer_property(properties, "evasion")))
         if character_id is None or not mud_firearms.is_firearm(properties):
             attack += item_attack
+            accuracy += item_accuracy
+        else:
+            firearm_accuracy += item_accuracy
         defense += item_defense
-    return {"attack": attack, "defense": defense, "categories": categories, "unproficient": unproficient}
+    return {"attack": attack, "defense": defense, "accuracy": accuracy,
+            "firearm_accuracy": firearm_accuracy, "evasion": evasion,
+            "categories": categories, "unproficient": unproficient}
 
 
 def _item_category(properties):
@@ -1361,6 +1424,7 @@ def combat_state(database, user_id):
             "encounter_id": encounter["id"], "status": encounter["status"],
             "health": encounter["current_health"], "maximum_health": encounter["maximum_health"],
             "attack": npc["combat_attack"], "defense": npc["combat_defense"],
+            "accuracy": npc["combat_accuracy"] or 0, "evasion": npc["combat_evasion"] or 0,
             "effects": mud_effects.list_effects(database, "encounter", encounter["id"]),
         })
     return {"scope_type": "instance" if room.get("instance_id") else "room",
@@ -1438,7 +1502,7 @@ def _room_state(database, user_id):
         entry = {"id": npc["id"], "definition_id": npc["definition_id"],
                  "name": npc["name"], "display_name": display_name,
                  "description": npc["description"],
-                 "hostile": _npc_aggressive(npc)}
+                 "hostile": _npc_stance(database, npc, user_id) == "Hostile"}
         if npc["combat_maximum_health"] is not None:
             encounter = _encounter_row(database, npc)
             entry.update(status=encounter["status"], health=encounter["current_health"],
@@ -2067,46 +2131,79 @@ def _objective_target_name(database, objective):
     return row["name"] if row else f"Unknown {fallback}"
 
 
+def _npc_names(database, definition_ids):
+    names = sorted({row["name"] for row in database.execute(
+        f"SELECT name FROM mud_npc_definitions WHERE id IN ({','.join('?' for _ in definition_ids)})",
+        tuple(definition_ids),
+    )}, key=str.casefold) if definition_ids else []
+    return " or ".join(names) if names else "the quest giver"
+
+
+def _turn_in_npc_ids(database, quest):
+    """The NPC definitions that accept a turn-in: the named one, else any giver."""
+    if quest["turn_in_npc_definition_id"]:
+        return {quest["turn_in_npc_definition_id"]}
+    return {row["npc_definition_id"] for row in database.execute(
+        "SELECT npc_definition_id FROM mud_quest_givers WHERE quest_id=?", (quest["id"],))}
+
+
+def _quest_objectives(database, character_id, quest_id):
+    return [dict(row) for row in database.execute(
+        "SELECT o.*,COALESCE(p.progress,0) AS progress,p.completed_at "
+        "FROM mud_quest_objectives AS o LEFT JOIN mud_player_objectives AS p "
+        "ON p.objective_id=o.id AND p.character_id=? WHERE o.quest_id=? "
+        "ORDER BY o.sort_order,o.id", (character_id, quest_id),
+    )]
+
+
+def _locked_objective_ids(quest, objectives):
+    """Sequential quests unlock stages (equal sort_order) once earlier required work is done."""
+    if not quest["sequential"]:
+        return set()
+    locked, blocked = set(), False
+    for stage in sorted({objective["sort_order"] for objective in objectives}):
+        members = [objective for objective in objectives if objective["sort_order"] == stage]
+        if blocked:
+            locked.update(objective["id"] for objective in members)
+        elif any(not objective["optional"] and not objective["completed_at"] for objective in members):
+            blocked = True
+    return locked
+
+
 def quest_state(database, user_id):
     """Return player-specific active/completed quest state for rendering."""
     character = _character_row(database, user_id)
     quests = []
     rows = database.execute(
-        "SELECT q.id,q.name,q.description,p.status,p.accepted_at,p.completed_at,p.rewarded_at "
+        "SELECT q.id,q.name,q.description,q.completion_mode,q.sequential,q.abandonable,"
+        "q.turn_in_npc_definition_id,p.status,p.accepted_at,p.completed_at,p.rewarded_at,p.ready_at "
         "FROM mud_player_quests AS p JOIN mud_quests AS q ON q.id=p.quest_id "
         "WHERE p.character_id=? ORDER BY p.status,q.name COLLATE NOCASE,q.id",
         (character["id"],),
     ).fetchall()
     for row in rows:
         entry = dict(row)
+        entry["ready"] = row["status"] == "active" and row["ready_at"] is not None
+        entry["turn_in_npc_name"] = (_npc_names(database, _turn_in_npc_ids(database, row))
+                                     if row["completion_mode"] == "turn_in" else None)
+        objectives = _quest_objectives(database, character["id"], row["id"])
+        locked = _locked_objective_ids(row, objectives) if row["status"] == "active" else set()
         entry["objectives"] = []
-        objectives = database.execute(
-            "SELECT o.*,COALESCE(p.progress,0) AS progress,p.completed_at "
-            "FROM mud_quest_objectives AS o LEFT JOIN mud_player_objectives AS p "
-            "ON p.objective_id=o.id AND p.character_id=? WHERE o.quest_id=? "
-            "ORDER BY o.sort_order,o.id", (character["id"], row["id"]),
-        ).fetchall()
-        for objective in objectives:
-            item = dict(objective)
-            item["target_name"] = _objective_target_name(database, objective)
+        for item in objectives:
+            item["target_name"] = _objective_target_name(database, item)
+            item["locked"] = item["id"] in locked
+            item["optional"] = bool(item["optional"])
             entry["objectives"].append(item)
         quests.append(entry)
     return {"active": [q for q in quests if q["status"] == "active"],
             "completed": [q for q in quests if q["status"] == "completed"]}
 
 
-def _award_quest_rewards(database, user, quest_id):
+def _grant_rewards(database, user, rewards):
+    """Grant quest-style rewards (experience, item, coins) and describe them."""
     character = _character_row(database, user["id"])
-    player_quest = database.execute(
-        "SELECT rewarded_at FROM mud_player_quests WHERE character_id=? AND quest_id=?",
-        (character["id"], quest_id),
-    ).fetchone()
-    if player_quest is None or player_quest["rewarded_at"] is not None:
-        return []
     messages = []
-    for reward in database.execute(
-        "SELECT * FROM mud_quest_rewards WHERE quest_id=? ORDER BY id", (quest_id,),
-    ):
+    for reward in rewards:
         if reward["reward_type"] == "experience":
             result = award_experience(database, user["id"], reward["amount"])
             # Report what was actually earned after Intellect and Lore bonuses.
@@ -2128,10 +2225,24 @@ def _award_quest_rewards(database, user, quest_id):
             database.execute("UPDATE mud_character_wallets SET coins=coins+? WHERE character_id=?",
                              (reward["amount"], character["id"]))
             messages.append(f"{reward['amount']} coins")
-    database.execute(
+    return messages
+
+
+def _award_quest_rewards(database, user, quest_id):
+    character = _character_row(database, user["id"])
+    # Claim the payout first so a repeated completion can never pay twice.
+    if database.execute(
         "UPDATE mud_player_quests SET rewarded_at=CURRENT_TIMESTAMP WHERE character_id=? "
         "AND quest_id=? AND rewarded_at IS NULL", (character["id"], quest_id),
-    )
+    ).rowcount == 0:
+        return []
+    rewards = database.execute(
+        "SELECT * FROM mud_quest_rewards WHERE quest_id=? ORDER BY id", (quest_id,),
+    ).fetchall()
+    messages = _grant_rewards(database, user, rewards)
+    for reward in rewards:
+        if reward["reward_type"] == "item":
+            _record_objective_progress(database, user, "possess_item", reward["target_id"])
     return messages
 
 
@@ -2139,16 +2250,27 @@ def _finish_ready_quests(database, user):
     character = _character_row(database, user["id"])
     completed = []
     active = database.execute(
-        "SELECT q.id,q.name FROM mud_player_quests AS p JOIN mud_quests AS q ON q.id=p.quest_id "
+        "SELECT q.*,p.ready_at FROM mud_player_quests AS p JOIN mud_quests AS q ON q.id=p.quest_id "
         "WHERE p.character_id=? AND p.status='active'", (character["id"],),
     ).fetchall()
     for quest in active:
         remaining = database.execute(
             "SELECT 1 FROM mud_quest_objectives AS o LEFT JOIN mud_player_objectives AS p "
-            "ON p.objective_id=o.id AND p.character_id=? WHERE o.quest_id=? "
+            "ON p.objective_id=o.id AND p.character_id=? WHERE o.quest_id=? AND o.optional=0 "
             "AND (p.completed_at IS NULL) LIMIT 1", (character["id"], quest["id"]),
         ).fetchone()
         if remaining is not None:
+            continue
+        if quest["completion_mode"] == "turn_in":
+            if quest["ready_at"] is None and database.execute(
+                "UPDATE mud_player_quests SET ready_at=CURRENT_TIMESTAMP WHERE character_id=? "
+                "AND quest_id=? AND status='active' AND ready_at IS NULL",
+                (character["id"], quest["id"]),
+            ).rowcount:
+                who = _npc_names(database, _turn_in_npc_ids(database, quest))
+                completed.append(EventDraft(
+                    f"Objectives complete: {quest['name']}. Return to {who} to turn it in "
+                    f"(/quest turnin {quest['name']}).", event_type="quest"))
             continue
         database.execute(
             "UPDATE mud_player_quests SET status='completed',completed_at=CURRENT_TIMESTAMP "
@@ -2161,26 +2283,49 @@ def _finish_ready_quests(database, user):
     return completed
 
 
-def _set_objective_progress(database, user, objective_type, target_id, objective_id=None):
+def _unlocked_objective(database, character_id, objective_id):
+    quest = database.execute(
+        "SELECT q.* FROM mud_quests q JOIN mud_quest_objectives o ON o.quest_id=q.id WHERE o.id=?",
+        (objective_id,),
+    ).fetchone()
+    if quest is None or not quest["sequential"]:
+        return quest is not None
+    return objective_id not in _locked_objective_ids(
+        quest, _quest_objectives(database, character_id, quest["id"]))
+
+
+def _held_counts(database, user_id):
+    counts = {}
+    for item in (*_inventory_rows(database, user_id), *_inventory_rows(database, user_id, True)):
+        counts[item["definition_id"]] = counts.get(item["definition_id"], 0) + 1
+    return counts
+
+
+def _record_objective_progress(database, user, objective_type, target_id, objective_id=None):
+    """Advance matching unlocked objectives; return True when one newly completes."""
     character = _character_row(database, user["id"])
     objectives = database.execute(
-        "SELECT o.id,o.required_count FROM mud_quest_objectives AS o "
+        "SELECT o.id,o.required_count,p.completed_at FROM mud_quest_objectives AS o "
         "JOIN mud_player_quests AS q ON q.quest_id=o.quest_id "
+        "LEFT JOIN mud_player_objectives AS p ON p.objective_id=o.id AND p.character_id=q.character_id "
         "WHERE q.character_id=? AND q.status='active' AND o.objective_type=? AND o.target_id=? "
         "AND (? IS NULL OR o.id=?)",
         (character["id"], objective_type, target_id, objective_id, objective_id),
     ).fetchall()
+    newly_completed = False
     for objective in objectives:
+        if objective["completed_at"] or not _unlocked_objective(database, character["id"], objective["id"]):
+            continue
         if objective_type == "possess_item":
-            visible = [*list(_inventory_rows(database, user["id"])),
-                       *list(_inventory_rows(database, user["id"], True))]
-            count = sum(item["definition_id"] == target_id for item in visible)
+            count = _held_counts(database, user["id"]).get(target_id, 0)
             progress = min(count, objective["required_count"])
         else:
             current = database.execute(
                 "SELECT progress FROM mud_player_objectives WHERE character_id=? AND objective_id=?",
                 (character["id"], objective["id"])).fetchone()
             progress = min(objective["required_count"], (current["progress"] if current else 0) + 1)
+        done = progress >= objective["required_count"]
+        newly_completed = newly_completed or done
         database.execute(
             "INSERT INTO mud_player_objectives(character_id,objective_id,progress,completed_at) "
             "VALUES(?,?,?,CASE WHEN ? THEN CURRENT_TIMESTAMP END) "
@@ -2188,20 +2333,62 @@ def _set_objective_progress(database, user, objective_type, target_id, objective
             "completed_at=CASE WHEN completed_at IS NOT NULL THEN completed_at "
             "WHEN excluded.progress>=(SELECT required_count FROM mud_quest_objectives WHERE id=excluded.objective_id) "
             "THEN CURRENT_TIMESTAMP END,updated_at=CURRENT_TIMESTAMP",
-            (character["id"], objective["id"], progress,
-             1 if progress >= objective["required_count"] else 0),
+            (character["id"], objective["id"], progress, 1 if done else 0),
         )
+    return newly_completed
+
+
+def _sync_held_items(database, user):
+    """Credit possession objectives, repeating as finished stages unlock later ones."""
+    for _ in range(50):
+        changed = False
+        for definition_id in _held_counts(database, user["id"]):
+            changed = _record_objective_progress(database, user, "possess_item", definition_id) or changed
+        if not changed:
+            return
+
+
+def _set_objective_progress(database, user, objective_type, target_id, objective_id=None):
+    if _record_objective_progress(database, user, objective_type, target_id, objective_id):
+        _sync_held_items(database, user)
     return _finish_ready_quests(database, user)
 
 
-def _available_quests(database, user, room_id):
+def _quest_status(database, character_id, quest_id):
+    row = database.execute(
+        "SELECT status,ready_at FROM mud_player_quests WHERE character_id=? AND quest_id=?",
+        (character_id, quest_id),
+    ).fetchone()
+    if row is None:
+        return "not_started"
+    if row["status"] == "active" and row["ready_at"] is not None:
+        return "ready"
+    return row["status"]
+
+
+def _quest_blocker(database, user, quest):
+    """Why this character cannot accept the quest now, or None."""
     character = _character_row(database, user["id"])
+    if _quest_status(database, character["id"], quest["id"]) != "not_started":
+        return "You have already accepted that quest."
+    if quest["prerequisite_quest_id"] and database.execute(
+        "SELECT 1 FROM mud_player_quests WHERE character_id=? AND quest_id=? "
+        "AND status='completed' AND rewarded_at IS NOT NULL",
+        (character["id"], quest["prerequisite_quest_id"]),
+    ).fetchone() is None:
+        return "You have not completed this quest's prerequisite."
+    if not mud_conditions.evaluate(quest["conditions_json"], _ConditionContext(database, user["id"])):
+        return "You do not meet the requirements for that quest."
+    return None
+
+
+def _available_quests(database, user, room_id):
+    """Quests offered by NPCs in this room that the character can accept now."""
     return [dict(row) for row in database.execute(
-        "SELECT q.* FROM mud_quests q WHERE NOT EXISTS "
-        "(SELECT 1 FROM mud_player_quests p WHERE p.character_id=? AND p.quest_id=q.id) "
-        "AND EXISTS (SELECT 1 FROM mud_quest_givers g JOIN mud_npc_instances n "
-        "ON n.definition_id=g.npc_definition_id WHERE g.quest_id=q.id AND n.room_id=?) "
-        "ORDER BY q.name COLLATE NOCASE,q.id", (character["id"], room_id))]
+        "SELECT q.* FROM mud_quests q WHERE EXISTS (SELECT 1 FROM mud_quest_givers g "
+        "JOIN mud_npc_instances n ON n.definition_id=g.npc_definition_id "
+        "WHERE g.quest_id=q.id AND n.room_id=?) ORDER BY q.name COLLATE NOCASE,q.id", (room_id,))
+        if _quest_blocker(database, user, row) is None]
 
 
 def _accept_quest(database, user, quest_id):
@@ -2209,18 +2396,9 @@ def _accept_quest(database, user, quest_id):
     quest = database.execute("SELECT * FROM mud_quests WHERE id=?", (quest_id,)).fetchone()
     if quest is None:
         raise ActionError("That quest no longer exists.")
-    existing = database.execute(
-        "SELECT status FROM mud_player_quests WHERE character_id=? AND quest_id=?",
-        (character["id"], quest_id),
-    ).fetchone()
-    if existing:
-        raise ActionError("You have already accepted that quest.")
-    if quest["prerequisite_quest_id"] and database.execute(
-        "SELECT 1 FROM mud_player_quests WHERE character_id=? AND quest_id=? "
-        "AND status='completed' AND rewarded_at IS NOT NULL",
-        (character["id"], quest["prerequisite_quest_id"]),
-    ).fetchone() is None:
-        raise ActionError("You have not completed this quest's prerequisite.")
+    blocker = _quest_blocker(database, user, quest)
+    if blocker:
+        raise ActionError(blocker)
     database.execute(
         "INSERT INTO mud_player_quests(character_id,quest_id) VALUES(?,?)",
         (character["id"], quest_id),
@@ -2232,14 +2410,159 @@ def _accept_quest(database, user, quest_id):
     )
     room = _current_room(database, user["id"])
     events = [EventDraft(f"Quest accepted: {quest['name']} — {quest['description']}", event_type="quest")]
-    events += _set_objective_progress(database, user, "visit_room", room["id"])
-    definitions = {row["definition_id"] for row in (
-        *list(_inventory_rows(database, user["id"])),
-        *list(_inventory_rows(database, user["id"], True)),
-    )}
-    for definition_id in definitions:
-        events += _set_objective_progress(database, user, "possess_item", definition_id)
+    _record_objective_progress(database, user, "visit_room", room["id"])
+    _sync_held_items(database, user)
     return events + _finish_ready_quests(database, user)
+
+
+def _abandon_quest(database, user, quest):
+    character = _character_row(database, user["id"])
+    status = _quest_status(database, character["id"], quest["id"])
+    if status in ("not_started", "completed"):
+        raise ActionError("You can only abandon an active quest.")
+    if not quest["abandonable"]:
+        raise ActionError(f"{quest['name']} cannot be abandoned.")
+    database.execute(
+        "DELETE FROM mud_player_objectives WHERE character_id=? AND objective_id IN "
+        "(SELECT id FROM mud_quest_objectives WHERE quest_id=?)", (character["id"], quest["id"]),
+    )
+    database.execute("DELETE FROM mud_player_quests WHERE character_id=? AND quest_id=? AND status='active'",
+                     (character["id"], quest["id"]))
+    return [EventDraft(f"Quest abandoned: {quest['name']}. Its progress has been cleared.", event_type="quest")]
+
+
+def _handover_items(database, user, definition_id, amount):
+    """Carried, unequipped items that can be given away, or an ActionError."""
+    eligible = [item for item in _inventory_rows(database, user["id"])
+                if item["definition_id"] == definition_id and not item["acquired_run_id"]
+                and database.execute("SELECT 1 FROM mud_item_instances WHERE container_id=?",
+                                     (item["id"],)).fetchone() is None]
+    if len(eligible) < amount:
+        name = database.execute("SELECT name FROM mud_item_definitions WHERE id=?",
+                                (definition_id,)).fetchone()
+        raise ActionError(f"You need {amount} × {name['name'] if name else 'that item'} "
+                          "carried, unequipped, and empty (extract run loot first).")
+    return eligible[:amount]
+
+
+def _turn_in_quest(database, user, quest_id, npc_definition_id=None):
+    character = _character_row(database, user["id"])
+    room = _current_room(database, user["id"])
+    quest = database.execute("SELECT * FROM mud_quests WHERE id=?", (quest_id,)).fetchone()
+    if quest is None:
+        raise ActionError("That quest no longer exists.")
+    if room.get("instance_id"):
+        raise ActionError("Quests are turned in within traditional worlds.")
+    status = _quest_status(database, character["id"], quest_id)
+    if status == "completed":
+        raise ActionError(f"You have already turned in {quest['name']}.")
+    if status == "not_started":
+        raise ActionError(f"You are not on the quest {quest['name']}.")
+    if quest["completion_mode"] != "turn_in":
+        raise ActionError(f"{quest['name']} completes on its own once its objectives are done.")
+    if status != "ready":
+        raise ActionError(f"You have not finished the objectives for {quest['name']}.")
+    recipients = _turn_in_npc_ids(database, quest)
+    present = {row["definition_id"] for row in database.execute(
+        "SELECT definition_id FROM mud_npc_instances WHERE room_id=?", (room["id"],))} & recipients
+    if npc_definition_id is not None:
+        present &= {npc_definition_id}
+    if not present:
+        raise ActionError(f"Return to {_npc_names(database, recipients)} to turn in {quest['name']}.")
+    handed = []
+    for objective in database.execute(
+        "SELECT o.* FROM mud_quest_objectives o JOIN mud_player_objectives p ON p.objective_id=o.id "
+        "WHERE o.quest_id=? AND p.character_id=? AND o.consume_on_turn_in=1 "
+        "AND o.objective_type='possess_item' AND p.completed_at IS NOT NULL ORDER BY o.sort_order,o.id",
+        (quest_id, character["id"]),
+    ).fetchall():
+        handed += _handover_items(database, user, objective["target_id"], objective["required_count"])
+    if database.execute(
+        "UPDATE mud_player_quests SET status='completed',completed_at=CURRENT_TIMESTAMP "
+        "WHERE character_id=? AND quest_id=? AND status='active' AND ready_at IS NOT NULL",
+        (character["id"], quest_id),
+    ).rowcount == 0:
+        raise ActionError(f"You have already turned in {quest['name']}.")
+    for item in handed:
+        database.execute("DELETE FROM mud_item_instances WHERE id=? AND owner_character_id=?",
+                         (item["id"], character["id"]))
+    events = []
+    if handed:
+        events.append(EventDraft("You hand over " + ", ".join(item["name"] for item in handed) + ".",
+                                 event_type="quest"))
+    rewards = _award_quest_rewards(database, user, quest_id)
+    suffix = f" Rewards: {', '.join(rewards)}." if rewards else ""
+    events.append(EventDraft(f"Quest complete: {quest['name']}.{suffix}", event_type="quest"))
+    return events + _finish_ready_quests(database, user)
+
+
+class _ConditionContext:
+    """Lazy character/world facts that dialogue and quest conditions read."""
+
+    def __init__(self, database, user_id, npc_id=None, dungeon=False):
+        self.database, self.user_id = database, user_id
+        self.npc_id, self.dungeon = npc_id, dungeon
+        self.response_id = None
+        self._row = self._origin = self._counts = self._skills = self._state = None
+
+    def _character(self):
+        if self._row is None:
+            self._row = _character_row(self.database, self.user_id)
+        return self._row
+
+    def _origins(self):
+        if self._origin is None:
+            self._origin = self.database.execute(
+                "SELECT race_key,class_key FROM mud_characters WHERE id=?", (self._character()["id"],)
+            ).fetchone()
+        return self._origin
+
+    def level(self):
+        return self._character()["level"]
+
+    def race(self):
+        return self._origins()["race_key"]
+
+    def class_key(self):
+        return self._origins()["class_key"]
+
+    def coins(self):
+        return _wallet(self.database, self._character()["id"])
+
+    def item_count(self, item_id):
+        if self._counts is None:
+            self._counts = _held_counts(self.database, self.user_id)
+        return self._counts.get(item_id, 0)
+
+    def attribute(self, name):
+        return self._character()[name]
+
+    def skill_rank(self, skill_key):
+        if self._skills is None:
+            self._skills = {row["skill_key"]: row["rank"]
+                            for row in mud_skills.character_rows(self.database, self._character()["id"])}
+        return self._skills.get(skill_key, 0)
+
+    def quest_status(self, quest_id):
+        return _quest_status(self.database, self._character()["id"], quest_id)
+
+    def objective_complete(self, objective_id):
+        return self.database.execute(
+            "SELECT 1 FROM mud_player_objectives WHERE character_id=? AND objective_id=? "
+            "AND completed_at IS NOT NULL", (self._character()["id"], objective_id),
+        ).fetchone() is not None
+
+    def state(self, key):
+        if self._state is None:
+            self._state = (_npc_player_state(self.database, self._character()["id"], self.npc_id, self.dungeon)
+                           if self.npc_id else {})
+        return self._state.get(key, "")
+
+    def claimed(self):
+        return self.response_id is not None and self.database.execute(
+            "SELECT 1 FROM mud_player_dialogue_claims WHERE character_id=? AND response_id=?",
+            (self._character()["id"], self.response_id),
+        ).fetchone() is not None
 
 
 def _describe_item(database, row, user_id=None):
@@ -2294,9 +2617,11 @@ def _examine_npc(_database, _user, room, target):
     body = f"{npc['name']}\n{npc['description']}"
     if npc["combat_maximum_health"] is not None:
         encounter = _encounter_row(_database, npc)
-        body += (f"\nHostile · {encounter['status']} · Health "
+        body += (f"\n{_npc_stance(_database, npc, _user['id'] if _user else None)} · "
+                 f"{encounter['status']} · Health "
                  f"{encounter['current_health']}/{encounter['maximum_health']}"
-                 f" · Attack {npc['combat_attack']} · Defense {npc['combat_defense']}")
+                 f" · Attack {npc['combat_attack']} · Defense {npc['combat_defense']}"
+                 f" · Accuracy {npc['combat_accuracy'] or 0} · Evasion {npc['combat_evasion'] or 0}")
     return body
 
 
@@ -2372,24 +2697,31 @@ def _encounter_reward_drafts(database, encounter, npc):
     drafts = []
     if encounter["scope_type"] == "instance":
         participants = database.execute(
-            "SELECT p.character_id,c.user_id,c.display_name FROM mud_combat_participants AS p "
+            "SELECT p.character_id,c.user_id,c.display_name,p.damage_dealt,p.damage_taken "
+            "FROM mud_combat_participants AS p "
             "JOIN mud_characters AS c ON c.id=p.character_id "
             "JOIN mud_player_locations AS l ON l.user_id=c.user_id "
             "JOIN mud_expedition_participants AS ep ON ep.instance_id=l.instance_id "
             "AND ep.user_id=c.user_id "
-            "WHERE p.encounter_id=? AND p.damage_dealt>0 AND p.left_at IS NULL "
+            "WHERE p.encounter_id=? AND p.damage_dealt+p.damage_taken>0 AND p.left_at IS NULL "
             "AND l.instance_id=? AND ep.status='active' ORDER BY p.joined_at,p.character_id",
             (encounter["id"], encounter["scope_key"]),
         ).fetchall()
     else:
         participants = database.execute(
-            "SELECT p.character_id,c.user_id,c.display_name FROM mud_combat_participants AS p "
+            "SELECT p.character_id,c.user_id,c.display_name,p.damage_dealt,p.damage_taken "
+            "FROM mud_combat_participants AS p "
             "JOIN mud_characters AS c ON c.id=p.character_id "
             "JOIN mud_world_locations AS l ON l.user_id=c.user_id "
-            "WHERE p.encounter_id=? AND p.damage_dealt>0 AND p.left_at IS NULL "
+            "WHERE p.encounter_id=? AND p.damage_dealt+p.damage_taken>0 AND p.left_at IS NULL "
             "AND l.room_id=? ORDER BY p.joined_at,p.character_id",
             (encounter["id"], encounter["scope_key"]),
         ).fetchall()
+    # Blows dealt count fully and blows absorbed count half, so guards share the spoils.
+    contributions = {row["character_id"]: row["damage_dealt"] + row["damage_taken"] // 2
+                     for row in participants}
+    total = sum(contributions.values())
+    threshold = mud_combat.reward_threshold(sum(1 for value in contributions.values() if value > 0))
     configured = database.execute(
         "SELECT r.*,d.name AS item_name FROM mud_npc_combat_rewards AS r "
         "LEFT JOIN mud_item_definitions AS d ON d.id=r.target_id "
@@ -2404,6 +2736,13 @@ def _encounter_reward_drafts(database, encounter, npc):
         ).rowcount
         if not claimed:
             continue
+        share = contributions[participant["character_id"]] / total if total else 0
+        if share < threshold:
+            drafts.append(EventDraft(
+                f"You contributed too little to defeating {npc['name']} to earn rewards.",
+                event_type="reward", audience_key=str(participant["user_id"]),
+            ))
+            continue
         rewards = []
         rewarded_items = set()
         experience = npc["experience_reward"]
@@ -2413,10 +2752,11 @@ def _encounter_reward_drafts(database, encounter, npc):
             if reward["reward_type"] == "experience":
                 experience += reward["amount"]
             elif reward["reward_type"] == "coins":
+                coins = mud_combat.scaled_reward(reward["amount"], share)
                 _wallet(database, participant["character_id"])
                 database.execute("UPDATE mud_character_wallets SET coins=coins+? WHERE character_id=?",
-                                 (reward["amount"], participant["character_id"]))
-                rewards.append(f"{reward['amount']} coins")
+                                 (coins, participant["character_id"]))
+                rewards.append(f"{coins} coins")
             elif reward["reward_type"] == "item":
                 for _ in range(reward["amount"]):
                     _grant_item(
@@ -2426,6 +2766,7 @@ def _encounter_reward_drafts(database, encounter, npc):
                 rewarded_items.add(reward["target_id"])
                 rewards.append(f"{reward['amount']} × {reward['item_name']}")
         level_up = ""
+        experience = mud_combat.scaled_reward(experience, share)
         if experience and encounter["scope_type"] == "instance":
             # Dungeon kills taper for characters far above the room's recommended level.
             experience = max(1, experience * dungeons.dungeon_xp_percent(
@@ -2495,13 +2836,47 @@ def _npc_aggressive(npc):
     )))
 
 
-def _active_hostiles(database, room):
+def _npc_passive(npc):
+    """Passive combat NPCs, such as training dummies, take blows but never strike back."""
+    return not _npc_aggressive(npc) and bool(_json_properties(npc["behaviors_json"]).get("passive"))
+
+
+def _engaged(database, encounter_id, character_id):
+    return database.execute(
+        "SELECT 1 FROM mud_combat_participants WHERE encounter_id=? AND character_id=? "
+        "AND left_at IS NULL", (encounter_id, character_id),
+    ).fetchone() is not None
+
+
+def _npc_stance(database, npc, user_id=None):
+    """Hostile, Neutral, or Friendly as this player sees the NPC right now."""
+    if _npc_aggressive(npc):
+        return "Hostile"
+    if user_id is not None and npc["combat_maximum_health"] is not None and not _npc_passive(npc):
+        encounter = _encounter_row(database, npc, create=False)
+        if (encounter is not None and encounter["status"] == "active"
+                and _engaged(database, encounter["id"], f"stationnet:character:{user_id}")):
+            return "Hostile"
+    return "Friendly" if _json_properties(npc["behaviors_json"]).get("friendly") else "Neutral"
+
+
+def _active_hostiles(database, room, user_id=None):
+    """Aggressive enemies, plus non-aggressive ones this player is already fighting."""
+    character_id = f"stationnet:character:{user_id}" if user_id is not None else None
     enemies = []
     for npc in _room_npc_rows(database, room["id"], room.get("instance_id")):
-        if not _npc_aggressive(npc):
+        if npc["combat_maximum_health"] is None:
             continue
-        encounter = _encounter_row(database, npc)
-        if encounter["status"] in {"ready", "active"}:
+        aggressive = _npc_aggressive(npc)
+        if not aggressive and (character_id is None or _npc_passive(npc)):
+            continue
+        encounter = _encounter_row(database, npc, create=aggressive)
+        if encounter is None:
+            continue
+        if aggressive and encounter["status"] in {"ready", "active"}:
+            enemies.append((npc, encounter))
+        elif (not aggressive and encounter["status"] == "active"
+              and _engaged(database, encounter["id"], character_id)):
             enemies.append((npc, encounter))
     return enemies
 
@@ -2535,7 +2910,7 @@ def _hide_action(database, user, parameters):
     if _is_hidden(database, user["id"]):
         raise ActionError("You are already hidden.")
     character = _character_row(database, user["id"])
-    enemies = _active_hostiles(database, room)
+    enemies = _active_hostiles(database, room, user["id"])
     if any(database.execute(
         "SELECT 1 FROM mud_combat_participants WHERE encounter_id=? "
         "AND character_id=? AND left_at IS NULL LIMIT 1",
@@ -2552,27 +2927,106 @@ def _hide_action(database, user, parameters):
     return [EventDraft("You slip into hiding.", event_type="combat")] + practiced
 
 
-def _enemy_turn(database, user, defending=False, chosen=None):
-    room = _current_room(database, user["id"])
-    enemies = _active_hostiles(database, room)
-    if not enemies:
-        return []
-    _set_hidden(database, user["id"], False)
-    npc, encounter = next(
-        ((npc, encounter) for npc, encounter in enemies if chosen == npc["id"]), enemies[0]
-    )
-    character = _character_row(database, user["id"])
+def _join_encounter(database, encounter_id, character_id):
     database.execute(
         "INSERT INTO mud_combat_participants(encounter_id,character_id) VALUES(?,?) "
         "ON CONFLICT(encounter_id,character_id) DO UPDATE SET left_at=NULL,"
         "defeated_at=NULL,last_action_at=CURRENT_TIMESTAMP",
-        (encounter["id"], character["id"]),
+        (encounter_id, character_id),
     )
     database.execute(
         "UPDATE mud_combat_encounters SET status='active',"
         "started_at=COALESCE(started_at,CURRENT_TIMESTAMP),updated_at=CURRENT_TIMESTAMP "
-        "WHERE id=? AND status='ready'", (encounter["id"],),
+        "WHERE id=? AND status='ready'", (encounter_id,),
     )
+
+
+def _addressed(drafts, user_id):
+    """Send drafts written for the acting player to another player instead."""
+    return [EventDraft(draft.body, draft.event_type, "private", str(user_id), (user_id,))
+            if draft.audience_type == "private" and draft.recipient_ids is None else draft
+            for draft in drafts]
+
+
+def _guarding_user(database, encounter, actor_character_id, room):
+    """The most recent engaged guard in this room, other than the actor, or None."""
+    for row in database.execute(
+        "SELECT c.user_id FROM mud_combat_participants AS p JOIN mud_characters AS c "
+        "ON c.id=p.character_id WHERE p.encounter_id=? AND p.character_id!=? "
+        "AND p.left_at IS NULL AND p.guarding_until>CURRENT_TIMESTAMP "
+        "ORDER BY p.guarding_until DESC", (encounter["id"], actor_character_id),
+    ).fetchall():
+        location = _current_room(database, row["user_id"])
+        if location["id"] == room["id"] and location.get("instance_id") == room.get("instance_id"):
+            return row["user_id"]
+    return None
+
+
+def _enemy_turn(database, user, defending=False, chosen=None, single=False):
+    """Every enemy hostile to the actor acts once; with single, only the first strikes."""
+    room = _current_room(database, user["id"])
+    enemies = _active_hostiles(database, room, user["id"])
+    if not enemies:
+        return []
+    _set_hidden(database, user["id"], False)
+    enemies.sort(key=lambda pair: pair[0]["id"] != chosen)
+    character = _character_row(database, user["id"])
+    newly_engaged = set()
+    for _, encounter in enemies:
+        if not _engaged(database, encounter["id"], character["id"]):
+            newly_engaged.add(encounter["id"])
+        _join_encounter(database, encounter["id"], character["id"])
+    drafts = []
+    if defending:
+        database.execute(
+            "UPDATE mud_combat_participants SET guarding_until=datetime('now', ?) "
+            "WHERE character_id=? AND left_at IS NULL AND encounter_id IN "
+            f"({','.join('?' for _ in enemies)})",
+            (f"+{mud_combat.GUARD_SECONDS} seconds", character["id"],
+             *[encounter["id"] for _, encounter in enemies]),
+        )
+        gear = _equipment_combat_totals(database, character_id=character["id"])
+        drafts += _practice(database, character["id"], "defend", categories=gear["categories"])
+    for index, (npc, encounter) in enumerate(enemies):
+        if single and index:
+            if encounter["id"] in newly_engaged:
+                drafts.append(EventDraft(f"{npc['name']} joins the fight.", event_type="combat"))
+            continue
+        guard = _guarding_user(database, encounter, character["id"], room)
+        if guard is None:
+            strike, actor_down = _enemy_strike(database, user, npc, encounter, defending)
+            drafts += strike
+            if actor_down:
+                return drafts
+            continue
+        guard_name = _character_row(database, guard)["display_name"]
+        drafts.append(EventDraft(f"{guard_name} intercepts {npc['name']}'s attack.", event_type="combat"))
+        drafts += _addressed(_enemy_strike(database, {"id": guard}, npc, encounter, True)[0], guard)
+    # Lingering damage effects tick once per enemy turn, however many enemies act.
+    ticks = mud_effects.tick(database, "character", character["id"])
+    if ticks:
+        character = _character_row(database, user["id"])
+        damage = sum(amount for _, amount in ticks)
+        health = max(0, character["current_health"] - damage)
+        database.execute(
+            "UPDATE mud_character_progression SET current_health=?,updated_at=CURRENT_TIMESTAMP "
+            "WHERE character_id=? AND track_key=?", (health, character["id"], character["track_key"]),
+        )
+        drafts.append(EventDraft(
+            f"You suffer {damage} damage from {', '.join(key for key, _ in ticks)} "
+            f"({health}/{character['maximum_health']} health).", event_type="combat"))
+        if health == 0:
+            npc, encounter = enemies[0]
+            refreshed = database.execute(
+                "SELECT * FROM mud_combat_encounters WHERE id=?", (encounter["id"],)
+            ).fetchone()
+            drafts += _defeat_player(database, user, refreshed, npc)
+    return drafts
+
+
+def _enemy_strike(database, user, npc, encounter, defending=False):
+    """One enemy attacks one player; returns the drafts and whether that player fell."""
+    character = _character_row(database, user["id"])
     enemy_gear = _equipment_combat_totals(database, npc_definition_id=npc["definition_id"])
     npc_reloading = False
     npc_firearm = next((row for row in database.execute(
@@ -2599,32 +3053,40 @@ def _enemy_turn(database, user, defending=False, chosen=None):
                              (encounter["id"],))
     player_gear = _equipment_combat_totals(database, character_id=character["id"])
     effects = _character_effects(database, character["id"], player_gear)
-    damage = 0 if npc_reloading else max(1, npc["combat_attack"] + (2 if npc_firearm else 0) + enemy_gear["attack"]
-                 + mud_effects.modifier(database, "encounter", encounter["id"], "attack")
-                 - (character["vitality"] // 10 + character["agility"] // 5
-                    + player_gear["defense"]
-                    + _equipment_stat_bonus(player_gear, character["vitality"], "defense")
-                    + effects["defense"] + level_bonuses(character["level"])["defense"]))
-    if defending:
-        damage = max(0, (damage - max(0, (character["vitality"] - 10) // 2)) // 3)
-    # Only real blows teach defense: reload turns and fully blocked hits do not.
+    outcome = "reload" if npc_reloading else mud_combat.resolve(
+        _npc_hit_stat(database, npc, encounter, enemy_gear, "accuracy"),
+        _player_evasion(character, player_gear, effects, defending), _hit_roll())
+    damage = 0
+    if outcome == "hit":
+        damage = max(1, npc["combat_attack"] + (2 if npc_firearm else 0) + enemy_gear["attack"]
+                     + mud_effects.modifier(database, "encounter", encounter["id"], "attack")
+                     - _player_mitigation(character, player_gear, effects))
+        if defending:
+            damage = max(0, (damage - max(0, (character["vitality"] - 10) // 2)) // 3)
+    # Only real blows teach defense; dodging teaches evasion. Reloads and misses teach neither.
     practiced = (_practice(database, character["id"], "damage_taken", categories=player_gear["categories"])
                  if damage > 0 else [])
-    if defending:
-        practiced += _practice(database, character["id"], "defend", categories=player_gear["categories"])
-    damage += sum(amount for _, amount in mud_effects.tick(database, "character", character["id"]))
+    if outcome == "dodge":
+        practiced += _practice(database, character["id"], "dodge")
     health = max(0, character["current_health"] - damage)
-    database.execute(
-        "UPDATE mud_character_progression SET current_health=?,updated_at=CURRENT_TIMESTAMP "
-        "WHERE character_id=? AND track_key=?", (health, character["id"], character["track_key"]),
-    )
-    drafts = [EventDraft(
-        (f"{npc['name']} reloads {npc_firearm['name']} ({health}/{character['maximum_health']} health)."
-         if npc_reloading else
-         f"{npc['name']} strikes for {damage} damage ({health}/{character['maximum_health']} health)."),
-        event_type="combat",
-    )] + practiced
-    if health > 0 and damage > 0 and not npc_reloading:
+    if damage:
+        database.execute(
+            "UPDATE mud_character_progression SET current_health=?,updated_at=CURRENT_TIMESTAMP "
+            "WHERE character_id=? AND track_key=?", (health, character["id"], character["track_key"]),
+        )
+        database.execute(
+            "UPDATE mud_combat_participants SET damage_taken=damage_taken+? "
+            "WHERE encounter_id=? AND character_id=?", (damage, encounter["id"], character["id"]),
+        )
+    status = f"({health}/{character['maximum_health']} health)"
+    body = {
+        "reload": f"{npc['name']} reloads {npc_firearm['name'] if npc_firearm else ''} {status}.",
+        "hit": f"{npc['name']} strikes for {damage} damage {status}.",
+        "dodge": f"You dodge {npc['name']}'s attack {status}.",
+        "miss": f"{npc['name']} strikes at you but misses {status}.",
+    }[outcome]
+    drafts = [EventDraft(body, event_type="combat")] + practiced
+    if health > 0 and damage > 0:
         for spec in _effect_specs(_json_properties(npc["properties_json"]), "on_hit_effects"):
             try:
                 key = mud_effects.apply(database, "character", character["id"], spec, npc["name"])
@@ -2636,12 +3098,12 @@ def _enemy_turn(database, user, defending=False, chosen=None):
             "SELECT * FROM mud_combat_encounters WHERE id=?", (encounter["id"],)
         ).fetchone()
         drafts += _defeat_player(database, user, refreshed, npc)
-    return drafts
+    return drafts, health == 0
 
 
 def _entry_attack(database, user):
     room = _current_room(database, user["id"])
-    enemies = _active_hostiles(database, room)
+    enemies = _active_hostiles(database, room, user["id"])
     if not enemies:
         return []
     if _is_hidden(database, user["id"]):
@@ -2654,8 +3116,9 @@ def _entry_attack(database, user):
         noticed = [EventDraft("An enemy spots you!", event_type="combat")]
     else:
         noticed = []
+    # Only the first enemy gets a free strike; the rest join in and act from the next turn.
     return noticed + [EventDraft(f"{enemies[0][0]['name']} notices you and attacks!", event_type="combat")] + \
-        _enemy_turn(database, user, chosen=enemies[0][0]["id"])
+        _enemy_turn(database, user, chosen=enemies[0][0]["id"], single=True)
 
 
 def _defeat_player(database, user, encounter, npc):
@@ -2663,10 +3126,16 @@ def _defeat_player(database, user, encounter, npc):
     character = _character_row(database, user["id"])
     mud_effects.clear(database, "character", character["id"])
     old_room = _current_room(database, user["id"])
+    # Death never heals fully, so it is never a better potion than resting.
+    health = mud_combat.recovery_amount(character["maximum_health"], mud_combat.DEATH_RECOVERY_PERCENT)
+    mana = mud_combat.recovery_amount(character["maximum_mana"], mud_combat.DEATH_RECOVERY_PERCENT)
+    # Procedural deaths already cost the run's loot; world deaths cost some level progress instead.
+    lost_experience = 0 if old_room.get("instance_id") else mud_combat.death_experience_loss(
+        character["experience"], experience_for_level(character["level"]))
     database.execute(
-        "UPDATE mud_character_progression SET current_health=maximum_health,current_mana=maximum_mana,"
+        "UPDATE mud_character_progression SET current_health=?,current_mana=?,experience=experience-?,"
         "updated_at=CURRENT_TIMESTAMP WHERE character_id=? AND track_key=?",
-        (character["id"], character["track_key"]),
+        (health, mana, lost_experience, character["id"], character["track_key"]),
     )
     _leave_combat(database, user["id"], encounter["scope_type"], encounter["scope_key"], True)
     if old_room.get("instance_id"):
@@ -2728,7 +3197,10 @@ def _defeat_player(database, user, encounter, npc):
     )
     return [
         EventDraft(
-            f"{npc['name']} defeats you. You awaken fully recovered in {start['name']}.",
+            f"{npc['name']} defeats you. You awaken in {start['name']}, battered "
+            f"({health}/{character['maximum_health']} health)."
+            + (f" You lose {lost_experience} experience." if lost_experience else "")
+            + " Rest to recover.",
             event_type="defeat",
         ),
         EventDraft(
@@ -2794,15 +3266,26 @@ def _attack_action(database, user, parameters):
                   + effects["attack"] + style_bonus + bonuses["attack"] - (npc["combat_defense"] + enemy_gear["defense"]
                      + mud_effects.modifier(database, "encounter", encounter["id"], "defense")) // 2))
     if surprise:
+        # An unaware target cannot dodge, so ambushes always land.
         damage += max(2, character["agility"] // 2)
-    practiced = _practice(database, character["id"],
-                          "spell_cast" if spell_damage is not None else "firearm_hit" if firearm else "melee_hit",
-                          categories=player_gear["categories"])
+        outcome = "hit"
+    else:
+        kind = "spell" if spell_damage is not None else "firearm" if firearm else "melee"
+        evasion = _npc_hit_stat(database, npc, encounter, enemy_gear, "evasion")
+        # Magic is harder to sidestep: spells face only half of the target's evasion.
+        outcome = mud_combat.resolve(_player_accuracy(character, player_gear, effects, kind),
+                                     evasion // 2 if kind == "spell" else evasion, _hit_roll())
+    if outcome != "hit":
+        damage = 0
+    practiced = (_practice(database, character["id"],
+                           "spell_cast" if spell_damage is not None else "firearm_hit" if firearm else "melee_hit",
+                           categories=player_gear["categories"]) if outcome == "hit" else [])
     if firearm:
         state = _item_state(firearm)
         state["loaded"] = _loaded_rounds(firearm) - 1
         _save_item_state(database, firearm["id"], state)
-    damage += sum(amount for _, amount in mud_effects.tick(database, "encounter", encounter["id"]))
+    lingering = sum(amount for _, amount in mud_effects.tick(database, "encounter", encounter["id"]))
+    damage += lingering
     remaining = max(0, encounter["current_health"] - damage)
     database.execute(
         "UPDATE mud_combat_encounters SET status=?,current_health=?,"
@@ -2819,13 +3302,21 @@ def _attack_action(database, user, parameters):
     recipients = set(_occupant_ids(database, room["id"], instance_id=room.get("instance_id"))); recipients.add(user["id"])
     audience_type = "instance" if room.get("instance_id") else "room"
     audience_key = room.get("instance_id") or room["id"]
+    verb = ('casts at' if spell_damage is not None else 'fires at' if firearm else
+            'surprises' if surprise else 'attacks')
+    status = f"({remaining}/{encounter['maximum_health']} health)"
+    if outcome == "hit":
+        body = f"{character['display_name']} {verb} {display_name} for {damage} damage {status}."
+    else:
+        noun = "spell" if spell_damage is not None else "shot" if firearm else "attack"
+        body = (f"{display_name} dodges {character['display_name']}'s {noun}" if outcome == "dodge" else
+                f"{character['display_name']} {verb} {display_name} but misses")
+        body += (f"; lingering effects deal {lingering} damage {status}." if lingering else f" {status}.")
     drafts = [EventDraft(
-        f"{character['display_name']} {'casts at' if spell_damage is not None else 'fires at' if firearm else 'surprises' if surprise else 'attacks'} {display_name} for {damage} damage "
-        f"({remaining}/{encounter['maximum_health']} health).",
-        event_type="combat", audience_type=audience_type, audience_key=audience_key,
+        body, event_type="combat", audience_type=audience_type, audience_key=audience_key,
         recipient_ids=tuple(sorted(recipients)),
     )] + practiced
-    if remaining > 0:
+    if remaining > 0 and outcome == "hit":
         applications = parameters.get("_spell_effects") if spell_damage is not None else []
         if spell_damage is None:
             for equipped in ([firearm] if firearm else _inventory_rows(database, user["id"], True)):
@@ -2905,7 +3396,7 @@ def _reload_action(database, user, parameters):
 
 
 def _defend_action(database, user, _parameters):
-    if not _active_hostiles(database, _current_room(database, user["id"])):
+    if not _active_hostiles(database, _current_room(database, user["id"]), user["id"]):
         raise ActionError("There is no hostile enemy to defend against.")
     return [EventDraft("You brace for the next blow.", event_type="combat")] + \
         _enemy_turn(database, user, defending=True)
@@ -2913,7 +3404,7 @@ def _defend_action(database, user, _parameters):
 
 def _flee_action(database, user, _parameters):
     room = _current_room(database, user["id"])
-    if not _active_hostiles(database, room):
+    if not _active_hostiles(database, room, user["id"]):
         raise ActionError("There is no hostile enemy to flee from.")
     character = _character_row(database, user["id"])
     chance = _flee_chance(character["agility"], _character_effects(database, character["id"])["flee"])
@@ -2921,7 +3412,8 @@ def _flee_action(database, user, _parameters):
     if secrets.randbelow(100) >= chance:
         return [EventDraft("Your escape fails.", event_type="combat")] + practiced + _enemy_turn(database, user)
     drafts = [EventDraft("You slip past the enemy, but it lashes out as you flee.", event_type="combat")] + practiced
-    drafts += _enemy_turn(database, user)
+    # A clean escape draws one parting strike, not a blow from every enemy in the room.
+    drafts += _enemy_turn(database, user, single=True)
     if _current_room(database, user["id"])["id"] != room["id"]:
         return drafts
     instance_id = room.get("instance_id")
@@ -3046,12 +3538,46 @@ def _cast_action(database, user, parameters):
 def _rest_action(database, user, parameters):
     if parameters.get("arguments"):
         raise ActionError("The rest command does not accept arguments.")
-    if _active_hostiles(database, _current_room(database, user["id"])):
+    if _active_hostiles(database, _current_room(database, user["id"]), user["id"]):
         raise ActionError("You cannot rest while enemies are nearby.")
     character = _character_row(database, user["id"])
-    database.execute("UPDATE mud_character_progression SET current_mana=maximum_mana "
-                     "WHERE character_id=? AND track_key=?", (character["id"], character["track_key"]))
-    return [EventDraft("You rest and recover your mana.", event_type="character")]
+    if (character["current_health"] >= character["maximum_health"]
+            and character["current_mana"] >= character["maximum_mana"]):
+        raise ActionError("You are already fully rested.")
+    wait = database.execute(
+        "SELECT CAST(? - (julianday('now') - julianday(last_rested_at)) * 86400 AS INTEGER) "
+        "FROM mud_character_progression WHERE character_id=? AND track_key=? AND last_rested_at IS NOT NULL",
+        (mud_combat.REST_COOLDOWN_SECONDS, character["id"], character["track_key"]),
+    ).fetchone()
+    if wait is not None and wait[0] > 0:
+        raise ActionError(f"You need a moment before resting again ({wait[0]}s).", 409)
+    # Dungeons are hostile ground, so a breather there restores less than a rest in the world.
+    mode = "procedural" if _current_room(database, user["id"]).get("instance_id") else "traditional"
+    health_percent, mana_percent = mud_combat.REST_PERCENT[mode]
+    health = min(character["maximum_health"] - character["current_health"],
+                 mud_combat.recovery_amount(character["maximum_health"], health_percent))
+    mana = min(character["maximum_mana"] - character["current_mana"],
+               mud_combat.recovery_amount(character["maximum_mana"], mana_percent))
+    database.execute(
+        "UPDATE mud_character_progression SET current_health=current_health+?,current_mana=current_mana+?,"
+        "last_rested_at=CURRENT_TIMESTAMP,updated_at=CURRENT_TIMESTAMP WHERE character_id=? AND track_key=?",
+        (health, mana, character["id"], character["track_key"]),
+    )
+    # Resting lets one turn of lingering effects wear off, harmful ones included.
+    ticks = mud_effects.tick(database, "character", character["id"])
+    harm = min(sum(amount for _, amount in ticks), character["current_health"] + health - 1)
+    if harm > 0:
+        database.execute(
+            "UPDATE mud_character_progression SET current_health=current_health-? "
+            "WHERE character_id=? AND track_key=?", (harm, character["id"], character["track_key"]),
+        )
+    rested = _character_row(database, user["id"])
+    return [EventDraft(
+        f"You rest and recover {health} health and {mana} mana "
+        f"({rested['current_health']}/{rested['maximum_health']} health, "
+        f"{rested['current_mana']}/{rested['maximum_mana']} mana)."
+        + (f" Lingering effects cost you {harm} health." if harm else ""),
+        event_type="character")]
 
 
 def _look_action(database, user, parameters):
@@ -3115,7 +3641,7 @@ def _get_action(database, user, parameters):
     if not target:
         raise ActionError("Get what?")
     room = _current_room(database, user["id"])
-    if _active_hostiles(database, room):
+    if _active_hostiles(database, room, user["id"]):
         raise ActionError("A hostile enemy blocks the loot. Fight or flee first.", 409)
     container_name = str(parameters.get("container_id", "")).strip()
     if not container_name and re.search(r"\s+from\s+", target, re.I):
@@ -3224,7 +3750,7 @@ def _put_action(database, user, parameters):
 
 
 def _equip_action(database, user, parameters):
-    if _active_hostiles(database, _current_room(database, user["id"])):
+    if _active_hostiles(database, _current_room(database, user["id"]), user["id"]):
         raise ActionError("You cannot change equipment while an enemy is attacking.")
     target = _item_target(parameters)
     item = _item_matches(_inventory_rows(database, user["id"]), target)
@@ -3262,7 +3788,7 @@ def _equip_action(database, user, parameters):
 
 
 def _unequip_action(database, user, parameters):
-    if _active_hostiles(database, _current_room(database, user["id"])):
+    if _active_hostiles(database, _current_room(database, user["id"]), user["id"]):
         raise ActionError("You cannot change equipment while an enemy is attacking.")
     target = _item_target(parameters)
     item = _item_matches(_inventory_rows(database, user["id"], True), target)
@@ -3381,9 +3907,7 @@ def _dialogue_node(database, node_id):
     return node, responses
 
 
-def _available_dialogue_responses(database, character_id, npc_id, node_id,
-                                  dungeon=False):
-    node, responses = _dialogue_node(database, node_id)
+def _npc_player_state(database, character_id, npc_id, dungeon=False):
     if dungeon:
         state_row = database.execute(
             "SELECT state_json FROM mud_dungeon_npc_player_states "
@@ -3398,8 +3922,77 @@ def _available_dialogue_responses(database, character_id, npc_id, node_id,
         state = json.loads(state_row["state_json"]) if state_row else {}
     except json.JSONDecodeError:
         state = {}
-    visible = [response for response in responses if not response["required_state_key"]
-               or str(state.get(response["required_state_key"], "")) == response["required_state_value"]]
+    return state if isinstance(state, dict) else {}
+
+
+def _delivery_objective(database, user, definition_id, npc_definition_id=None):
+    """The first open, unlocked delivery of this item whose recipient stands here."""
+    room = _current_room(database, user["id"])
+    if room.get("instance_id"):
+        return None
+    character = _character_row(database, user["id"])
+    present = {row["definition_id"] for row in database.execute(
+        "SELECT definition_id FROM mud_npc_instances WHERE room_id=?", (room["id"],))}
+    if npc_definition_id is not None:
+        present &= {npc_definition_id}
+    for objective in database.execute(
+        "SELECT o.id,o.quest_id,o.recipient_npc_definition_id FROM mud_quest_objectives o "
+        "JOIN mud_player_quests q ON q.quest_id=o.quest_id "
+        "LEFT JOIN mud_player_objectives p ON p.objective_id=o.id AND p.character_id=q.character_id "
+        "WHERE q.character_id=? AND q.status='active' AND o.objective_type='deliver_item' "
+        "AND o.target_id=? AND p.completed_at IS NULL ORDER BY q.accepted_at,o.sort_order,o.id",
+        (character["id"], definition_id),
+    ).fetchall():
+        recipients = ({objective["recipient_npc_definition_id"]} if objective["recipient_npc_definition_id"]
+                      else {row["npc_definition_id"] for row in database.execute(
+                          "SELECT npc_definition_id FROM mud_quest_givers WHERE quest_id=?",
+                          (objective["quest_id"],))})
+        if recipients & present and _unlocked_objective(database, character["id"], objective["id"]):
+            return objective
+    return None
+
+
+def _response_visible(database, user, context, response, npc_definition_id, dungeon):
+    if response["required_state_key"] and str(
+            context.state(response["required_state_key"])) != response["required_state_value"]:
+        return False
+    context.response_id = response["id"]
+    if not mud_conditions.evaluate(response["conditions_json"], context):
+        return False
+    # Quest actions only appear when they can actually happen, so dialogue can
+    # neither re-offer a taken quest nor accept an item nobody is waiting for.
+    if response["accept_quest_id"]:
+        quest = database.execute("SELECT * FROM mud_quests WHERE id=?",
+                                 (response["accept_quest_id"],)).fetchone()
+        if dungeon or quest is None or _quest_blocker(database, user, quest):
+            return False
+    if response["turn_in_quest_id"]:
+        quest = database.execute("SELECT * FROM mud_quests WHERE id=?",
+                                 (response["turn_in_quest_id"],)).fetchone()
+        if (dungeon or quest is None or quest["completion_mode"] != "turn_in"
+                or context.quest_status(quest["id"]) != "ready"
+                or npc_definition_id not in _turn_in_npc_ids(database, quest)):
+            return False
+    if response["deliver_item_id"]:
+        if dungeon or not context.item_count(response["deliver_item_id"]) or _delivery_objective(
+                database, user, response["deliver_item_id"], npc_definition_id) is None:
+            return False
+    return True
+
+
+def _available_dialogue_responses(database, character_id, npc_id, node_id,
+                                  dungeon=False):
+    node, responses = _dialogue_node(database, node_id)
+    owner = database.execute("SELECT user_id FROM mud_characters WHERE id=?", (character_id,)).fetchone()
+    user = {"id": owner["user_id"]}
+    if dungeon:
+        npc_definition_id = None
+    else:
+        npc = database.execute("SELECT definition_id FROM mud_npc_instances WHERE id=?", (npc_id,)).fetchone()
+        npc_definition_id = npc["definition_id"] if npc else None
+    context = _ConditionContext(database, user["id"], npc_id, dungeon)
+    visible = [response for response in responses
+               if _response_visible(database, user, context, response, npc_definition_id, dungeon)]
     return node, visible
 
 
@@ -3414,20 +4007,49 @@ def _dialogue_text(npc_name, node, responses):
     return body
 
 
+def _quest_hints(database, user, room, npc, responses=()):
+    """Lines telling the player what quest business this NPC has with them."""
+    if room.get("instance_id"):
+        return []
+    in_dialogue = {response[key] for response in responses
+                   for key in ("accept_quest_id", "turn_in_quest_id") if response[key]}
+    offered = [quest["name"] for quest in _available_quests(database, user, room["id"])
+               if quest["id"] not in in_dialogue and database.execute(
+                   "SELECT 1 FROM mud_quest_givers WHERE quest_id=? AND npc_definition_id=?",
+                   (quest["id"], npc["definition_id"])).fetchone()]
+    character = _character_row(database, user["id"])
+    ready = [quest["name"] for quest in database.execute(
+        "SELECT q.* FROM mud_player_quests p JOIN mud_quests q ON q.id=p.quest_id "
+        "WHERE p.character_id=? AND p.status='active' AND p.ready_at IS NOT NULL "
+        "AND q.completion_mode='turn_in' ORDER BY q.name COLLATE NOCASE", (character["id"],))
+        if quest["id"] not in in_dialogue and npc["definition_id"] in _turn_in_npc_ids(database, quest)]
+    lines = []
+    if offered:
+        lines.append("Quests offered: " + ", ".join(offered) + " — use /quest accept <name>.")
+    if ready:
+        lines.append("Ready to turn in: " + ", ".join(ready) + " — use /quest turnin <name>.")
+    return lines
+
+
 def _talk_action(database, user, parameters):
     target = str(parameters.get("npc_id") or " ".join(str(x) for x in parameters.get("arguments", []))).strip()
     if not target:
         raise ActionError("Talk to whom?")
     room = _current_room(database, user["id"])
     npc = _npc_match(_room_npc_rows(database, room["id"], room.get("instance_id")), target)
-    if not npc["conversation_id"]:
-        raise ActionError(f"{npc['name']} has nothing to say right now.")
     node = database.execute(
         "SELECT id FROM mud_dialogue_nodes WHERE conversation_id=? AND is_start=1",
         (npc["conversation_id"],),
-    ).fetchone()
+    ).fetchone() if npc["conversation_id"] else None
     if node is None:
-        raise ActionError(f"{npc['name']} has nothing to say right now.")
+        hints = _quest_hints(database, user, room, npc)
+        if not hints:
+            raise ActionError(f"{npc['name']} has nothing to say right now.")
+        events = [EventDraft(f"{npc['name']} has business with you.\n" + "\n".join(hints),
+                             event_type="dialogue")]
+        if not room.get("instance_id"):
+            events += _set_objective_progress(database, user, "talk_npc", npc["definition_id"])
+        return events
     character = _character_row(database, user["id"])
     if room.get("instance_id"):
         database.execute(
@@ -3453,8 +4075,58 @@ def _talk_action(database, user, parameters):
     node, responses = _available_dialogue_responses(
         database, character["id"], npc["id"], node["id"], bool(room.get("instance_id"))
     )
-    events = [EventDraft(_dialogue_text(npc["name"], node, responses), event_type="dialogue")]
+    body = _dialogue_text(npc["name"], node, responses)
+    hints = _quest_hints(database, user, room, npc, responses)
+    if hints:
+        body += "\n\n" + "\n".join(hints)
+    events = [EventDraft(body, event_type="dialogue")]
     events += _set_objective_progress(database, user, "talk_npc", npc["definition_id"])
+    return events
+
+
+def _apply_dialogue_outcomes(database, user, response):
+    """Grant a response's outcomes once per character; later choices give nothing."""
+    try:
+        outcomes = mud_conditions.validate_outcomes(response["outcomes_json"])
+    except ValueError:
+        return []
+    if not outcomes:
+        return []
+    character = _character_row(database, user["id"])
+    if database.execute("SELECT 1 FROM mud_player_dialogue_claims WHERE character_id=? AND response_id=?",
+                        (character["id"], response["id"])).fetchone():
+        return []
+    # Check every cost before writing anything so a failed payment changes nothing.
+    handed = []
+    for outcome in outcomes:
+        if outcome["type"] == "take_item":
+            handed += _handover_items(database, user, outcome["item"], outcome["amount"])
+    cost = sum(outcome["amount"] for outcome in outcomes if outcome["type"] == "take_coins")
+    if cost > _wallet(database, character["id"]):
+        raise ActionError(f"You need {cost} coins for that.")
+    if database.execute("INSERT OR IGNORE INTO mud_player_dialogue_claims(character_id,response_id) VALUES(?,?)",
+                        (character["id"], response["id"])).rowcount == 0:
+        return []
+    events = []
+    if handed:
+        for item in handed:
+            database.execute("DELETE FROM mud_item_instances WHERE id=? AND owner_character_id=?",
+                             (item["id"], character["id"]))
+        events.append(EventDraft("You hand over " + ", ".join(item["name"] for item in handed) + ".",
+                                 event_type="dialogue"))
+    if cost:
+        database.execute("UPDATE mud_character_wallets SET coins=coins-? WHERE character_id=?",
+                         (cost, character["id"]))
+        events.append(EventDraft(f"You pay {cost} coins.", event_type="dialogue"))
+    kinds = {"give_item": "item", "experience": "experience", "coins": "coins"}
+    received = _grant_rewards(database, user, [
+        {"reward_type": kinds[outcome["type"]], "target_id": outcome.get("item"), "amount": outcome["amount"]}
+        for outcome in outcomes if outcome["type"] in kinds])
+    if received:
+        events.append(EventDraft(f"You receive {', '.join(received)}.", event_type="reward"))
+    for outcome in outcomes:
+        if outcome["type"] == "give_item":
+            events += _set_objective_progress(database, user, "possess_item", outcome["item"])
     return events
 
 
@@ -3496,18 +4168,12 @@ def _respond_action(database, user, parameters):
         raise ActionError("Choose one of the current dialogue responses.")
     chosen = matches[0]
     events = [EventDraft(f"You: {chosen['response_text']}", event_type="dialogue")]
+    events += _apply_dialogue_outcomes(database, user, chosen)
     if chosen["state_key"]:
         state_table = ("mud_dungeon_npc_player_states" if dungeon_session
                        else "mud_npc_player_states")
         identity_column = "content_id" if dungeon_session else "npc_instance_id"
-        state_row = database.execute(
-            f"SELECT state_json FROM {state_table} WHERE character_id=? AND {identity_column}=?",
-            (character["id"], session_row["npc_id"]),
-        ).fetchone()
-        try:
-            state = json.loads(state_row["state_json"]) if state_row else {}
-        except json.JSONDecodeError:
-            state = {}
+        state = _npc_player_state(database, character["id"], session_row["npc_id"], bool(dungeon_session))
         state[chosen["state_key"]] = chosen["state_value"]
         database.execute(
             f"INSERT INTO {state_table}(character_id,{identity_column},state_json) VALUES(?,?,?) "
@@ -3515,20 +4181,18 @@ def _respond_action(database, user, parameters):
             "updated_at=CURRENT_TIMESTAMP",
             (character["id"], session_row["npc_id"], json.dumps(state, separators=(",", ":"), sort_keys=True)),
         )
-    if chosen["accept_quest_id"]:
-        existing_quest = database.execute(
-            "SELECT 1 FROM mud_player_quests WHERE character_id=? AND quest_id=?",
-            (character["id"], chosen["accept_quest_id"]),
-        ).fetchone()
-        if existing_quest is None:
-            events += _accept_quest(database, user, chosen["accept_quest_id"])
-            events += _set_objective_progress(database, user, "talk_npc", session_row["definition_id"])
+    if chosen["accept_quest_id"] and not dungeon_session:
+        # Accepting no longer counts as speaking to the giver; talk objectives
+        # advance only when the player starts a conversation with /talk.
+        events += _accept_quest(database, user, chosen["accept_quest_id"])
     if chosen["deliver_item_id"] and not dungeon_session:
         matching_items = [item for item in _inventory_rows(database, user["id"])
                           if item["definition_id"] == chosen["deliver_item_id"]]
         if not matching_items:
             raise ActionError("You do not carry the item requested in that response.")
         events += _deliver_quest_item(database, user, matching_items[0], session_row["definition_id"])
+    if chosen["turn_in_quest_id"] and not dungeon_session:
+        events += _turn_in_quest(database, user, chosen["turn_in_quest_id"], session_row["definition_id"])
     if chosen["next_node_id"]:
         session_table = ("mud_dungeon_conversation_sessions" if dungeon_session
                          else "mud_conversation_sessions")
@@ -3552,28 +4216,90 @@ def _respond_action(database, user, parameters):
     return events
 
 
+QUEST_USAGE = ("Use /quests, /quests completed, /quest available, /quest info <name>, "
+               "/quest accept <name>, /quest turnin <name>, or /quest abandon <name>.")
+
+
+def _match_quest(quests, target, missing):
+    key = " ".join(target.casefold().split())
+    matches = [quest for quest in quests if quest["id"] == target
+               or " ".join(quest["name"].casefold().split()) == key]
+    if not key or len(matches) != 1:
+        raise ActionError(missing)
+    return matches[0]
+
+
+def _objective_line(objective):
+    mark = "✓" if objective["completed_at"] else ("🔒" if objective["locked"] else "·")
+    suffix = " (optional)" if objective["optional"] else ""
+    return f"{mark} {objective['description']} ({objective['progress']}/{objective['required_count']}){suffix}"
+
+
+def _quest_lines(quest):
+    lines = [f"\n{quest['name']} — {quest['description']}"]
+    if quest["ready"]:
+        lines.append(f"READY — return to {quest['turn_in_npc_name']} to turn it in.")
+    lines += [_objective_line(objective) for objective in quest["objectives"]]
+    return lines
+
+
 def _quests_action(database, user, parameters):
     args = [str(value) for value in parameters.get("arguments", [])]
-    if args and args[0].casefold() == "accept":
-        target = " ".join(args[1:]).strip()
-        room = _current_room(database, user["id"])
-        available = _available_quests(database, user, room["id"])
-        matches = [quest for quest in available if quest["id"] == target or quest["name"].casefold() == target.casefold()]
-        if len(matches) != 1:
-            raise ActionError("That quest is not currently available from a nearby NPC.")
-        return _accept_quest(database, user, matches[0]["id"])
-    if args:
-        raise ActionError("Use /quests or /quest accept <name>.")
+    command = args[0].casefold() if args else ""
+    target = " ".join(args[1:]).strip()
+    room = _current_room(database, user["id"])
     state = quest_state(database, user["id"])
+    if command == "accept":
+        available = _available_quests(database, user, room["id"])
+        quest = _match_quest(available, target, "That quest is not currently available from a nearby NPC.")
+        return _accept_quest(database, user, quest["id"])
+    if command in ("turnin", "turn-in", "complete"):
+        quest = _match_quest(state["active"], target, "You have no active quest by that name.")
+        return _turn_in_quest(database, user, quest["id"])
+    if command == "abandon":
+        quest = _match_quest(state["active"], target, "You have no active quest by that name.")
+        row = database.execute("SELECT * FROM mud_quests WHERE id=?", (quest["id"],)).fetchone()
+        return _abandon_quest(database, user, row)
+    if command == "available" and not target:
+        available = _available_quests(database, user, room["id"]) if not room.get("instance_id") else []
+        if not available:
+            return [EventDraft("No one nearby has a quest for you right now.", event_type="quest")]
+        lines = ["Quests available here:"]
+        for quest in available:
+            givers = {row["npc_definition_id"] for row in database.execute(
+                "SELECT npc_definition_id FROM mud_quest_givers WHERE quest_id=?", (quest["id"],))}
+            lines.append(f"\n{quest['name']} (from {_npc_names(database, givers)}) — {quest['description']}")
+        lines.append("\nUse /quest accept <name>.")
+        return [EventDraft("\n".join(lines), event_type="quest")]
+    if command == "info":
+        known = state["active"] + state["completed"]
+        try:
+            quest = _match_quest(known, target, "")
+        except ActionError:
+            offered = _available_quests(database, user, room["id"])
+            quest = _match_quest(offered, target, "You know of no quest by that name.")
+            return [EventDraft(f"{quest['name']} — {quest['description']}\nAvailable here: /quest accept {quest['name']}.",
+                               event_type="quest")]
+        lines = _quest_lines(quest)
+        lines[0] = lines[0].lstrip()
+        if quest["status"] == "completed":
+            lines.insert(1, "Completed.")
+        elif quest["abandonable"]:
+            lines.append(f"Use /quest abandon {quest['name']} to give it up.")
+        return [EventDraft("\n".join(lines), event_type="quest")]
+    if command == "completed" and not target:
+        if not state["completed"]:
+            return [EventDraft("You have not completed any quests yet.", event_type="quest")]
+        return [EventDraft("Completed quests:\n" + "\n".join(f"✓ {quest['name']}" for quest in state["completed"]),
+                           event_type="quest")]
+    if args:
+        raise ActionError(QUEST_USAGE)
     if not state["active"]:
         body = "You have no active quests."
     else:
         lines = ["Active quests:"]
         for quest in state["active"]:
-            lines.append(f"\n{quest['name']} — {quest['description']}")
-            for objective in quest["objectives"]:
-                mark = "✓" if objective["completed_at"] else "·"
-                lines.append(f"{mark} {objective['description']} ({objective['progress']}/{objective['required_count']})")
+            lines += _quest_lines(quest)
         body = "\n".join(lines)
     return [EventDraft(body, event_type="quest")]
 
@@ -3590,19 +4316,10 @@ def _deliver_action(database, user, parameters):
 
 
 def _deliver_quest_item(database, user, item, npc_definition_id=None):
-    room = _current_room(database, user["id"])
     character = _character_row(database, user["id"])
-    objective = database.execute(
-        "SELECT o.id FROM mud_quest_objectives o JOIN mud_player_quests q ON q.quest_id=o.quest_id "
-        "JOIN mud_quest_givers g ON g.quest_id=o.quest_id "
-        "JOIN mud_npc_instances n ON n.definition_id=g.npc_definition_id "
-        "LEFT JOIN mud_player_objectives p ON p.objective_id=o.id AND p.character_id=q.character_id "
-        "WHERE q.character_id=? AND q.status='active' AND o.objective_type='deliver_item' "
-        "AND o.target_id=? AND n.room_id=? AND p.completed_at IS NULL "
-        "AND (? IS NULL OR g.npc_definition_id=?) LIMIT 1",
-        (character["id"], item["definition_id"], room["id"], npc_definition_id, npc_definition_id)).fetchone()
+    objective = _delivery_objective(database, user, item["definition_id"], npc_definition_id)
     if objective is None:
-        raise ActionError("No nearby quest giver is waiting for that item.")
+        raise ActionError("No one nearby is waiting for that item.")
     if item["acquired_run_id"]:
         raise ActionError("Extract from the active run before delivering its loot.")
     if database.execute("SELECT 1 FROM mud_item_instances WHERE container_id=?", (item["id"],)).fetchone():
@@ -4092,7 +4809,7 @@ def _complete_expedition_action(database, user, parameters):
     room = _current_room(database, user["id"])
     if run is None or room.get("instance_id") != run["id"] or room.get("role") != "exit":
         raise ActionError("The expedition can only be completed from its exit room.")
-    if _active_hostiles(database, room):
+    if _active_hostiles(database, room, user["id"]):
         raise ActionError("Defeat or escape the enemy guarding the exit first.", 409)
     active = database.execute(
         "SELECT p.user_id,p.character_id,p.rooms_visited,c.display_name "
@@ -4362,7 +5079,7 @@ def _pick_action(database, user, parameters):
         return [EventDraft(f"{chosen['name']} is already open.", event_type="room")]
     if not chosen["pick_difficulty"]:
         raise ActionError(f"The lock on {chosen['name']} cannot be picked; find its key.")
-    if _active_hostiles(database, room):
+    if _active_hostiles(database, room, user["id"]):
         raise ActionError("You cannot work a lock with enemies nearby.", 409)
     character = _character_row(database, user["id"])
     if database.execute("SELECT 1 FROM mud_exit_unlocks WHERE character_id=? AND exit_id=?",
@@ -4396,7 +5113,7 @@ def _go_action(database, user, parameters):
     ):
         return _portal_action(database, user, {})
     instance_id = room.get("instance_id") if isinstance(room, dict) else None
-    if _active_hostiles(database, room) and not _is_hidden(database, user["id"]):
+    if _active_hostiles(database, room, user["id"]) and not _is_hidden(database, user["id"]):
         raise ActionError("A hostile enemy blocks your route. Fight or attempt to flee.", 409)
     if exit_id:
         matches = [item for item in _room_exits(database, room["id"], instance_id)
@@ -4686,7 +5403,7 @@ actions.register(ActionDefinition(key="who", label="WHO", description="List play
 actions.register(ActionDefinition(key="description", label="DESCRIPTION", description="View or edit your public character description; use clear to remove it.", commands=("description", "describe"), handler=_description_action, group="CHARACTER", show_context=False))
 actions.register(ActionDefinition(key="block", label="BLOCK", description="Block a player from private messages.", commands=("block",), handler=_block_action, group="SOCIAL", show_context=False))
 actions.register(ActionDefinition(key="unblock", label="UNBLOCK", description="Allow a blocked player to send private messages.", commands=("unblock",), handler=_unblock_action, group="SOCIAL", show_context=False))
-actions.register(ActionDefinition(key="quests", label="QUESTS", description="View progress or use /quest accept <name> beside a quest giver.", commands=("quests", "quest", "objectives"), handler=_quests_action, group="QUESTS"))
+actions.register(ActionDefinition(key="quests", label="QUESTS", description="View quests; /quest available, info, accept, turnin, or abandon <name>.", commands=("quests", "quest", "objectives"), handler=_quests_action, group="QUESTS"))
 actions.register(ActionDefinition(key="deliver", label="DELIVER ITEM", description="Give a quest item to a nearby quest giver: /deliver <item>.", commands=("deliver",), handler=_deliver_action, group="QUESTS", show_context=False))
 actions.register(ActionDefinition(key="combat", label="COMBAT STATUS", description="View hostile enemies and encounter status.", commands=("combat",), handler=_combat_action, group="COMBAT"))
 actions.register(ActionDefinition(key="spells", label="KNOWN SPELLS", description="List your class spells and their mana costs.", commands=("spells",), handler=_spells_action, group="MAGIC"))
@@ -5691,7 +6408,8 @@ def builder():
         )]
     npc_definitions = [dict(row) for row in database.execute(
         "SELECT d.*,p.maximum_health AS combat_maximum_health,p.attack AS combat_attack,"
-        "p.defense AS combat_defense,p.experience_reward,p.respawn_seconds "
+        "p.defense AS combat_defense,p.accuracy AS combat_accuracy,p.evasion AS combat_evasion,"
+        "p.experience_reward,p.respawn_seconds "
         "FROM mud_npc_definitions AS d LEFT JOIN mud_npc_combat_profiles AS p "
         "ON p.npc_definition_id=d.id WHERE d.world_id=(SELECT id FROM mud_world_packages WHERE active=1) AND NOT EXISTS "
         "(SELECT 1 FROM mud_dungeon_managed_definitions AS m WHERE m.definition_id=d.id) "
@@ -5927,23 +6645,66 @@ def builder_update_dialogue_node(node_id):
     flash("Dialogue node updated.", "success"); return _builder_redirect()
 
 
+def _builder_rules(database, field, validate):
+    """Validate a builder conditions/outcomes JSON field and the content it names."""
+    try:
+        entries = validate(request.form.get(field, "").strip() or "[]")
+    except ValueError as problem:
+        return None, str(problem)
+    tables = {"item": "mud_item_definitions", "quest": "mud_quests", "objective": "mud_quest_objectives"}
+    origins = character_creation.catalog(database)
+    known = {"race": {entry["key"] for entry in origins["races"]},
+             "class": {entry["key"] for entry in origins["classes"]},
+             "skill": {entry["key"] for entry in mud_skills.catalog(database)}}
+    for kind, ref in mud_conditions.references(entries):
+        missing = (ref not in known[kind] if kind in known else
+                   database.execute(f"SELECT 1 FROM {tables[kind]} WHERE id=?", (ref,)).fetchone() is None)
+        if missing:
+            return None, f"{field.replace('_json', '').title()} name an unknown {kind}: {ref}."
+    return json.dumps(entries, separators=(",", ":")), None
+
+
+def _dialogue_response_fields(database, node):
+    response_text = " ".join(request.form.get("response_text", "").split()); next_node_id = request.form.get("next_node_id", "").strip() or None; quest_id = request.form.get("accept_quest_id", "").strip() or None; deliver_item_id = request.form.get("deliver_item_id", "").strip() or None; turn_in_quest_id = request.form.get("turn_in_quest_id", "").strip() or None
+    required_state_key = " ".join(request.form.get("required_state_key", "").split()) or None; required_state_value = request.form.get("required_state_value", "").strip() or None
+    state_key = " ".join(request.form.get("state_key", "").split()) or None; state_value = request.form.get("state_value", "").strip() or None
+    sort_order = request.form.get("sort_order", 0, type=int)
+    if not 1 <= len(response_text) <= 500 or (state_key and len(state_key) > 80) or (state_value and len(state_value) > 500) or (required_state_key and len(required_state_key) > 80) or (required_state_value and len(required_state_value) > 500) or sort_order is None or not -10000 <= sort_order <= 10000: return None, "Check response, state, and order fields."
+    if bool(required_state_key) != bool(required_state_value): return None, "A response state requirement needs both a key and value."
+    if next_node_id and database.execute("SELECT 1 FROM mud_dialogue_nodes WHERE id=? AND conversation_id=?", (next_node_id, node["conversation_id"])).fetchone() is None: return None, "The next node must belong to this conversation."
+    if quest_id and database.execute("SELECT 1 FROM mud_quests WHERE id=?", (quest_id,)).fetchone() is None: return None, "Choose an existing quest."
+    if turn_in_quest_id and database.execute("SELECT 1 FROM mud_quests WHERE id=? AND completion_mode='turn_in'", (turn_in_quest_id,)).fetchone() is None: return None, "Choose an existing quest that is turned in to an NPC."
+    if deliver_item_id and database.execute("SELECT 1 FROM mud_item_definitions WHERE id=?", (deliver_item_id,)).fetchone() is None: return None, "Choose an existing delivery item."
+    conditions_json, error = _builder_rules(database, "conditions_json", mud_conditions.validate_conditions)
+    if error: return None, error
+    outcomes_json, error = _builder_rules(database, "outcomes_json", mud_conditions.validate_outcomes)
+    if error: return None, error
+    return {"response_text": response_text, "next_node_id": next_node_id, "accept_quest_id": quest_id, "deliver_item_id": deliver_item_id, "turn_in_quest_id": turn_in_quest_id, "required_state_key": required_state_key, "required_state_value": required_state_value, "state_key": state_key, "state_value": state_value, "sort_order": sort_order, "conditions_json": conditions_json, "outcomes_json": outcomes_json}, None
+
+
 @bp.post("/builder/dialogue-nodes/<path:node_id>/responses")
 @builder_required
 def builder_create_dialogue_response(node_id):
     validate_csrf(); database = get_db(); node = database.execute("SELECT conversation_id FROM mud_dialogue_nodes WHERE id=?", (node_id,)).fetchone()
     if node is None: abort(404)
     if _managed_dungeon_conversation(database, node["conversation_id"]): abort(404)
-    response_text = " ".join(request.form.get("response_text", "").split()); next_node_id = request.form.get("next_node_id", "").strip() or None; quest_id = request.form.get("accept_quest_id", "").strip() or None; deliver_item_id = request.form.get("deliver_item_id", "").strip() or None
-    required_state_key = " ".join(request.form.get("required_state_key", "").split()) or None; required_state_value = request.form.get("required_state_value", "").strip() or None
-    state_key = " ".join(request.form.get("state_key", "").split()) or None; state_value = request.form.get("state_value", "").strip() or None
-    sort_order = request.form.get("sort_order", 0, type=int)
-    if not 1 <= len(response_text) <= 500 or (state_key and len(state_key) > 80) or (state_value and len(state_value) > 500) or (required_state_key and len(required_state_key) > 80) or (required_state_value and len(required_state_value) > 500) or sort_order is None or not -10000 <= sort_order <= 10000: flash("Check response, state, and order fields.", "error"); return _builder_redirect()
-    if bool(required_state_key) != bool(required_state_value): flash("A response state requirement needs both a key and value.", "error"); return _builder_redirect()
-    if next_node_id and database.execute("SELECT 1 FROM mud_dialogue_nodes WHERE id=? AND conversation_id=?", (next_node_id, node["conversation_id"])).fetchone() is None: flash("The next node must belong to this conversation.", "error"); return _builder_redirect()
-    if quest_id and database.execute("SELECT 1 FROM mud_quests WHERE id=?", (quest_id,)).fetchone() is None: flash("Choose an existing quest.", "error"); return _builder_redirect()
-    if deliver_item_id and database.execute("SELECT 1 FROM mud_item_definitions WHERE id=?", (deliver_item_id,)).fetchone() is None: flash("Choose an existing delivery item.", "error"); return _builder_redirect()
-    database.execute("INSERT INTO mud_dialogue_responses(id,node_id,response_text,next_node_id,accept_quest_id,deliver_item_id,required_state_key,required_state_value,state_key,state_value,sort_order) VALUES(?,?,?,?,?,?,?,?,?,?,?)", (f"world:dialogue-response:{uuid.uuid4().hex}", node_id, response_text, next_node_id, quest_id, deliver_item_id, required_state_key, required_state_value, state_key, state_value, sort_order)); database.commit()
+    fields, error = _dialogue_response_fields(database, node)
+    if error: flash(error, "error"); return _builder_redirect()
+    fields.update(id=f"world:dialogue-response:{uuid.uuid4().hex}", node_id=node_id)
+    database.execute(f"INSERT INTO mud_dialogue_responses({','.join(fields)}) VALUES({','.join('?' for _ in fields)})", tuple(fields.values())); database.commit()
     flash("Dialogue response added.", "success"); return _builder_redirect()
+
+
+@bp.post("/builder/dialogue-responses/<path:response_id>")
+@builder_required
+def builder_update_dialogue_response(response_id):
+    validate_csrf(); database = get_db()
+    node = database.execute("SELECT n.conversation_id FROM mud_dialogue_responses r JOIN mud_dialogue_nodes n ON n.id=r.node_id WHERE r.id=?", (response_id,)).fetchone()
+    if node is None or _managed_dungeon_conversation(database, node["conversation_id"]): abort(404)
+    fields, error = _dialogue_response_fields(database, node)
+    if error: flash(error, "error"); return _builder_redirect()
+    database.execute(f"UPDATE mud_dialogue_responses SET {','.join(f'{name}=?' for name in fields)} WHERE id=?", (*fields.values(), response_id)); database.commit()
+    flash("Dialogue response updated.", "success"); return _builder_redirect()
 
 
 @bp.post("/builder/dialogue-responses/<path:response_id>/delete")
@@ -5993,6 +6754,15 @@ def _npc_combat_fields(database):
     if any(values[key] is None or not low <= values[key] <= high
            for key, (low, high) in limits.items()):
         return None, {}, "Check combat values (respawn must be 5 seconds to 24 hours)."
+    # Accuracy and evasion are optional; blank keeps the 0 default of older NPCs.
+    for key in ("accuracy", "evasion"):
+        raw = request.form.get(f"combat_{key}", "").strip()
+        if not raw:
+            values[key] = None
+            continue
+        if not raw.isdigit() or not 0 <= int(raw) <= 100:
+            return None, {}, "Accuracy and evasion must be whole numbers from 0 to 100."
+        values[key] = int(raw)
     equipment = {}
     for slot in EQUIPMENT_SLOTS:
         item_id = request.form.get(f"npc_equipment_{slot}", "").strip()
@@ -6019,12 +6789,14 @@ def _save_npc_combat(database, npc_id, profile, equipment):
         return
     database.execute(
         "INSERT INTO mud_npc_combat_profiles(npc_definition_id,maximum_health,attack,defense,"
-        "experience_reward,respawn_seconds) VALUES(?,?,?,?,?,?) "
+        "experience_reward,respawn_seconds,accuracy,evasion) VALUES(?,?,?,?,?,?,?,?) "
         "ON CONFLICT(npc_definition_id) DO UPDATE SET maximum_health=excluded.maximum_health,"
         "attack=excluded.attack,defense=excluded.defense,experience_reward=excluded.experience_reward,"
-        "respawn_seconds=excluded.respawn_seconds,updated_at=CURRENT_TIMESTAMP",
+        "respawn_seconds=excluded.respawn_seconds,accuracy=excluded.accuracy,evasion=excluded.evasion,"
+        "updated_at=CURRENT_TIMESTAMP",
         (npc_id, profile["maximum_health"], profile["attack"], profile["defense"],
-         profile["experience_reward"], profile["respawn_seconds"]),
+         profile["experience_reward"], profile["respawn_seconds"],
+         profile.get("accuracy"), profile.get("evasion")),
     )
     database.execute("DELETE FROM mud_npc_equipment WHERE npc_definition_id=?", (npc_id,))
     database.executemany(
@@ -6200,7 +6972,7 @@ def builder_delete_npc_instance(instance_id):
 def _quest_fields(database, quest_id=None):
     name = " ".join(request.form.get("name", "").split()); description = request.form.get("description", "").strip(); prerequisite = request.form.get("prerequisite_quest_id", "").strip() or None
     if not 2 <= len(name) <= 120 or not 1 <= len(description) <= 4000: return None, "Quest names must be 2–120 characters and descriptions 1–4000 characters."
-    if prerequisite == quest_id: return None, "A quest cannot require itself."
+    if prerequisite and prerequisite == quest_id: return None, "A quest cannot require itself."
     if prerequisite and database.execute("SELECT 1 FROM mud_quests WHERE id=?", (prerequisite,)).fetchone() is None: return None, "Choose an existing prerequisite quest."
     cursor = prerequisite
     seen = set()
@@ -6212,7 +6984,14 @@ def _quest_fields(database, quest_id=None):
             "SELECT prerequisite_quest_id FROM mud_quests WHERE id=?", (cursor,)
         ).fetchone()
         cursor = row["prerequisite_quest_id"] if row else None
-    return (name, description, prerequisite), None
+    completion_mode = request.form.get("completion_mode", "auto")
+    turn_in_npc = request.form.get("turn_in_npc_definition_id", "").strip() or None
+    if completion_mode not in ("auto", "turn_in"): return None, "Choose how the quest completes."
+    if turn_in_npc and database.execute("SELECT 1 FROM mud_npc_definitions WHERE id=?", (turn_in_npc,)).fetchone() is None: return None, "Choose an existing turn-in NPC."
+    conditions_json, error = _builder_rules(database, "conditions_json", mud_conditions.validate_conditions)
+    if error: return None, error
+    return (name, description, prerequisite, completion_mode, turn_in_npc if completion_mode == "turn_in" else None,
+            int(request.form.get("sequential") == "1"), int(request.form.get("abandonable") == "1"), conditions_json), None
 
 
 @bp.post("/builder/quests")
@@ -6220,7 +6999,7 @@ def _quest_fields(database, quest_id=None):
 def builder_create_quest():
     validate_csrf(); database = get_db(); fields, error = _quest_fields(database)
     if error: flash(error, "error"); return _builder_redirect()
-    quest_id = f"world:quest:{uuid.uuid4().hex}"; database.execute("INSERT INTO mud_quests(id,name,description,prerequisite_quest_id,created_by,world_id) VALUES(?,?,?,?,?,(SELECT id FROM mud_world_packages WHERE active=1))", (quest_id, *fields, g.user["id"])); database.commit(); flash(f"Quest {fields[0]} created.", "success"); return _builder_redirect()
+    quest_id = f"world:quest:{uuid.uuid4().hex}"; database.execute("INSERT INTO mud_quests(id,name,description,prerequisite_quest_id,completion_mode,turn_in_npc_definition_id,sequential,abandonable,conditions_json,created_by,world_id) VALUES(?,?,?,?,?,?,?,?,?,?,(SELECT id FROM mud_world_packages WHERE active=1))", (quest_id, *fields, g.user["id"])); database.commit(); flash(f"Quest {fields[0]} created.", "success"); return _builder_redirect()
 
 
 @bp.post("/builder/quests/<path:quest_id>")
@@ -6230,7 +7009,7 @@ def builder_update_quest(quest_id):
     if database.execute("SELECT 1 FROM mud_quests WHERE id=?", (quest_id,)).fetchone() is None: abort(404)
     fields, error = _quest_fields(database, quest_id)
     if error: flash(error, "error"); return _builder_redirect()
-    database.execute("UPDATE mud_quests SET name=?,description=?,prerequisite_quest_id=?,updated_at=CURRENT_TIMESTAMP WHERE id=?", (*fields, quest_id)); database.commit(); flash("Quest updated.", "success"); return _builder_redirect()
+    database.execute("UPDATE mud_quests SET name=?,description=?,prerequisite_quest_id=?,completion_mode=?,turn_in_npc_definition_id=?,sequential=?,abandonable=?,conditions_json=?,updated_at=CURRENT_TIMESTAMP WHERE id=?", (*fields, quest_id)); database.commit(); flash("Quest updated.", "success"); return _builder_redirect()
 
 
 @bp.post("/builder/quests/<path:quest_id>/givers")
@@ -6243,16 +7022,38 @@ def builder_set_quest_givers(quest_id):
     database.execute("DELETE FROM mud_quest_givers WHERE quest_id=?", (quest_id,)); database.executemany("INSERT INTO mud_quest_givers(quest_id,npc_definition_id) VALUES(?,?)", ((quest_id, value) for value in giver_ids)); database.commit(); flash("Quest givers updated.", "success"); return _builder_redirect()
 
 
+def _quest_objective_fields(database):
+    objective_type = request.form.get("objective_type", ""); target_id = request.form.get("target_id", "").strip(); description = request.form.get("description", "").strip(); required_count = request.form.get("required_count", 1, type=int)
+    target_tables = {"talk_npc": "mud_npc_definitions", "visit_room": "mud_world_rooms", "possess_item": "mud_item_definitions", "defeat_npc": "mud_npc_definitions", "deliver_item": "mud_item_definitions"}
+    if objective_type not in target_tables or database.execute(f"SELECT 1 FROM {target_tables.get(objective_type, 'mud_quests')} WHERE id=?", (target_id,)).fetchone() is None: return None, "Choose a valid objective type and target."
+    sort_order = request.form.get("sort_order", 0, type=int)
+    if not 1 <= len(description) <= 500 or required_count is None or not 1 <= required_count <= 100 or sort_order is None or not -10000 <= sort_order <= 10000: return None, "Objective descriptions must be 1–500 characters, counts 1–100, and order valid."
+    consume = int(request.form.get("consume_on_turn_in") == "1"); recipient = request.form.get("recipient_npc_definition_id", "").strip() or None
+    if consume and objective_type != "possess_item": return None, "Only possess-item objectives can take the items at turn-in."
+    if recipient and objective_type != "deliver_item": return None, "Only delivery objectives can name a recipient NPC."
+    if recipient and database.execute("SELECT 1 FROM mud_npc_definitions WHERE id=?", (recipient,)).fetchone() is None: return None, "Choose an existing recipient NPC."
+    return {"objective_type": objective_type, "target_id": target_id, "description": description, "required_count": required_count, "sort_order": sort_order, "optional": int(request.form.get("optional") == "1"), "consume_on_turn_in": consume, "recipient_npc_definition_id": recipient}, None
+
+
 @bp.post("/builder/quests/<path:quest_id>/objectives")
 @builder_required
 def builder_create_quest_objective(quest_id):
-    validate_csrf(); database = get_db(); objective_type = request.form.get("objective_type", ""); target_id = request.form.get("target_id", "").strip(); description = request.form.get("description", "").strip(); required_count = request.form.get("required_count", 1, type=int)
-    target_tables = {"talk_npc": "mud_npc_definitions", "visit_room": "mud_world_rooms", "possess_item": "mud_item_definitions", "defeat_npc": "mud_npc_definitions", "deliver_item": "mud_item_definitions"}
+    validate_csrf(); database = get_db()
     if database.execute("SELECT 1 FROM mud_quests WHERE id=?", (quest_id,)).fetchone() is None: abort(404)
-    if objective_type not in target_tables or database.execute(f"SELECT 1 FROM {target_tables.get(objective_type, 'mud_quests')} WHERE id=?", (target_id,)).fetchone() is None: flash("Choose a valid objective type and target.", "error"); return _builder_redirect()
-    sort_order = request.form.get("sort_order", 0, type=int)
-    if not 1 <= len(description) <= 500 or required_count is None or not 1 <= required_count <= 100 or sort_order is None or not -10000 <= sort_order <= 10000: flash("Objective descriptions must be 1–500 characters, counts 1–100, and order valid.", "error"); return _builder_redirect()
-    database.execute("INSERT INTO mud_quest_objectives(id,quest_id,objective_type,target_id,description,required_count,sort_order) VALUES(?,?,?,?,?,?,?)", (f"world:quest-objective:{uuid.uuid4().hex}", quest_id, objective_type, target_id, description, required_count, sort_order)); database.commit(); flash("Quest objective added.", "success"); return _builder_redirect()
+    fields, error = _quest_objective_fields(database)
+    if error: flash(error, "error"); return _builder_redirect()
+    fields.update(id=f"world:quest-objective:{uuid.uuid4().hex}", quest_id=quest_id)
+    database.execute(f"INSERT INTO mud_quest_objectives({','.join(fields)}) VALUES({','.join('?' for _ in fields)})", tuple(fields.values())); database.commit(); flash("Quest objective added.", "success"); return _builder_redirect()
+
+
+@bp.post("/builder/quest-objectives/<path:objective_id>")
+@builder_required
+def builder_update_quest_objective(objective_id):
+    validate_csrf(); database = get_db()
+    if database.execute("SELECT 1 FROM mud_quest_objectives WHERE id=?", (objective_id,)).fetchone() is None: abort(404)
+    fields, error = _quest_objective_fields(database)
+    if error: flash(error, "error"); return _builder_redirect()
+    database.execute(f"UPDATE mud_quest_objectives SET {','.join(f'{name}=?' for name in fields)} WHERE id=?", (*fields.values(), objective_id)); database.commit(); flash("Quest objective updated.", "success"); return _builder_redirect()
 
 
 @bp.post("/builder/quest-objectives/<path:objective_id>/delete")

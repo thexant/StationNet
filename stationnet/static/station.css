@@ -914,6 +914,8 @@ button:disabled { opacity: .5; cursor: not-allowed; }
 .mud-quest-list li { display: flex; justify-content: space-between; gap: .4rem; color: var(--white); font-size: var(--text-xs); }
 .mud-quest-list li.complete { color: var(--green-bright); }
 .mud-quest-list li span { flex: none; color: var(--cyan); }
+.mud-quest-list li.locked { color: var(--grey); }
+.mud-quest-list article > p.mud-quest-ready { color: var(--amber); font-size: var(--text-xs); }
 
 .builder-shell { display: grid; gap: 1rem; }
 .builder-head { margin-bottom: .25rem; }

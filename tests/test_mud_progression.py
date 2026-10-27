@@ -68,8 +68,10 @@ def _set_level(db, user_id, level):
 
 def test_attribute_points_per_level():
     assert [mud.attribute_points_for_level(level) for level in range(2, 11)] == [1, 1, 1, 2, 1, 1, 1, 1, 2]
-    assert mud.level_bonuses(1) == {"attack": 0, "spell_power": 0, "healing": 0, "defense": 0}
-    assert mud.level_bonuses(10) == {"attack": 3, "spell_power": 3, "healing": 4, "defense": 1}
+    assert mud.level_bonuses(1) == {"attack": 0, "spell_power": 0, "healing": 0, "defense": 0,
+                                    "accuracy": 0, "evasion": 0}
+    assert mud.level_bonuses(10) == {"attack": 3, "spell_power": 3, "healing": 4, "defense": 1,
+                                     "accuracy": 4, "evasion": 2}
 
 
 def test_leveling_grants_points_and_announces_them(game):

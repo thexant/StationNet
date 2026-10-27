@@ -92,7 +92,8 @@ can use `"on_use_effects"`; equipped weapons and hostile NPCs can use
 ```
 
 Keys are `poison`, `burning`, `bleeding` (damage each combat turn), `might` and
-`weakness` (attack), or `ward` and `vulnerability` (defense). Potency is 1–1000
+`weakness` (attack), `ward` and `vulnerability` (defense), `focus` and `blinded`
+(accuracy), or `evasive` and `snared` (evasion). Potency is 1–1000
 and duration is 1–100 turns. Reapplying a key keeps its stronger potency and
 longer remaining duration. Classes declare known spells through imported
 class JSON or `character_options.json`; the world ZIP cannot add spell
@@ -215,14 +216,14 @@ The supported arrays are:
 | `mud_item_instances` | Items in rooms or containers | `definition_id`, `room_id` or `container_id` |
 | `mud_conversations` | Dialogue groups | `id` |
 | `mud_dialogue_nodes` | Dialogue text and starting nodes | `conversation_id` |
-| `mud_dialogue_responses` | Choices and quest acceptance | `node_id`, `next_node_id`, `accept_quest_id` |
+| `mud_dialogue_responses` | Choices, conditions, outcomes, quest acceptance and turn-in | `node_id`, `next_node_id`, `accept_quest_id`, `turn_in_quest_id` |
 | `mud_npc_definitions` | NPC templates and behavior | `conversation_id` |
 | `mud_npc_instances` | NPCs placed in rooms | `definition_id`, `room_id` |
 | `mud_npc_combat_profiles` | Health, attack, defense, XP, respawn | `npc_definition_id` |
 | `mud_npc_equipment` | NPC equipment slots | `npc_definition_id`, `item_definition_id` |
 | `mud_npc_combat_rewards` | Probabilistic item, XP, or coin drops | `npc_definition_id`, `target_id` for items |
-| `mud_quests` | Quests and prerequisites | `prerequisite_quest_id` |
-| `mud_quest_objectives` | Talk, visit, possess, defeat, or deliver objectives | `quest_id`, `target_id` |
+| `mud_quests` | Quests, prerequisites, completion rules | `prerequisite_quest_id`, `turn_in_npc_definition_id` |
+| `mud_quest_objectives` | Talk, visit, possess, defeat, or deliver objectives | `quest_id`, `target_id`, `recipient_npc_definition_id` |
 | `mud_quest_rewards` | Quest item, XP, or coin rewards | `quest_id`, `target_id` for items |
 | `mud_npc_shops` | NPC merchant settings | `npc_definition_id`, `buys_items`, `sell_percent` |
 | `mud_shop_stock` | Merchant merchandise and prices | `npc_definition_id`, `item_definition_id`, `price`, optional `quantity` |
@@ -241,14 +242,14 @@ must point to records in the same package, including room IDs in `rooms.json`.
 | `mud_item_instances` | `definition_id`, `room_id`, `container_id`, `is_open`, `state_json` |
 | `mud_conversations` | `name` |
 | `mud_dialogue_nodes` | `conversation_id`, `node_key`, `body`, `is_start` |
-| `mud_dialogue_responses` | `node_id`, `response_text`, `next_node_id`, `accept_quest_id`, `deliver_item_id`, `required_state_key`, `required_state_value`, `state_key`, `state_value`, `sort_order` |
+| `mud_dialogue_responses` | `node_id`, `response_text`, `next_node_id`, `accept_quest_id`, `deliver_item_id`, `turn_in_quest_id`, `required_state_key`, `required_state_value`, `state_key`, `state_value`, `sort_order`, `conditions_json`, `outcomes_json` |
 | `mud_npc_definitions` | `name`, `description`, `conversation_id`, `properties_json`, `behaviors_json` |
 | `mud_npc_instances` | `definition_id`, `room_id`, `state_json` |
-| `mud_npc_combat_profiles` | `npc_definition_id`, `maximum_health`, `attack`, `defense`, `experience_reward`, `respawn_seconds` |
+| `mud_npc_combat_profiles` | `npc_definition_id`, `maximum_health`, `attack`, `defense`, `experience_reward`, `respawn_seconds`, optional `accuracy`, `evasion` |
 | `mud_npc_equipment` | `npc_definition_id`, `equipment_slot`, `item_definition_id` |
 | `mud_npc_combat_rewards` | `npc_definition_id`, `reward_type`, `target_id`, `amount`, `chance_percent` |
-| `mud_quests` | `name`, `description`, `prerequisite_quest_id` |
-| `mud_quest_objectives` | `quest_id`, `objective_type`, `target_id`, `description`, `required_count`, `sort_order` |
+| `mud_quests` | `name`, `description`, `prerequisite_quest_id`, `completion_mode`, `turn_in_npc_definition_id`, `sequential`, `abandonable`, `conditions_json` |
+| `mud_quest_objectives` | `quest_id`, `objective_type`, `target_id`, `description`, `required_count`, `sort_order`, `optional`, `consume_on_turn_in`, `recipient_npc_definition_id` |
 | `mud_quest_rewards` | `quest_id`, `reward_type`, `target_id`, `amount` |
 | `mud_npc_shops` | `npc_definition_id`, `buys_items`, `sell_percent` (no `id`) |
 | `mud_shop_stock` | `npc_definition_id`, `item_definition_id`, `price`, `quantity` |
@@ -267,7 +268,10 @@ array; it is installed before its children regardless of JSON order. Set
 
 For NPC combat, `maximum_health` is 1 to 1,000,000; `attack` is 1 to 100,000;
 `defense` and `experience_reward` are 0 to 100,000; `respawn_seconds` is 5
-to 86,400. A profile makes the NPC fightable; omit it for a purely
+to 86,400. Optional `accuracy` and `evasion` are 0 to 100 (omitted or `null`
+means 0). Every attack rolls to hit at 85% + accuracy − evasion, kept between
+30% and 95%, and `defense` then reduces the damage of hits that land. Older
+packages without these fields import unchanged. A profile makes the NPC fightable; omit it for a purely
 conversational NPC. A combat reward uses `reward_type: "experience"` or
 `"coins"` with no `target_id`, or `"item"` with an item definition `target_id`.
 `amount` is 1 to 100,000; `chance_percent` is 1 to 100 and defaults to 100.
@@ -276,29 +280,149 @@ equipment slot per NPC; the item should be equipment for that slot.
 
 Give each conversation one start node (`is_start: 1`) and a distinct
 `node_key` per node. Responses point to a `node_id` and may name a
-`next_node_id` in the same conversation. `accept_quest_id` starts a quest;
-`deliver_item_id` consumes one carried item for an active delivery objective
-when the speaking NPC is a giver for that quest;
-`required_state_key` / `required_state_value` gate a response, and
-`state_key` / `state_value` save conversation state. `sort_order` controls
-display order. To offer a quest through a character, include both a
-`mud_quest_givers` link and a dialogue response accepting that quest.
+`next_node_id` in the same conversation. `sort_order` controls display order.
+A response can do several things when chosen:
+
+- `accept_quest_id` starts a quest. The response is shown only while the
+  player can accept it: not already taken, prerequisite done, quest
+  conditions met.
+- `turn_in_quest_id` turns in a `turn_in` quest. The response is shown only
+  when that quest is ready and the speaking NPC is its turn-in NPC.
+- `deliver_item_id` hands over one carried item for an open, unlocked delivery
+  objective whose recipient is the speaking NPC. The response is shown only
+  then.
+- `state_key` / `state_value` save per-player conversation state with this NPC.
+- `outcomes_json` grants or charges things (see below).
+
+A response is visible only when its legacy `required_state_key` /
+`required_state_value` pair matches **and** every entry in `conditions_json`
+holds. Because quest responses hide when they cannot happen, response numbers
+can shift as a quest progresses; players may also answer by response text.
+To offer a quest through a character, include both a `mud_quest_givers` link
+and a dialogue response accepting that quest. Players can also use
+`/quest accept <name>` beside any giver. `/talk` to a giver or turn-in NPC
+lists quests offered and quests ready to turn in there, even when the NPC has
+no conversation.
+
+### Quests
 
 Quest objectives support `talk_npc` and `defeat_npc` (target an NPC
 **definition**), `visit_room` (target a room ID), and `possess_item` and
-`deliver_item` (target an item **definition**). Deliveries use `/deliver <item>`
-beside one of the quest's giver NPCs and consume the item. `required_count` is
-at least 1, and `sort_order` orders
-objectives. A quest may name another local quest in
+`deliver_item` (target an item **definition**). `talk_npc` advances when the
+player starts a conversation with `/talk`; accepting a quest in dialogue does
+not count as talking to the giver. Deliveries use `/deliver <item>` (or a
+`deliver_item_id` response) beside the objective's `recipient_npc_definition_id`,
+or beside one of the quest's givers when no recipient is set, and consume the
+item. `required_count` is 1 to 100. A quest may name another local quest in
 `prerequisite_quest_id`; prerequisite chains cannot form cycles. Quest
 rewards use `reward_type: "experience"` or `"coins"` with no `target_id`, or `"item"`
 with an item definition `target_id`; `amount` is at least 1.
 
+| Quest field | Values | Meaning |
+| --- | --- | --- |
+| `completion_mode` | `auto` (default) or `turn_in` | `auto` completes and pays the moment the required objectives are done. `turn_in` marks the quest **ready** instead; the player returns to an NPC and turns it in to receive the rewards. |
+| `turn_in_npc_definition_id` | NPC definition ID or omitted | The NPC that accepts the turn-in. Omit it to accept turn-ins from any of the quest's givers. |
+| `sequential` | `0` (default) or `1` | With `1`, objectives unlock in stages by `sort_order`. Objectives that share a `sort_order` run together; a stage opens once every required objective in earlier stages is complete. Locked objectives do not advance. Items already carried count as soon as their stage unlocks. |
+| `abandonable` | `1` (default) or `0` | Whether `/quest abandon <name>` may drop the active quest. Abandoning clears its progress so it can be accepted again. Items already delivered are not returned. |
+| `conditions_json` | Condition array (default `[]`) | Who may accept the quest. See the condition reference below. |
+
+| Objective field | Values | Meaning |
+| --- | --- | --- |
+| `sort_order` | Integer | Display order and, in sequential quests, the stage number. |
+| `optional` | `0` (default) or `1` | Optional objectives are tracked but never block completion. |
+| `consume_on_turn_in` | `0` (default) or `1` | `possess_item` only. At turn-in the player must still carry `required_count` of the item (unequipped, not run loot), and those items are taken. |
+| `recipient_npc_definition_id` | NPC definition ID or omitted | `deliver_item` only. Who receives the delivery. |
+
+Rewards are paid exactly once per character. Repeated turn-ins, repeated
+dialogue choices, and completed quests cannot pay again. Players manage quests
+with `/quests`, `/quests completed`, `/quest available`, `/quest info <name>`,
+`/quest accept <name>`, `/quest turnin <name>`, and `/quest abandon <name>`.
+
+### Conditions
+
+`conditions_json` is an array; **all** entries must hold. Any entry may add
+`"negate": true` to invert it. `{"any": [ ... ]}` holds when at least one of
+its entries holds; groups cannot be nested. A list holds up to 20 entries.
+
+| Type | Fields | Holds when |
+| --- | --- | --- |
+| `level` | `min` and/or `max` (1–1000) | The character's level is within the bounds. |
+| `race` / `class` | `keys`: array of origin keys (or a single `key`) | The character's race/class is one of them. Built-in keys such as `human` or `warrior` work, and bundled `origins.json` keys are mapped on import. |
+| `has_item` | `item`, optional `count` (default 1) | The character carries at least `count` of the item definition. |
+| `coins` | `min` | The character has at least `min` coins. |
+| `attribute` | `attribute` (`strength`, `agility`, `intellect`, `vitality`), `min` | The attribute is at least `min`. |
+| `skill` | `skill` key, optional `min_rank` (default 1) | The skill rank is at least `min_rank`. |
+| `quest` | `quest`, `status`: one or more of `not_started`, `active`, `ready`, `completed` (default `completed`) | The character's quest status matches. `ready` means a `turn_in` quest whose objectives are done. |
+| `objective` | `objective` | That quest objective is complete. |
+| `state` | `key`, `value` | This NPC's saved per-player state for `key` equals `value` (`""` when unset). |
+| `claimed` | none | This response's outcomes have already been granted. Use it with `negate` to hide a one-time offer after it is claimed. |
+
+### Outcomes
+
+`outcomes_json` on a dialogue response is an array of up to 10 entries. They
+apply the **first** time a character chooses the response. Later choices still
+move the conversation but grant and charge nothing. Costs are checked before
+anything changes: if the player cannot pay, the response is refused and
+nothing is granted.
+
+| Type | Fields | Effect |
+| --- | --- | --- |
+| `give_item` | `item`, `amount` (1–100, default 1) | Gives items. |
+| `take_item` | `item`, `amount` (1–100, default 1) | Takes carried, unequipped items (refused if too few). |
+| `experience` | `amount` (1–100,000) | Awards experience (Intellect and Lore bonuses apply). |
+| `coins` | `amount` (1–100,000) | Gives coins. |
+| `take_coins` | `amount` (1–100,000) | Charges coins (refused if too few). |
+
+Item, quest, and objective IDs inside conditions and outcomes are local package
+IDs, like other references, and must exist in the package.
+
+### Example: a return-to-the-NPC quest
+
+```json
+{
+  "mud_quests": [
+    {"id": "wolf-hunt", "name": "Wolf Hunt", "description": "Bring two pelts to the hunter.",
+     "completion_mode": "turn_in", "turn_in_npc_definition_id": "hunter", "sequential": 1,
+     "conditions_json": [{"type": "level", "min": 2}]}
+  ],
+  "mud_quest_givers": [{"quest_id": "wolf-hunt", "npc_definition_id": "elder"}],
+  "mud_quest_objectives": [
+    {"id": "find-hunter", "quest_id": "wolf-hunt", "objective_type": "talk_npc",
+     "target_id": "hunter", "description": "Find the hunter", "sort_order": 1},
+    {"id": "pelts", "quest_id": "wolf-hunt", "objective_type": "possess_item", "target_id": "pelt",
+     "description": "Collect two pelts", "required_count": 2, "sort_order": 2, "consume_on_turn_in": 1}
+  ],
+  "mud_quest_rewards": [{"id": "hunt-pay", "quest_id": "wolf-hunt", "reward_type": "coins", "amount": 20}],
+  "mud_dialogue_responses": [
+    {"id": "accept-hunt", "node_id": "elder-start", "response_text": "I will hunt wolves.",
+     "accept_quest_id": "wolf-hunt"},
+    {"id": "turn-in-hunt", "node_id": "hunter-start", "response_text": "Here are your pelts.",
+     "turn_in_quest_id": "wolf-hunt"},
+    {"id": "warrior-gift", "node_id": "elder-start", "response_text": "Any advice for a warrior?",
+     "conditions_json": [{"type": "class", "keys": ["warrior"]}, {"type": "claimed", "negate": true}],
+     "outcomes_json": [{"type": "give_item", "item": "pelt"}, {"type": "experience", "amount": 25}]}
+  ]
+}
+```
+
+1. The player accepts the quest from the elder.
+2. They `/talk` to the hunter, which unlocks the pelt stage.
+3. Once they carry two pelts, the quest becomes ready.
+4. Beside the hunter, they choose "Here are your pelts." (or use `/quest turnin Wolf Hunt`). The hunter takes the pelts and pays 20 coins, once.
+
+### Item and NPC properties
+
 `properties_json`, `behaviors_json`, and `state_json` may be JSON objects or
 JSON text in the file. Item properties can include `heal`, `value`,
 `reveal_exit`, `use_message`, equipment bonuses, firearm data, attribute
-`requirements`, and timed effects. `behaviors_json` can make a combat-capable
-NPC peaceful with `{"aggressive": false}` or `{"friendly": true}`.
+`requirements`, and timed effects. Equipment may also set integer `accuracy`
+and `evasion` (each −20 to 20; negative evasion suits heavy armor). A firearm's
+`accuracy` applies only to its own shots.
+
+`behaviors_json` controls hostility for combat-capable NPCs:
+- By default, they attack on sight.
+- `{"aggressive": false}`, `{"neutral": true}`, or `{"friendly": true}` keeps them from attacking first. They still fight back against a player who attacks them, and only against that player.
+- `{"passive": true}` NPCs, such as training dummies, never strike back.
 
 `mud_npc_shops` turns a placed NPC into a merchant. Set `buys_items` to 0 or 1
 and `sell_percent` to 1–100 for player sales. `mud_shop_stock` sets each item's

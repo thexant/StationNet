@@ -108,8 +108,9 @@ def test_package_quest_shop_respawn_search_and_lock(game):
         assert mud.quest_state(db, users[1])["active"]
         herb_definition = db.execute("SELECT id FROM mud_item_definitions WHERE name='Silver Herb'").fetchone()[0]
         mud._grant_item(db, users[1], herb_definition)
+        # The accept response is hidden once the quest is taken, so delivery is now first.
         mud._talk_action(db, other, {"arguments": ["Trader"]})
-        assert "You deliver" in mud._respond_action(db, other, {"arguments": ["2"]})[1].body
+        assert "You deliver" in mud._respond_action(db, other, {"arguments": ["1"]})[1].body
         assert mud.quest_state(db, users[1])["active"][0]["objectives"][0]["progress"] == 1
         assert "locked" in mud._look_action(db, user, {"arguments": ["vault door"]})[0].body.lower()
         with pytest.raises(mud.ActionError, match="locked"):

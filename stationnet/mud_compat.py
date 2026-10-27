@@ -8,7 +8,7 @@ from . import character_creation
 PERSISTENT_TABLES = (
     "mud_character_progression", "mud_character_skills", "mud_character_wallets",
     "mud_player_quests", "mud_player_objectives", "mud_npc_player_states",
-    "mud_dungeon_npc_player_states",
+    "mud_dungeon_npc_player_states", "mud_player_dialogue_claims",
 )
 USER_TABLES = ("mud_player_locations", "mud_world_locations", "mud_player_stealth")
 OPTIONAL_TABLES = (
@@ -200,7 +200,8 @@ def restore_campaign(database, archive_id):
         _clear_character(database, record["user_id"], cid)
         _insert(database, "mud_characters", snapshot["character"])
         for table in PERSISTENT_TABLES:
-            for row in snapshot["tables"][table]:
+            # Archives taken before a table existed simply have nothing to restore.
+            for row in snapshot["tables"].get(table, []):
                 _insert(database, table, row)
         for item in snapshot["items"]:
             item.pop("depth", None)

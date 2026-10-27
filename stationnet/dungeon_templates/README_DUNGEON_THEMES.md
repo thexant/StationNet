@@ -29,8 +29,9 @@ Embedded item and enemy `properties` support the shared MUD effects format.
 Use `on_use_effects` for consumables and `on_hit_effects` for equipment or
 enemies. For example, `"properties": {"on_hit_effects":
 [{"key":"bleeding","potency":2,"duration":3}]}`. Available keys are
-`poison`, `burning`, `bleeding`, `might`, `weakness`, `ward`, and
-`vulnerability`. Potency must be 1–1000 and duration 1–100 combat turns.
+`poison`, `burning`, `bleeding`, `might`, `weakness`, `ward`,
+`vulnerability`, `focus`, `blinded` (accuracy), `evasive`, and `snared`
+(evasion). Potency must be 1–1000 and duration 1–100 combat turns.
 
 1. Start StationNet once to create `data/dungeons/` (or your
    `<STATIONNET_DATA>/dungeons/` directory). Copy `_template.json` to a new
@@ -207,13 +208,34 @@ Required fields: `id`, `name`, `description` (enemies also require `combat`).
   an `id` and `text`, and may set `next_node_id`, `sort_order`, or read and write
   conversation state with `required_state_key` / `required_state_value` and
   `state_key` / `state_value`.
+
+  A response may also have `conditions`, an array that must all hold for the
+  response to appear. Supported types are `level`, `race`, `class`,
+  `has_item`, `coins`, `attribute`, `skill`, `state`, and `claimed`. Any
+  condition can take `"negate": true`, and `{"any": [...]}` groups
+  alternatives. Quest conditions are not available in dungeons.
+
+  A response may have `outcomes` (`give_item`, `take_item`, `experience`,
+  `coins`, `take_coins`). These are applied the first time each character
+  chooses the response, and never again, across all runs. Item IDs in either
+  list may name an embedded item's `id` or an existing item definition. The
+  [custom world guide](../mud_world_templates/README_CUSTOM_WORLDS.md#conditions)
+  lists every field. For example:
+
+  ```json
+  {"id": "bribe", "text": "Take these coins and let me pass.",
+   "conditions": [{"type": "coins", "min": 25}, {"type": "claimed", "negate": true}],
+   "outcomes": [{"type": "take_coins", "amount": 25}, {"type": "give_item", "item": "gate-key"}]}
+  ```
 - `combat`: all optional individually.
 
   | Field | Range | Notes |
   | --- | --- | --- |
   | `maximum_health` | 1 to 1,000,000 | |
   | `attack` | 1 to 100,000 | |
-  | `defense` | 0 to 100,000 | |
+  | `defense` | 0 to 100,000 | Flat damage reduction against attacks that land. |
+  | `accuracy` | 0 to 100 | Default 0. Added to the base 85% chance to hit. |
+  | `evasion` | 0 to 100 | Default 0. Subtracted from attackers' chance to hit; spells face half. |
   | `experience_reward` | 0 to 100,000 | Base experience. |
   | `respawn_seconds` | 5 to 86,400 | Traditional world only; dungeon enemies stay defeated for the run. |
 
@@ -266,8 +288,8 @@ Notes:
 - `properties.on_use_effects` on consumables and `properties.on_hit_effects`
   on equipment or enemies apply timed effects. Each entry has `key`, `potency`
   (1 to 1,000), and `duration` (1 to 100 combat turns). Supported keys are
-  `poison`, `burning`, `bleeding`, `might`, `weakness`, `ward`, and
-  `vulnerability`.
+  `poison`, `burning`, `bleeding`, `might`, `weakness`, `ward`,
+  `vulnerability`, `focus`, `blinded`, `evasive`, and `snared`.
 - Older bundled recovery items carrying the former "standard recovery rules"
   message still heal, for compatibility. New themes should use `heal`.
 
@@ -329,7 +351,9 @@ in every case.
 
 Generation builds a connected layout, assigns `entrance`, `exit`, `normal`, and
 your configured special roles, then evaluates pools. Room difficulty scales
-enemy combat stats and experience rewards. Completion pays coins based on
+enemy combat stats and experience rewards: each step above difficulty 2 adds
+8 health, 2 attack, half a point of defense, 2 accuracy, 1 evasion, and 5
+experience. Completion pays coins based on
 difficulty and rooms visited, so harder runs pay more.
 
 Each difficulty is tuned for a recommended character level of
@@ -422,9 +446,17 @@ Conditions can appear on pools and on individual content choices.
 - Combat advances only when a player acts. Waiting or disconnecting never gives
   enemies extra turns.
 - Players can attack, defend, use an item, or attempt a risky flee.
-- Combat-capable NPCs attack on entry by default. To keep one neutral, set
-  `behaviors.aggressive` to `false`, or set `behaviors.friendly`, `neutral`, or
-  `passive` to `true`.
+- Attacks roll to hit (85% + accuracy − evasion, kept within 30–95%), and
+  `defense` reduces the damage of hits that land. Every enemy fighting a
+  player acts after each of that player's actions; on room entry only the
+  first strikes and the rest join in.
+- Combat-capable NPCs attack on entry by default. To keep one from attacking
+  first, set `behaviors.aggressive` to `false` or `behaviors.friendly` or
+  `neutral` to `true`; it still fights back against whoever attacks it.
+  `passive: true` NPCs never fight back.
+- `/rest` in a cleared room restores 15% of health and 25% of mana, every 30
+  seconds. Dying ends the run and forfeits its loot, but costs no
+  experience; the player returns with half health and mana.
 - Defeated dungeon enemies stay defeated for that run. `respawn_seconds` only
   applies in the traditional world.
 - Cooperative runs are joined with `/join <code>`.
@@ -496,7 +528,7 @@ arrays. Reordering choices can change what is generated.
 | An item is "used" but nothing heals | It has `use_message` but no `heal`. |
 | Unexpected rooms are missing a name or description | No room pool matches that room's role or conditions. |
 | An enemy appears in the wrong rooms | Check `conditions` on the pool, the choice, and the encounter. |
-| A friendly NPC attacks the player | It has `combat`; set `behaviors.aggressive: false` or `friendly`/`neutral`/`passive: true`. |
+| A friendly NPC attacks the player | It has `combat`; set `behaviors.aggressive: false` or `friendly`/`neutral`/`passive: true` (only `passive` NPCs never fight back). |
 | Output changed after a small edit | Array order is part of the seed's input; reordering changes generation. |
 | StationNet rejects an edited installed theme | Its ID/version was already used; increment `version`. |
 | A loot item vanished | The run ended in death or `/abandon`; run loot is only banked on exit or entrance extraction. |

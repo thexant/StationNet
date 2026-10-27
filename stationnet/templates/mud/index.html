@@ -168,7 +168,7 @@
         </button>
         <div id="mud-quests-panel" data-panel-content hidden>
           <div class="mud-quest-list" data-mud-quests>
-            {% for quest in quests.active %}<article><strong>{{ quest.name }}</strong><p>{{ quest.description }}</p><ul>{% for objective in quest.objectives %}<li class="{% if objective.completed_at %}complete{% endif %}">{{ '✓' if objective.completed_at else '·' }} {{ objective.description }} <span>{{ objective.progress }}/{{ objective.required_count }}</span></li>{% endfor %}</ul></article>{% else %}<span class="muted">no active quests</span>{% endfor %}
+            {% for quest in quests.active %}<article><strong>{{ quest.name }}</strong><p>{{ quest.description }}</p>{% if quest.ready %}<p class="mud-quest-ready">READY — return to {{ quest.turn_in_npc_name }}</p>{% endif %}<ul>{% for objective in quest.objectives %}<li class="{% if objective.completed_at %}complete{% elif objective.locked %}locked{% endif %}">{{ '✓' if objective.completed_at else ('🔒' if objective.locked else '·') }} {{ objective.description }}{% if objective.optional %} (optional){% endif %} <span>{{ objective.progress }}/{{ objective.required_count }}</span></li>{% endfor %}</ul></article>{% else %}<span class="muted">no active quests</span>{% endfor %}
           </div>
         </div>
       </section>
