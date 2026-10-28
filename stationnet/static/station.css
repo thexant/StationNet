@@ -35,6 +35,10 @@
 }
 
 * { box-sizing: border-box; }
+/* Use palette colours for the page and every nested scrolling panel. */
+* { scrollbar-color: var(--green-dim) var(--black); }
+*::-webkit-scrollbar-thumb { background-color: var(--green-dim); }
+*::-webkit-scrollbar-track { background-color: var(--black); }
 html { min-height: 100%; background: var(--black); }
 /* Scale the whole desktop layout, including pixel-sized editors and controls.
    Zoom participates in layout, unlike transform: scale(), so wrapping and
@@ -837,7 +841,7 @@ button:disabled { opacity: .5; cursor: not-allowed; }
 .mud-game-jumps [data-mud-jump-room][aria-expanded="true"] { color: #000; border-color: var(--cyan); background: var(--cyan); }
 .mud-game-jumps [data-mud-jump-latest].is-unread { color: var(--amber); border-color: var(--amber); }
 .mud-game-jumps [data-mud-clear-events] { color: var(--amber); }
-.mud-game-scroll, .mud-scene-view { grid-column: 1; grid-row: 2; min-height: 0; overflow-y: auto; overscroll-behavior: contain; scrollbar-color: var(--green-dim) #000; }
+.mud-game-scroll, .mud-scene-view { grid-column: 1; grid-row: 2; min-height: 0; overflow-y: auto; overscroll-behavior: contain; }
 .mud-scene-view { z-index: 1; background: var(--surface-field); }
 .mud-scene-view[hidden] { display: none; }
 .mud-scene { margin: .65rem .7rem .8rem; padding: .75rem .85rem; overflow-wrap: anywhere; border: 1px solid var(--green-dim); border-left: 3px solid var(--cyan); background: linear-gradient(105deg, rgba(var(--accent-rgb),.065), rgba(var(--theme-rgb),.015) 65%); }
@@ -885,7 +889,7 @@ button:disabled { opacity: .5; cursor: not-allowed; }
 .mud-suggestion:hover, .mud-suggestion.is-active, .mud-suggestion:focus-visible { outline: 1px solid var(--cyan); outline-offset: -1px; background: var(--surface-field); }
 .mud-suggestion.is-active span { color: var(--cyan); }
 .mud-error { display: block; min-height: 1em; margin-top: .35rem; color: var(--red); font-size: var(--text-xs); }
-.mud-sidebar { min-width: 0; min-height: 0; overflow-y: auto; background: var(--black); scrollbar-color: var(--green-dim) #000; }
+.mud-sidebar { min-width: 0; min-height: 0; overflow-y: auto; background: var(--black); }
 .mud-panel { padding: .55rem .65rem; border-bottom: 1px solid var(--green-dim); }
 .mud-panel .collapsible-panel-title { font-size: .82rem; text-transform: uppercase; }
 .mud-panel [data-panel-content] p { margin: 0; font-size: var(--text-xs); }

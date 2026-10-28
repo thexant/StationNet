@@ -37,7 +37,7 @@ not a promise that every element of that type uses it.
 | --- | --- |
 | `green` | Main text, navigation links, primary borders |
 | `green-bright` | Headings, emphasized text, form control text |
-| `green-dim` | Subtle borders, dividers, heading shadows |
+| `green-dim` | Subtle borders, dividers, heading shadows, scrollbar thumbs |
 | `cyan` | Links, focus outlines, accent labels and borders |
 | `magenta` | Hovered links, secondary accents |
 | `amber` | Warnings, badges, highlighted details |
@@ -45,7 +45,7 @@ not a promise that every element of that type uses it.
 | `red-dim` | Muted danger borders and shadows |
 | `grey` | Muted text, captions, metadata |
 | `white` | Secondary body text and text on emphasized surfaces |
-| `black` | Main page and dark panel background |
+| `black` | Main page and dark panel background, scrollbar tracks |
 | `field` | Input, textarea, and select backgrounds |
 | `button` | Button backgrounds |
 | `masthead` | Large text logo colour |
