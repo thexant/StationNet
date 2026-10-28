@@ -1,0 +1,44 @@
+{
+  "key": "swamp",
+  "name": "Swamp",
+  "terrain": "swamp",
+  "glyph": "~",
+  "links": "4",
+  "names": [
+    "Swamp",
+    "Marsh",
+    "Bog"
+  ],
+  "descriptions": [
+    "Black water pools between hummocks of reeds and sedge. Each step sinks into mud that sucks at your boots.",
+    "Twisted trees rise from the murk, their roots arching above the water like grasping fingers.",
+    "A blanket of green scum covers still water. Bubbles rise slowly and burst with a foul smell.",
+    "Tall reeds close in on all sides, rattling softly in the wind. Frogs fall silent as you approach.",
+    "Clouds of midges swarm over a stretch of soggy ground. The air is thick, warm and wet.",
+    "A rotting boardwalk, long abandoned, sags into the bog here. Only a few planks remain above the water.",
+    "Grey mist curls low across the marsh, hiding the ground and muffling every sound."
+  ],
+  "environment": {
+    "light": "dim",
+    "exposure": "open",
+    "tags": [
+      "outdoors",
+      "wetland"
+    ],
+    "lines": [
+      "Something splashes in the water nearby.",
+      "The croaking of frogs rises and falls."
+    ]
+  },
+  "encounters": {
+    "chance": 8,
+    "max_live": 1,
+    "despawn_seconds": 600,
+    "creatures": []
+  },
+  "resources": {
+    "respawn_seconds": 3600,
+    "max_per_room": 2,
+    "items": []
+  }
+}

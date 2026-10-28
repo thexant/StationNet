@@ -1,0 +1,45 @@
+{
+  "key": "grassland",
+  "name": "Grassy Plains",
+  "terrain": "grassland",
+  "glyph": ".",
+  "links": "4",
+  "names": [
+    "Grassy Plains",
+    "Open Meadow",
+    "Rolling Grassland"
+  ],
+  "descriptions": [
+    "Knee-high grass ripples in long waves across open country. The sky feels enormous here, broken only by a few drifting clouds.",
+    "A wide meadow spreads in every direction, dotted with clover and pale yellow wildflowers. Insects hum lazily in the warm air.",
+    "The land rises and falls in gentle swells of green. A faint game trail winds through the grass before vanishing again.",
+    "Wind hisses through the tall grass, bending it flat and letting it spring back. A lone boulder sits half-buried nearby.",
+    "Tufts of coarse grass grow between patches of bare, sun-baked earth. Somewhere far off a bird calls, and another answers.",
+    "Low hummocks of turf break up the plain here. Small burrows riddle the ground, and something darts out of sight as you pass.",
+    "A shallow dip in the grassland collects morning dew, leaving the stems here heavy and glistening.",
+    "The grass thins around a ring of flat stones, long ago arranged by someone and since forgotten."
+  ],
+  "environment": {
+    "light": "bright",
+    "exposure": "open",
+    "tags": [
+      "outdoors",
+      "plains"
+    ],
+    "lines": [
+      "A breeze carries the smell of crushed grass.",
+      "Clouds cast slow shadows across the plain."
+    ]
+  },
+  "encounters": {
+    "chance": 4,
+    "max_live": 1,
+    "despawn_seconds": 600,
+    "creatures": []
+  },
+  "resources": {
+    "respawn_seconds": 3600,
+    "max_per_room": 1,
+    "items": []
+  }
+}

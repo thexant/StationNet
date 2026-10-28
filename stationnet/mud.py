@@ -19,7 +19,7 @@ from flask import Blueprint, abort, flash, g, jsonify, redirect, render_template
 
 from .auth import admin_required, login_required
 from .db import get_db
-from . import dungeons, character_creation, mud_combat, mud_conditions, mud_effects, mud_firearms, mud_compat, mud_skills, mud_triggers, moderation
+from . import dungeons, character_creation, mud_combat, mud_conditions, mud_effects, mud_firearms, mud_compat, mud_skills, mud_triggers, mud_wilderness, moderation
 from .security import validate_csrf
 
 bp = Blueprint("mud", __name__, url_prefix="/mud")
@@ -1038,6 +1038,12 @@ def _start_room(database):
     ).fetchone()
 
 
+def _world_room(database, room_id):
+    """A world room as players see it; wilderness rooms take their text from their preset."""
+    row = mud_wilderness.room_row(database, room_id)
+    return mud_wilderness.resolve_room(database, row) if row is not None else None
+
+
 def _set_player_location(database, user_id, mode, location_type, location_key,
                          instance_id=None):
     """Move shared identity state without making system locations world rooms."""
@@ -1197,7 +1203,7 @@ def _return_label(database, instance_id):
     _mode, location_type, key = _return_destination(database, instance_id)
     if location_type == "portal":
         return "the Dungeon Portals"
-    return database.execute("SELECT name FROM mud_world_rooms WHERE id=?", (key,)).fetchone()["name"]
+    return _world_room(database, key)["name"]
 
 
 def _leave_run_location(database, user_id, instance_id):
@@ -1225,12 +1231,9 @@ def _current_room(database, user_id):
             return room
         _leave_run_location(database, user_id, location["instance_id"])
         return _current_room(database, user_id)
-    room = database.execute(
-        "SELECT id,name,description FROM mud_world_rooms WHERE id=?",
-        (location["location_key"],),
-    ).fetchone()
+    room = _world_room(database, location["location_key"])
     if room is not None:
-        return dict(room)
+        return room
     fallback = _start_room(database)
     _set_player_location(
         database, user_id, "traditional", "world_room", fallback["id"]
@@ -1266,7 +1269,15 @@ def _room_exits(database, room_id, instance_id=None, viewer_id=None):
         "CASE WHEN e.direction IS NULL THEN 1 ELSE 0 END,e.name COLLATE NOCASE,e.id",
         (viewer_id, room_id),
     ).fetchall()
-    return [row for row in rows if row["script_state"] != "hidden"]
+    exits = []
+    for row in rows:
+        if row["script_state"] == "hidden":
+            continue
+        if not row["destination_name"]:
+            row = {**dict(row), "destination_name": _world_room(database, row["to_room_id"])["name"]}
+        exits.append(row)
+    # Stored exits win; hidden or sealed ones still claim their direction.
+    return exits + mud_wilderness.grid_exits(database, room_id, {row["direction"] for row in rows})
 
 
 def _room_entrances(database, room_id):
@@ -3879,6 +3890,31 @@ def _look_action(database, user, parameters):
     return [EventDraft(description, event_type="room")]
 
 
+MAP_WIDTH = 15
+MAP_HEIGHT = 9
+
+
+def _map_action(database, user, parameters):
+    """An ASCII view of the surrounding grid; it shows the land but never moves anyone."""
+    room = _current_room(database, user["id"])
+    if room.get("instance_id") or room.get("system_managed") or room.get("x") is None:
+        return [EventDraft("No map is available here.", event_type="room")]
+    window = mud_wilderness.map_window(database, room["world_id"], room["x"], room["y"], room["z"],
+                                       MAP_WIDTH, MAP_HEIGHT, hide_users=(user["id"],))
+    x1, y1 = window["origin"]
+    lines = [[window["palette"][index]["glyph"] for index in row] for row in window["grid"]]
+    for x, y in window["players"]:
+        lines[y - y1][x - x1] = "P"
+    lines[room["y"] - y1][room["x"] - x1] = "@"
+    shown = sorted({index for row in window["grid"] for index in row if index > 1})
+    legend = ["@ you", "P another player"] + (["* landmark"] if any(1 in row for row in window["grid"]) else [])
+    legend += [f"{window['palette'][index]['glyph']} {window['palette'][index]['name']}" for index in shown]
+    layer = f", layer {room['z']}" if room["z"] else ""
+    text = (f"Map around {room['name']} ({room['x']}, {room['y']}{layer}); north is up.\n"
+            + "\n".join("".join(line).rstrip() for line in lines) + "\n" + " · ".join(legend))
+    return [EventDraft(text, event_type="map")]
+
+
 def _search_action(database, user, parameters):
     if parameters.get("arguments"):
         raise ActionError("Use /search to search this room.")
@@ -5660,10 +5696,8 @@ def _go_action(database, user, parameters):
         destination_room = _dungeon_room(database, instance_id, chosen["to_room_id"])
     else:
         _set_player_location(database, user["id"], "traditional", "world_room", chosen["to_room_id"])
-        destination_room = database.execute(
-            "SELECT id,name,description FROM mud_world_rooms WHERE id=?",
-            (chosen["to_room_id"],),
-        ).fetchone()
+        destination_room = _world_room(database, chosen["to_room_id"])
+        mud_wilderness.roll_resources(database, destination_room)
     route = chosen["direction"] or chosen["name"]
     new_recipients = _occupant_ids(database, destination_room["id"], user["id"], instance_id)
     audience_type = "instance" if instance_id else "room"
@@ -5687,8 +5721,23 @@ def _go_action(database, user, parameters):
     ]
     if not instance_id:
         events += _set_objective_progress(database, user, "visit_room", destination_room["id"])
+        events += _wilderness_encounter(database, destination_room)
     events += _entry_triggers(database, user)
     return events + _entry_attack(database, user)
+
+
+def _wilderness_encounter(database, room):
+    """Wild rooms may spawn a creature as someone arrives; it despawns like a trigger spawn."""
+    encounter = mud_wilderness.roll_encounter(database, room)
+    if encounter is None:
+        return []
+    instance_id = f"world:spawn:{uuid.uuid4().hex}"
+    database.execute("INSERT INTO mud_npc_instances(id,definition_id,room_id,spawned_by_trigger) VALUES(?,?,?,?)",
+                     (instance_id, encounter["npc"], room["id"], encounter["source"]))
+    database.execute("INSERT INTO mud_scheduled_events(event_kind,entity_id,due_at) VALUES('npc_despawn',?,?)",
+                     (instance_id, _scheduled_now(datetime.now(timezone.utc)
+                                                  + timedelta(seconds=encounter["despawn_seconds"]))))
+    return [EventDraft(f"{encounter['name']} appears.", "npc", "room", room["id"], _occupant_ids(database, room["id"]))]
 
 
 def _say_action(database, user, parameters):
@@ -6130,9 +6179,7 @@ def _trigger_room(database, user, trigger):
     """The room an event happened in: the player's, or a timer's own room."""
     if user is not None:
         return _current_room(database, user["id"])
-    room = database.execute("SELECT id,name,description FROM mud_world_rooms WHERE id=?",
-                            (trigger["source"].get("room"),)).fetchone()
-    return dict(room) if room else None
+    return _world_room(database, trigger["source"].get("room"))
 
 
 def _trigger_action(database, user, trigger, index, realm, instance_id=None):
@@ -6418,6 +6465,12 @@ actions.register(ActionDefinition(
     key="look", label="LOOK AROUND",
     description="Examine your current surroundings.",
     commands=("look", "l", "examine", "x"), handler=_look_action,
+    group="SURROUNDINGS",
+))
+actions.register(ActionDefinition(
+    key="map", label="MAP",
+    description="Show a map of the wilderness around you.",
+    commands=("map",), handler=_map_action,
     group="SURROUNDINGS",
 ))
 actions.register(ActionDefinition(key="get", label="PICK UP", description="Pick up an item in this room or an open container.", commands=("get", "take"), handler=_get_action, group="ITEMS", show_context=False))
@@ -7354,6 +7407,11 @@ def perform_action():
 
 
 def _builder_redirect(room_id=None):
+    # Forms in the wilderness cell inspector reuse these routes and return to the inspector.
+    if request.method == "POST" and request.form.get("return_to") == "wilderness":
+        cell = request.form.get("return_cell", "")
+        return redirect(url_for("mud.builder_wilderness", cell=cell or None,
+                                _anchor="cell-inspector" if cell else None))
     anchor = f"room-{room_id}" if room_id else None
     return redirect(url_for("mud.builder", _anchor=anchor))
 
@@ -7423,9 +7481,10 @@ def builder():
         "FROM mud_world_rooms AS r "
         "LEFT JOIN mud_world_locations AS l ON l.room_id=r.id "
         "LEFT JOIN mud_presence AS p ON p.room_id=r.id "
-        "WHERE r.world_id=(SELECT id FROM mud_world_packages WHERE active=1) "
+        "WHERE r.world_id=(SELECT id FROM mud_world_packages WHERE active=1) AND r.kind='authored' "
         "GROUP BY r.id ORDER BY r.is_start DESC,r.name COLLATE NOCASE,r.id"
     ).fetchall()
+    # Wilderness rooms are edited on the wilderness page; listing them here would not scale.
     rooms = [dict(row) for row in room_rows]
     exits_by_room = {room["id"]: [] for room in rooms}
     for row in database.execute(
@@ -7434,7 +7493,12 @@ def builder():
         "JOIN mud_world_rooms AS destination ON destination.id=e.to_room_id "
         "ORDER BY e.from_room_id,e.direction IS NULL,e.direction,e.name COLLATE NOCASE"
     ):
-        exits_by_room.setdefault(row["from_room_id"], []).append(dict(row))
+        if row["from_room_id"] not in exits_by_room:
+            continue
+        exit_row = dict(row)
+        if not exit_row["destination_name"]:
+            exit_row["destination_name"] = _world_room(database, row["to_room_id"])["name"]
+        exits_by_room[row["from_room_id"]].append(exit_row)
     users = database.execute(
         "SELECT u.id,u.username,u.callsign,u.is_admin,"
         "CASE WHEN p.user_id IS NULL THEN 0 ELSE 1 END AS is_builder "
@@ -8371,6 +8435,12 @@ def builder_update_room(room_id):
     if error:
         flash(error, "error")
         return _builder_redirect(room_id)
+    if request.form.get("grid_form") == "1":
+        error = _builder_room_grid(database, room_id, name)
+        if error:
+            database.rollback()
+            flash(error, "error")
+            return _builder_redirect(room_id)
     recipients = _occupant_ids(database, room_id)
     database.execute(
         "UPDATE mud_world_rooms SET name=?,description=?,updated_at=CURRENT_TIMESTAMP WHERE id=?",
@@ -8385,6 +8455,60 @@ def builder_update_room(room_id):
     database.commit()
     flash(f"Room {name} updated.", "success")
     return _builder_redirect(room_id)
+
+
+def _builder_room_grid(database, room_id, name):
+    """Place an authored room on the wilderness grid, absorbing any wild room at that spot."""
+    try:
+        position = mud_wilderness.parse_position(request.form.get("x"), request.form.get("y"), request.form.get("z"))
+        blocked = mud_wilderness.validate_blocked(request.form.getlist("blocked_dirs"))
+        if position is not None:
+            displaced = database.execute(
+                "SELECT id FROM mud_world_rooms WHERE world_id=(SELECT world_id FROM mud_world_rooms WHERE id=?) "
+                "AND x=? AND y=? AND z=? AND kind='wild'", (room_id, *position)).fetchone()
+            if displaced:
+                _move_room_occupants(database, [displaced["id"]], {"id": room_id, "name": name},
+                                     "A world builder placed {name} here.")
+        mud_wilderness.place_authored(database, room_id, position, request.form.get("grid_link") == "1", blocked)
+    except mud_wilderness.WildernessError as problem:
+        return str(problem)
+    return None
+
+
+def _move_room_occupants(database, room_ids, destination, message):
+    """Move saved and present players out of rooms about to change; message may use {name}."""
+    affected = set()
+    for start in range(0, len(room_ids), 500):
+        chunk = list(room_ids[start:start + 500])
+        marks = ",".join("?" * len(chunk))
+        affected |= {row["user_id"] for row in database.execute(
+            f"SELECT user_id FROM mud_world_locations WHERE room_id IN ({marks}) UNION "
+            f"SELECT user_id FROM mud_presence WHERE room_id IN ({marks}) UNION "
+            f"SELECT user_id FROM mud_player_locations WHERE location_type='world_room' AND location_key IN ({marks})",
+            chunk * 3)}
+        database.execute(
+            f"UPDATE mud_presence SET room_id=?,location_type='world_room',location_key=?,"
+            f"instance_id=NULL WHERE room_id IN ({marks}) OR (location_type='world_room' AND location_key IN ({marks}))",
+            (destination["id"], destination["id"], *chunk, *chunk),
+        )
+    database.executemany(
+        "INSERT INTO mud_world_locations(user_id,room_id) VALUES(?,?) "
+        "ON CONFLICT(user_id) DO UPDATE SET room_id=excluded.room_id,"
+        "updated_at=CURRENT_TIMESTAMP",
+        ((user_id, destination["id"]) for user_id in affected),
+    )
+    database.executemany(
+        "INSERT INTO mud_player_locations(user_id,mode,location_type,location_key) "
+        "VALUES(?,'traditional','world_room',?) ON CONFLICT(user_id) DO UPDATE SET "
+        "mode='traditional',location_type='world_room',location_key=excluded.location_key,"
+        "instance_id=NULL,updated_at=CURRENT_TIMESTAMP",
+        ((user_id, destination["id"]) for user_id in affected),
+    )
+    for user_id in affected:
+        _insert_event(database, EventDraft(message.replace("{name}", destination["name"]),
+                                           event_type="movement", recipient_ids=(user_id,)),
+                      default_user_id=user_id)
+    return affected
 
 
 @bp.post("/builder/rooms/<path:room_id>/delete")
@@ -8409,34 +8533,9 @@ def builder_delete_room(room_id):
             database.rollback()
             return _builder_redirect(room_id)
         start = _start_room(database)
-        affected = [row["user_id"] for row in database.execute(
-            "SELECT user_id FROM mud_world_locations WHERE room_id=? UNION "
-            "SELECT user_id FROM mud_presence WHERE room_id=?", (room_id, room_id)
-        )]
-        database.executemany(
-            "INSERT INTO mud_world_locations(user_id,room_id) VALUES(?,?) "
-            "ON CONFLICT(user_id) DO UPDATE SET room_id=excluded.room_id,"
-            "updated_at=CURRENT_TIMESTAMP",
-            ((user_id, start["id"]) for user_id in affected),
-        )
-        database.executemany(
-            "INSERT INTO mud_player_locations(user_id,mode,location_type,location_key) "
-            "VALUES(?,'traditional','world_room',?) ON CONFLICT(user_id) DO UPDATE SET "
-            "mode='traditional',location_type='world_room',location_key=excluded.location_key,"
-            "instance_id=NULL,updated_at=CURRENT_TIMESTAMP",
-            ((user_id, start["id"]) for user_id in affected),
-        )
-        database.execute(
-            "UPDATE mud_presence SET room_id=?,location_type='world_room',location_key=?,"
-            "instance_id=NULL WHERE room_id=? OR (location_type='world_room' AND location_key=?)",
-            (start["id"], start["id"], room_id, room_id),
-        )
+        _move_room_occupants(database, [room_id], start,
+                             f"{room['name']} was removed by a world builder. You have been moved to {{name}}.")
         database.execute("DELETE FROM mud_world_rooms WHERE id=?", (room_id,))
-        for user_id in affected:
-            _insert_event(database, EventDraft(
-                f"{room['name']} was removed by a world builder. You have been moved to {start['name']}.",
-                event_type="movement", recipient_ids=(user_id,),
-            ), default_user_id=user_id)
         database.commit()
     except sqlite3.Error:
         database.rollback()
@@ -9054,3 +9153,562 @@ def builder_permission(user_id):
             "success",
         )
     return _builder_redirect()
+
+
+# --- Wilderness: room presets, regions and area fills -------------------------
+
+WILDERNESS_VIEW = (41, 25)
+MAX_PRESET_UPLOAD_BYTES = 2 * 1024 * 1024
+
+
+def _wilderness_redirect(anchor=None, **arguments):
+    return redirect(url_for("mud.builder_wilderness", _anchor=anchor,
+                            **{key: value for key, value in arguments.items() if value not in (None, "")}))
+
+
+def _definition_names(database, table, world_id):
+    """Definition IDs by ID and by case-folded name, for the line-based preset fields."""
+    rows = database.execute(
+        f"SELECT d.id,d.name FROM {table} AS d WHERE (d.world_id=? OR d.id LIKE 'stationnet:%') AND NOT EXISTS "
+        "(SELECT 1 FROM mud_dungeon_managed_definitions AS m WHERE m.definition_id=d.id) ORDER BY d.name COLLATE NOCASE",
+        (world_id,)).fetchall()
+    lookup = {row["id"]: row["id"] for row in rows}
+    for row in rows:
+        lookup.setdefault(row["name"].casefold(), row["id"])
+    return rows, lookup
+
+
+def _parse_entry_lines(text, lookup, label, fields):
+    """Lines of 'name or ID, n, n, ...' with numeric defaults; returns dictionaries."""
+    entries = []
+    for number, line in enumerate(str(text or "").splitlines(), 1):
+        if not line.strip():
+            continue
+        parts = [part.strip() for part in line.split(",")]
+        reference = lookup.get(parts[0]) or lookup.get(parts[0].casefold())
+        if reference is None:
+            raise mud_wilderness.WildernessError(f"{label} line {number}: no definition is named {parts[0]!r}.")
+        entry = {"ref": reference}
+        for (key, default), value in zip(fields, parts[1:] + [""] * len(fields)):
+            if value == "":
+                entry[key] = default
+                continue
+            try:
+                entry[key] = float(value) if "." in value else int(value)
+            except ValueError:
+                raise mud_wilderness.WildernessError(f"{label} line {number}: {value!r} is not a number.") from None
+        entries.append(entry)
+    return entries
+
+
+def _creature_lines(text, lookup):
+    return [{"npc": entry["ref"], "weight": entry["weight"], "min_danger": entry["min_danger"],
+             "max_danger": entry["max_danger"]}
+            for entry in _parse_entry_lines(text, lookup, "Creatures",
+                                            (("weight", 1), ("min_danger", 1), ("max_danger", 10)))]
+
+
+def _resource_lines(text, lookup):
+    return [{"item": entry["ref"], "chance": entry["chance"],
+             "count": {"minimum": entry["minimum"], "maximum": max(entry["minimum"], entry["maximum"])}}
+            for entry in _parse_entry_lines(text, lookup, "Resources",
+                                            (("chance", 100), ("minimum", 1), ("maximum", 1)))]
+
+
+def _paragraphs(text):
+    """Descriptions are separated by blank lines; a leading 'N|' sets a weight."""
+    entries = []
+    for block in re.split(r"\n\s*\n", str(text or "").replace("\r\n", "\n")):
+        block = " ".join(block.split())
+        if not block:
+            continue
+        match = re.match(r"^(\d{1,4})\|\s*(.+)$", block)
+        entries.append({"text": match.group(2), "weight": int(match.group(1))} if match else {"text": block})
+    return entries
+
+
+def _lines(text):
+    return [line.strip() for line in str(text or "").splitlines() if line.strip()]
+
+
+def _number_field(name, default=None):
+    value = request.form.get(name, "").strip()
+    if value == "":
+        return default
+    try:
+        return float(value) if "." in value else int(value)
+    except ValueError:
+        raise mud_wilderness.WildernessError(f"{name.replace('_', ' ').capitalize()} must be a number.") from None
+
+
+def _preset_from_form(database, world_id):
+    """A preset from the guided editor; definitions may be named instead of given by ID."""
+    _, npcs = _definition_names(database, "mud_npc_definitions", world_id)
+    _, items = _definition_names(database, "mud_item_definitions", world_id)
+    return {
+        "key": request.form.get("key", "").strip(), "name": request.form.get("name", ""),
+        "terrain": request.form.get("terrain", "custom"), "glyph": request.form.get("glyph", "."),
+        "links": request.form.get("links", "4"),
+        "names": _lines(request.form.get("names")),
+        "descriptions": _paragraphs(request.form.get("descriptions")),
+        "environment": {"light": request.form.get("light", "bright"),
+                        "exposure": request.form.get("exposure", "open"),
+                        "tags": [tag.strip() for tag in request.form.get("tags", "").split(",") if tag.strip()],
+                        "lines": _lines(request.form.get("environment_lines"))},
+        "encounters": {"chance": _number_field("encounter_chance", 0),
+                       "max_live": _number_field("max_live", 1),
+                       "despawn_seconds": _number_field("despawn_seconds", 600),
+                       "creatures": _creature_lines(request.form.get("creatures"), npcs)},
+        "resources": {"respawn_seconds": _number_field("respawn_seconds", 3600),
+                      "max_per_room": _number_field("max_per_room", 2),
+                      "items": _resource_lines(request.form.get("resources"), items)},
+    }
+
+
+def _preset_json(text):
+    try:
+        value = json.loads(text)
+    except json.JSONDecodeError as problem:
+        raise mud_wilderness.WildernessError(f"Preset JSON is invalid: {problem.msg} (line {problem.lineno}).") from None
+    return value
+
+
+def _check_preset_references(database, preset):
+    npcs, items = mud_wilderness.preset_references(mud_wilderness.validate_preset(preset))
+    problems = mud_wilderness.missing_references(database, npcs, items)
+    if problems:
+        raise mud_wilderness.WildernessError("This preset names " + ", ".join(problems) + ".")
+
+
+def _region_from_form(database, world_id):
+    _, npcs = _definition_names(database, "mud_npc_definitions", world_id)
+    overrides = {"danger": _number_field("danger", 1),
+                 "encounter_multiplier": _number_field("encounter_multiplier", 1),
+                 "resource_multiplier": _number_field("resource_multiplier", 1),
+                 "name_prefix": request.form.get("name_prefix", "").strip()}
+    chance = _number_field("encounter_chance")
+    if chance is not None:
+        overrides["encounter_chance"] = chance
+    creatures = _creature_lines(request.form.get("creatures"), npcs)
+    if creatures or request.form.get("creature_mode") == "replace":
+        overrides["creatures"] = {"mode": request.form.get("creature_mode", "add"), "list": creatures}
+    return overrides
+
+
+def _definition_label(names, value):
+    return names.get(value, value)
+
+
+def _wilderness_cell(database, world_id, text):
+    """The inspector's view of one grid position, or None."""
+    position = mud_wilderness.parse_reference("@" + str(text or "").replace(" ", ""))
+    if position is None:
+        return None
+    row = database.execute(f"SELECT {mud_wilderness.ROOM_COLUMNS} FROM mud_world_rooms "
+                           "WHERE world_id=? AND x=? AND y=? AND z=?", (world_id, *position)).fetchone()
+    cell = {"x": position[0], "y": position[1], "z": position[2], "key": f"{position[0]},{position[1]},{position[2]}",
+            "room": None}
+    if row is None:
+        return cell
+    room = mud_wilderness.resolve_room(database, row)
+    preset = database.execute("SELECT name FROM mud_world_room_presets WHERE id=?", (row["preset_id"],)).fetchone()
+    region = database.execute("SELECT name FROM mud_world_regions WHERE id=?", (row["region_id"],)).fetchone()
+    cell.update(
+        room=room, preset_name=preset["name"] if preset else None, region_name=region["name"] if region else None,
+        walls=set((row["blocked_dirs"] or "").split(",")) - {""},
+        players=[dict(item) for item in database.execute(
+            "SELECT DISTINCT COALESCE(c.display_name,u.callsign) AS name FROM mud_presence p JOIN users u ON u.id=p.user_id "
+            "LEFT JOIN mud_characters c ON c.user_id=u.id WHERE p.location_type='world_room' AND p.location_key=?",
+            (row["id"],))],
+        npcs=[dict(item) for item in database.execute(
+            "SELECT i.id,d.name,i.spawned_by_trigger FROM mud_npc_instances i JOIN mud_npc_definitions d "
+            "ON d.id=i.definition_id WHERE i.room_id=? ORDER BY d.name COLLATE NOCASE", (row["id"],))],
+        contents=[dict(item) for item in database.execute(
+            "SELECT i.id,d.name FROM mud_item_instances i JOIN mud_item_definitions d ON d.id=i.definition_id "
+            "WHERE i.room_id=? ORDER BY d.name COLLATE NOCASE", (row["id"],))],
+        entrances=[dict(item) for item in database.execute(
+            "SELECT id,name FROM mud_world_dungeon_entrances WHERE room_id=? ORDER BY name COLLATE NOCASE", (row["id"],))],
+        stored_exits=[dict(item) for item in database.execute(
+            "SELECT e.id,e.name,e.direction,e.to_room_id FROM mud_world_exits e WHERE e.from_room_id=? "
+            "ORDER BY e.direction,e.name", (row["id"],))],
+        grid_exits=mud_wilderness.grid_exits(database, row["id"], {
+            item["direction"] for item in database.execute(
+                "SELECT direction FROM mud_world_exits WHERE from_room_id=?", (row["id"],))}),
+    )
+    for exit_row in cell["stored_exits"]:
+        destination = _world_room(database, exit_row["to_room_id"])
+        exit_row["destination_name"] = destination["name"] if destination else "?"
+    return cell
+
+
+@bp.get("/builder/wilderness")
+@builder_required
+def builder_wilderness():
+    database = get_db()
+    world_id = _active_world_id(database)
+    world = database.execute("SELECT id,name,start_room_id FROM mud_world_packages WHERE id=?", (world_id,)).fetchone()
+    npc_rows, _ = _definition_names(database, "mud_npc_definitions", world_id)
+    item_rows, _ = _definition_names(database, "mud_item_definitions", world_id)
+    npc_names = {row["id"]: row["name"] for row in npc_rows}
+    item_names = {row["id"]: row["name"] for row in item_rows}
+    presets = []
+    for row in mud_wilderness.world_presets(database, world_id):
+        preset = mud_wilderness.preset_for(database, row["id"])
+        if preset is None:
+            continue
+        presets.append({
+            **dict(row), "preset": preset,
+            "json": json.dumps(preset, ensure_ascii=False, indent=2),
+            "descriptions_text": "\n\n".join((f"{entry['weight']}| " if entry["weight"] != 1 else "") + entry["text"]
+                                             for entry in preset["descriptions"]),
+            "names_text": "\n".join(entry["text"] for entry in preset["names"]),
+            "environment_text": "\n".join(entry["text"] for entry in preset["environment"]["lines"]),
+            "creatures_text": "\n".join(f"{_definition_label(npc_names, entry['npc'])}, {entry['weight']}, "
+                                        f"{entry['min_danger']}, {entry['max_danger']}"
+                                        for entry in preset["encounters"]["creatures"]),
+            "resources_text": "\n".join(f"{_definition_label(item_names, entry['item'])}, {entry['chance']:g}, "
+                                        f"{entry['count']['minimum']}, {entry['count']['maximum']}"
+                                        for entry in preset["resources"]["items"]),
+        })
+    regions = []
+    for row in mud_wilderness.world_regions(database, world_id):
+        overrides = mud_wilderness.region_for(database, row["id"])
+        creatures = overrides.get("creatures", {"mode": "add", "list": []})
+        regions.append({**dict(row), "overrides": overrides, "creature_mode": creatures["mode"],
+                        "creatures_text": "\n".join(f"{_definition_label(npc_names, entry['npc'])}, {entry['weight']}, "
+                                                    f"{entry['min_danger']}, {entry['max_danger']}"
+                                                    for entry in creatures["list"])})
+    cell = _wilderness_cell(database, world_id, request.args.get("cell"))
+    start = database.execute("SELECT x,y,z FROM mud_world_rooms WHERE id=?", (world["start_room_id"],)).fetchone()
+    center = (cell["x"], cell["y"], cell["z"]) if cell else (
+        (start["x"], start["y"], start["z"]) if start and start["x"] is not None else (0, 0, 0))
+    for index, axis in enumerate("xyz"):
+        try:
+            center = (*center[:index], int(request.args[axis]), *center[index + 1:])
+        except (KeyError, ValueError):
+            pass
+    authored = database.execute(
+        "SELECT id,name,x,y,z FROM mud_world_rooms WHERE world_id=? AND kind='authored' "
+        "ORDER BY name COLLATE NOCASE,id", (world_id,)).fetchall()
+    return render_template(
+        "mud/wilderness.html", world=world, presets=presets, regions=regions, cell=cell, center=center,
+        view=WILDERNESS_VIEW, authored_rooms=authored, npc_definitions=npc_rows, item_definitions=item_rows,
+        bundled=sorted(mud_wilderness.bundled_presets().values(), key=lambda preset: preset["name"].casefold()),
+        terrains=mud_wilderness.TERRAINS, lights=mud_wilderness.LIGHTS, exposures=mud_wilderness.EXPOSURES,
+        directions=tuple(mud_wilderness.DELTAS), all_directions=DIRECTIONS,
+        dungeon_templates=database.execute("SELECT id,name FROM mud_world_dungeon_templates WHERE world_id=? "
+                                           "ORDER BY name COLLATE NOCASE", (world_id,)).fetchall(),
+        cell_count=database.execute("SELECT COUNT(*) FROM mud_world_rooms WHERE world_id=? AND kind='wild'",
+                                    (world_id,)).fetchone()[0],
+        limits={"fill": mud_wilderness.MAX_FILL_CELLS, "world": mud_wilderness.MAX_WORLD_CELLS,
+                "map": mud_wilderness.MAP_LIMIT, "coordinate": mud_wilderness.COORDINATE_LIMIT},
+    )
+
+
+@bp.get("/builder/wilderness/map")
+@builder_required
+def builder_wilderness_map():
+    database = get_db()
+    world_id = _active_world_id(database)
+    try:
+        x, y, z = (int(request.args.get(axis, 0)) for axis in "xyz")
+        width = int(request.args.get("w", WILDERNESS_VIEW[0]))
+        height = int(request.args.get("h", WILDERNESS_VIEW[1]))
+    except ValueError:
+        return jsonify(error="Map coordinates must be whole numbers."), 400
+    limit = mud_wilderness.COORDINATE_LIMIT
+    if any(abs(value) > limit for value in (x, y, z)):
+        return jsonify(error="Map coordinates are out of range."), 400
+    return jsonify(mud_wilderness.map_window(database, world_id, x, y, z, width, height))
+
+
+@bp.post("/builder/room-presets")
+@builder_required
+def builder_create_room_preset():
+    validate_csrf()
+    database = get_db()
+    world_id = _active_world_id(database)
+    base = request.form.get("base", "")
+    key = request.form.get("key", "").strip()
+    name = request.form.get("name", "")
+    try:
+        if request.form.get("preset_json", "").strip():
+            preset = _preset_json(request.form["preset_json"])
+        elif base.startswith("bundled:"):
+            preset = mud_wilderness.bundled_presets().get(base.removeprefix("bundled:"))
+        elif base.startswith("preset:"):
+            preset = mud_wilderness.preset_for(database, base.removeprefix("preset:"))
+        else:
+            description = request.form.get("description", "").strip()
+            preset = {"descriptions": [description] if description else []}
+        if not isinstance(preset, dict):
+            raise mud_wilderness.WildernessError("Choose a preset to start from.")
+        preset = {**preset, **({"key": key} if key else {}), **({"name": name} if name.strip() else {})}
+        _check_preset_references(database, preset)
+        preset_id = mud_wilderness.save_preset(database, world_id, preset)
+    except mud_wilderness.WildernessError as problem:
+        database.rollback()
+        flash(str(problem), "error")
+        return _wilderness_redirect("presets-heading")
+    database.commit()
+    flash(f"Room preset {mud_wilderness.preset_for(database, preset_id)['name']} created.", "success")
+    return _wilderness_redirect(f"preset-{preset_id}")
+
+
+@bp.post("/builder/room-presets/<path:preset_id>")
+@builder_required
+def builder_update_room_preset(preset_id):
+    validate_csrf()
+    database = get_db()
+    world_id = _active_world_id(database)
+    if database.execute("SELECT 1 FROM mud_world_room_presets WHERE id=? AND world_id=?",
+                        (preset_id, world_id)).fetchone() is None:
+        abort(404)
+    try:
+        preset = (_preset_json(request.form["preset_json"]) if request.form.get("preset_json", "").strip()
+                  else _preset_from_form(database, world_id))
+        _check_preset_references(database, preset)
+        mud_wilderness.save_preset(database, world_id, preset, preset_id)
+    except mud_wilderness.WildernessError as problem:
+        database.rollback()
+        flash(str(problem), "error")
+        return _wilderness_redirect(f"preset-{preset_id}")
+    database.commit()
+    flash("Room preset saved. Every room using it now reflects the change.", "success")
+    return _wilderness_redirect(f"preset-{preset_id}")
+
+
+@bp.post("/builder/room-presets/<path:preset_id>/delete")
+@builder_required
+def builder_delete_room_preset(preset_id):
+    validate_csrf()
+    database = get_db()
+    world_id = _active_world_id(database)
+    if request.form.get("confirmation") != "delete":
+        flash("Preset removal was not confirmed.", "error")
+        return _wilderness_redirect(f"preset-{preset_id}")
+    try:
+        moved = mud_wilderness.delete_preset(database, world_id, preset_id,
+                                             request.form.get("reassign_to", "").strip() or None)
+    except mud_wilderness.WildernessError as problem:
+        database.rollback()
+        flash(str(problem), "error")
+        return _wilderness_redirect(f"preset-{preset_id}")
+    database.commit()
+    flash(f"Room preset removed{f'; {moved:,} rooms moved to another preset' if moved else ''}.", "success")
+    return _wilderness_redirect("presets-heading")
+
+
+@bp.post("/builder/room-presets/import")
+@builder_required
+def builder_import_room_presets():
+    validate_csrf()
+    database = get_db()
+    world_id = _active_world_id(database)
+    uploaded = request.files.get("preset_file")
+    payload = uploaded.read(MAX_PRESET_UPLOAD_BYTES + 1) if uploaded else b""
+    overwrite = request.form.get("conflict") == "overwrite"
+    drop_unknown = request.form.get("drop_unknown") == "1"
+    try:
+        if not payload or len(payload) > MAX_PRESET_UPLOAD_BYTES:
+            raise mud_wilderness.WildernessError("Upload a preset JSON file of at most 2 MB.")
+        try:
+            document = json.loads(payload.decode("utf-8"))
+        except (UnicodeError, json.JSONDecodeError):
+            raise mud_wilderness.WildernessError("Preset files must be UTF-8 JSON.") from None
+        entries = document.get("presets") if isinstance(document, dict) and "presets" in document else [document]
+        if not isinstance(entries, list) or not entries:
+            raise mud_wilderness.WildernessError('Upload one preset object or {"presets": [...]}.')
+        created = updated = skipped = 0
+        for entry in entries:
+            preset = mud_wilderness.validate_preset(entry)
+            if drop_unknown:
+                preset["encounters"]["creatures"] = [
+                    item for item in preset["encounters"]["creatures"]
+                    if not mud_wilderness.missing_references(database, {item["npc"]}, set())]
+                preset["resources"]["items"] = [
+                    item for item in preset["resources"]["items"]
+                    if not mud_wilderness.missing_references(database, set(), {item["item"]})]
+            _check_preset_references(database, preset)
+            existing = database.execute("SELECT id FROM mud_world_room_presets WHERE world_id=? AND local_key=?",
+                                        (world_id, preset["key"])).fetchone()
+            if existing and not overwrite:
+                skipped += 1
+                continue
+            mud_wilderness.save_preset(database, world_id, preset, existing["id"] if existing else None)
+            updated, created = (updated + 1, created) if existing else (updated, created + 1)
+    except mud_wilderness.WildernessError as problem:
+        database.rollback()
+        flash(f"Preset import failed: {problem}", "error")
+        return _wilderness_redirect("presets-heading")
+    database.commit()
+    flash(f"Imported room presets: {created} created, {updated} replaced, {skipped} skipped.", "success")
+    return _wilderness_redirect("presets-heading")
+
+
+@bp.get("/builder/room-presets/export")
+@builder_required
+def builder_export_room_presets():
+    database = get_db()
+    world_id = _active_world_id(database)
+    wanted = request.args.get("id")
+    presets = [mud_wilderness.preset_for(database, row["id"]) for row in mud_wilderness.world_presets(database, world_id)
+               if not wanted or row["id"] == wanted]
+    presets = [preset for preset in presets if preset is not None]
+    if wanted and not presets:
+        abort(404)
+    payload = json.dumps({"presets": presets}, ensure_ascii=False, indent=2).encode("utf-8")
+    name = f"{presets[0]['key']}-preset.json" if wanted else f"{world_id}-room-presets.json"
+    return send_file(BytesIO(payload), mimetype="application/json", as_attachment=True, download_name=name)
+
+
+@bp.post("/builder/regions")
+@builder_required
+def builder_create_region():
+    return _builder_save_region(None)
+
+
+@bp.post("/builder/regions/<path:region_id>")
+@builder_required
+def builder_update_region(region_id):
+    return _builder_save_region(region_id)
+
+
+def _builder_save_region(region_id):
+    validate_csrf()
+    database = get_db()
+    world_id = _active_world_id(database)
+    try:
+        overrides = _region_from_form(database, world_id)
+        problems = mud_wilderness.missing_references(
+            database, mud_wilderness.region_references(mud_wilderness.validate_region_overrides(overrides)), set())
+        if problems:
+            raise mud_wilderness.WildernessError("This region names " + ", ".join(problems) + ".")
+        region_id = mud_wilderness.save_region(database, world_id, request.form.get("key", "").strip(),
+                                               request.form.get("name", ""), overrides, region_id)
+    except mud_wilderness.WildernessError as problem:
+        database.rollback()
+        flash(str(problem), "error")
+        return _wilderness_redirect(f"region-{region_id}" if region_id else "regions-heading")
+    database.commit()
+    flash("Region saved.", "success")
+    return _wilderness_redirect(f"region-{region_id}")
+
+
+@bp.post("/builder/regions/<path:region_id>/delete")
+@builder_required
+def builder_delete_region(region_id):
+    validate_csrf()
+    database = get_db()
+    world_id = _active_world_id(database)
+    if request.form.get("confirmation") != "delete":
+        flash("Region removal was not confirmed.", "error")
+        return _wilderness_redirect(f"region-{region_id}")
+    try:
+        mud_wilderness.delete_region(database, world_id, region_id)
+    except mud_wilderness.WildernessError as problem:
+        database.rollback()
+        flash(str(problem), "error")
+        return _wilderness_redirect("regions-heading")
+    database.commit()
+    flash("Region removed; its rooms keep their presets without regional changes.", "success")
+    return _wilderness_redirect("regions-heading")
+
+
+@bp.post("/builder/wilderness/fill")
+@builder_required
+def builder_wilderness_fill():
+    validate_csrf()
+    database = get_db()
+    world_id = _active_world_id(database)
+    try:
+        shape = mud_wilderness.parse_shape(request.form)
+        database.execute("BEGIN IMMEDIATE")
+        result = mud_wilderness.fill(database, world_id, shape, request.form.get("preset_id", ""),
+                                     request.form.get("region_id", "").strip() or None,
+                                     request.form.get("mode", "empty"))
+    except mud_wilderness.WildernessError as problem:
+        database.rollback()
+        flash(str(problem), "error")
+        return _wilderness_redirect("fill-heading")
+    database.commit()
+    flash(f"Filled the area: {result['created']:,} rooms created, {result['updated']:,} rooms changed, "
+          f"{result['skipped_authored']:,} authored rooms left untouched.", "success")
+    return _wilderness_redirect("fill-heading", x=(shape["x1"] + shape["x2"]) // 2,
+                                y=(shape["y1"] + shape["y2"]) // 2, z=shape["z"])
+
+
+@bp.post("/builder/wilderness/clear")
+@builder_required
+def builder_wilderness_clear():
+    validate_csrf()
+    database = get_db()
+    world_id = _active_world_id(database)
+    if request.form.get("confirm_clear") != "1":
+        flash("Tick the confirmation box to remove wilderness rooms.", "error")
+        return _wilderness_redirect("fill-heading")
+    try:
+        shape = mud_wilderness.parse_shape(request.form)
+        database.execute("BEGIN IMMEDIATE")
+        room_ids = mud_wilderness.cells_in(database, world_id, shape)
+        entrances = mud_wilderness.entrance_count(database, room_ids)
+        if entrances and request.form.get("remove_entrances") != "1":
+            raise mud_wilderness.WildernessError(
+                f"{entrances} dungeon entrances stand in that area. Tick 'also remove dungeon entrances' to proceed.")
+        if room_ids:
+            _move_room_occupants(database, room_ids, _start_room(database),
+                                 "The land around you was reshaped by a world builder. You have been moved to {name}.")
+            mud_wilderness.delete_cells(database, room_ids)
+    except mud_wilderness.WildernessError as problem:
+        database.rollback()
+        flash(str(problem), "error")
+        return _wilderness_redirect("fill-heading")
+    database.commit()
+    flash(f"Removed {len(room_ids):,} wilderness rooms. Authored rooms were left untouched.", "success")
+    return _wilderness_redirect("fill-heading", x=(shape["x1"] + shape["x2"]) // 2,
+                                y=(shape["y1"] + shape["y2"]) // 2, z=shape["z"])
+
+
+@bp.post("/builder/wilderness/rooms/<path:room_id>/convert")
+@builder_required
+def builder_wilderness_convert(room_id):
+    validate_csrf()
+    database = get_db()
+    world_id = _active_world_id(database)
+    row = database.execute("SELECT x,y,z FROM mud_world_rooms WHERE id=? AND world_id=?", (room_id, world_id)).fetchone()
+    if row is None:
+        abort(404)
+    try:
+        room = mud_wilderness.convert_to_authored(database, room_id)
+    except mud_wilderness.WildernessError as problem:
+        flash(str(problem), "error")
+        return _wilderness_redirect("cell-inspector", cell=f"{row['x']},{row['y']},{row['z']}")
+    database.commit()
+    flash(f"{room['name']} is now an authored room. Edit it in the world builder.", "success")
+    return redirect(url_for("mud.builder", _anchor=f"room-{room_id}"))
+
+
+@bp.post("/builder/wilderness/rooms/<path:room_id>/options")
+@builder_required
+def builder_wilderness_cell_options(room_id):
+    validate_csrf()
+    database = get_db()
+    world_id = _active_world_id(database)
+    row = database.execute("SELECT x,y,z FROM mud_world_rooms WHERE id=? AND world_id=? AND kind='wild'",
+                           (room_id, world_id)).fetchone()
+    if row is None:
+        abort(404)
+    try:
+        blocked = mud_wilderness.validate_blocked(request.form.getlist("blocked_dirs"))
+    except mud_wilderness.WildernessError as problem:
+        flash(str(problem), "error")
+        return _wilderness_redirect("cell-inspector", cell=f"{row['x']},{row['y']},{row['z']}")
+    region_id = request.form.get("region_id", "").strip() or None
+    if region_id and database.execute("SELECT 1 FROM mud_world_regions WHERE id=? AND world_id=?",
+                                      (region_id, world_id)).fetchone() is None:
+        abort(400)
+    database.execute("UPDATE mud_world_rooms SET grid_link=?,blocked_dirs=?,region_id=?,updated_at=CURRENT_TIMESTAMP "
+                     "WHERE id=?", (int(request.form.get("grid_link") == "1"), blocked, region_id, room_id))
+    database.commit()
+    flash("Room links saved.", "success")
+    return _wilderness_redirect("cell-inspector", cell=f"{row['x']},{row['y']},{row['z']}")

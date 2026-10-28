@@ -1,0 +1,44 @@
+{
+  "key": "desert",
+  "name": "Desert",
+  "terrain": "desert",
+  "glyph": ":",
+  "links": "8",
+  "names": [
+    "Desert",
+    "Dunes",
+    "Sun-Baked Flats"
+  ],
+  "descriptions": [
+    "Endless dunes of pale sand roll toward the horizon. Heat shimmers above the ground, blurring the distance.",
+    "Cracked, hard-baked earth stretches flat in every direction. Nothing grows here but a few wiry thornbushes.",
+    "The wind has carved the sand into sharp ridges that crumble beneath your feet.",
+    "A bleached skeleton, half-buried in sand, marks where some creature met its end.",
+    "Wind-scoured rock pillars rise from the sand, their bases worn thin by countless storms.",
+    "The sand here is coarse and reddish, crunching underfoot. A lizard watches you from a sunlit stone.",
+    "A dry gully cuts through the dunes, its bed littered with smooth stones from some long-gone river."
+  ],
+  "environment": {
+    "light": "bright",
+    "exposure": "open",
+    "tags": [
+      "outdoors",
+      "desert"
+    ],
+    "lines": [
+      "Hot wind hisses across the sand.",
+      "The sun beats down without mercy."
+    ]
+  },
+  "encounters": {
+    "chance": 5,
+    "max_live": 1,
+    "despawn_seconds": 600,
+    "creatures": []
+  },
+  "resources": {
+    "respawn_seconds": 3600,
+    "max_per_room": 1,
+    "items": []
+  }
+}

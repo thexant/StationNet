@@ -6,15 +6,17 @@ editor. Put three UTF-8 JSON files at the root of a ZIP archive:
 `manifest.json`, `rooms.json`, and `exits.json`. Add `content.json` for items,
 NPCs, dialogue, quests, trainers, and placements. Add `origins.json` for custom
 races and classes, `skills.json` for custom skills, `dungeons.json` for
-procedural dungeons, and `events.json` for [triggers](#5c-events-and-triggers-eventsjson)
-that make the world react to players. Triggers are declarative settings: no
+procedural dungeons, `events.json` for [triggers](#5c-events-and-triggers-eventsjson)
+that make the world react to players, and `wilderness.json` for large
+[wilderness areas built from room presets](#5d-wilderness-and-room-presets-wildernessjson). Triggers are declarative settings: no
 code or scripts run from a world package.
 
-Archives are limited to 16 MB, each JSON file to 8 MB, 1000 rooms, and 5000
-exits. `content.json` may have up to 5,000 records in each supported array.
+Archives are limited to 16 MB, each JSON file to 8 MB, 1000 authored rooms, and 5000
+exits. Wilderness rooms do not count toward the room limit; a world may hold up
+to 1,000,000 of them. `content.json` may have up to 5,000 records in each supported array.
 The ZIP must contain only those three required files and optional
-`content.json`, `origins.json`, `skills.json`, `dungeons.json`, and
-`events.json`, all at its root. Imports validate references
+`content.json`, `origins.json`, `skills.json`, `dungeons.json`,
+`events.json`, and `wilderness.json`, all at its root. Imports validate references
 and reject duplicate world IDs. Standalone race and class imports remain
 available through the [origin guide](../mud_origin_templates/README_RACES_CLASSES.md).
 
@@ -87,6 +89,12 @@ Room IDs are unique within the ZIP and follow the same pattern as the world
 ID. You need at least one room. Names must be 2–80 characters and descriptions
 1–4000 characters.
 
+A room may also stand on the [wilderness grid](#5d-wilderness-and-room-presets-wildernessjson):
+add whole-number `"x"`, `"y"` and `"z"` together. It keeps its own name, text,
+exits and contents, and links automatically to neighbouring grid rooms. Add
+`"grid_link": false` to stop the automatic links, or `"blocked_dirs": "north,east"`
+to wall off particular sides. Two rooms cannot share a position.
+
 ## 3. Connect rooms
 
 `exits.json`:
@@ -103,6 +111,10 @@ An exit is one-way; add its return route explicitly. `direction` can be
 `northwest`, `up`, `down`, `in`, or `out`. Omit it or set it to `null` for a
 named exit. Names and nonempty directions must be unique among exits from the
 same room. An empty exit list is valid for a one-room world.
+`from` and `to` may also name a wilderness square as `"@x,y,z"`, such as
+`{"from": "cave", "to": "@12,-4,0", "name": "cave mouth", "direction": "out"}`.
+The same `"@x,y,z"` form works for every room reference in `content.json`,
+`dungeons.json` and `events.json`.
 Add `"key_item_id": "local-key-id"` to require a key item defined in
 `content.json`. Add `"pick_difficulty": 30` (1–200) to make the lock pickable
 with `/pick <exit>` and the Lockpicking skill; an exit may have a key, a
@@ -813,6 +825,162 @@ counts, object and exit states, and spawned NPCs, which is useful while
 testing. Builder forms use installed IDs; the **IDs to use** list shows them.
 The builder's export writes `events.json` with simple local IDs.
 
+## 5d. Wilderness and room presets (`wilderness.json`)
+
+Large outdoor areas such as forests, plains, mountains, deserts and swamps are
+not written room by room. Instead, `wilderness.json` defines reusable **room
+presets** and paints them onto a coordinate grid. Every painted square becomes a
+real room: players walk through it with ordinary directions, meet each other
+there, drop items, fight, and find authored landmarks. Nothing about it is
+fast travel.
+
+Coordinates are whole numbers. `x` grows to the east, `y` grows to the **south**,
+and `z` is the layer, which grows upward. Neighbouring squares link automatically:
+
+- `north`, `east`, `south` and `west` link any two neighbours on the same layer.
+- The diagonals link only when **both** rooms allow eight-way links
+  (`"links": "8"`). Authored rooms on the grid accept whatever their neighbour
+  allows.
+- `up` and `down` link a square to the one directly above or below it on the
+  next layer.
+- An authored exit in the same direction replaces the automatic link. A road,
+  gate, bridge or cave mouth works this way. Walls (`blocked_dirs`) on either
+  side of an edge remove the link both ways.
+
+### Presets
+
+```json
+{
+  "key": "pine-forest",
+  "name": "Pine Forest",
+  "terrain": "forest",
+  "glyph": "t",
+  "links": "4",
+  "names": ["Pine Forest", "Needle-Strewn Path"],
+  "descriptions": [
+    "Tall pines crowd close, their needles muffling every step.",
+    {"text": "A clearing opens among the pines, bright with sun.", "weight": 1},
+    {"text": "Resin scents the cool, still air between the trunks.", "weight": 3}
+  ],
+  "environment": {"light": "dim", "exposure": "sheltered", "tags": ["outdoors"],
+                  "lines": ["A crow calls somewhere overhead."]},
+  "encounters": {"chance": 8, "max_live": 1, "despawn_seconds": 600,
+                 "creatures": [{"npc": "wolf", "weight": 2, "min_danger": 1, "max_danger": 10}]},
+  "resources": {"respawn_seconds": 3600, "max_per_room": 2,
+                "items": [{"item": "pinecone", "chance": 40, "count": {"minimum": 1, "maximum": 2}}]}
+}
+```
+
+| Field | Rules |
+|---|---|
+| `key` | Required. 1–32 lowercase letters, digits and hyphens, starting with a letter. |
+| `name` | Required, 2–80 characters. Used as the room name unless `names` is given. |
+| `terrain` | `grassland`, `forest`, `dense-forest`, `hills`, `mountains`, `desert`, `swamp`, `tundra`, `water`, `road` or `custom` (the default). Colours the builder map. |
+| `glyph` | One printable character for maps; not a space, `@`, `*` or `P`. Default `.`. |
+| `links` | `"4"` (default) or `"8"`. |
+| `names` | Optional list of up to 20 room-name variants (up to 80 characters each). |
+| `descriptions` | Required list of 1–40 descriptions, each up to 4000 characters. A plain string means weight 1. |
+| `environment` | Optional `light` (`bright`, `dim`, `dark`), `exposure` (`open`, `sheltered`), up to 20 `tags`, and up to 20 `lines` of ambient text added after the description. |
+| `encounters` | Optional. `chance` is the percentage (0–100) rolled each time a player enters; `max_live` (0–5) caps creatures per room; `despawn_seconds` (10–86400) removes them later. Each creature names an NPC definition and may limit itself to a danger range (1–10). |
+| `resources` | Optional. When a player enters, each item rolls its `chance` and places 1–5 copies, up to `max_per_room` (0–5). The room then waits `respawn_seconds` (60–86400) before gathering again. |
+
+Each room picks its name, description and ambient line from its own position, so
+**the same room reads the same on every visit** while its neighbours vary.
+Editing a preset changes every room that uses it at once. Creatures and items
+name definitions in `content.json`, or built-in `stationnet:` definitions.
+Encounter creatures behave like trigger spawns: they never respawn and they
+vanish after `despawn_seconds`. Hostile creatures attack as usual.
+Gathered resources are play state and are not exported; they regrow from the
+preset.
+
+### Regions
+
+A region applies local changes to whatever presets are painted inside it, so one
+forest preset can be peaceful in the south and deadly in the north:
+
+```json
+{"key": "north-woods", "name": "North Woods",
+ "overrides": {"danger": 6, "encounter_multiplier": 2, "name_prefix": "Northern",
+               "creatures": {"mode": "add", "list": [{"npc": "troll", "min_danger": 5}]}}}
+```
+
+`danger` (1–10, default 1) chooses which creatures may appear.
+`encounter_chance` (0–100) replaces a preset's chance, and
+`encounter_multiplier` (0–5) scales it. `resource_multiplier` (0–5) scales
+resource chances. `creatures` either adds to (`"add"`) or replaces
+(`"replace"`) each preset's creatures. `name_prefix` (up to 30 characters) is
+put in front of room names.
+
+### Layers
+
+Painted squares are stored as **run-length encoded rows**, one layer per `z`:
+
+```json
+{
+  "presets": [],
+  "regions": [],
+  "layers": [
+    {"z": 0, "origin": [-2, -2], "width": 5, "height": 3,
+     "palette": ["", "pine-forest", "pine-forest@north-woods", "grassland"],
+     "rows": ["5*2", "2*1,0,2*1", "3*3,1"]}
+  ],
+  "cells": [{"x": -2, "y": -2, "z": 0, "blocked_dirs": "east"}]
+}
+```
+
+(Fill in `presets` and `regions` as described above.)
+
+- `origin` is the `[x, y]` of the layer's top-left (north-west) square.
+- `palette` lists what each number in a row means. `""` is an empty square;
+  `"preset"` or `"preset@region"` paints a preset, optionally in a region.
+- Each row is a comma-separated list of runs, `count*index`; a bare `index`
+  means one square. The second row above is two `pine-forest` squares, one empty
+  square, then two more. Rows may stop early, and missing rows are empty.
+- `cells` holds only per-square exceptions: `"grid_link": false` or
+  `blocked_dirs`.
+- Limits: 200 presets, 200 regions, 64 layers, 200,000 runs in total, and
+  1,000,000 wilderness rooms.
+- An authored room's `x`, `y`, `z` must fall on an empty square of its layer.
+
+Exports from the builder always write this compact form, so a 500 × 500 forest
+takes only a few kilobytes.
+
+### Building in the World Builder
+
+Open **World Builder → Wilderness**.
+
+- **Presets.** Create a preset from a starter (grassland, forest, dense forest,
+  mountains, desert, swamp), as a copy of an existing preset, or from scratch.
+  Edit it with the guided form, where creatures and items can be typed by name,
+  or as JSON. Presets can be imported and exported as JSON files: one preset, or
+  `{"presets": [...]}`. A preset that rooms still use can only be removed after
+  its rooms are moved to another preset.
+- **Map.** Pan, change layer and zoom. Choose **Inspect** to open a room,
+  **Rectangle** or **Ellipse** to pick two corners, or **Brush** to paint
+  individual squares.
+- **Fill.** Choose a preset and, optionally, a region. **Only fill empty
+  squares** leaves existing rooms alone. **Also repaint existing wilderness**
+  changes the preset of wilderness rooms in place, so they keep their contents
+  and anyone standing in them. Authored rooms are never overwritten. One fill
+  covers up to 250,000 squares.
+- **Remove wilderness.** Deletes only wilderness rooms in the area and anything
+  lying in them. Players there move to the starting room. Dungeon entrances
+  block the removal unless you also choose to remove them.
+- **Room inspector.** Shows a square's text, exits, players, NPCs and items. From
+  here you can place NPCs and items, add exits that reach beyond the grid, add a
+  dungeon entrance, set walls and the region, or **convert it to an authored
+  room**. Converting keeps its current text and position and unlocks every World
+  Builder tool for it: descriptions, triggers, discoveries and locks. Use this
+  for settlements, roads, ruins and other special locations.
+- **Placing existing rooms.** Each authored room in the World Builder has
+  **Wilderness grid placement**. Give it coordinates to drop it into the
+  wilderness. A wilderness room already at that spot is absorbed: its NPCs,
+  items, entrances and visitors move into the authored room.
+
+Players can type `/map` for a 15 × 9 view of the land around them. `@` marks
+the player, `P` other visible players, `*` authored landmarks, and each preset
+appears as its glyph.
+
 ## 6. Import, edit, export, and remove
 
 Download the starter ZIP from **SYSOP Settings → MUD service → Traditional
@@ -827,7 +995,7 @@ Compress-Archive -Path manifest.json,rooms.json,exits.json,content.json -Destina
 zip lantern-isles.zip manifest.json rooms.json exits.json content.json
 ```
 
-If you omit `content.json`, `origins.json`, `skills.json`, `dungeons.json`, or `events.json`, omit them from the command too. Confirm the ZIP
+If you omit `content.json`, `origins.json`, `skills.json`, `dungeons.json`, `events.json`, or `wilderness.json`, omit them from the command too. Confirm the ZIP
 lists the JSON files directly, without a containing folder. In **SYSOP Settings → MUD service →
 Traditional Worlds**, import the ZIP and select it as the active world. Choose
 whether its bundled races, classes, and skills replace, combine with, or are

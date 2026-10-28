@@ -1,0 +1,275 @@
+{% extends 'base.html' %}
+{% block title %}MUD Wilderness Builder{% endblock %}
+{% macro preset_fields(entry=None) %}{% set p = entry.preset if entry else none %}
+<div class="builder-coordinates">
+  <label>Key<input name="key" required pattern="[a-z][a-z0-9-]{0,31}" maxlength="32" value="{{ p.key if p else '' }}"></label>
+  <label>Name<input name="name" required minlength="2" maxlength="80" value="{{ p.name if p else '' }}"></label>
+  <label>Map glyph<input name="glyph" required maxlength="1" value="{{ p.glyph if p else '.' }}"></label>
+</div>
+<div class="builder-coordinates">
+  <label>Terrain<select name="terrain">{% for terrain in terrains %}<option value="{{ terrain }}" {% if p and p.terrain==terrain %}selected{% endif %}>{{ terrain }}</option>{% endfor %}</select></label>
+  <label>Links<select name="links"><option value="4" {% if p and p.links=='4' %}selected{% endif %}>4-way (N/E/S/W)</option><option value="8" {% if p and p.links=='8' %}selected{% endif %}>8-way (adds diagonals)</option></select></label>
+  <label>Light<select name="light">{% for light in lights %}<option {% if p and p.environment.light==light %}selected{% endif %}>{{ light }}</option>{% endfor %}</select></label>
+  <label>Exposure<select name="exposure">{% for exposure in exposures %}<option {% if p and p.environment.exposure==exposure %}selected{% endif %}>{{ exposure }}</option>{% endfor %}</select></label>
+</div>
+<label>Room descriptions (separate with a blank line; start one with <code>3|</code> to make it three times as common)<textarea name="descriptions" rows="8" required>{{ entry.descriptions_text if entry else '' }}</textarea></label>
+<label>Room name variants (one per line; blank uses the preset name)<textarea name="names" rows="3">{{ entry.names_text if entry else '' }}</textarea></label>
+<label>Ambient lines added to descriptions (one per line, optional)<textarea name="environment_lines" rows="3">{{ entry.environment_text if entry else '' }}</textarea></label>
+<label>Tags (comma separated)<input name="tags" maxlength="400" value="{{ p.environment.tags|join(', ') if p else '' }}"></label>
+<fieldset><legend>Encounters (rolled each time a player enters a room)</legend>
+  <div class="builder-coordinates">
+    <label>Chance % per arrival<input type="number" name="encounter_chance" min="0" max="100" step="0.1" value="{{ p.encounters.chance if p else 0 }}"></label>
+    <label>Most at once per room<input type="number" name="max_live" min="0" max="5" value="{{ p.encounters.max_live if p else 1 }}"></label>
+    <label>Despawn after (seconds)<input type="number" name="despawn_seconds" min="10" max="86400" value="{{ p.encounters.despawn_seconds if p else 600 }}"></label>
+  </div>
+  <label>Creatures: one per line as <code>NPC name, weight, min danger, max danger</code><textarea name="creatures" rows="3">{{ entry.creatures_text if entry else '' }}</textarea></label>
+</fieldset>
+<fieldset><legend>Resources (gathered when a player enters, then renewed after the respawn time)</legend>
+  <div class="builder-coordinates">
+    <label>Respawn (seconds)<input type="number" name="respawn_seconds" min="60" max="86400" value="{{ p.resources.respawn_seconds if p else 3600 }}"></label>
+    <label>Most per room<input type="number" name="max_per_room" min="0" max="5" value="{{ p.resources.max_per_room if p else 2 }}"></label>
+  </div>
+  <label>Items: one per line as <code>item name, chance %, minimum, maximum</code><textarea name="resources" rows="3">{{ entry.resources_text if entry else '' }}</textarea></label>
+</fieldset>
+{% endmacro %}
+{% macro region_fields(region=None) %}{% set o = region.overrides if region else {} %}
+<div class="builder-coordinates">
+  <label>Key<input name="key" required pattern="[a-z][a-z0-9-]{0,31}" maxlength="32" value="{{ region.local_key if region else '' }}"></label>
+  <label>Name<input name="name" required minlength="2" maxlength="80" value="{{ region.name if region else '' }}"></label>
+  <label>Room name prefix<input name="name_prefix" maxlength="30" placeholder="Northern" value="{{ o.name_prefix or '' }}"></label>
+</div>
+<div class="builder-coordinates">
+  <label>Danger (1-10)<input type="number" name="danger" min="1" max="10" value="{{ o.danger or 1 }}"></label>
+  <label>Encounter chance % (blank = preset's)<input type="number" name="encounter_chance" min="0" max="100" step="0.1" value="{{ o.encounter_chance if o.encounter_chance is defined else '' }}"></label>
+  <label>Encounter multiplier<input type="number" name="encounter_multiplier" min="0" max="5" step="0.1" value="{{ o.encounter_multiplier if o.encounter_multiplier is defined else 1 }}"></label>
+  <label>Resource multiplier<input type="number" name="resource_multiplier" min="0" max="5" step="0.1" value="{{ o.resource_multiplier if o.resource_multiplier is defined else 1 }}"></label>
+</div>
+<label>Creatures<select name="creature_mode"><option value="add" {% if not region or region.creature_mode=='add' %}selected{% endif %}>add to each preset's creatures</option><option value="replace" {% if region and region.creature_mode=='replace' %}selected{% endif %}>replace each preset's creatures</option></select></label>
+<label>Regional creatures: one per line as <code>NPC name, weight, min danger, max danger</code><textarea name="creatures" rows="3">{{ region.creatures_text if region else '' }}</textarea></label>
+{% endmacro %}
+{% macro inspector_return() %}<input type="hidden" name="csrf_token" value="{{ session.csrf_token }}"><input type="hidden" name="return_to" value="wilderness"><input type="hidden" name="return_cell" value="{{ cell.key }}">{% endmacro %}
+{% block content %}
+<section class="builder-shell wilderness-builder">
+  <header class="board-head builder-head">
+    <div>
+      <p class="eyebrow">TRADITIONAL WORLD / {{ world.name|upper }} / WILDERNESS</p>
+      <h1>Wilderness Builder</h1>
+      <p class="muted">Paint large areas with reusable room presets. Each painted square is a real room that players walk through with ordinary directions; neighbouring rooms link automatically. {{ '{:,}'.format(cell_count) }} wilderness rooms of {{ '{:,}'.format(limits.world) }} allowed.</p>
+    </div>
+    <div class="button-row">
+      <a class="button secondary" href="{{ url_for('mud.builder') }}">WORLD BUILDER</a>
+      {% if g.station.mud_enabled %}<a class="button secondary" href="{{ url_for('mud.index') }}">OPEN MUD</a>{% endif %}
+    </div>
+  </header>
+
+  <nav class="subnav settings-jump-nav" aria-label="Wilderness sections"><a href="#map-heading">MAP</a><a href="#fill-heading">FILL AREA</a>{% if cell %}<a href="#cell-inspector">ROOM</a>{% endif %}<a href="#presets-heading">PRESETS</a><a href="#regions-heading">REGIONS</a></nav>
+
+  <section class="terminal-card" aria-labelledby="map-heading">
+    <p class="eyebrow">MAP / NORTH IS UP / Y GROWS SOUTHWARD</p>
+    <h2 id="map-heading">Map</h2>
+    <form method="get" action="{{ url_for('mud.builder_wilderness') }}" class="builder-coordinates wilderness-goto" data-map-goto>
+      <label>X<input type="number" name="x" value="{{ center[0] }}" min="-{{ limits.coordinate }}" max="{{ limits.coordinate }}"></label>
+      <label>Y<input type="number" name="y" value="{{ center[1] }}" min="-{{ limits.coordinate }}" max="{{ limits.coordinate }}"></label>
+      <label>Layer Z<input type="number" name="z" value="{{ center[2] }}" min="-{{ limits.coordinate }}" max="{{ limits.coordinate }}"></label>
+      <button class="secondary">GO</button>
+    </form>
+    <form method="get" action="{{ url_for('mud.builder_wilderness') }}" class="builder-coordinates">
+      <label>Inspect room at x,y,z<input name="cell" placeholder="10,4,0" pattern="-?\d+,-?\d+,-?\d+" value="{{ cell.key if cell else '' }}"></label>
+      <button class="secondary">INSPECT</button>
+    </form>
+    <div class="wilderness-map" data-wilderness-map data-map-url="{{ url_for('mud.builder_wilderness_map') }}" data-page-url="{{ url_for('mud.builder_wilderness') }}" data-x="{{ center[0] }}" data-y="{{ center[1] }}" data-z="{{ center[2] }}" data-width="{{ view[0] }}" data-height="{{ view[1] }}" data-max="{{ limits.map }}" data-selected="{{ cell.key if cell else '' }}" hidden>
+      <div class="button-row wilderness-tools" role="toolbar" aria-label="Map tools">
+        <label class="check"><input type="radio" name="map_tool" value="inspect" checked> Inspect</label>
+        <label class="check"><input type="radio" name="map_tool" value="rect"> Rectangle</label>
+        <label class="check"><input type="radio" name="map_tool" value="ellipse"> Ellipse</label>
+        <label class="check"><input type="radio" name="map_tool" value="brush"> Brush</label>
+        <button type="button" class="secondary" data-pan="-10,0,0" aria-label="Pan west">◀</button>
+        <button type="button" class="secondary" data-pan="0,-10,0" aria-label="Pan north">▲</button>
+        <button type="button" class="secondary" data-pan="0,10,0" aria-label="Pan south">▼</button>
+        <button type="button" class="secondary" data-pan="10,0,0" aria-label="Pan east">▶</button>
+        <button type="button" class="secondary" data-pan="0,0,1" aria-label="Layer up">Z+</button>
+        <button type="button" class="secondary" data-pan="0,0,-1" aria-label="Layer down">Z−</button>
+        <button type="button" class="secondary" data-zoom="1">ZOOM OUT</button>
+        <button type="button" class="secondary" data-zoom="-1">ZOOM IN</button>
+        <button type="button" class="secondary" data-clear-selection>CLEAR SELECTION</button>
+      </div>
+      <canvas class="wilderness-canvas" data-map-canvas aria-label="Wilderness map; use the coordinate forms for keyboard access"></canvas>
+      <p class="muted" data-map-status aria-live="polite">Loading map…</p>
+      <p class="wilderness-legend" data-map-legend></p>
+    </div>
+    <noscript><p class="muted">The interactive map needs JavaScript. You can still inspect a room and fill areas by typing coordinates.</p></noscript>
+  </section>
+
+  <section class="terminal-card builder-create" aria-labelledby="fill-heading">
+    <p class="eyebrow">AREA / UP TO {{ '{:,}'.format(limits.fill) }} ROOMS PER OPERATION</p>
+    <h2 id="fill-heading">Fill or clear an area</h2>
+    {% if not presets %}<p class="muted">Create a room preset below before filling an area.</p>{% endif %}
+    <form method="post" action="{{ url_for('mud.builder_wilderness_fill') }}" class="form-grid" data-fill-form>
+      <input type="hidden" name="csrf_token" value="{{ session.csrf_token }}">
+      <input type="hidden" name="cells" value="" data-shape-cells>
+      <label>Shape<select name="shape" data-shape-kind><option value="rect">Rectangle</option><option value="ellipse">Ellipse inside the corners</option><option value="cells">Brushed rooms (from the map)</option></select></label>
+      <div class="builder-coordinates">
+        <label>X1<input type="number" name="x1" value="{{ center[0] - 5 }}" data-shape-field="x1"></label>
+        <label>Y1<input type="number" name="y1" value="{{ center[1] - 5 }}" data-shape-field="y1"></label>
+        <label>X2<input type="number" name="x2" value="{{ center[0] + 5 }}" data-shape-field="x2"></label>
+        <label>Y2<input type="number" name="y2" value="{{ center[1] + 5 }}" data-shape-field="y2"></label>
+        <label>Layer Z<input type="number" name="z" value="{{ center[2] }}" data-shape-field="z"></label>
+      </div>
+      <p class="muted" data-shape-summary></p>
+      <label>Preset<select name="preset_id" required>{% for entry in presets %}<option value="{{ entry.id }}">{{ entry.name }} ({{ entry.preset.glyph }})</option>{% endfor %}</select></label>
+      <label>Region<select name="region_id"><option value="">No region</option>{% for region in regions %}<option value="{{ region.id }}">{{ region.name }}</option>{% endfor %}</select></label>
+      <fieldset><legend>Existing rooms in the area</legend>
+        <label class="check"><input type="radio" name="mode" value="empty" checked> Only fill empty squares</label>
+        <label class="check"><input type="radio" name="mode" value="replace"> Also repaint existing wilderness (rooms keep their contents)</label>
+        <p class="muted">Authored rooms, settlements and landmarks are never overwritten.</p>
+      </fieldset>
+      <div class="button-row">
+        <button {% if not presets %}disabled{% endif %}>FILL AREA</button>
+      </div>
+      <details class="builder-danger-zone">
+        <summary>Remove wilderness rooms in this area</summary>
+        <p class="muted">Removes only wilderness rooms, with anything lying in them. Players there are moved to the starting room. Authored rooms stay.</p>
+        <label class="check"><input type="checkbox" name="confirm_clear" value="1"> I understand these rooms will be deleted</label>
+        <label class="check"><input type="checkbox" name="remove_entrances" value="1"> Also remove dungeon entrances standing in them</label>
+        <button class="danger" formaction="{{ url_for('mud.builder_wilderness_clear') }}" formnovalidate>REMOVE WILDERNESS</button>
+      </details>
+    </form>
+  </section>
+
+  {% if cell %}
+  <section class="terminal-card" aria-labelledby="cell-inspector" id="cell-inspector-card">
+    <p class="eyebrow">ROOM AT {{ cell.x }}, {{ cell.y }}, LAYER {{ cell.z }}</p>
+    <h2 id="cell-inspector">{{ cell.room.name if cell.room else 'Empty square' }}</h2>
+    {% if not cell.room %}
+      <p class="muted">No room exists here. Fill an area that covers it, or place an authored room here from the world builder.</p>
+    {% else %}
+      {% set room = cell.room %}
+      <p>{{ room.description }}</p>
+      <p class="muted">{% if room.kind == 'wild' %}Wilderness room using {{ cell.preset_name or 'a missing preset' }}{% if cell.region_name %} in {{ cell.region_name }}{% endif %}.{% else %}Authored room. <a href="{{ url_for('mud.builder', _anchor='room-' ~ room.id) }}">Edit it in the world builder</a>.{% endif %} Room ID <code>{{ room.id }}</code></p>
+      <p><strong>Exits:</strong> {% for exit in cell.stored_exits %}{{ (exit.direction or exit.name)|upper }} → {{ exit.destination_name }} (authored){% if not loop.last or cell.grid_exits %}, {% endif %}{% endfor %}{% for exit in cell.grid_exits %}{{ exit.direction|upper }} → {{ exit.destination_name }}{% if not loop.last %}, {% endif %}{% endfor %}{% if not cell.stored_exits and not cell.grid_exits %}none{% endif %}</p>
+      <p><strong>Players:</strong> {{ cell.players|map(attribute='name')|join(', ') or 'none' }}</p>
+      <div class="wilderness-inspector">
+        <h3>NPCs</h3>
+        {% for npc in cell.npcs %}<form method="post" action="{{ url_for('mud.builder_delete_npc_instance', instance_id=npc.id) }}" class="wilderness-row">{{ inspector_return() }}<input type="hidden" name="confirmation" value="delete"><span>{{ npc.name }}{% if npc.spawned_by_trigger %} (temporary){% endif %}</span><button class="secondary">REMOVE</button></form>{% else %}<p class="muted">None.</p>{% endfor %}
+        {% if npc_definitions %}<form method="post" action="{{ url_for('mud.builder_place_npc') }}" class="wilderness-row">{{ inspector_return() }}<input type="hidden" name="room_id" value="{{ room.id }}"><select name="definition_id" aria-label="NPC to place">{% for npc in npc_definitions %}<option value="{{ npc.id }}">{{ npc.name }}</option>{% endfor %}</select><button>PLACE NPC</button></form>{% endif %}
+        <h3>Items</h3>
+        {% for item in cell.contents %}<form method="post" action="{{ url_for('mud.builder_delete_item_instance', instance_id=item.id) }}" class="wilderness-row">{{ inspector_return() }}<input type="hidden" name="confirmation" value="delete"><span>{{ item.name }}</span><button class="secondary">REMOVE</button></form>{% else %}<p class="muted">None.</p>{% endfor %}
+        {% if item_definitions %}<form method="post" action="{{ url_for('mud.builder_place_selected_item') }}" class="wilderness-row">{{ inspector_return() }}<input type="hidden" name="room_id" value="{{ room.id }}"><select name="definition_id" aria-label="Item to place">{% for item in item_definitions %}<option value="{{ item.id }}">{{ item.name }}</option>{% endfor %}</select><label>Respawn seconds (0 = once)<input type="number" name="respawn_seconds" min="0" max="86400" value="0"></label><button>PLACE ITEM</button></form>{% endif %}
+        <h3>Exits beyond the grid</h3>
+        <p class="muted">Neighbouring rooms link automatically. Add an exit for a link the grid cannot make, such as a cave mouth to a distant room. An exit in the same direction as a grid link replaces it.</p>
+        <form method="post" action="{{ url_for('mud.builder_create_exit') }}" class="form-grid builder-subform">{{ inspector_return() }}
+          <label>From<select name="from_room_id"><option value="{{ room.id }}">This room</option>{% for option in authored_rooms %}{% if option.id != room.id %}<option value="{{ option.id }}">{{ option.name }}</option>{% endif %}{% endfor %}</select></label>
+          <label>To<select name="to_room_id">{% for option in authored_rooms %}{% if option.id != room.id %}<option value="{{ option.id }}">{{ option.name }}</option>{% endif %}{% endfor %}<option value="{{ room.id }}">This room</option></select></label>
+          <label>Exit name<input name="name" required maxlength="80" placeholder="cave mouth"></label>
+          <label>Direction<select name="direction"><option value="">Named exit only</option>{% for direction in all_directions %}<option>{{ direction }}</option>{% endfor %}</select></label>
+          <button>ADD EXIT</button>
+        </form>
+        {% for exit in cell.stored_exits %}<form method="post" action="{{ url_for('mud.builder_delete_exit', exit_id=exit.id) }}" class="wilderness-row">{{ inspector_return() }}<input type="hidden" name="confirmation" value="delete"><span>{{ (exit.direction or exit.name)|upper }} → {{ exit.destination_name }}</span><button class="secondary">REMOVE EXIT</button></form>{% endfor %}
+        <h3>Dungeon entrances</h3>
+        {% for entrance in cell.entrances %}<p>{{ entrance.name }} <a href="{{ url_for('mud.builder', _anchor='dungeon-heading') }}">(manage in the world builder)</a></p>{% else %}<p class="muted">None.</p>{% endfor %}
+        {% if dungeon_templates %}<form method="post" action="{{ url_for('mud.builder_create_entrance') }}" class="form-grid builder-subform">{{ inspector_return() }}<input type="hidden" name="room_id" value="{{ room.id }}"><input type="hidden" name="return_room_id" value="{{ room.id }}"><input type="hidden" name="enabled" value="1"><input type="hidden" name="max_party" value="4">
+          <label>Name players type<input name="name" required maxlength="80" placeholder="old mine"></label>
+          <label>Template<select name="template_id">{% for template in dungeon_templates %}<option value="{{ template.id }}">{{ template.name }}</option>{% endfor %}</select></label>
+          <label>Description (shown by /look)<textarea name="description" rows="2" maxlength="2000"></textarea></label>
+          <button>ADD ENTRANCE</button></form>{% endif %}
+      </div>
+      {% if room.kind == 'wild' %}
+      <form method="post" action="{{ url_for('mud.builder_wilderness_cell_options', room_id=room.id) }}" class="form-grid builder-subform">
+        <input type="hidden" name="csrf_token" value="{{ session.csrf_token }}">
+        <h3>Links and region</h3>
+        <label class="check"><input type="checkbox" name="grid_link" value="1" {% if room.grid_link %}checked{% endif %}> Link automatically to neighbouring rooms</label>
+        <fieldset><legend>Walls (no automatic link in these directions)</legend>{% for direction in directions %}<label class="check"><input type="checkbox" name="blocked_dirs" value="{{ direction }}" {% if direction in cell.walls %}checked{% endif %}> {{ direction }}</label>{% endfor %}</fieldset>
+        <label>Region<select name="region_id"><option value="">No region</option>{% for region in regions %}<option value="{{ region.id }}" {% if room.region_id==region.id %}selected{% endif %}>{{ region.name }}</option>{% endfor %}</select></label>
+        <button class="secondary">SAVE LINKS</button>
+      </form>
+      <form method="post" action="{{ url_for('mud.builder_wilderness_convert', room_id=room.id) }}" class="builder-subform" data-confirm="Turn this wilderness room into an authored room? It keeps its current text, which you can then edit.">
+        <input type="hidden" name="csrf_token" value="{{ session.csrf_token }}">
+        <p class="muted">Turn this room into a special location: an authored room keeps this position and its contents, and gains every world builder tool (text, triggers, discoveries, locks).</p>
+        <button>CONVERT TO AUTHORED ROOM</button>
+      </form>
+      {% endif %}
+    {% endif %}
+  </section>
+  {% endif %}
+
+  <section class="terminal-card builder-create" aria-labelledby="presets-heading">
+    <p class="eyebrow">ROOM PRESETS / SHARED BY EVERY ROOM THAT USES THEM</p>
+    <h2 id="presets-heading">Room presets</h2>
+    <p class="muted">A preset describes one kind of land. Each room picks one of its descriptions from its position, so the same room always reads the same while its neighbours vary. Editing a preset changes every room that uses it.</p>
+    <form method="post" action="{{ url_for('mud.builder_create_room_preset') }}" class="form-grid">
+      <input type="hidden" name="csrf_token" value="{{ session.csrf_token }}">
+      <label>Start from<select name="base"><option value="">Blank preset</option>{% for preset in bundled %}<option value="bundled:{{ preset.key }}">Starter: {{ preset.name }}</option>{% endfor %}{% for entry in presets %}<option value="preset:{{ entry.id }}">Copy of {{ entry.name }}</option>{% endfor %}</select></label>
+      <div class="builder-coordinates">
+        <label>Key (blank keeps the starter's)<input name="key" pattern="[a-z][a-z0-9-]{0,31}" maxlength="32" placeholder="pine-forest"></label>
+        <label>Name (blank keeps the starter's)<input name="name" maxlength="80" placeholder="Pine Forest"></label>
+      </div>
+      <label>First description (for a blank preset)<textarea name="description" rows="2" maxlength="4000"></textarea></label>
+      <details><summary>Paste preset JSON instead</summary><label>Preset JSON<textarea name="preset_json" rows="8" spellcheck="false"></textarea></label></details>
+      <button>CREATE PRESET</button>
+    </form>
+    <div class="builder-coordinates">
+      <form method="post" action="{{ url_for('mud.builder_import_room_presets') }}" enctype="multipart/form-data" class="form-grid builder-subform">
+        <input type="hidden" name="csrf_token" value="{{ session.csrf_token }}">
+        <label>Import presets (JSON: one preset or {"presets": [...]})<input type="file" name="preset_file" accept="application/json,.json" required></label>
+        <label>When a key already exists<select name="conflict"><option value="skip">Skip it</option><option value="overwrite">Replace it</option></select></label>
+        <label class="check"><input type="checkbox" name="drop_unknown" value="1"> Drop creatures and items this world does not have</label>
+        <button class="secondary">IMPORT</button>
+      </form>
+      {% if presets %}<p><a class="button secondary" href="{{ url_for('mud.builder_export_room_presets') }}">EXPORT ALL PRESETS</a></p>{% endif %}
+    </div>
+    {% for entry in presets %}
+    <article class="builder-room" id="preset-{{ entry.id }}">
+      <details>
+        <summary><strong>{{ entry.preset.glyph }} {{ entry.name }}</strong> <span class="muted">{{ entry.local_key }} / {{ entry.preset.terrain }} / {{ entry.preset.descriptions|length }} descriptions / {{ '{:,}'.format(entry.cell_count) }} rooms</span></summary>
+        <form method="post" action="{{ url_for('mud.builder_update_room_preset', preset_id=entry.id) }}" class="form-grid">
+          <input type="hidden" name="csrf_token" value="{{ session.csrf_token }}">
+          {{ preset_fields(entry) }}
+          <button>SAVE PRESET</button>
+        </form>
+        <details><summary>Edit as JSON</summary>
+          <form method="post" action="{{ url_for('mud.builder_update_room_preset', preset_id=entry.id) }}" class="form-grid">
+            <input type="hidden" name="csrf_token" value="{{ session.csrf_token }}">
+            <label>Preset JSON (creatures and items by definition ID)<textarea name="preset_json" rows="14" spellcheck="false" required>{{ entry.json }}</textarea></label>
+            <button class="secondary">SAVE JSON</button>
+          </form>
+        </details>
+        <p><a class="button secondary" href="{{ url_for('mud.builder_export_room_presets', id=entry.id) }}">EXPORT</a></p>
+        <form method="post" action="{{ url_for('mud.builder_delete_room_preset', preset_id=entry.id) }}" class="wilderness-row" data-confirm="Remove the preset {{ entry.name }}?">
+          <input type="hidden" name="csrf_token" value="{{ session.csrf_token }}"><input type="hidden" name="confirmation" value="delete">
+          {% if entry.cell_count %}<label>Move its {{ '{:,}'.format(entry.cell_count) }} rooms to<select name="reassign_to" required>{% for other in presets %}{% if other.id != entry.id %}<option value="{{ other.id }}">{{ other.name }}</option>{% endif %}{% endfor %}</select></label>{% endif %}
+          <button class="danger" {% if entry.cell_count and presets|length < 2 %}disabled title="Create another preset to take over its rooms first"{% endif %}>REMOVE PRESET</button>
+        </form>
+      </details>
+    </article>
+    {% endfor %}
+  </section>
+
+  <section class="terminal-card builder-create" aria-labelledby="regions-heading">
+    <p class="eyebrow">REGIONS / LOCAL CHANGES TO SHARED PRESETS</p>
+    <h2 id="regions-heading">Regions</h2>
+    <p class="muted">A region lets the same presets behave differently in one part of the world: more dangerous creatures, rarer encounters, richer resources. Choose a region when filling an area, or per room in the inspector.</p>
+    <form method="post" action="{{ url_for('mud.builder_create_region') }}" class="form-grid">
+      <input type="hidden" name="csrf_token" value="{{ session.csrf_token }}">
+      {{ region_fields() }}
+      <button>CREATE REGION</button>
+    </form>
+    {% for region in regions %}
+    <article class="builder-room" id="region-{{ region.id }}">
+      <details>
+        <summary><strong>{{ region.name }}</strong> <span class="muted">{{ region.local_key }} / danger {{ region.overrides.danger }} / {{ '{:,}'.format(region.cell_count) }} rooms</span></summary>
+        <form method="post" action="{{ url_for('mud.builder_update_region', region_id=region.id) }}" class="form-grid">
+          <input type="hidden" name="csrf_token" value="{{ session.csrf_token }}">
+          {{ region_fields(region) }}
+          <button>SAVE REGION</button>
+        </form>
+        <form method="post" action="{{ url_for('mud.builder_delete_region', region_id=region.id) }}" data-confirm="Remove the region {{ region.name }}? Its rooms keep their presets.">
+          <input type="hidden" name="csrf_token" value="{{ session.csrf_token }}"><input type="hidden" name="confirmation" value="delete">
+          <button class="danger">REMOVE REGION</button>
+        </form>
+      </details>
+    </article>
+    {% endfor %}
+  </section>
+</section>
+<script type="module" src="{{ url_for('static', filename='wilderness-builder.js') }}?v=1"></script>
+{% endblock %}

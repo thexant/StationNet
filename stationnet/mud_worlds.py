@@ -10,7 +10,7 @@ import zipfile
 
 from flask import current_app
 
-from . import mud_conditions, mud_triggers, mud_world_dungeons
+from . import mud_conditions, mud_triggers, mud_wilderness, mud_world_dungeons
 
 
 MAX_ZIP_BYTES = 16 * 1024 * 1024
@@ -22,7 +22,8 @@ ORIGINS_FILE = "origins.json"
 SKILLS_FILE = "skills.json"
 DUNGEONS_FILE = mud_world_dungeons.DUNGEONS_FILE
 EVENTS_FILE = "events.json"
-OPTIONAL_FILES = {CONTENT_FILE, ORIGINS_FILE, SKILLS_FILE, DUNGEONS_FILE, EVENTS_FILE}
+WILDERNESS_FILE = mud_wilderness.WILDERNESS_FILE
+OPTIONAL_FILES = {CONTENT_FILE, ORIGINS_FILE, SKILLS_FILE, DUNGEONS_FILE, EVENTS_FILE, WILDERNESS_FILE}
 # Order follows foreign-key dependencies. Only these authored columns cross
 # the package boundary; player state and generated dungeon data never do.
 CONTENT_TABLES = {
@@ -137,7 +138,7 @@ def read_package(payload):
         with zipfile.ZipFile(BytesIO(payload)) as archive:
             names = archive.namelist()
             if not FILES <= set(names) or set(names) - FILES - OPTIONAL_FILES or len(names) != len(set(names)):
-                raise WorldError("World ZIP must contain manifest.json, rooms.json, and exits.json at its root, with optional content.json, origins.json, skills.json, dungeons.json, and events.json.")
+                raise WorldError("World ZIP must contain manifest.json, rooms.json, and exits.json at its root, with optional content.json, origins.json, skills.json, dungeons.json, events.json, and wilderness.json.")
             docs = {}
             for name in names:
                 info = archive.getinfo(name)
@@ -165,18 +166,38 @@ def read_package(payload):
         raise WorldError("rooms.json must contain 1 to 1000 rooms.")
     if not isinstance(exits, list) or len(exits) > 5000:
         raise WorldError("exits.json must contain at most 5000 exits.")
-    room_ids = set()
+    authored_ids = set()
     clean_rooms = []
+    positions = {}
     for room in rooms:
         room = _object(room, "Room")
         local_id = room.get("id")
-        if not isinstance(local_id, str) or not ID_RE.fullmatch(local_id) or local_id in room_ids:
+        if not isinstance(local_id, str) or not ID_RE.fullmatch(local_id) or local_id in authored_ids:
             raise WorldError("Room IDs must be unique lowercase IDs.")
-        room_ids.add(local_id)
+        authored_ids.add(local_id)
         clean_rooms.append({"id": local_id, "name": _label(room.get("name"), "Room name", 2, 80),
-                            "description": _label(room.get("description"), "Room description", 1, 4000)})
-    if start not in room_ids:
+                            "description": _label(room.get("description"), "Room description", 1, 4000),
+                            **_room_grid(room, local_id, positions)})
+    if start not in authored_ids:
         raise WorldError("start_room does not match a room in rooms.json.")
+    raw_content = docs.get(CONTENT_FILE, {}) if isinstance(docs.get(CONTENT_FILE, {}), dict) else {}
+
+    def raw_ids(table):
+        rows = raw_content.get(table, [])
+        return {row.get("id") for row in rows if isinstance(row, dict)} if isinstance(rows, list) else set()
+
+    try:
+        wilderness = mud_wilderness.read_document(docs.get(WILDERNESS_FILE), raw_ids("mud_npc_definitions"),
+                                                  raw_ids("mud_item_definitions"))
+    except mud_wilderness.WildernessError as problem:
+        raise WorldError(f"Invalid wilderness.json: {problem}") from problem
+    for position, local_id in positions.items():
+        if mud_wilderness.lookup(wilderness, mud_wilderness.cell_reference(*position)):
+            raise WorldError(f"Room {local_id} stands on a square wilderness.json also fills; leave that square empty.")
+    # Exits, content, entrances and triggers may name wilderness squares as '@x,y,z'.
+    room_ids = mud_wilderness.RoomReferences(
+        {local_id: local_id for local_id in authored_ids},
+        lambda key: key if mud_wilderness.lookup(wilderness, key) else None)
     clean_exits = []
     exit_names = set()
     exit_directions = set()
@@ -338,7 +359,34 @@ def read_package(payload):
                 raise WorldError(f"Trigger {trigger['id']} names an unknown {kind}: {ref}.")
     return {"id": world_id, "name": name, "author": author, "start_room": start, "resource": resource,
             "rooms": clean_rooms, "exits": clean_exits, "content": content, "origins": origins,
-            "skills": skills["skills"], "dungeons": world_dungeons, "events": triggers}
+            "skills": skills["skills"], "dungeons": world_dungeons, "events": triggers,
+            # wilderness is the file as written, so a parsed document repackages unchanged;
+            # wild is its validated run index, used to install and resolve '@x,y,z'.
+            "wilderness": docs.get(WILDERNESS_FILE), "wild": wilderness}
+
+
+def _room_grid(room, local_id, positions):
+    """Optional grid placement for an authored room: x, y, z together, plus link settings."""
+    axes = [room.get(axis) for axis in ("x", "y", "z")]
+    if all(value is None for value in axes):
+        if "grid_link" in room or "blocked_dirs" in room:
+            raise WorldError(f"Room {local_id} sets grid links without x, y and z.")
+        return {}
+    limit = mud_wilderness.COORDINATE_LIMIT
+    if not all(_whole(value, -limit, limit) for value in axes):
+        raise WorldError(f"Room {local_id} needs whole-number x, y and z between -{limit} and {limit}.")
+    position = tuple(axes)
+    if position in positions:
+        raise WorldError(f"Rooms {positions[position]} and {local_id} share the position {position}.")
+    positions[position] = local_id
+    grid_link = room.get("grid_link", True)
+    if type(grid_link) is not bool:
+        raise WorldError(f"Room {local_id} grid_link must be true or false.")
+    try:
+        blocked = mud_wilderness.validate_blocked(room.get("blocked_dirs", ""))
+    except mud_wilderness.WildernessError as problem:
+        raise WorldError(f"Room {local_id}: {problem}") from problem
+    return {"x": position[0], "y": position[1], "z": position[2], "grid_link": grid_link, "blocked_dirs": blocked}
 
 
 def validate_object_properties(properties):
@@ -390,6 +438,11 @@ def package_bytes(document):
             if len(encoded) > MAX_FILE_BYTES:
                 raise WorldError("events.json is too large to export.")
             archive.writestr(EVENTS_FILE, encoded)
+        if document.get("wilderness"):
+            encoded = (json.dumps(document["wilderness"], ensure_ascii=False, indent=1) + "\n").encode("utf-8")
+            if len(encoded) > MAX_FILE_BYTES:
+                raise WorldError("wilderness.json is too large to export.")
+            archive.writestr(WILDERNESS_FILE, encoded)
     payload = stream.getvalue()
     if len(payload) > MAX_ZIP_BYTES:
         raise WorldError("World ZIP is too large to export.")
@@ -408,9 +461,20 @@ def template_bytes():
     })
 
 
+def _room_references(document, installation_key):
+    """Installed room IDs by package reference, wilderness squares included."""
+    world_id = document["id"]
+
+    def cell(key):
+        found = mud_wilderness.lookup(document["wild"], key)
+        return mud_wilderness.cell_id(world_id, *found[:3]) if found else None
+
+    return mud_wilderness.RoomReferences(
+        {room["id"]: f"world:{world_id}:{installation_key}:room:{room['id']}" for room in document["rooms"]}, cell)
+
+
 def _content_maps(document, installation_key):
-    maps = {"rooms": {room["id"]: f"world:{document['id']}:{installation_key}:room:{room['id']}"
-                      for room in document["rooms"]}}
+    maps = {"rooms": _room_references(document, installation_key)}
     for table in ID_TABLES:
         mapping = {}
         for row in document["content"].get(table, []):
@@ -763,15 +827,30 @@ def install(database, payload, *, origin_mode="preserve", selected=None):
                           int(document["resource"]["enabled"]), document["resource"]["name"]))
         skill_map = _install_skills(database, document)
         for room in document["rooms"]:
-            database.execute("INSERT INTO mud_world_rooms(id,name,description,world_id) VALUES(?,?,?,?)",
-                             (prefix + room["id"], room["name"], room["description"], world_id))
+            x, y, z = room.get("x"), room.get("y"), room.get("z")
+            database.execute("INSERT INTO mud_world_rooms(id,name,description,world_id,x,y,z,grid_link,blocked_dirs) "
+                             "VALUES(?,?,?,?,?,?,?,?,?)",
+                             (prefix + room["id"], room["name"], room["description"], world_id, x, y, z,
+                              int(room.get("grid_link", True)), room.get("blocked_dirs", "")))
+        try:
+            preset_ids, region_ids = mud_wilderness.install_cells(database, world_id, installation_key,
+                                                                  document["wild"])
+        except mud_wilderness.WildernessError as problem:
+            raise WorldError(f"Invalid wilderness.json: {problem}") from problem
+        room_refs = _room_references(document, installation_key)
         for ordinal, item in enumerate(document["exits"]):
             database.execute("INSERT INTO mud_world_exits(id,from_room_id,to_room_id,name,direction,pick_difficulty,"
                              "conditions_json,conditions_message,local_id,hidden) VALUES(?,?,?,?,?,?,?,?,?,?)",
-                             (f"world:{world_id}:{installation_key}:exit:{ordinal}", prefix + item["from"],
-                              prefix + item["to"], item["name"], item["direction"], item["pick_difficulty"],
+                             (f"world:{world_id}:{installation_key}:exit:{ordinal}", room_refs[item["from"]],
+                              room_refs[item["to"]], item["name"], item["direction"], item["pick_difficulty"],
                               "[]", item["conditions_message"], item.get("id"), int(item.get("hidden", False))))
         maps = _insert_content(database, document, installation_key, skill_map)
+
+        def shared(table):
+            return lambda value: value if value.startswith("stationnet:") else _mapped(maps, table, value, "preset reference")
+
+        mud_wilderness.install_references(database, world_id, document["wild"], preset_ids, region_ids,
+                                          shared("mud_npc_definitions"), shared("mud_item_definitions"))
         exit_mapper = _exit_condition_mapper(document, maps, skill_map)
         for ordinal, item in enumerate(document["exits"]):
             if item["conditions"]:
@@ -786,9 +865,7 @@ def install(database, payload, *, origin_mode="preserve", selected=None):
         if document["dungeons"]["templates"]:
             try:
                 mud_world_dungeons.install_document(
-                    database, world_id, document["dungeons"],
-                    {room["id"]: prefix + room["id"] for room in document["rooms"]},
-                    maps, exit_mapper)
+                    database, world_id, document["dungeons"], room_refs, maps, exit_mapper)
             except mud_world_dungeons.WorldDungeonError as problem:
                 raise WorldError(str(problem)) from problem
         _install_triggers(database, document, installation_key, maps, exit_mapper)
@@ -868,7 +945,7 @@ def _export_content(database, world_id, room_map):
     roots = {"mud_item_definitions", "mud_conversations", "mud_npc_definitions", "mud_quests"}
     all_placed_items = [dict(row) for row in database.execute(
         "SELECT id,definition_id,room_id,container_id FROM mud_item_instances "
-        "WHERE spawn_source_id IS NULL"
+        "WHERE spawn_source_id IS NULL AND id NOT LIKE 'world:wild-item:%'"
     )]
     placed_item_ids = {row["id"] for row in all_placed_items if row["room_id"] in room_map}
     while True:
@@ -899,6 +976,9 @@ def _export_content(database, world_id, room_map):
     template_items, template_npcs = mud_world_dungeons.shared_references(database, world_id)
     needed_items |= template_items
     needed_npcs |= template_npcs
+    preset_npcs, preset_items = mud_wilderness.shared_references(database, world_id)
+    needed_items |= preset_items
+    needed_npcs |= preset_npcs
     needed_conversations = {row["conversation_id"] for row in database.execute(
         "SELECT conversation_id FROM mud_npc_definitions WHERE id IN "
         "(SELECT definition_id FROM mud_npc_instances WHERE room_id IN "
@@ -1025,11 +1105,12 @@ def export(database, world_id, *, origin_keys=None, skill_keys=None):
     world = database.execute("SELECT * FROM mud_world_packages WHERE id=?", (world_id,)).fetchone()
     if world is None:
         raise WorldError("World was not found.")
-    rooms = database.execute("SELECT id,name,description FROM mud_world_rooms WHERE world_id=? ORDER BY id",
-                             (world_id,)).fetchall()
+    rooms = database.execute("SELECT id,name,description,x,y,z,grid_link,blocked_dirs FROM mud_world_rooms "
+                             "WHERE world_id=? AND kind='authored' ORDER BY id", (world_id,)).fetchall()
     if not rooms:
         raise WorldError("World has no rooms to export.")
-    ids = {room["id"]: f"room-{index}" for index, room in enumerate(rooms, 1)}
+    # Wilderness rooms travel as run-length layers in wilderness.json and are named '@x,y,z'.
+    ids = mud_wilderness.export_references(world_id, {room["id"]: f"room-{index}" for index, room in enumerate(rooms, 1)})
     if world["start_room_id"] not in ids:
         raise WorldError("World starting room is missing.")
     exits = database.execute(
@@ -1051,8 +1132,11 @@ def export(database, world_id, *, origin_keys=None, skill_keys=None):
                 "name": world["name"], "author": world["author"],
                 "start_room": ids[world["start_room_id"]],
                 "resource": {"enabled": bool(world["resource_enabled"]), "name": world["resource_name"]},
-                "rooms": [{"id": ids[room["id"]], "name": room["name"],
-                           "description": room["description"]} for room in rooms],
+                "rooms": [{"id": ids[room["id"]], "name": room["name"], "description": room["description"],
+                           **({"x": room["x"], "y": room["y"], "z": room["z"]} if room["x"] is not None else {}),
+                           **({"grid_link": False} if room["x"] is not None and not room["grid_link"] else {}),
+                           **({"blocked_dirs": room["blocked_dirs"]} if room["x"] is not None and room["blocked_dirs"] else {})}
+                          for room in rooms],
                 "exits": [{**({"id": exit_ids[row["id"]]} if row["id"] in exit_ids else {}),
                            "from": ids[row["from_room_id"]], "to": ids[row["to_room_id"]],
                            "name": row["name"], "direction": row["direction"],
@@ -1127,6 +1211,14 @@ def export(database, world_id, *, origin_keys=None, skill_keys=None):
     events = _export_triggers(triggers, maps, local_reference)
     if events:
         document["events"] = events
+
+    def shared(table):
+        return lambda value: maps.get(table, {}).get(value, value)
+
+    wilderness = mud_wilderness.export_document(database, world_id, shared("mud_npc_definitions"),
+                                                shared("mud_item_definitions"))
+    if wilderness:
+        document["wilderness"] = wilderness
     return package_bytes(document)
 
 

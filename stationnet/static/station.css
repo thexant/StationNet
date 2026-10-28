@@ -868,6 +868,7 @@ button:disabled { opacity: .5; cursor: not-allowed; }
 .mud-event-chat span { color: var(--magenta); }
 .mud-event-arrival p { color: var(--green-bright); }
 .mud-event-departure p { color: var(--grey); }
+.mud-event-map p { font-family: var(--mono); line-height: 1.2; white-space: pre; overflow-x: auto; overflow-wrap: normal; }
 .mud-command { padding: .45rem .65rem .5rem; border-top: 1px solid var(--green-dim); background: var(--black); }
 .mud-command .mud-command-row { display: grid; grid-template-columns: minmax(0,1fr) auto; gap: .5rem; }
 .mud-command label { margin-bottom: .2rem; color: var(--cyan); }
@@ -954,6 +955,20 @@ button:disabled { opacity: .5; cursor: not-allowed; }
 .builder-danger-zone p { margin: .7rem 0; color: var(--grey); }
 .builder-danger-zone form { display: grid; grid-template-columns: minmax(12rem,1fr) auto; align-items: end; gap: .65rem; }
 .builder-danger-zone button { margin: 0; }
+.builder-coordinates { display: grid; grid-template-columns: repeat(auto-fit, minmax(7.5rem, 1fr)); align-items: end; gap: .55rem; }
+.builder-grid-placement { grid-column: 1 / -1; display: grid; gap: .55rem; }
+.builder-grid-placement summary { cursor: pointer; color: var(--cyan); letter-spacing: .05em; }
+.builder-grid-placement fieldset, .wilderness-builder fieldset { display: flex; flex-wrap: wrap; gap: .4rem 1rem; }
+.wilderness-builder details > summary { cursor: pointer; }
+.wilderness-builder .builder-room { padding: .6rem 0; border-top: 1px dotted var(--green-dim); }
+.wilderness-inspector { display: grid; gap: .35rem; margin-top: .75rem; }
+.wilderness-inspector h3 { margin-top: .8rem; color: var(--cyan); font-size: .75rem; font-weight: 400; letter-spacing: .06em; }
+.wilderness-row { display: flex; flex-wrap: wrap; align-items: end; justify-content: space-between; gap: .6rem; padding: .45rem 0; border-bottom: 1px dotted var(--green-dim); }
+.wilderness-row button { min-height: 2rem; margin: 0; padding: .3rem .5rem; }
+.wilderness-tools { flex-wrap: wrap; align-items: center; gap: .4rem .7rem; }
+.wilderness-tools button { min-height: 2rem; margin: 0; padding: .3rem .55rem; }
+.wilderness-canvas { display: block; max-width: 100%; margin-top: .6rem; border: 1px solid var(--green-dim); background: var(--surface-field); cursor: crosshair; touch-action: none; }
+.wilderness-legend { color: var(--grey); font-size: var(--text-xs); }
 
 .settings-section { margin-top: 1.5rem; }
 .collapsible-panel-toggle { width: 100%; min-height: 0; padding: 0 0 .55rem; color: inherit; border: 0; border-bottom: 1px solid var(--green-dim); background: transparent; text-align: left; }

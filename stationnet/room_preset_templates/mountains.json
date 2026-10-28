@@ -1,0 +1,44 @@
+{
+  "key": "mountains",
+  "name": "Mountains",
+  "terrain": "mountains",
+  "glyph": "^",
+  "links": "4",
+  "names": [
+    "Mountainside",
+    "Rocky Slope",
+    "Mountain Pass"
+  ],
+  "descriptions": [
+    "Jagged grey rock rises steeply around you. Loose scree shifts underfoot, and the wind is sharp and cold.",
+    "A narrow ledge winds along the mountainside. Far below, the land spreads out in a patchwork of green and brown.",
+    "Boulders the size of houses lie scattered across a high slope, as if tossed there by giants.",
+    "Thin, hardy grass clings to cracks in the stone. Snow lingers in the shadowed hollows even now.",
+    "The trail climbs between two crags, funnelling a howling wind that tugs at your clothes.",
+    "A cold spring trickles from a crack in the rock and freezes into icicles along its edge.",
+    "Lichen paints the rocks in orange and green. An eagle circles high overhead, riding the updrafts."
+  ],
+  "environment": {
+    "light": "bright",
+    "exposure": "open",
+    "tags": [
+      "outdoors",
+      "mountains"
+    ],
+    "lines": [
+      "Pebbles clatter down the slope.",
+      "The thin air makes every breath an effort."
+    ]
+  },
+  "encounters": {
+    "chance": 7,
+    "max_live": 1,
+    "despawn_seconds": 600,
+    "creatures": []
+  },
+  "resources": {
+    "respawn_seconds": 3600,
+    "max_per_room": 1,
+    "items": []
+  }
+}

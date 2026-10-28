@@ -1437,6 +1437,7 @@ def init_db():
     _migrate_mud_world_resource(database)
     _migrate_mud_world_dungeons(database)
     _migrate_mud_triggers(database)
+    _migrate_mud_wilderness(database)
     database.execute("INSERT OR IGNORE INTO mud_portal_settings(id) VALUES(1)")
     database.execute("INSERT OR IGNORE INTO mud_crossover_settings(id) VALUES(1)")
     database.execute(
@@ -1749,6 +1750,55 @@ def _migrate_mud_world_dungeons(database):
     for name, declaration in additions.items():
         if name not in columns:
             database.execute(f"ALTER TABLE mud_procedural_instances ADD COLUMN {name} {declaration}")
+
+
+def _migrate_mud_wilderness(database):
+    """Let worlds hold coordinate-placed rooms and shared wilderness room presets.
+
+    A wild room stores only its coordinates and preset; its name and text come
+    from the preset. Existing rooms stay authored with no coordinates.
+    preset_id and region_id are not foreign keys so removing a world never
+    depends on cascade order; the builder refuses deleting presets in use.
+    """
+    database.executescript("""
+    CREATE TABLE IF NOT EXISTS mud_world_room_presets (
+      id TEXT PRIMARY KEY,
+      world_id TEXT NOT NULL REFERENCES mud_world_packages(id) ON DELETE CASCADE,
+      local_key TEXT NOT NULL,
+      name TEXT NOT NULL,
+      preset_json TEXT NOT NULL,
+      revision INTEGER NOT NULL DEFAULT 1 CHECK(revision>=1),
+      created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      UNIQUE(world_id,local_key));
+    CREATE TABLE IF NOT EXISTS mud_world_regions (
+      id TEXT PRIMARY KEY,
+      world_id TEXT NOT NULL REFERENCES mud_world_packages(id) ON DELETE CASCADE,
+      local_key TEXT NOT NULL,
+      name TEXT NOT NULL,
+      overrides_json TEXT NOT NULL DEFAULT '{}',
+      created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      UNIQUE(world_id,local_key));
+    """)
+    additions = {
+        "kind": "TEXT NOT NULL DEFAULT 'authored' CHECK(kind IN ('authored','wild'))",
+        "x": "INTEGER", "y": "INTEGER", "z": "INTEGER",
+        "preset_id": "TEXT", "region_id": "TEXT",
+        "grid_link": "INTEGER NOT NULL DEFAULT 1 CHECK(grid_link IN (0,1))",
+        "blocked_dirs": "TEXT NOT NULL DEFAULT ''",
+        "resources_at": "TEXT",
+    }
+    existing = {row["name"] for row in database.execute("PRAGMA table_info(mud_world_rooms)")}
+    for column, definition in additions.items():
+        if column not in existing:
+            database.execute(f"ALTER TABLE mud_world_rooms ADD COLUMN {column} {definition}")
+    database.executescript("""
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_mud_world_rooms_grid
+      ON mud_world_rooms(world_id,z,y,x) WHERE x IS NOT NULL;
+    CREATE INDEX IF NOT EXISTS idx_mud_world_rooms_preset ON mud_world_rooms(preset_id);
+    CREATE INDEX IF NOT EXISTS idx_mud_world_rooms_kind ON mud_world_rooms(world_id,kind);
+    """)
 
 
 def _migrate_mud_triggers(database):

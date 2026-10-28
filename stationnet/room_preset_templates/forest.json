@@ -1,0 +1,45 @@
+{
+  "key": "forest",
+  "name": "Forest",
+  "terrain": "forest",
+  "glyph": "t",
+  "links": "4",
+  "names": [
+    "Forest",
+    "Woodland",
+    "Forest Path"
+  ],
+  "descriptions": [
+    "Tall oaks and beeches rise around you, their branches knitting a green roof overhead. Dappled light shifts on the leaf litter.",
+    "The forest floor is soft with moss and old leaves. Ferns crowd between the trunks, brushing your legs as you pass.",
+    "A fallen tree lies across the way, its bark furred with fungus. Beetles scurry along the rotting wood.",
+    "Birdsong fills the woods. Sunlight breaks through a gap in the canopy where an old tree has come down.",
+    "Thin saplings compete for light among older trees. A narrow deer track threads between them.",
+    "The ground dips toward a trickle of water that winds between mossy roots before disappearing under the leaves.",
+    "Acorns crunch underfoot beneath a sprawling oak whose lowest boughs nearly touch the ground.",
+    "Pale birches stand in a loose cluster, their peeling bark bright against the darker trunks beyond."
+  ],
+  "environment": {
+    "light": "dim",
+    "exposure": "sheltered",
+    "tags": [
+      "outdoors",
+      "forest"
+    ],
+    "lines": [
+      "Leaves rustle somewhere above you.",
+      "A woodpecker drums in the distance."
+    ]
+  },
+  "encounters": {
+    "chance": 6,
+    "max_live": 1,
+    "despawn_seconds": 600,
+    "creatures": []
+  },
+  "resources": {
+    "respawn_seconds": 3600,
+    "max_per_room": 2,
+    "items": []
+  }
+}

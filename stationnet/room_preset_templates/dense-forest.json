@@ -1,0 +1,44 @@
+{
+  "key": "dense-forest",
+  "name": "Dense Forest",
+  "terrain": "dense-forest",
+  "glyph": "T",
+  "links": "4",
+  "names": [
+    "Dense Forest",
+    "Deep Woods",
+    "Tangled Thicket"
+  ],
+  "descriptions": [
+    "Ancient trees crowd so closely that their trunks form a wall of bark. Little light reaches the ground, and the air is still and damp.",
+    "Thorny undergrowth snags at you from every side. You push through brambles between towering, moss-draped trunks.",
+    "Gnarled roots heave up from the dark soil like the backs of sleeping beasts. The silence here is heavy.",
+    "Strands of grey lichen hang from low branches. Somewhere in the gloom, a twig snaps.",
+    "The canopy is so thick that it feels like dusk. Pale mushrooms ring the base of a vast, hollow tree.",
+    "A tangle of fallen limbs and creepers makes every step uncertain. The smell of rot and wet earth is strong.",
+    "Huge trunks, too wide to embrace, rise into darkness. Their bark is scored with old claw marks."
+  ],
+  "environment": {
+    "light": "dark",
+    "exposure": "sheltered",
+    "tags": [
+      "outdoors",
+      "forest"
+    ],
+    "lines": [
+      "Something moves in the undergrowth, then is still.",
+      "Water drips steadily from the leaves."
+    ]
+  },
+  "encounters": {
+    "chance": 10,
+    "max_live": 1,
+    "despawn_seconds": 600,
+    "creatures": []
+  },
+  "resources": {
+    "respawn_seconds": 3600,
+    "max_per_room": 2,
+    "items": []
+  }
+}
