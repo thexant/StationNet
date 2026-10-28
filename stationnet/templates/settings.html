@@ -515,7 +515,7 @@
     <form method="post" action="{{ url_for('station.remove_mud_origins') }}" class="form-grid origin-removal" id="mud-origin-removal">
       <input type="hidden" name="csrf_token" value="{{ session.csrf_token }}">
       <div class="divider">REMOVE IMPORTED CHOICES</div>
-      <p class="muted">Select any imported races and classes to remove together. Defaults cannot be removed.</p>
+      <p class="muted">Select any imported races and classes to remove together. Defaults cannot be removed. If removal leaves no enabled race or class while the MUD is on, the first default choice of that type is enabled automatically.</p>
       {% for kind in ('races', 'classes') %}
       {% if mud_origins[kind]|selectattr('imported')|list %}
       <fieldset>

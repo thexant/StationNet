@@ -415,6 +415,20 @@ def remove_origins(database, selected, *, require_active=False):
             )
             removed.append(entry)
     if require_active:
+        # A world can make its bundled origins the only enabled choices. When
+        # those imports are removed, keep character creation usable by enabling
+        # a built-in choice for each emptied kind in the same transaction.
+        built_in = _built_in_options()
+        for kind, count in active_counts(database).items():
+            if count:
+                continue
+            defaults = built_in[kind]
+            if defaults:
+                database.execute(
+                    "INSERT INTO mud_origin_definitions(kind,key,enabled) VALUES(?,?,1) "
+                    "ON CONFLICT(kind,key) DO UPDATE SET enabled=1",
+                    (kind, defaults[0]["key"]),
+                )
         require_available(database)
     return removed
 

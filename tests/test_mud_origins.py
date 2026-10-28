@@ -151,7 +151,8 @@ def test_empty_choices_cannot_support_enabled_mud(data_path):
         with app.app_context():
             db = get_db()
             assert character_creation.active_counts(db) == {"races": 1, "classes": 1}
-            assert any(entry["key"] == "riverfolk" for entry in character_creation.catalog(db)["races"])
+            assert all(entry["key"] != "riverfolk" for entry in character_creation.catalog(db)["races"])
+            assert {entry["key"] for entry in character_creation.options(db)["races"]} == {"human"}
         # Choices may be cleared while the entire MUD is off, but enabling it is rejected.
         with app.app_context():
             db = get_db()
@@ -212,6 +213,11 @@ def test_pack_import_is_atomic_and_bulk_removal_handles_both_kinds(data_path):
             assert "marshfolk" in {item["key"] for item in available["races"]}
             assert "trailwarden" in {item["key"] for item in available["classes"]}
 
+        client.post("/sysop/settings/mud-origins/availability", data={
+            "csrf_token": "test-token", "races": ["marshfolk"],
+            "classes": ["trailwarden"],
+        })
+
         unconfirmed = client.post("/sysop/settings/mud-origins/remove", data={
             "csrf_token": "test-token", "races": ["marshfolk"],
             "classes": ["trailwarden"],
@@ -229,9 +235,12 @@ def test_pack_import_is_atomic_and_bulk_removal_handles_both_kinds(data_path):
         }, follow_redirects=True)
         assert b"Removed 2 imported choices: Marshfolk, Trail Warden" in removed.data
         with app.app_context():
-            assert get_db().execute(
+            db = get_db()
+            assert db.execute(
                 "SELECT 1 FROM mud_origin_definitions WHERE key IN ('marshfolk','trailwarden')"
             ).fetchone() is None
+            assert {item["key"] for item in character_creation.options(db)["races"]} == {"human"}
+            assert {item["key"] for item in character_creation.options(db)["classes"]} == {"warrior"}
 
         race_only = {**_template("races"), "key": "reedfolk", "name": "Reedfolk"}
         class_only = {**_template("classes"), "key": "wayfinder", "name": "Wayfinder"}
