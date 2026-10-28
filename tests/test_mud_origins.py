@@ -202,6 +202,11 @@ def test_pack_import_is_atomic_and_bulk_removal_handles_both_kinds(data_path):
         assert b"DEFAULT" in imported.data and b"IMPORTED" in imported.data
         assert b"origin-removal-summary" in imported.data
         assert b'data-remove-name="Marshfolk"' in imported.data
+        assert b"settings-mud.js" in imported.data
+        assert b"<script>" not in imported.data
+        assert b"script-src 'self'" in imported.headers["Content-Security-Policy"].encode()
+        assert b"unsafe-inline" not in imported.headers["Content-Security-Policy"].encode()
+        assert client.get("/static/settings-mud.js").status_code == 200
         with app.app_context():
             available = character_creation.options(get_db())
             assert "marshfolk" in {item["key"] for item in available["races"]}

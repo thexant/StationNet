@@ -1,4 +1,5 @@
 """Native MUD service and server-authoritative action dispatch."""
+import contextvars
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from functools import wraps
@@ -18,7 +19,7 @@ from flask import Blueprint, abort, flash, g, jsonify, redirect, render_template
 
 from .auth import admin_required, login_required
 from .db import get_db
-from . import dungeons, character_creation, mud_combat, mud_conditions, mud_effects, mud_firearms, mud_compat, mud_skills, moderation
+from . import dungeons, character_creation, mud_combat, mud_conditions, mud_effects, mud_firearms, mud_compat, mud_skills, mud_triggers, moderation
 from .security import validate_csrf
 
 bp = Blueprint("mud", __name__, url_prefix="/mud")
@@ -941,7 +942,7 @@ def _help_action(_database, _user, parameters):
             "description": '/description A traveler in a blue coat',
             "train": '/train strength 2', "skills": '/skills stealth',
             "learn": '/learn lockpicking from "Old Thief"', "practice_skill": '/practice blades',
-            "pick": '/pick north',
+            "pick": '/pick north', "interact": '/pull "Rusty Lever"',
         }
         body = f"/{name}: {_action_description(definition, resource)}\nAliases: " + ", ".join(f"/{alias}" for alias in aliases)
         if definition.key in examples:
@@ -1151,7 +1152,7 @@ def _active_expedition(database, user_id):
 
 def _dungeon_room(database, instance_id, room_key):
     row = database.execute(
-        "SELECT room_key AS id,name,description,role,depth,difficulty,instance_id "
+        "SELECT room_key AS id,name,description,role,depth,difficulty,instance_id,room_template_id "
         "FROM mud_dungeon_rooms WHERE instance_id=? AND room_key=?",
         (instance_id, room_key),
     ).fetchone()
@@ -1237,7 +1238,12 @@ def _current_room(database, user_id):
     return dict(fallback)
 
 
-def _room_exits(database, room_id, instance_id=None):
+def _room_exits(database, room_id, instance_id=None, viewer_id=None):
+    """Exits a viewer can see; triggers may hide, reveal, open, or seal world exits.
+
+    script_state is the viewer's own trigger state, else the world's, else
+    'hidden' for exits authored hidden, else ''.
+    """
     if instance_id:
         return [dict(row) for row in database.execute(
             "SELECT (e.instance_id || ':exit:' || from_room_key || ':' || direction) AS id,"
@@ -1247,14 +1253,20 @@ def _room_exits(database, room_id, instance_id=None):
             "WHERE e.instance_id=? AND e.from_room_key=? ORDER BY e.direction,e.to_room_key",
             (instance_id, room_id),
         ).fetchall()]
-    return database.execute(
+    rows = database.execute(
         "SELECT e.id,e.name,e.direction,e.to_room_id,e.key_item_id,e.pick_difficulty,"
-        "e.conditions_json,e.conditions_message,r.name AS destination_name "
+        "e.conditions_json,e.conditions_message,r.name AS destination_name,"
+        "COALESCE((SELECT s.state FROM mud_script_entity_states AS s WHERE s.entity_type='exit' "
+        "AND s.entity_id=e.id AND s.scope_key=(SELECT id FROM mud_characters WHERE user_id=?)),"
+        "(SELECT s.state FROM mud_script_entity_states AS s WHERE s.entity_type='exit' "
+        "AND s.entity_id=e.id AND s.scope_key=''),"
+        "CASE WHEN e.hidden=1 THEN 'hidden' ELSE '' END) AS script_state "
         "FROM mud_world_exits AS e JOIN mud_world_rooms AS r ON r.id=e.to_room_id "
         "WHERE e.from_room_id=? ORDER BY "
         "CASE WHEN e.direction IS NULL THEN 1 ELSE 0 END,e.name COLLATE NOCASE,e.id",
-        (room_id,),
+        (viewer_id, room_id),
     ).fetchall()
+    return [row for row in rows if row["script_state"] != "hidden"]
 
 
 def _room_entrances(database, room_id):
@@ -1317,9 +1329,16 @@ def _exit_label(exit_row):
     return f"{route.upper()} — {exit_row['destination_name']}"
 
 
+def _exit_sealed(exit_row):
+    """A trigger locked this exit; no key, pick, or earlier unlock opens it."""
+    return "script_state" in exit_row.keys() and exit_row["script_state"] == "locked"
+
+
 def _exit_locked(exit_row):
-    """Traditional exits lock behind a key, a pickable lock, or both."""
+    """Traditional exits lock behind a key, a pickable lock, or both; triggers may open or seal them."""
     keys = exit_row.keys()
+    if "script_state" in keys and exit_row["script_state"] in ("open", "locked"):
+        return exit_row["script_state"] == "locked"
     return bool(("key_item_id" in keys and exit_row["key_item_id"]) or
                 ("pick_difficulty" in keys and exit_row["pick_difficulty"]))
 
@@ -1342,6 +1361,8 @@ def _player_exit_label(database, user_id, exit_row):
         return label + " [barred]"
     if not _exit_locked(exit_row):
         return label
+    if _exit_sealed(exit_row):
+        return label + " [sealed]"
     character = _character_row(database, user_id)
     unlocked = database.execute("SELECT 1 FROM mud_exit_unlocks WHERE character_id=? AND exit_id=?",
                                 (character["id"], exit_row["id"])).fetchone()
@@ -1376,8 +1397,8 @@ def _room_npc_rows(database, room_id, instance_id=None):
                 "respawn_seconds": snapshot.get("respawn_seconds", 86400),
             })
         return rows
-    return database.execute(
-        "SELECT i.id,i.definition_id,i.room_id,i.state_json,d.name,d.description,"
+    return _script_visible(database, "npc", database.execute(
+        "SELECT i.id,i.definition_id,i.room_id,i.state_json,i.spawned_by_trigger,d.name,d.description,"
         "d.conversation_id,d.properties_json,d.behaviors_json,"
         "p.maximum_health AS combat_maximum_health,p.attack AS combat_attack,"
         "p.defense AS combat_defense,p.accuracy AS combat_accuracy,p.evasion AS combat_evasion,"
@@ -1386,7 +1407,7 @@ def _room_npc_rows(database, room_id, instance_id=None):
         "ON d.id=i.definition_id LEFT JOIN mud_npc_combat_profiles AS p "
         "ON p.npc_definition_id=d.id WHERE i.room_id=? "
         "ORDER BY d.name COLLATE NOCASE,i.id", (room_id,),
-    ).fetchall()
+    ).fetchall())
 
 
 def _npc_match(rows, target):
@@ -1560,7 +1581,8 @@ def _encounter_row(database, npc, create=True):
         f"SELECT * FROM mud_combat_encounters WHERE {identity_column}=? "
         "ORDER BY updated_at DESC,id DESC LIMIT 1", (identity,),
     ).fetchone()
-    if content_id and latest is not None and latest["status"] == "defeated":
+    spawned = not content_id and "spawned_by_trigger" in npc.keys() and npc["spawned_by_trigger"]
+    if (content_id or spawned) and latest is not None and latest["status"] == "defeated":
         return latest
     if latest is not None and latest["status"] == "defeated":
         ready = database.execute(
@@ -1698,7 +1720,7 @@ def _room_state(database, user_id):
             "destination_id": exit_row["to_room_id"],
             "destination_name": exit_row["destination_name"],
         }
-        for exit_row in _room_exits(database, room["id"], instance_id)
+        for exit_row in _room_exits(database, room["id"], instance_id, user_id)
     ]
     modes = _mode_settings(database)
     if portal and modes["traditional"]:
@@ -1737,7 +1759,7 @@ def _room_state(database, user_id):
 
 def _describe_room(database, room, viewer_id=None):
     instance_id = room.get("instance_id") if isinstance(room, dict) else None
-    exits = _room_exits(database, room["id"], instance_id)
+    exits = _room_exits(database, room["id"], instance_id, viewer_id)
     routes = ", ".join(_player_exit_label(database, viewer_id, item) if viewer_id else _exit_label(item)
                        for item in exits) if exits else "none"
     occupants = _room_occupants(database, room["id"], viewer_id, instance_id) if viewer_id else []
@@ -1762,8 +1784,10 @@ def _describe_room(database, room, viewer_id=None):
                   for entrance in _room_entrances(database, room["id"])]
         if delves:
             routes = (routes + ", " if routes != "none" else "") + ", ".join(delves)
+    states = " ".join(text for text in (_object_state_text(database, item) for item in
+                                        _room_item_rows(database, room["id"], instance_id)) if text)
     return (
-        f"{room['name']}\n{room['description']}{instructions}\n\n"
+        f"{room['name']}\n{room['description']}" + (f"\n\n{states}" if states else "") + f"{instructions}\n\n"
         f"Exits: {routes}\nOther players: {people}\nNPCs: {npcs}\nItems: {items}"
     )
 
@@ -1930,11 +1954,11 @@ def _room_item_rows(database, room_id, instance_id=None):
                 "dungeon_content_id": content["id"], "instance_id": instance_id,
             })
         return rows
-    return database.execute(
+    return _script_visible(database, "item", database.execute(
         "SELECT i.*,d.name,d.description,d.item_type,d.equipment_slot AS definition_slot,d.properties_json "
         "FROM mud_item_instances i JOIN mud_item_definitions d ON d.id=i.definition_id "
         "WHERE i.room_id=? ORDER BY d.name COLLATE NOCASE,i.id", (room_id,)
-    ).fetchall()
+    ).fetchall())
 
 
 def _container_rows(database, container_id, user_id=None):
@@ -2474,6 +2498,7 @@ def _finish_ready_quests(database, user):
         rewards = _award_quest_rewards(database, user, quest["id"])
         suffix = f" Rewards: {', '.join(rewards)}." if rewards else ""
         completed.append(EventDraft(f"Quest complete: {quest['name']}.{suffix}", event_type="quest"))
+        completed += fire_triggers(database, user, "quest_complete", [quest["id"]])
     return completed
 
 
@@ -2687,15 +2712,17 @@ def _turn_in_quest(database, user, quest_id, npc_definition_id=None):
     rewards = _award_quest_rewards(database, user, quest_id)
     suffix = f" Rewards: {', '.join(rewards)}." if rewards else ""
     events.append(EventDraft(f"Quest complete: {quest['name']}.{suffix}", event_type="quest"))
+    events += fire_triggers(database, user, "quest_complete", [quest_id])
     return events + _finish_ready_quests(database, user)
 
 
 class _ConditionContext:
     """Lazy character/world facts that dialogue and quest conditions read."""
 
-    def __init__(self, database, user_id, npc_id=None, dungeon=False):
+    def __init__(self, database, user_id, npc_id=None, dungeon=False, realm=None):
         self.database, self.user_id = database, user_id
         self.npc_id, self.dungeon = npc_id, dungeon
+        self.realm = realm
         self.response_id = None
         self._row = self._origin = self._counts = self._skills = self._state = None
 
@@ -2761,9 +2788,24 @@ class _ConditionContext:
             (self._character()["id"], self.response_id),
         ).fetchone() is not None
 
+    def flag(self, scope, key):
+        if self.realm is None:
+            self.realm = _script_realm(self.database, self.user_id)
+        scope_key = "" if scope == "world" else self._character()["id"]
+        return _script_flag(self.database, self.realm, scope_key, key)
+
+    def object_state(self, object_id):
+        return _object_state(self.database, object_id)
+
+    def room_id(self):
+        return _current_room(self.database, self.user_id)["id"]
+
 
 def _describe_item(database, row, user_id=None):
     body = f"{row['name']}\n{row['description']}\nType: {row['item_type']}"
+    state = _object_state_text(database, row)
+    if state:
+        body += f"\n{state}"
     if row["definition_slot"]:
         body += f"\nEquipment slot: {row['definition_slot'].replace('_', ' ')}"
         try:
@@ -2851,7 +2893,7 @@ def _examine_exit(database, _user, room, target):
         return "Traditional World\nReturns to your last traditional-world location."
     if room["id"] != PORTAL_ROOM_ID and modes["procedural"] and room["id"] == _start_room(database)["id"] and target.casefold() in {"portals", "dungeon portals"}:
         return "Dungeon Portals\nLeads to the protected procedural hub."
-    exits = _room_exits(database, room["id"], room.get("instance_id"))
+    exits = _room_exits(database, room["id"], room.get("instance_id"), _user["id"])
     matches = [entry for entry in exits if target.casefold() in {
         entry["id"].casefold(), entry["name"].casefold(),
         (entry["direction"] or "").casefold()}]
@@ -2859,6 +2901,8 @@ def _examine_exit(database, _user, room, target):
         raise ActionError("More than one exit matches. Use its full name.")
     if matches:
         item = matches[0]
+        if _exit_sealed(item):
+            return f"{item['name']}\nLeads to {item['destination_name']}. Sealed; something else must open it."
         if _exit_locked(item):
             character = _character_row(database, _user["id"])
             unlocked = database.execute("SELECT 1 FROM mud_exit_unlocks WHERE character_id=? AND exit_id=?",
@@ -3010,6 +3054,10 @@ def _encounter_reward_drafts(database, encounter, npc):
                                              "defeat_npc", npc["definition_id"]):
             drafts.append(EventDraft(event.body, event.event_type, "private",
                                      str(participant["user_id"]), (participant["user_id"],)))
+        drafts += fire_triggers(
+            database, {"id": participant["user_id"]}, "defeat_npc",
+            [npc["id"] if "id" in npc.keys() else None, npc["definition_id"]],
+            instance_id=encounter["scope_key"] if encounter["scope_type"] == "instance" else None)
     return drafts
 
 
@@ -3659,15 +3707,16 @@ def _flee_action(database, user, _parameters):
                              chosen["to_room_id"], instance_id)
         _record_expedition_visit(database, instance_id, user["id"], chosen["to_room_id"])
         drafts.append(EventDraft(f"You flee {chosen['direction']}.", event_type="movement"))
-        return drafts + [_room_entry_event(database, user)] + _entry_attack(database, user)
-    exits = _room_exits(database, room["id"])
+        return drafts + [_room_entry_event(database, user)] + _entry_triggers(database, user) + \
+            _entry_attack(database, user)
+    exits = _room_exits(database, room["id"], viewer_id=user["id"])
     if not exits:
         return drafts
     chosen = exits[0]
     _leave_combat(database, user["id"], "room", room["id"])
     _set_player_location(database, user["id"], "traditional", "world_room", chosen["to_room_id"])
     return drafts + [EventDraft(f"You flee {chosen['direction']}.", event_type="movement"),
-                     _room_entry_event(database, user)] + \
+                     _room_entry_event(database, user)] + _entry_triggers(database, user) + \
         _entry_attack(database, user)
 
 
@@ -3892,6 +3941,8 @@ def _get_action(database, user, parameters):
     if container and not container["is_open"]:
         raise ActionError("Open that container first.")
     item = _item_matches(source, target)
+    if _json_properties(item["properties_json"]).get("fixed") is True:
+        raise ActionError(f"{item['name']} is fixed in place.")
     character = _character_row(database, user["id"])
     if isinstance(item, dict) and item.get("dungeon_content_id"):
         claimed = database.execute(
@@ -3920,7 +3971,9 @@ def _get_action(database, user, parameters):
                              (spawn["id"], due))
     return [EventDraft(f"You pick up {item['name']}.", event_type="item"),
             _room_item_event(database, user, room, f"{_character_row(database, user['id'])['display_name']} picks up {item['name']}.")] + \
-        _set_objective_progress(database, user, "possess_item", item["definition_id"])
+        _set_objective_progress(database, user, "possess_item", item["definition_id"]) + \
+        fire_triggers(database, user, "take_item", [item["id"], item["definition_id"]],
+                      instance_id=room.get("instance_id"))
 
 
 def _drop_action(database, user, parameters):
@@ -4045,7 +4098,32 @@ def _unequip_action(database, user, parameters):
 
 def _use_action(database, user, parameters):
     target = _item_target(parameters)
-    item = _item_matches(list(_inventory_rows(database, user["id"])) + list(_inventory_rows(database, user["id"], True)), target)
+    carried = list(_inventory_rows(database, user["id"])) + list(_inventory_rows(database, user["id"], True))
+    try:
+        item = _item_matches(carried, target)
+    except ActionError:
+        # /use also works on objects in the room, such as a lever or an altar.
+        room = _current_room(database, user["id"])
+        if target and (room.get("instance_id") or not room.get("system_managed")):
+            try:
+                _item_matches(_room_item_rows(database, room["id"], room.get("instance_id")), target)
+            except ActionError:
+                pass
+            else:
+                return _interact_action(database, user, {**parameters, "arguments": [":use", target]})
+        raise
+    room = _current_room(database, user["id"])
+    script = fire_triggers(database, user, "use_object", [item["id"], item["definition_id"]],
+                           instance_id=room.get("instance_id"))
+    try:
+        return _use_item_effect(database, user, item) + script
+    except ActionError:
+        if script:
+            return script
+        raise
+
+
+def _use_item_effect(database, user, item):
     properties = _json_properties(item["properties_json"])
     use_effects = properties.get("on_use_effects", [])
     if use_effects:
@@ -4336,6 +4414,14 @@ def _apply_dialogue_outcomes(database, user, response):
     if database.execute("SELECT 1 FROM mud_player_dialogue_claims WHERE character_id=? AND response_id=?",
                         (character["id"], response["id"])).fetchone():
         return []
+    return _settle_outcomes(database, user, outcomes, lambda: database.execute(
+        "INSERT OR IGNORE INTO mud_player_dialogue_claims(character_id,response_id) VALUES(?,?)",
+        (character["id"], response["id"])).rowcount > 0)
+
+
+def _settle_outcomes(database, user, outcomes, claim=None, event_type="dialogue"):
+    """Pay an outcome list's costs, then grant its rewards; claim() may veto first."""
+    character = _character_row(database, user["id"])
     # Check every cost before writing anything so a failed payment changes nothing.
     handed = []
     for outcome in outcomes:
@@ -4344,8 +4430,7 @@ def _apply_dialogue_outcomes(database, user, response):
     cost = sum(outcome["amount"] for outcome in outcomes if outcome["type"] == "take_coins")
     if cost > _wallet(database, character["id"]):
         raise ActionError(f"You need {cost} coins for that.")
-    if database.execute("INSERT OR IGNORE INTO mud_player_dialogue_claims(character_id,response_id) VALUES(?,?)",
-                        (character["id"], response["id"])).rowcount == 0:
+    if claim is not None and not claim():
         return []
     events = []
     if handed:
@@ -4353,11 +4438,11 @@ def _apply_dialogue_outcomes(database, user, response):
             database.execute("DELETE FROM mud_item_instances WHERE id=? AND owner_character_id=?",
                              (item["id"], character["id"]))
         events.append(EventDraft("You hand over " + ", ".join(item["name"] for item in handed) + ".",
-                                 event_type="dialogue"))
+                                 event_type=event_type))
     if cost:
         database.execute("UPDATE mud_character_wallets SET coins=coins-? WHERE character_id=?",
                          (cost, character["id"]))
-        events.append(EventDraft(f"You pay {cost} coins.", event_type="dialogue"))
+        events.append(EventDraft(f"You pay {cost} coins.", event_type=event_type))
     kinds = {"give_item": "item", "experience": "experience", "coins": "coins"}
     received = _grant_rewards(database, user, [
         {"reward_type": kinds[outcome["type"]], "target_id": outcome.get("item"), "amount": outcome["amount"]}
@@ -4433,6 +4518,8 @@ def _respond_action(database, user, parameters):
         events += _deliver_quest_item(database, user, matching_items[0], session_row["definition_id"])
     if chosen["turn_in_quest_id"] and not dungeon_session:
         events += _turn_in_quest(database, user, chosen["turn_in_quest_id"], session_row["definition_id"])
+    if not dungeon_session:
+        events += fire_triggers(database, user, "dialogue_choice", [chosen["id"]])
     if chosen["next_node_id"]:
         session_table = ("mud_dungeon_conversation_sessions" if dungeon_session
                          else "mud_conversation_sessions")
@@ -4611,7 +4698,7 @@ def _transition_location(database, user, destination_mode, destination_type,
             audience_type="room", audience_key=new_room["id"],
             recipient_ids=new_recipients,
         ),
-    ]
+    ] + _entry_triggers(database, user)
 
 
 def _portal_action(database, user, parameters):
@@ -4714,7 +4801,7 @@ def _enter_expedition(database, user, instance_id, room_key):
         database, user["id"], _run_mode(database, instance_id), "dungeon_instance", room_key, instance_id
     )
     _record_expedition_visit(database, instance_id, user["id"], room_key)
-    return _entry_attack(database, user)
+    return _entry_triggers(database, user) + _entry_attack(database, user)
 
 
 def _installed_expedition_themes(database, strict=False):
@@ -5462,10 +5549,12 @@ def _locked_exit(database, user, parameters, usage):
     room = _current_room(database, user["id"])
     if room.get("instance_id"):
         raise ActionError("There are no locked exits here.")
-    matches = [row for row in _room_exits(database, room["id"]) if target.casefold() in
+    matches = [row for row in _room_exits(database, room["id"], viewer_id=user["id"]) if target.casefold() in
                {row["id"].casefold(), row["name"].casefold(), (row["direction"] or "").casefold()}]
     if len(matches) != 1:
         raise ActionError("Choose a nearby exit by name or direction.")
+    if _exit_sealed(matches[0]):
+        raise ActionError(f"{matches[0]['name']} is sealed. No key or pick will open it.")
     return room, matches[0]
 
 
@@ -5530,12 +5619,12 @@ def _go_action(database, user, parameters):
     if _active_hostiles(database, room, user["id"]) and not _is_hidden(database, user["id"]):
         raise ActionError("A hostile enemy blocks your route. Fight or attempt to flee.", 409)
     if exit_id:
-        matches = [item for item in _room_exits(database, room["id"], instance_id)
+        matches = [item for item in _room_exits(database, room["id"], instance_id, user["id"])
                    if item["id"] == exit_id]
     elif destination:
         key = " ".join(destination.casefold().split())
         matches = [
-            item for item in _room_exits(database, room["id"], instance_id)
+            item for item in _room_exits(database, room["id"], instance_id, user["id"])
             if key in {
                 " ".join(item["name"].casefold().split()),
                 " ".join((item["direction"] or "").casefold().split()),
@@ -5554,6 +5643,8 @@ def _go_action(database, user, parameters):
     chosen = matches[0]
     if not instance_id and not _exit_open_to(database, user["id"], chosen):
         raise ActionError(_exit_barred_message(chosen))
+    if not instance_id and _exit_sealed(chosen):
+        raise ActionError(f"{chosen['name']} is sealed. Something else must open it.")
     if not instance_id and _exit_locked(chosen):
         unlocked = database.execute("SELECT 1 FROM mud_exit_unlocks WHERE character_id=? AND exit_id=?",
                                     (_character_row(database, user["id"])["id"], chosen["id"])).fetchone()
@@ -5596,6 +5687,7 @@ def _go_action(database, user, parameters):
     ]
     if not instance_id:
         events += _set_objective_progress(database, user, "visit_room", destination_room["id"])
+    events += _entry_triggers(database, user)
     return events + _entry_attack(database, user)
 
 
@@ -5619,12 +5711,14 @@ def _say_action(database, user, parameters):
     recipients.add(user["id"])
     character = character_state(database, user["id"])
     _set_hidden(database, user["id"], False)
+    source = (f"role:{room['role']}", f"room_template:{room.get('room_template_id')}") if instance_id else (room["id"],)
     return [EventDraft(
         f"{character['name']}: {body}", event_type="chat",
         audience_type="instance" if instance_id else "room",
         audience_key=instance_id or room["id"],
         recipient_ids=tuple(sorted(recipients)),
-    )]
+    )] + (fire_triggers(database, user, "say_phrase", source, instance_id=instance_id, phrase=body)
+          if room["id"] != PORTAL_ROOM_ID else [])
 
 
 def _emote_action(database, user, parameters):
@@ -5742,6 +5836,529 @@ def _unblock_action(database, user, parameters):
     return [EventDraft(f"Unblocked {name}.", event_type="social")]
 
 
+# Authored triggers ---------------------------------------------------------
+# A trigger reacts to one game event (see mud_triggers). Triggers that run
+# other triggers, teleport players into rooms with their own triggers, or
+# finish quests all share one chain, so a single action stays bounded.
+
+_TRIGGER_CHAIN = contextvars.ContextVar("mud_trigger_chain", default=None)
+_DUNGEON_TRIGGERS = {}
+INTERACT_VERBS = {"interact": "interacts with", "use": "uses", "push": "pushes", "pull": "pulls",
+                  "press": "presses", "touch": "touches", "activate": "activates", "turn": "turns"}
+
+
+def _active_world(database):
+    row = database.execute("SELECT id FROM mud_world_packages WHERE active=1").fetchone()
+    return row["id"] if row else ""
+
+
+def _script_realm(database, user_id=None):
+    """A dungeon run keeps its own script state; everywhere else uses the active world's."""
+    if user_id is not None:
+        location = database.execute(
+            "SELECT location_type,instance_id FROM mud_player_locations WHERE user_id=?", (user_id,),
+        ).fetchone()
+        if location is not None and location["location_type"] == "dungeon_instance" and location["instance_id"]:
+            return location["instance_id"]
+    return _active_world(database)
+
+
+def _script_flag(database, realm, scope_key, key):
+    row = database.execute("SELECT value FROM mud_script_flags WHERE realm=? AND scope_key=? AND key=?",
+                           (realm, scope_key, key)).fetchone()
+    return row["value"] if row else ""
+
+
+def _store_script_flag(database, realm, scope_key, key, value):
+    if value == "":
+        database.execute("DELETE FROM mud_script_flags WHERE realm=? AND scope_key=? AND key=?",
+                         (realm, scope_key, key))
+        return
+    database.execute(
+        "INSERT INTO mud_script_flags(realm,scope_key,key,value) VALUES(?,?,?,?) "
+        "ON CONFLICT(realm,scope_key,key) DO UPDATE SET value=excluded.value,updated_at=CURRENT_TIMESTAMP",
+        (realm, scope_key, key, value))
+
+
+def _store_entity_state(database, realm, entity_type, entity_id, state, scope_key=""):
+    """Override an authored exit, NPC, or object; a blank state restores the authored one."""
+    if not state:
+        database.execute("DELETE FROM mud_script_entity_states WHERE entity_type=? AND entity_id=? "
+                         "AND scope_key=?", (entity_type, entity_id, scope_key))
+        return
+    database.execute(
+        "INSERT INTO mud_script_entity_states(realm,entity_type,entity_id,scope_key,state) VALUES(?,?,?,?,?) "
+        "ON CONFLICT(entity_type,entity_id,scope_key) DO UPDATE SET state=excluded.state,"
+        "realm=excluded.realm,updated_at=CURRENT_TIMESTAMP",
+        (realm, entity_type, entity_id, scope_key, state))
+
+
+def _script_visible(database, entity_type, rows):
+    """Drop placed NPCs or items that are hidden, by authored state_json or by a trigger."""
+    rows = list(rows)
+    if not rows:
+        return rows
+    states = {row["entity_id"]: row["state"] for row in database.execute(
+        f"SELECT entity_id,state FROM mud_script_entity_states WHERE entity_type=? AND scope_key='' "
+        f"AND entity_id IN ({','.join('?' for _ in rows)})", (entity_type, *(row["id"] for row in rows)))}
+    return [row for row in rows if states.get(
+        row["id"], "hidden" if _json_properties(row["state_json"]).get("hidden") is True else "shown") != "hidden"]
+
+
+def _object_state(database, object_id):
+    row = database.execute("SELECT state FROM mud_script_entity_states WHERE entity_type='object' "
+                           "AND entity_id=? AND scope_key=''", (object_id,)).fetchone()
+    if row is not None:
+        return row["state"]
+    item = database.execute("SELECT state_json FROM mud_item_instances WHERE id=?", (object_id,)).fetchone()
+    state = _json_properties(item["state_json"]).get("state", "") if item else ""
+    return state if isinstance(state, str) else ""
+
+
+def _object_state_text(database, item):
+    """The authored line describing an object's current state, such as 'The lever is down.'"""
+    descriptions = _json_properties(item["properties_json"]).get("state_descriptions")
+    if not isinstance(descriptions, dict):
+        return ""
+    text = descriptions.get(_object_state(database, item["id"]))
+    return text.strip() if isinstance(text, str) else ""
+
+
+def _load_triggers(rows):
+    triggers = []
+    for row in rows:
+        try:
+            trigger = json.loads(row["definition_json"])
+        except (TypeError, json.JSONDecodeError):
+            continue  # Malformed stored rules stay inert.
+        triggers.append({**trigger, "id": row["id"]})
+    return triggers
+
+
+def _world_triggers(database, event, source_ids=(), trigger_id=None):
+    world_id = _active_world(database)
+    if trigger_id is not None:
+        return _load_triggers(database.execute(
+            "SELECT id,definition_json FROM mud_world_triggers WHERE id=? AND world_id=? AND enabled=1 "
+            "AND event=?", (trigger_id, world_id, event)))
+    source_ids = list(source_ids)
+    return _load_triggers(database.execute(
+        "SELECT id,definition_json FROM mud_world_triggers WHERE world_id=? AND event=? AND enabled=1 "
+        f"AND source_id IN ({','.join('?' for _ in source_ids)}) ORDER BY rowid",
+        (world_id, event, *source_ids)))
+
+
+def _dungeon_trigger_list(database, instance_id):
+    """A run's triggers, resolved from its template's local names to engine IDs."""
+    row = database.execute(
+        "SELECT v.template_json,v.template_hash FROM mud_procedural_instances AS i "
+        "JOIN mud_dungeon_template_versions AS v ON v.theme_id=i.theme_id AND v.version=i.theme_version "
+        "WHERE i.id=?", (instance_id,)).fetchone()
+    if row is None:
+        return []
+    if row["template_hash"] not in _DUNGEON_TRIGGERS:
+        template = json.loads(row["template_json"])
+        try:
+            raw = mud_triggers.validate_list(template.get("triggers"), dungeon=True)
+        except ValueError:
+            raw = []
+        definitions = template.get("definitions") if isinstance(template.get("definitions"), dict) else {}
+        local = {kind: {entry.get("id") for entry in definitions.get(kind, []) if isinstance(entry, dict)}
+                 for kind in ("items", "npcs", "enemies")}
+        prefix = f"dungeon:{template['id']}@{template['version']}:trigger:"
+
+        def resolve(kind, ref):
+            if kind == "item" and ref in local["items"]:
+                return dungeons.local_definition_id(template, "items", ref)
+            if kind == "npc" and ref in local["npcs"] | local["enemies"]:
+                return dungeons.local_definition_id(template, "npcs", ref)
+            if kind == "trigger":
+                return prefix + ref
+            if kind == "room_role":
+                return f"role:{ref}"
+            if kind == "room_template":
+                return f"room_template:{ref}"
+            return ref
+
+        resolved = []
+        for trigger in raw:
+            trigger = mud_triggers.remap(trigger, resolve)
+            trigger["id"] = prefix + trigger["id"]
+            trigger["source_id"] = next(iter(trigger["source"].values()), None)
+            resolved.append(trigger)
+        _DUNGEON_TRIGGERS[row["template_hash"]] = resolved
+    return _DUNGEON_TRIGGERS[row["template_hash"]]
+
+
+def _dungeon_triggers(database, instance_id, event, source_ids=(), trigger_id=None):
+    return [trigger for trigger in _dungeon_trigger_list(database, instance_id)
+            if trigger["event"] == event and trigger.get("enabled", True)
+            and (trigger["id"] == trigger_id if trigger_id is not None else trigger["source_id"] in source_ids)]
+
+
+def fire_triggers(database, user, event, source_ids, *, instance_id=None, phrase=None):
+    """Run every enabled trigger for this event and source; return the drafts they produce."""
+    source_ids = [value for value in source_ids if value]
+    if not source_ids:
+        return []
+    triggers = (_dungeon_triggers(database, instance_id, event, source_ids) if instance_id
+                else _world_triggers(database, event, source_ids))
+    if phrase is not None:
+        key = mud_triggers.phrase_key(phrase)
+        triggers = [trigger for trigger in triggers if trigger.get("phrase") == key]
+    drafts = []
+    for trigger in triggers:
+        drafts += _run_trigger(database, user, trigger, instance_id)
+    return drafts
+
+
+def _entry_triggers(database, user):
+    room = _current_room(database, user["id"])
+    if room["id"] in (PORTAL_ROOM_ID, "stationnet:death-summary"):
+        return []
+    instance_id = room.get("instance_id")
+    sources = ([f"role:{room['role']}", f"room_template:{room.get('room_template_id')}"] if instance_id
+               else [room["id"]])
+    return fire_triggers(database, user, "enter_room", sources, instance_id=instance_id)
+
+
+def _private(user_id, text, event_type="world"):
+    return EventDraft(text, event_type, "private", str(user_id), (user_id,))
+
+
+def _trigger_costs_problem(database, user, trigger):
+    """Why the player cannot pay a trigger's immediate costs, or None. Nothing is written."""
+    items, coins = {}, 0
+    for action in trigger["actions"]:
+        if action.get("delay_seconds"):
+            continue
+        if action["type"] == "take_item":
+            items[action["item"]] = items.get(action["item"], 0) + action["amount"]
+        elif action["type"] == "take_coins":
+            coins += action["amount"]
+    try:
+        for definition_id, amount in items.items():
+            _handover_items(database, user, definition_id, amount)
+    except ActionError as problem:
+        return str(problem)
+    if coins and coins > _wallet(database, _character_row(database, user["id"])["id"]):
+        return f"You need {coins} coins for that."
+    return None
+
+
+def _claim_trigger_fire(database, realm, trigger, scope_key):
+    """Count one firing unless once, max_fires, or the cooldown forbid it.
+
+    Actions run inside one write transaction, so two players can never both
+    claim a world-once trigger.
+    """
+    row = database.execute("SELECT fires,last_fired_at FROM mud_trigger_fires WHERE realm=? AND trigger_id=? "
+                           "AND scope_key=?", (realm, trigger["id"], scope_key)).fetchone()
+    fires = row["fires"] if row else 0
+    if trigger.get("once") and fires or trigger.get("max_fires") and fires >= trigger["max_fires"]:
+        return False
+    if row and trigger.get("cooldown_seconds") and row["last_fired_at"] > _timestamp_before(trigger["cooldown_seconds"]):
+        return False
+    database.execute(
+        "INSERT INTO mud_trigger_fires(realm,trigger_id,scope_key,fires,last_fired_at) VALUES(?,?,?,1,?) "
+        "ON CONFLICT(realm,trigger_id,scope_key) DO UPDATE SET fires=fires+1,last_fired_at=excluded.last_fired_at",
+        (realm, trigger["id"], scope_key, _scheduled_now()))
+    return True
+
+
+def _run_trigger(database, user, trigger, instance_id=None):
+    chain = _TRIGGER_CHAIN.get()
+    token = None
+    if chain is None:
+        chain = {"depth": 0, "actions": 0, "fired": set()}
+        token = _TRIGGER_CHAIN.set(chain)
+    try:
+        if trigger["id"] in chain["fired"] or chain["depth"] >= mud_triggers.MAX_CHAIN_DEPTH:
+            return []
+        user_id = user["id"] if user else None
+        realm = instance_id or _active_world(database)
+        try:
+            passed = mud_conditions.evaluate(trigger["conditions"], _ConditionContext(database, user_id, realm=realm))
+        except (ActionError, KeyError, TypeError):
+            passed = False
+        if not passed:
+            return [_private(user_id, trigger["fail_message"])] if user and trigger.get("fail_message") else []
+        problem = _trigger_costs_problem(database, user, trigger) if user else None
+        if problem:
+            return [_private(user_id, trigger.get("fail_message") or problem)]
+        scope_key = _character_row(database, user_id)["id"] if user and trigger["scope"] == "character" else ""
+        if not _claim_trigger_fire(database, realm, trigger, scope_key):
+            return []
+        chain["fired"].add(trigger["id"])
+        chain["depth"] += 1
+        drafts = []
+        try:
+            for index, action in enumerate(trigger["actions"]):
+                if chain["actions"] >= mud_triggers.MAX_CHAIN_ACTIONS:
+                    break
+                chain["actions"] += 1
+                if action.get("delay_seconds"):
+                    _schedule_trigger_action(database, trigger, index, user_id, realm, instance_id, chain["depth"])
+                else:
+                    drafts += _trigger_action(database, user, trigger, index, realm, instance_id)
+        finally:
+            chain["depth"] -= 1
+        return _addressed(drafts, user_id) if user else drafts
+    finally:
+        if token is not None:
+            _TRIGGER_CHAIN.reset(token)
+
+
+def _schedule_trigger_action(database, trigger, index, user_id, realm, instance_id, depth):
+    """Persist a delayed action; at most a few per trigger may wait at once."""
+    prefix = f"{trigger['id']}#"
+    pending = database.execute(
+        "SELECT COUNT(*) FROM mud_scheduled_events WHERE event_kind='trigger_action' AND substr(entity_id,1,?)=?",
+        (len(prefix), prefix)).fetchone()[0]
+    if pending >= mud_triggers.MAX_PENDING_DELAYS:
+        return
+    action = trigger["actions"][index]
+    due = _scheduled_now(datetime.now(timezone.utc) + timedelta(seconds=action["delay_seconds"]))
+    payload = {"trigger": {"id": trigger["id"], "source": trigger["source"], "actions": trigger["actions"]},
+               "index": index, "user_id": user_id, "realm": realm, "instance_id": instance_id, "depth": depth}
+    database.execute(
+        "INSERT INTO mud_scheduled_events(event_kind,entity_id,due_at,payload_json) VALUES('trigger_action',?,?,?)",
+        (prefix + uuid.uuid4().hex, due, json.dumps(payload, separators=(",", ":"))))
+
+
+def _trigger_room(database, user, trigger):
+    """The room an event happened in: the player's, or a timer's own room."""
+    if user is not None:
+        return _current_room(database, user["id"])
+    room = database.execute("SELECT id,name,description FROM mud_world_rooms WHERE id=?",
+                            (trigger["source"].get("room"),)).fetchone()
+    return dict(room) if room else None
+
+
+def _trigger_action(database, user, trigger, index, realm, instance_id=None):
+    """Apply one action. A failed action tells the player why and the rest still run."""
+    action = trigger["actions"][index]
+    kind = action["type"]
+    user_id = user["id"] if user else None
+    if user is None and mud_triggers.actor_required(action):
+        return []
+    try:
+        if kind == "message":
+            if action["to"] == "actor":
+                return [_private(user_id, action["text"])]
+            if action["to"] == "other_room":
+                room_id, room_instance = action["room"], None
+            else:
+                room = _trigger_room(database, user, trigger)
+                if room is None:
+                    return []
+                room_id, room_instance = room["id"], room.get("instance_id")
+            recipients = set(_occupant_ids(database, room_id, instance_id=room_instance))
+            if user and action["to"] == "room":
+                recipients.add(user_id)
+            if not recipients:
+                return []
+            return [EventDraft(action["text"], "world", "instance" if room_instance else "room",
+                               room_instance or room_id, tuple(sorted(recipients)))]
+        if kind in ("set_flag", "clear_flag"):
+            scope_key = "" if action["scope"] == "world" else _character_row(database, user_id)["id"]
+            value = action.get("value", "")
+            if "add" in action:
+                current = mud_conditions.flag_number(_script_flag(database, realm, scope_key, action["key"]))
+                value = str(max(-1_000_000_000, min(1_000_000_000, current + action["add"])))
+            _store_script_flag(database, realm, scope_key, action["key"], value)
+            return []
+        if kind in mud_triggers.OUTCOME_ACTIONS:
+            outcome = {"type": kind, **{key: action[key] for key in ("item", "amount") if key in action}}
+            return _settle_outcomes(database, user, [outcome], event_type="world")
+        if kind in ("heal", "damage"):
+            character = _character_row(database, user_id)
+            amount = (min(action["amount"], character["maximum_health"] - character["current_health"]) if kind == "heal"
+                      else min(action["amount"], character["current_health"] - 1))
+            if amount <= 0:
+                return []
+            database.execute(
+                "UPDATE mud_character_progression SET current_health=current_health+?,updated_at=CURRENT_TIMESTAMP "
+                "WHERE character_id=? AND track_key=?",
+                (amount if kind == "heal" else -amount, character["id"], character["track_key"]))
+            return [_private(user_id, f"You recover {amount} health." if kind == "heal" else f"You take {amount} damage.",
+                             "combat")]
+        if kind == "set_object_state":
+            _store_entity_state(database, realm, "object", action["object"], action["state"])
+            return []
+        if kind == "set_exit":
+            scope_key = _character_row(database, user_id)["id"] if action["scope"] == "character" else ""
+            _store_entity_state(database, realm, "exit", action["exit"],
+                                "" if action["state"] == "default" else action["state"], scope_key)
+            return []
+        if kind in ("show", "hide"):
+            entity_type, entity_id = (("npc", action["npc_instance"]) if "npc_instance" in action
+                                      else ("item", action["object"]))
+            _store_entity_state(database, realm, entity_type, entity_id, "shown" if kind == "show" else "hidden")
+            return []
+        if kind == "spawn_npc":
+            return _trigger_spawn(database, trigger, index, action)
+        if kind == "teleport":
+            return _trigger_teleport(database, user, action["room"])
+        if kind == "start_quest":
+            return _accept_quest(database, user, action["quest"])
+        if kind == "complete_objective":
+            objective = database.execute("SELECT objective_type,target_id FROM mud_quest_objectives WHERE id=?",
+                                         (action["objective"],)).fetchone()
+            if objective is None:
+                return []
+            return _set_objective_progress(database, user, objective["objective_type"], objective["target_id"],
+                                           action["objective"])
+        if kind == "run_trigger":
+            targets = (_dungeon_triggers(database, instance_id, "manual", trigger_id=action["trigger"]) if instance_id
+                       else _world_triggers(database, "manual", trigger_id=action["trigger"]))
+            return [draft for target in targets for draft in _run_trigger(database, user, target, instance_id)]
+    except ActionError as problem:
+        return [_private(user_id, str(problem))] if user else []
+    return []
+
+
+def _trigger_spawn(database, trigger, index, action):
+    """Place a temporary NPC; it despawns on a timer and never respawns once defeated."""
+    source = f"{trigger['id']}#{index}"
+    definition = database.execute("SELECT name FROM mud_npc_definitions WHERE id=?", (action["npc"],)).fetchone()
+    room = database.execute("SELECT id FROM mud_world_rooms WHERE id=? AND world_id=?",
+                            (action["room"], _active_world(database))).fetchone()
+    if definition is None or room is None or database.execute(
+            "SELECT COUNT(*) FROM mud_npc_instances WHERE spawned_by_trigger=?", (source,)
+    ).fetchone()[0] >= action["max_live"]:
+        return []
+    instance_id = f"world:spawn:{uuid.uuid4().hex}"
+    database.execute("INSERT INTO mud_npc_instances(id,definition_id,room_id,spawned_by_trigger) VALUES(?,?,?,?)",
+                     (instance_id, action["npc"], room["id"], source))
+    database.execute("INSERT INTO mud_scheduled_events(event_kind,entity_id,due_at) VALUES('npc_despawn',?,?)",
+                     (instance_id, _scheduled_now(datetime.now(timezone.utc)
+                                                  + timedelta(seconds=action["despawn_seconds"]))))
+    recipients = _occupant_ids(database, room["id"])
+    return [EventDraft(f"{definition['name']} appears.", "npc", "room", room["id"], recipients)] if recipients else []
+
+
+def _trigger_teleport(database, user, room_id):
+    """Move a player between rooms of the active world, as if they had walked in."""
+    current = _current_room(database, user["id"])
+    destination = database.execute("SELECT id FROM mud_world_rooms WHERE id=? AND world_id=?",
+                                   (room_id, _active_world(database))).fetchone()
+    if destination is None or current.get("system_managed") or current["id"] == room_id:
+        return []
+    name = character_state(database, user["id"])["name"]
+    old_recipients = _occupant_ids(database, current["id"], user["id"])
+    _leave_combat(database, user["id"], "room", current["id"])
+    _set_player_location(database, user["id"], "traditional", "world_room", room_id)
+    drafts = [_room_entry_event(database, user),
+              EventDraft(f"{name} vanishes.", "departure", "room", current["id"], old_recipients),
+              EventDraft(f"{name} appears.", "arrival", "room", room_id,
+                         _occupant_ids(database, room_id, user["id"]))]
+    drafts += _set_objective_progress(database, user, "visit_room", room_id)
+    return drafts + _entry_triggers(database, user)
+
+
+def _process_trigger_event(database, event):
+    """Run a delayed trigger action or a repeating timer; returns drafts to deliver."""
+    if event["event_kind"] == "trigger_timer":
+        triggers = _world_triggers(database, "timer", trigger_id=event["entity_id"])
+        return [draft for trigger in triggers for draft in _run_trigger(database, None, trigger)]
+    database.execute("DELETE FROM mud_scheduled_events WHERE id=?", (event["id"],))
+    payload = _json_properties(event["payload_json"])
+    trigger, index = payload.get("trigger"), payload.get("index")
+    if (not isinstance(trigger, dict) or not isinstance(trigger.get("actions"), list) or type(index) is not int
+            or not 0 <= index < len(trigger["actions"]) or not payload.get("realm")):
+        return []
+    user = None
+    if payload.get("user_id") is not None:
+        user = database.execute("SELECT * FROM users WHERE id=?", (payload["user_id"],)).fetchone()
+        # A player who left the world or the run no longer receives its delayed effects.
+        if user is None or _script_realm(database, user["id"]) != payload.get("realm"):
+            return []
+    elif payload.get("realm") != _active_world(database):
+        return []
+    token = _TRIGGER_CHAIN.set({"depth": payload.get("depth", 1), "actions": 0, "fired": set()})
+    try:
+        drafts = _trigger_action(database, user, trigger, index, payload["realm"], payload.get("instance_id"))
+    finally:
+        _TRIGGER_CHAIN.reset(token)
+    return _addressed(drafts, user["id"]) if user else drafts
+
+
+def sync_trigger_schedule(database, now=None):
+    """Reconcile repeating timer triggers with the active world's enabled timers."""
+    active = {}
+    for trigger in _load_triggers(database.execute(
+            "SELECT id,definition_json FROM mud_world_triggers WHERE world_id=? AND event='timer' AND enabled=1",
+            (_active_world(database),))):
+        interval = trigger.get("interval_seconds")
+        if type(interval) is not int or interval < 30:
+            continue
+        active[trigger["id"]] = interval
+        due = _scheduled_now((now or datetime.now(timezone.utc)) + timedelta(seconds=interval))
+        database.execute(
+            "INSERT INTO mud_scheduled_events(event_kind,entity_id,due_at,interval_seconds) VALUES('trigger_timer',?,?,?) "
+            "ON CONFLICT(event_kind,entity_id) DO UPDATE SET "
+            "due_at=CASE WHEN interval_seconds<>excluded.interval_seconds THEN excluded.due_at ELSE due_at END,"
+            "interval_seconds=excluded.interval_seconds", (trigger["id"], due, interval))
+    for row in database.execute("SELECT entity_id FROM mud_scheduled_events WHERE event_kind='trigger_timer'").fetchall():
+        if row["entity_id"] not in active:
+            database.execute("DELETE FROM mud_scheduled_events WHERE event_kind='trigger_timer' AND entity_id=?",
+                             (row["entity_id"],))
+
+
+def _despawn_npc(database, event, now=None):
+    npc = database.execute(
+        "SELECT i.id,i.room_id,d.name FROM mud_npc_instances i JOIN mud_npc_definitions d ON d.id=i.definition_id "
+        "WHERE i.id=? AND i.spawned_by_trigger IS NOT NULL", (event["entity_id"],)).fetchone()
+    if npc is not None and database.execute(
+            "SELECT 1 FROM mud_combat_encounters WHERE npc_instance_id=? AND status='active'", (npc["id"],)).fetchone():
+        # Never pull an enemy out of a fight; try again shortly.
+        database.execute("UPDATE mud_scheduled_events SET due_at=? WHERE id=?",
+                         (_scheduled_now((now or datetime.now(timezone.utc)) + timedelta(seconds=60)), event["id"]))
+        return
+    database.execute("DELETE FROM mud_scheduled_events WHERE id=?", (event["id"],))
+    if npc is None:
+        return
+    recipients = _occupant_ids(database, npc["room_id"])
+    database.execute("DELETE FROM mud_npc_instances WHERE id=?", (npc["id"],))
+    if recipients:
+        _insert_event(database, EventDraft(f"{npc['name']} departs.", "npc", "room", npc["room_id"], recipients))
+
+
+def reset_script_state(database, realm):
+    """Forget a world's flags, trigger counts, overrides, spawns, and pending delays."""
+    for table in ("mud_script_flags", "mud_trigger_fires", "mud_script_entity_states"):
+        database.execute(f"DELETE FROM {table} WHERE realm=?", (realm,))
+    database.execute("DELETE FROM mud_npc_instances WHERE spawned_by_trigger IS NOT NULL AND room_id IN "
+                     "(SELECT id FROM mud_world_rooms WHERE world_id=?)", (realm,))
+    database.execute("DELETE FROM mud_scheduled_events WHERE event_kind='trigger_action' "
+                     "AND json_extract(payload_json,'$.realm')=?", (realm,))
+
+
+def _interact_action(database, user, parameters):
+    arguments = [str(value) for value in parameters.get("arguments", [])]
+    verb = "interact"
+    if arguments and arguments[0].startswith(":") and arguments[0][1:] in INTERACT_VERBS:
+        verb = arguments.pop(0)[1:]
+    target = str(parameters.get("item_id") or " ".join(arguments)).strip()
+    if not target:
+        raise ActionError(f"{verb.title()} what? Name an object in this room.")
+    room = _current_room(database, user["id"])
+    if room.get("system_managed") and not room.get("instance_id"):
+        raise ActionError("There is nothing here to interact with.")
+    instance_id = room.get("instance_id")
+    item = _item_matches(_room_item_rows(database, room["id"], instance_id), target)
+    name = _character_row(database, user["id"])["display_name"]
+    drafts = [_room_item_event(database, user, room, f"{name} {INTERACT_VERBS[verb]} {item['name']}.")]
+    script = fire_triggers(database, user, "use_object", [item["id"], item["definition_id"]],
+                           instance_id=instance_id)
+    if not script:
+        message = _json_properties(item["properties_json"]).get("use_message")
+        script = [EventDraft(message.strip() if isinstance(message, str) and message.strip()
+                             else "Nothing happens.", event_type="item")]
+    return drafts + script
+
+
 actions = ActionRegistry()
 actions.register(ActionDefinition(
     key="status", label="SYSTEM STATUS",
@@ -5810,7 +6427,8 @@ actions.register(ActionDefinition(key="close", label="CLOSE", description="Close
 actions.register(ActionDefinition(key="put", label="PUT AWAY", description="Put a carried item in an open container.", commands=("put",), handler=_put_action, group="ITEMS", show_context=False))
 actions.register(ActionDefinition(key="equip", label="EQUIP", description="Equip a carried item.", commands=("equip", "wear"), handler=_equip_action, group="ITEMS", show_context=False))
 actions.register(ActionDefinition(key="unequip", label="UNEQUIP", description="Remove equipped gear.", commands=("unequip", "remove"), handler=_unequip_action, group="ITEMS", show_context=False))
-actions.register(ActionDefinition(key="use", label="USE", description="Use a carried item.", commands=("use",), handler=_use_action, group="ITEMS", show_context=False))
+actions.register(ActionDefinition(key="use", label="USE", description="Use a carried item, or an object in this room.", commands=("use",), handler=_use_action, group="ITEMS", show_context=False))
+actions.register(ActionDefinition(key="interact", label="INTERACT", description="Work an object in this room; also /push, /pull, /press, /touch, /turn, or /activate <object>.", commands=("interact",), handler=_interact_action, group="ITEMS", show_context=False))
 actions.register(ActionDefinition(key="shop", label="SHOP", description="Browse, buy, or sell with a nearby merchant; the portal trader also serves the hub.", commands=("shop",), handler=_shop_action, group="HUB", show_context=False))
 actions.register(ActionDefinition(key="storage", label="PERSONAL STORAGE", description="Deposit or withdraw personal items in the portal room.", commands=("storage", "stash"), handler=_storage_action, group="HUB", show_context=False))
 actions.register(ActionDefinition(key="talk", label="TALK", description="Talk to a nearby NPC.", commands=("talk", "speak"), handler=_talk_action, group="NPCS", show_context=False))
@@ -5933,6 +6551,9 @@ for alias, direction in {
     "in": "in", "out": "out",
 }.items():
     actions.register_command(alias, actions.get("go"), (direction,))
+for verb in INTERACT_VERBS:
+    if verb not in ("interact", "use"):
+        actions.register_command(verb, actions.get("interact"), (f":{verb}",))
 
 
 def _insert_event(database, draft, default_user_id=None, action_id=None):
@@ -6132,10 +6753,21 @@ def process_scheduled_events(database, now=None, limit=50):
     stamp = _scheduled_now(now)
     rows = database.execute(
         "SELECT * FROM mud_scheduled_events WHERE due_at<=? "
-        "AND event_kind IN ('ambient','wander','patrol','room_message','item_respawn') ORDER BY due_at,id LIMIT ?",
+        "AND event_kind IN ('ambient','wander','patrol','room_message','item_respawn',"
+        "'trigger_action','trigger_timer','npc_despawn') ORDER BY due_at,id LIMIT ?",
         (stamp, min(50, max(1, limit))),
     ).fetchall()
     for event in rows:
+        if event["event_kind"] == "npc_despawn":
+            _despawn_npc(database, event, now)
+            continue
+        if event["event_kind"] in ("trigger_action", "trigger_timer"):
+            if event["event_kind"] == "trigger_timer":
+                next_due = _scheduled_now((now or datetime.now(timezone.utc)) + timedelta(seconds=event["interval_seconds"]))
+                database.execute("UPDATE mud_scheduled_events SET due_at=? WHERE id=?", (next_due, event["id"]))
+            for draft in _process_trigger_event(database, event):
+                _insert_event(database, draft)
+            continue
         if event["event_kind"] == "item_respawn":
             spawn = database.execute("SELECT * FROM mud_item_spawns WHERE id=?", (event["entity_id"],)).fetchone()
             if spawn and spawn["live_instance_id"] is None and database.execute(
@@ -6243,6 +6875,7 @@ def run_scheduled_tick(app, now=None):
         try:
             database.execute("BEGIN IMMEDIATE")
             sync_npc_schedule(database, now)
+            sync_trigger_schedule(database, now)
             count = process_scheduled_events(database, now)
             database.commit()
             return count
@@ -6341,10 +6974,13 @@ class MudService:
             if action_request.definition.key == "use":
                 use_room = _current_room(database, user["id"])
                 target = _item_target(action_request.parameters)
-                used_item = _item_matches(
-                    list(_inventory_rows(database, user["id"])) + list(_inventory_rows(database, user["id"], True)),
-                    target,
-                )["name"]
+                try:
+                    used_item = _item_matches(
+                        list(_inventory_rows(database, user["id"])) + list(_inventory_rows(database, user["id"], True)),
+                        target,
+                    )["name"]
+                except ActionError:
+                    used_item = None
             drafts = action_request.definition.handler(
                 database, user, action_request.parameters
             )
@@ -6773,7 +7409,8 @@ def _valid_exit_fields(database, exit_id=None):
     message = " ".join(request.form.get("conditions_message", "").split())
     if len(message) > 200:
         return None, "The barred-exit message cannot exceed 200 characters."
-    return (from_room_id, to_room_id, name, direction, key_item_id, pick_difficulty, conditions, message), None
+    hidden = int(request.form.get("hidden") == "1")
+    return (from_room_id, to_room_id, name, direction, key_item_id, pick_difficulty, conditions, message, hidden), None
 
 
 @bp.get("/builder")
@@ -6900,6 +7537,8 @@ def builder():
     for row in database.execute("SELECT * FROM mud_quest_givers"):
         givers_by_quest.setdefault(row["quest_id"], set()).add(row["npc_definition_id"])
     dungeon_context = _builder_dungeon_context(database)
+    trigger_context = _builder_trigger_context(database, rooms, exits_by_room, items_by_room, npcs_by_room,
+                                               nodes_by_conversation, responses_by_node, conversations)
     return render_template(
         "mud/builder.html", rooms=rooms, exits_by_room=exits_by_room,
         users=users, directions=DIRECTIONS, definitions=definitions, items_by_room=items_by_room,
@@ -6913,7 +7552,7 @@ def builder():
         skill_entries=[{**entry, "summary": mud_skills.describe_effects(entry["definition"])}
                        for entry in skill_entries],
         npc_trainers=npc_trainers, item_categories=item_categories,
-        resource=resource_settings(database), **dungeon_context,
+        resource=resource_settings(database), **dungeon_context, **trigger_context,
     )
 
 
@@ -7144,7 +7783,8 @@ def _builder_rules(database, field, validate):
         entries = validate(request.form.get(field, "").strip() or "[]")
     except ValueError as problem:
         return None, str(problem)
-    tables = {"item": "mud_item_definitions", "quest": "mud_quests", "objective": "mud_quest_objectives"}
+    tables = {"item": "mud_item_definitions", "quest": "mud_quests", "objective": "mud_quest_objectives",
+              "object": "mud_item_instances", "room": "mud_world_rooms"}
     origins = character_creation.catalog(database)
     known = {"race": {entry["key"] for entry in origins["races"]},
              "class": {entry["key"] for entry in origins["classes"]},
@@ -7518,7 +8158,9 @@ def builder_set_quest_givers(quest_id):
 def _quest_objective_fields(database):
     objective_type = request.form.get("objective_type", ""); target_id = request.form.get("target_id", "").strip(); description = request.form.get("description", "").strip(); required_count = request.form.get("required_count", 1, type=int)
     target_tables = {"talk_npc": "mud_npc_definitions", "visit_room": "mud_world_rooms", "possess_item": "mud_item_definitions", "defeat_npc": "mud_npc_definitions", "deliver_item": "mud_item_definitions"}
-    if objective_type not in target_tables or database.execute(f"SELECT 1 FROM {target_tables.get(objective_type, 'mud_quests')} WHERE id=?", (target_id,)).fetchone() is None: return None, "Choose a valid objective type and target."
+    if objective_type == "script":
+        target_id = "script"  # A trigger's complete_objective action names the objective itself.
+    elif objective_type not in target_tables or database.execute(f"SELECT 1 FROM {target_tables.get(objective_type, 'mud_quests')} WHERE id=?", (target_id,)).fetchone() is None: return None, "Choose a valid objective type and target."
     sort_order = request.form.get("sort_order", 0, type=int)
     if not 1 <= len(description) <= 500 or required_count is None or not 1 <= required_count <= 100 or sort_order is None or not -10000 <= sort_order <= 10000: return None, "Objective descriptions must be 1–500 characters, counts 1–100, and order valid."
     consume = int(request.form.get("consume_on_turn_in") == "1"); recipient = request.form.get("recipient_npc_definition_id", "").strip() or None
@@ -7815,7 +8457,7 @@ def builder_create_exit():
     exit_id = f"world:exit:{uuid.uuid4().hex}"
     database.execute(
         "INSERT INTO mud_world_exits(id,from_room_id,to_room_id,name,direction,key_item_id,pick_difficulty,"
-        "conditions_json,conditions_message) VALUES(?,?,?,?,?,?,?,?,?)", (exit_id, *fields),
+        "conditions_json,conditions_message,hidden) VALUES(?,?,?,?,?,?,?,?,?,?)", (exit_id, *fields),
     )
     database.commit()
     flash(f"Exit {fields[2]} created.", "success")
@@ -7840,7 +8482,7 @@ def builder_update_exit(exit_id):
         return _builder_redirect(existing["from_room_id"])
     database.execute(
         "UPDATE mud_world_exits SET from_room_id=?,to_room_id=?,name=?,direction=?,key_item_id=?,"
-        "pick_difficulty=?,conditions_json=?,conditions_message=? WHERE id=?",
+        "pick_difficulty=?,conditions_json=?,conditions_message=?,hidden=? WHERE id=?",
         (*fields, exit_id),
     )
     if (existing["key_item_id"] != fields[4] or existing["pick_difficulty"] != fields[5]
@@ -8120,6 +8762,211 @@ def builder_delete_entrance(entrance_id):
     database.commit()
     flash(f"Dungeon entrance {existing['name']} removed. Runs already in progress continue.", "success")
     return _builder_redirect(existing["room_id"])
+
+
+TRIGGER_REFERENCE_TABLES = {
+    "room": "mud_world_rooms", "object": "mud_item_instances", "item": "mud_item_definitions",
+    "npc": "mud_npc_definitions", "npc_instance": "mud_npc_instances", "response": "mud_dialogue_responses",
+    "quest": "mud_quests", "objective": "mud_quest_objectives", "exit": "mud_world_exits",
+}
+
+
+def _builder_trigger_context(database, rooms, exits_by_room, items_by_room, npcs_by_room,
+                             nodes_by_conversation, responses_by_node, conversations):
+    """Triggers, the content they can name, and a per-room list for the builder page."""
+    from . import mud_worlds
+    world_id = _active_world(database)
+    room_names = {room["id"]: room["name"] for room in rooms}
+    objects = [{**item, "room_name": room_names.get(item["room_id"], "")}
+               for room_items in items_by_room.values() for item in room_items]
+    placed_npcs = [{**npc, "room_name": room_names.get(npc["room_id"], "")}
+                   for room_npcs in npcs_by_room.values() for npc in room_npcs]
+    exits = [{**exit_row, "room_name": room_names.get(exit_row["from_room_id"], "")}
+             for room_exits in exits_by_room.values() for exit_row in room_exits
+             if exit_row["from_room_id"] in room_names]
+    conversation_names = {item["id"]: item["name"] for item in conversations}
+    responses = [{**response, "conversation_name": conversation_names.get(node["conversation_id"], "")}
+                 for conversation_id, nodes in nodes_by_conversation.items() if conversation_id in conversation_names
+                 for node in nodes for response in responses_by_node.get(node["id"], [])]
+    object_rooms = {item["id"]: item["room_id"] for item in objects}
+    triggers, triggers_by_room = [], {}
+    fires = {row["trigger_id"]: row["fires"] for row in database.execute(
+        "SELECT trigger_id,SUM(fires) AS fires FROM mud_trigger_fires WHERE realm=? GROUP BY trigger_id", (world_id,))}
+    for trigger in mud_worlds.world_triggers(database, world_id):
+        kind, ref = next(iter(trigger["source"].items()), ("", ""))
+        entry = {**trigger, "summary": mud_triggers.describe(trigger), "source_key": f"{kind}|{ref}" if kind else "",
+                 "conditions_text": json.dumps(trigger["conditions"], indent=1) if trigger["conditions"] else "",
+                 "actions_text": json.dumps(trigger["actions"], indent=1), "fires": fires.get(trigger["global_id"], 0)}
+        triggers.append(entry)
+        room_id = ref if kind == "room" else object_rooms.get(ref) if kind == "object" else None
+        if room_id:
+            triggers_by_room.setdefault(room_id, []).append(entry)
+    return {"triggers": triggers, "triggers_by_room": triggers_by_room, "trigger_objects": objects,
+            "trigger_npcs": placed_npcs, "trigger_exits": exits, "trigger_responses": responses,
+            "trigger_events": [(event, mud_triggers.EVENT_LABELS[event]) for event in mud_triggers.EVENT_TYPES],
+            "trigger_action_types": mud_triggers.ACTION_TYPES}
+
+
+def _trigger_local_id(database, world_id, name, requested, trigger_id):
+    """The form's trigger key, or one made from the name that no other trigger uses."""
+    taken = {row["local_id"] for row in database.execute(
+        "SELECT local_id FROM mud_world_triggers WHERE world_id=? AND id<>?", (world_id, trigger_id))}
+    if requested:
+        return requested, ("Another trigger already uses that key." if requested in taken else None)
+    base = re.sub(r"[^a-z0-9]+", "-", name.casefold()).strip("-")[:50] or "trigger"
+    base = base if base[0].isalpha() else f"t-{base}"
+    candidate, number = base, 2
+    while candidate in taken:
+        candidate, number = f"{base}-{number}", number + 1
+    return candidate, None
+
+
+def _builder_trigger_fields(database, world_id, trigger_id):
+    """Validate the trigger form; everything it names must exist in the active world."""
+    form = request.form
+    name = " ".join(form.get("name", "").split())
+    event = form.get("event", "")
+    local_id, error = _trigger_local_id(database, world_id, name, form.get("local_id", "").strip(), trigger_id)
+    if error:
+        return None, error
+    raw = {"id": local_id, "name": name or local_id, "event": event,
+           "scope": "world" if event == "timer" else form.get("scope", "character"),
+           "once": form.get("once") == "1", "enabled": form.get("enabled") == "1",
+           "fail_message": form.get("fail_message", "")}
+    source = form.get("source", "").strip()
+    if source and event != "manual":
+        kind, _, ref = source.partition("|")
+        raw["source"] = {kind: ref}
+    if event == "say_phrase":
+        raw["phrase"] = form.get("phrase", "")
+    numbers = {"cooldown_seconds": "cooldown_seconds", "max_fires": "max_fires"}
+    if event == "timer":
+        numbers["interval_seconds"] = "interval_seconds"
+    for key in numbers:
+        value = form.get(key, "").strip()
+        if value:
+            try:
+                raw[key] = int(value)
+            except ValueError:
+                return None, f"{key.replace('_', ' ').capitalize()} must be a whole number."
+    for key in ("conditions", "actions"):
+        text = form.get(key, "").strip()
+        try:
+            raw[key] = json.loads(text) if text else []
+        except json.JSONDecodeError:
+            return None, f"{key.capitalize()} must be valid JSON, such as [{{\"type\": \"message\", \"text\": \"Hello\"}}]."
+    try:
+        trigger = mud_triggers.validate_trigger(raw)
+    except ValueError as problem:
+        return None, str(problem)
+    origins = character_creation.catalog(database)
+    known = {"race": {entry["key"] for entry in origins["races"]},
+             "class": {entry["key"] for entry in origins["classes"]},
+             "skill": {entry["key"] for entry in mud_skills.catalog(database)}}
+    for kind, ref in mud_triggers.references(trigger):
+        if kind in known:
+            missing = ref not in known[kind]
+        elif kind == "trigger":
+            missing = database.execute("SELECT 1 FROM mud_world_triggers WHERE id=? AND world_id=? AND event='manual'",
+                                       (ref, world_id)).fetchone() is None
+            if missing:
+                return None, f"run_trigger must name a manual trigger in this world: {ref}."
+        else:
+            missing = database.execute(f"SELECT 1 FROM {TRIGGER_REFERENCE_TABLES[kind]} WHERE id=?",
+                                       (ref,)).fetchone() is None
+        if missing:
+            return None, f"The trigger names an unknown {kind.replace('_', ' ')}: {ref}."
+    from . import mud_worlds
+    chain = [{**entry, "id": entry["global_id"]} for entry in mud_worlds.world_triggers(database, world_id)
+             if entry["global_id"] != trigger_id] + [{**trigger, "id": trigger_id}]
+    try:
+        mud_triggers.check_chains(chain)
+    except ValueError as problem:
+        return None, str(problem)
+    return trigger, None
+
+
+def _builder_trigger(database, trigger_id):
+    row = database.execute("SELECT * FROM mud_world_triggers WHERE id=? AND world_id=?",
+                           (trigger_id, _active_world_id(database))).fetchone()
+    if row is None:
+        abort(404)
+    return row
+
+
+def _events_redirect(trigger_id=None):
+    return redirect(url_for("mud.builder", _anchor=f"trigger-{trigger_id}" if trigger_id else "events-heading"))
+
+
+@bp.post("/builder/triggers")
+@builder_required
+def builder_create_trigger():
+    from . import mud_worlds
+    validate_csrf()
+    database = get_db()
+    world_id = _active_world_id(database)
+    trigger_id = f"world:{world_id}:trigger:{uuid.uuid4().hex}"
+    trigger, error = _builder_trigger_fields(database, world_id, trigger_id)
+    if error:
+        flash(error, "error")
+        return _events_redirect()
+    mud_worlds.save_trigger(database, world_id, trigger_id, trigger)
+    database.commit()
+    flash(f"Trigger {trigger['name']} created.", "success")
+    return _events_redirect(trigger_id)
+
+
+@bp.post("/builder/triggers/reset-state")
+@builder_required
+def builder_reset_trigger_state():
+    validate_csrf()
+    database = get_db()
+    if request.form.get("confirmation") != "reset":
+        flash("Script state reset was not confirmed.", "error")
+        return _events_redirect()
+    reset_script_state(database, _active_world_id(database))
+    database.commit()
+    flash("World flags, trigger counts, object and exit states, and spawned NPCs were reset.", "success")
+    return _events_redirect()
+
+
+@bp.post("/builder/triggers/<path:trigger_id>/delete")
+@builder_required
+def builder_delete_trigger(trigger_id):
+    validate_csrf()
+    database = get_db()
+    existing = _builder_trigger(database, trigger_id)
+    if request.form.get("confirmation") != "delete":
+        flash("Trigger deletion was not confirmed.", "error")
+        return _events_redirect(trigger_id)
+    callers = [row["name"] for row in database.execute(
+        "SELECT name,definition_json FROM mud_world_triggers WHERE world_id=? AND id<>?",
+        (existing["world_id"], trigger_id)) if trigger_id in row["definition_json"]]
+    if callers:
+        flash(f"Remove the run_trigger actions that call this trigger first: {', '.join(callers)}.", "error")
+        return _events_redirect(trigger_id)
+    database.execute("DELETE FROM mud_world_triggers WHERE id=?", (trigger_id,))
+    database.execute("DELETE FROM mud_trigger_fires WHERE trigger_id=?", (trigger_id,))
+    database.commit()
+    flash(f"Trigger {existing['name']} removed.", "success")
+    return _events_redirect()
+
+
+@bp.post("/builder/triggers/<path:trigger_id>")
+@builder_required
+def builder_update_trigger(trigger_id):
+    from . import mud_worlds
+    validate_csrf()
+    database = get_db()
+    existing = _builder_trigger(database, trigger_id)
+    trigger, error = _builder_trigger_fields(database, existing["world_id"], trigger_id)
+    if error:
+        flash(error, "error")
+        return _events_redirect(trigger_id)
+    mud_worlds.save_trigger(database, existing["world_id"], trigger_id, trigger)
+    database.commit()
+    flash(f"Trigger {trigger['name']} saved.", "success")
+    return _events_redirect(trigger_id)
 
 
 @bp.post("/builder/resource")

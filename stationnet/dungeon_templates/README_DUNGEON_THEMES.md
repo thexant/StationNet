@@ -439,6 +439,46 @@ unknown keys are rejected.
 
 Conditions can appear on pools and on individual content choices.
 
+## Triggers (optional)
+
+A theme may add a top-level `triggers` array. Triggers make a run react: when
+something happens, if the conditions hold, the actions run in order. They use
+the format of world triggers (section 5c of `README_CUSTOM_WORLDS.md`), with
+names from the theme itself. Each run gets its own state, so flags set in one
+run never reach another run, the world, or the next run of the same theme.
+
+| `event` | `source` | Happens when |
+| --- | --- | --- |
+| `enter_room` | `room_role` (`entrance`, `exit`, `normal`, or a special role) or `room_template` (a room pool `id`) | A player enters a matching room, including the entrance on arrival. |
+| `say_phrase` | `room_role` or `room_template`, plus `phrase` | A player says the phrase in a matching room. |
+| `use_object`, `take_item` | `item`: an embedded item `id` or a shared definition ID | A player uses or picks up that kind of item. |
+| `defeat_npc` | `npc`: an embedded NPC or enemy `id`, or a shared definition ID | Fires for each player rewarded for the kill. |
+| `manual` | none | Run by another trigger's `run_trigger`. |
+
+Allowed actions are `message` (to `actor` or `room`), `set_flag` and
+`clear_flag` (`scope` `player`, or `world`, which means this run), `give_item`
+and `take_item` (embedded or shared items), `experience`, `coins`,
+`take_coins`, `heal`, `damage` (never below 1 health), and `run_trigger`.
+`delay_seconds`, `once`, `scope`, `cooldown_seconds`, `max_fires`,
+`conditions`, and `fail_message` work as in worlds. Conditions may use
+everything except quest, objective, `object_state`, and `in_room`.
+
+```json
+"triggers": [
+  {"id": "boss-down", "event": "defeat_npc", "source": {"npc": "bone-king"},
+   "scope": "world", "once": true,
+   "actions": [{"type": "set_flag", "scope": "world", "key": "king.slain", "value": "yes"},
+               {"type": "message", "to": "room", "text": "The crypt shudders as the Bone King falls."}]},
+  {"id": "exit-blessing", "event": "enter_room", "source": {"room_role": "exit"}, "once": true,
+   "conditions": [{"type": "flag", "scope": "world", "key": "king.slain", "value": "yes"}],
+   "actions": [{"type": "experience", "amount": 40}, {"type": "message", "text": "A calm settles over you."}]}
+]
+```
+
+Validation reports unknown roles, room pools, and definitions with their
+JSON path. Triggers are part of the content hash, so bump `version` after
+changing them.
+
 ## Gameplay rules themes should know about
 
 - Known spells come from the character's class, including imported classes;

@@ -5,13 +5,16 @@ StationNet stores imported world ZIPs in `data/mud_worlds/` (or
 editor. Put three UTF-8 JSON files at the root of a ZIP archive:
 `manifest.json`, `rooms.json`, and `exits.json`. Add `content.json` for items,
 NPCs, dialogue, quests, trainers, and placements. Add `origins.json` for custom
-races and classes, and `skills.json` for custom skills. No code or scripts run
-from a world package.
+races and classes, `skills.json` for custom skills, `dungeons.json` for
+procedural dungeons, and `events.json` for [triggers](#5c-events-and-triggers-eventsjson)
+that make the world react to players. Triggers are declarative settings: no
+code or scripts run from a world package.
 
 Archives are limited to 16 MB, each JSON file to 8 MB, 1000 rooms, and 5000
 exits. `content.json` may have up to 5,000 records in each supported array.
 The ZIP must contain only those three required files and optional
-`content.json`, `origins.json`, and `skills.json`, all at its root. Imports validate references
+`content.json`, `origins.json`, `skills.json`, `dungeons.json`, and
+`events.json`, all at its root. Imports validate references
 and reject duplicate world IDs. Standalone race and class imports remain
 available through the [origin guide](../mud_origin_templates/README_RACES_CLASSES.md).
 
@@ -105,6 +108,11 @@ Add `"key_item_id": "local-key-id"` to require a key item defined in
 with `/pick <exit>` and the Lockpicking skill; an exit may have a key, a
 pickable lock, or both. Unlocking persists per character; `/look <exit>`
 reports the lock state.
+
+Give an exit an `"id"` (a lowercase ID, unique among exits) when a
+[trigger](#5c-events-and-triggers-eventsjson) needs to open, seal, or hide it.
+Add `"hidden": true` to keep it out of sight, and impassable, until a trigger
+reveals it.
 
 An exit can also admit only some characters. Add `"conditions"` (the same
 array format as [conditions](#conditions) below) and an optional
@@ -359,8 +367,10 @@ no conversation.
 ### Quests
 
 Quest objectives support `talk_npc` and `defeat_npc` (target an NPC
-**definition**), `visit_room` (target a room ID), and `possess_item` and
-`deliver_item` (target an item **definition**). `talk_npc` advances when the
+**definition**), `visit_room` (target a room ID), `possess_item` and
+`deliver_item` (target an item **definition**), and `script`. A `script`
+objective advances only when a trigger's `complete_objective` action names it;
+its `target_id` is any short label, such as `"script"`. `talk_npc` advances when the
 player starts a conversation with `/talk`; accepting a quest in dialogue does
 not count as talking to the giver. Deliveries use `/deliver <item>` (or a
 `deliver_item_id` response) beside the objective's `recipient_npc_definition_id`,
@@ -409,6 +419,14 @@ its entries holds; groups cannot be nested. A list holds up to 20 entries.
 | `objective` | `objective` | That quest objective is complete. |
 | `state` | `key`, `value` | This NPC's saved per-player state for `key` equals `value` (`""` when unset). |
 | `claimed` | none | This response's outcomes have already been granted. Use it with `negate` to hide a one-time offer after it is claimed. |
+| `flag` | `scope` (`player`, the default, or `world`), `key`, and optionally `value` or `min`/`max` | With `value`, the flag equals that text. With `min`/`max`, the flag read as a number (unset is 0) is within the bounds. With neither, the flag is set. Triggers set flags; see [events](#5c-events-and-triggers-eventsjson). |
+| `object_state` | `object` (a placed item), `state` | The object's current state equals `state` (`""` until changed). |
+| `in_room` | `room` | The character is in that room. |
+
+Flag keys are 1 to 80 lowercase letters, digits, and `. _ : -`, such as
+`gate.open` or `rats_slain`. Inside a procedural dungeon, `world` flags belong
+to that run. `object_state` and `in_room` are not available in dungeon
+templates.
 
 ### Outcomes
 
@@ -466,7 +484,13 @@ IDs, like other references, and must exist in the package.
 ### Item and NPC properties
 
 `properties_json`, `behaviors_json`, and `state_json` may be JSON objects or
-JSON text in the file. Item properties can include `heal`, `value`,
+JSON text in the file. For objects that triggers work with, item properties
+may set `"fixed": true` (it cannot be picked up) and `"state_descriptions"`,
+which maps up to 20 states to a line shown in the room description and by
+`/look`. For example, `{"": "A rusty lever points up.", "down": "The lever is
+pulled down."}`. A placed item's `state_json` may set its starting
+`"state"`. A placed item or NPC with `{"hidden": true}` in its `state_json`
+stays out of sight until a trigger's `show` action reveals it. Item properties can include `heal`, `value`,
 `reveal_exit`, `use_message`, equipment bonuses, firearm data, attribute
 `requirements`, and timed effects. Equipment may also set integer `accuracy`
 and `evasion` (each −20 to 20; negative evasion suits heavy armor). A firearm's
@@ -641,6 +665,154 @@ Builder and the **Dungeon entrances** panel on each room. Templates can start
 from any installed dungeon theme and have an unsaved layout preview. The
 builder's export writes `dungeons.json` automatically.
 
+## 5c. Events and triggers (`events.json`)
+
+Triggers make a world react. Each one is a small rule: **when** something
+happens, **if** its conditions hold, **do** a short list of actions. They are
+plain JSON settings, not a programming language. There are no variables,
+expressions, or loops, and nothing in a package can run code.
+
+```json
+{"triggers": [
+  {"id": "pull-lever", "name": "Pull the rusty lever",
+   "event": "use_object", "source": {"object": "lever-1"},
+   "scope": "world", "once": true,
+   "conditions": [{"type": "attribute", "attribute": "strength", "min": 12}],
+   "fail_message": "The lever will not budge.",
+   "actions": [
+     {"type": "set_object_state", "object": "lever-1", "state": "down"},
+     {"type": "set_exit", "exit": "vault-door", "state": "open"},
+     {"type": "message", "to": "room", "text": "Gears grind somewhere below."},
+     {"type": "spawn_npc", "npc": "vault-guard", "room": "vault", "delay_seconds": 5, "despawn_seconds": 300}
+   ]}
+]}
+```
+
+### Events
+
+`source` names exactly one piece of content, using its local package ID.
+
+| `event` | `source` | Happens when |
+| --- | --- | --- |
+| `enter_room` | `room` | A player walks, flees, teleports, or returns into the room. |
+| `use_object` | `object` (a placed item) or `item` (any item of that type) | A player uses it: `/use` on something carried or in the room, or `/interact`, `/push`, `/pull`, `/press`, `/touch`, `/turn`, or `/activate` on something in the room. |
+| `take_item` | `object` or `item` | A player picks it up. |
+| `say_phrase` | `room`, plus `phrase` | A player says the phrase in that room. Case, punctuation, and extra spaces are ignored, so `Open, Sesame!` matches `open sesame`. |
+| `defeat_npc` | `npc` (any NPC of that type) or `npc_instance` (one placed NPC) | An NPC is defeated. It fires once for **each** player who earned a share of the rewards. |
+| `dialogue_choice` | `response` | A player picks that dialogue response. It runs after the response's own outcomes and quest changes. |
+| `quest_complete` | `quest` | A player completes the quest, automatically or by turning it in. |
+| `timer` | `room`, plus `interval_seconds` (30–86,400) | Repeatedly while the world is active, whether or not anyone is there. Timers have no player. |
+| `manual` | none | Only when another trigger runs it with `run_trigger`. Use these to share a set of actions. |
+
+### Trigger fields
+
+| Field | Default | Meaning |
+| --- | --- | --- |
+| `id` | required | Lowercase letters, digits, and hyphens; unique in the file. |
+| `name` | the `id` | Shown in the World Builder. |
+| `scope` | `character` (timers: `world`) | `character` tracks `once`, `cooldown_seconds`, and `max_fires` separately for every character. `world` shares them across everyone. |
+| `once` | `false` | Fire only once per scope: once per character, or once ever for a world trigger. |
+| `cooldown_seconds` | `0` | Minimum time between firings, per scope (up to a week). |
+| `max_fires` | none | Stop after this many firings, per scope. |
+| `enabled` | `true` | Disabled triggers do nothing. |
+| `conditions` | `[]` | All must hold; see [Conditions](#conditions). Timers may only check `world` flags and `object_state`. |
+| `fail_message` | none | Shown to the player when the conditions fail or they cannot pay a cost. |
+| `actions` | required | 1 to 10 actions, run in order. |
+
+### Actions
+
+Any action may add `"delay_seconds"` (up to 3,600) to run later. Delays are
+saved, so they survive restarts. A delayed action is skipped if its player has
+left the world, or the dungeon run, by the time it is due.
+
+| `type` | Fields | Effect |
+| --- | --- | --- |
+| `message` | `text`, `to`: `actor` (default), `room`, or `other_room` with `room` | Tells the player, everyone in the room, or everyone in another room. |
+| `set_flag` | `scope`: `player` (default) or `world`, `key`, and `value` (text) or `add` (a whole number) | Remembers something. `add` keeps a counter, such as wardens slain. |
+| `clear_flag` | `scope`, `key` | Forgets a flag. |
+| `give_item`, `take_item` | `item`, `amount` (1–100) | As in dialogue [outcomes](#outcomes). Costs are checked before anything changes. |
+| `experience`, `coins`, `take_coins` | `amount` | As in dialogue outcomes. |
+| `heal`, `damage` | `amount` (1–10,000) | Restores health, or deals it. Damage never takes a player below 1 health, so traps cannot kill. |
+| `set_object_state` | `object`, `state` (up to 40 characters; `""` resets it) | Changes a placed object's state for everyone. See `state_descriptions` below. |
+| `set_exit` | `exit`, `state`: `open`, `locked`, `hidden`, or `default`; `scope`: `world` (default) or `character` | `open` unlocks and reveals the exit. `locked` seals it so that no key, pick, or earlier unlock opens it. `hidden` removes it from view and use. `default` restores the authored exit. A character state applies to that player only and overrides the world's. |
+| `show`, `hide` | `npc_instance` or `object` | Shows or hides a placed NPC or object for everyone. |
+| `spawn_npc` | `npc` (definition), `room`, optional `despawn_seconds` (10–86,400, default 600) and `max_live` (1–5, default 1) | Places a temporary NPC. It disappears when its time runs out, but never in the middle of a fight. Once defeated, it never respawns. No more than `max_live` from the same action exist at once. |
+| `teleport` | `room` | Moves the player to a room in this world. That room's `enter_room` triggers run. |
+| `start_quest` | `quest` | Gives the player a quest, if they can accept it. |
+| `complete_objective` | `objective` | Advances an objective by one, or completes it. Use it with `script` objectives, which only triggers can advance. |
+| `run_trigger` | `trigger` | Runs a `manual` trigger. The manual trigger's own conditions and limits still apply. |
+
+Exits must have an `"id"` in `exits.json` before a trigger can name them.
+
+### Shared and personal state
+
+- **Player flags**, character-scope exits, and character-scope fire counts
+  belong to one character in one world. Other players never see them.
+- **World flags**, object states, shown or hidden NPCs and objects,
+  world-scope exits, and spawned NPCs are shared by everyone in the world.
+- Every world, and every procedural dungeon run, keeps separate state.
+  Switching worlds never carries flags across.
+- Rewards and personal actions only ever affect the player who caused the
+  event. A world trigger marked `once` rewards exactly one player, even when
+  several act at the same moment.
+
+### Safety limits
+
+- A trigger cannot run itself again in the same chain. A chain of triggers
+  that run each other, teleport players, or complete quests stops after 4
+  nested triggers or 40 actions.
+- `run_trigger` may only name `manual` triggers, and triggers that run each
+  other in a loop are rejected on import.
+- At most 20 delayed actions per trigger can wait at once. Delays carry their
+  chain depth with them, so a delayed loop also ends.
+- If an action fails, for example because the player cannot accept a quest,
+  the player is told why and the remaining actions still run.
+- Every ID a trigger names must exist in the package, or the import is
+  rejected with the trigger and the missing ID.
+
+### Recipes
+
+**A boss opens the way for everyone.** The exit's own conditions read the
+flag that the trigger sets:
+
+```json
+{"id": "warden-slain", "event": "defeat_npc", "source": {"npc": "warden"},
+ "scope": "world", "once": true,
+ "actions": [{"type": "set_flag", "scope": "world", "key": "warden.slain", "value": "yes"},
+             {"type": "message", "to": "other_room", "room": "hall", "text": "The ward on the stairs fades."}]}
+```
+
+```json
+{"from": "hall", "to": "tower", "name": "stairs", "direction": "up",
+ "conditions": [{"type": "flag", "scope": "world", "key": "warden.slain", "value": "yes"}],
+ "conditions_message": "A ward blocks the stairs."}
+```
+
+**A password that only opens the door for the speaker:**
+
+```json
+{"id": "password", "event": "say_phrase", "source": {"room": "hall"}, "phrase": "open sesame",
+ "actions": [{"type": "set_exit", "exit": "crypt-gate", "state": "open", "scope": "character"},
+             {"type": "message", "text": "The crypt gate swings open for you."}]}
+```
+
+**Count kills, then reward once:**
+
+```json
+[{"id": "count-rats", "event": "defeat_npc", "source": {"npc": "rat"},
+  "actions": [{"type": "set_flag", "key": "rats", "add": 1}, {"type": "run_trigger", "trigger": "rat-reward"}]},
+ {"id": "rat-reward", "event": "manual", "once": true,
+  "conditions": [{"type": "flag", "key": "rats", "min": 10}],
+  "actions": [{"type": "coins", "amount": 25}, {"type": "message", "text": "The ratcatcher's bounty is yours."}]}]
+```
+
+World builders can create, edit, disable, and remove triggers in the
+**Events** section of the World Builder. Each room also lists the triggers
+that start there. **Reset script state** clears the active world's flags, fire
+counts, object and exit states, and spawned NPCs, which is useful while
+testing. Builder forms use installed IDs; the **IDs to use** list shows them.
+The builder's export writes `events.json` with simple local IDs.
+
 ## 6. Import, edit, export, and remove
 
 Download the starter ZIP from **SYSOP Settings → MUD service → Traditional
@@ -655,7 +827,7 @@ Compress-Archive -Path manifest.json,rooms.json,exits.json,content.json -Destina
 zip lantern-isles.zip manifest.json rooms.json exits.json content.json
 ```
 
-If you omit `content.json`, `origins.json`, `skills.json`, or `dungeons.json`, omit them from the command too. Confirm the ZIP
+If you omit `content.json`, `origins.json`, `skills.json`, `dungeons.json`, or `events.json`, omit them from the command too. Confirm the ZIP
 lists the JSON files directly, without a containing folder. In **SYSOP Settings → MUD service →
 Traditional Worlds**, import the ZIP and select it as the active world. Choose
 whether its bundled races, classes, and skills replace, combine with, or are

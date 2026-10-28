@@ -1099,7 +1099,7 @@ CREATE INDEX IF NOT EXISTS idx_mud_quests_name ON mud_quests(name);
 CREATE TABLE IF NOT EXISTS mud_quest_objectives (
  id TEXT PRIMARY KEY,
  quest_id TEXT NOT NULL REFERENCES mud_quests(id) ON DELETE CASCADE,
- objective_type TEXT NOT NULL CHECK(objective_type IN ('talk_npc','visit_room','possess_item','defeat_npc','deliver_item')),
+ objective_type TEXT NOT NULL CHECK(objective_type IN ('talk_npc','visit_room','possess_item','defeat_npc','deliver_item','script')),
  target_id TEXT NOT NULL,
  description TEXT NOT NULL,
  required_count INTEGER NOT NULL DEFAULT 1 CHECK(required_count>=1),
@@ -1254,6 +1254,41 @@ def _migrate_office(database):
         )
 
 
+def _rebuild_with_check(database, table, marker, old, new, adjust=None):
+    """Rewrite a table's CHECK text (old -> new) unless marker shows it is done, keeping rows."""
+    sql = database.execute("SELECT sql FROM sqlite_master WHERE type='table' AND name=?", (table,)).fetchone()["sql"]
+    if marker in sql:
+        return
+    indexes = [row["sql"] for row in database.execute(
+        "SELECT sql FROM sqlite_master WHERE type='index' AND tbl_name=? AND sql IS NOT NULL", (table,))]
+    replacement = sql.replace(f"CREATE TABLE IF NOT EXISTS {table}",
+                              f"CREATE TABLE {table}_new", 1).replace(
+                                  f"CREATE TABLE {table}", f"CREATE TABLE {table}_new", 1).replace(old, new)
+    if adjust:
+        replacement = adjust(replacement)
+    columns = [row["name"] for row in database.execute(f"PRAGMA table_info({table})")]
+    database.commit()
+    database.execute("PRAGMA foreign_keys=OFF")
+    try:
+        database.execute(replacement)
+        names = ",".join(columns)
+        database.execute(f"INSERT INTO {table}_new({names}) SELECT {names} FROM {table}")
+        database.execute(f"DROP TABLE {table}")
+        database.execute(f"ALTER TABLE {table}_new RENAME TO {table}")
+        for index in indexes:
+            database.execute(index)
+        database.commit()
+    finally:
+        database.execute("PRAGMA foreign_keys=ON")
+
+
+def _combat_reward_chance(replacement):
+    return replacement.replace(
+        "created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,",
+        "chance_percent INTEGER NOT NULL DEFAULT 100 CHECK(chance_percent BETWEEN 1 AND 100),\n created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,",
+    ).replace("reward_type='experience' AND target_id IS NULL", "reward_type IN ('experience','coins') AND target_id IS NULL")
+
+
 def _migrate_mud_authored_features(database):
     """Expand old CHECK constrained content tables while retaining player progress."""
     updates = {
@@ -1262,33 +1297,8 @@ def _migrate_mud_authored_features(database):
         "mud_npc_combat_rewards": ("chance_percent", "'experience','item'", "'experience','item','coins'"),
     }
     for table, (marker, old, new) in updates.items():
-        sql = database.execute("SELECT sql FROM sqlite_master WHERE type='table' AND name=?", (table,)).fetchone()["sql"]
-        if marker in sql:
-            continue
-        indexes = [row["sql"] for row in database.execute(
-            "SELECT sql FROM sqlite_master WHERE type='index' AND tbl_name=? AND sql IS NOT NULL", (table,))]
-        replacement = sql.replace(f"CREATE TABLE IF NOT EXISTS {table}",
-                                  f"CREATE TABLE {table}_new", 1).replace(
-                                      f"CREATE TABLE {table}", f"CREATE TABLE {table}_new", 1).replace(old, new)
-        if table == "mud_npc_combat_rewards":
-            replacement = replacement.replace(
-                "created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,",
-                "chance_percent INTEGER NOT NULL DEFAULT 100 CHECK(chance_percent BETWEEN 1 AND 100),\n created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,",
-            ).replace("reward_type='experience' AND target_id IS NULL", "reward_type IN ('experience','coins') AND target_id IS NULL")
-        columns = [row["name"] for row in database.execute(f"PRAGMA table_info({table})")]
-        database.commit()
-        database.execute("PRAGMA foreign_keys=OFF")
-        try:
-            database.execute(replacement)
-            names = ",".join(columns)
-            database.execute(f"INSERT INTO {table}_new({names}) SELECT {names} FROM {table}")
-            database.execute(f"DROP TABLE {table}")
-            database.execute(f"ALTER TABLE {table}_new RENAME TO {table}")
-            for index in indexes:
-                database.execute(index)
-            database.commit()
-        finally:
-            database.execute("PRAGMA foreign_keys=ON")
+        _rebuild_with_check(database, table, marker, old, new,
+                            _combat_reward_chance if table == "mud_npc_combat_rewards" else None)
     columns = {row["name"] for row in database.execute("PRAGMA table_info(mud_world_exits)")}
     if "key_item_id" not in columns:
         database.execute("ALTER TABLE mud_world_exits ADD COLUMN key_item_id TEXT REFERENCES mud_item_definitions(id) ON DELETE RESTRICT")
@@ -1426,6 +1436,7 @@ def init_db():
     _migrate_mud_world_packages(database)
     _migrate_mud_world_resource(database)
     _migrate_mud_world_dungeons(database)
+    _migrate_mud_triggers(database)
     database.execute("INSERT OR IGNORE INTO mud_portal_settings(id) VALUES(1)")
     database.execute("INSERT OR IGNORE INTO mud_crossover_settings(id) VALUES(1)")
     database.execute(
@@ -1738,6 +1749,66 @@ def _migrate_mud_world_dungeons(database):
     for name, declaration in additions.items():
         if name not in columns:
             database.execute(f"ALTER TABLE mud_procedural_instances ADD COLUMN {name} {declaration}")
+
+
+def _migrate_mud_triggers(database):
+    """Add authored world triggers and the script state they keep; old worlds have none.
+
+    A realm is a world's ID, or a dungeon run's instance ID, so every world and
+    every run keeps separate flags, fire counts, and object states. scope_key
+    is '' for state shared by the whole realm, or a character ID.
+    """
+    database.executescript("""
+    CREATE TABLE IF NOT EXISTS mud_world_triggers (
+      id TEXT PRIMARY KEY,
+      world_id TEXT NOT NULL REFERENCES mud_world_packages(id) ON DELETE CASCADE,
+      local_id TEXT NOT NULL,
+      name TEXT NOT NULL,
+      event TEXT NOT NULL,
+      source_id TEXT,
+      definition_json TEXT NOT NULL,
+      enabled INTEGER NOT NULL DEFAULT 1 CHECK(enabled IN (0,1)),
+      created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      UNIQUE(world_id,local_id));
+    CREATE INDEX IF NOT EXISTS idx_mud_world_triggers_event
+      ON mud_world_triggers(world_id,event,source_id);
+    CREATE TABLE IF NOT EXISTS mud_script_flags (
+      realm TEXT NOT NULL,
+      scope_key TEXT NOT NULL DEFAULT '',
+      key TEXT NOT NULL,
+      value TEXT NOT NULL,
+      updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      PRIMARY KEY(realm,scope_key,key));
+    CREATE TABLE IF NOT EXISTS mud_trigger_fires (
+      realm TEXT NOT NULL,
+      trigger_id TEXT NOT NULL,
+      scope_key TEXT NOT NULL DEFAULT '',
+      fires INTEGER NOT NULL DEFAULT 0 CHECK(fires>=0),
+      last_fired_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      PRIMARY KEY(realm,trigger_id,scope_key));
+    CREATE TABLE IF NOT EXISTS mud_script_entity_states (
+      realm TEXT NOT NULL,
+      entity_type TEXT NOT NULL CHECK(entity_type IN ('exit','npc','item','object')),
+      entity_id TEXT NOT NULL,
+      scope_key TEXT NOT NULL DEFAULT '',
+      state TEXT NOT NULL,
+      updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      PRIMARY KEY(entity_type,entity_id,scope_key));
+    CREATE INDEX IF NOT EXISTS idx_mud_script_entity_states_realm
+      ON mud_script_entity_states(realm);
+    """)
+    exit_columns = {row["name"] for row in database.execute("PRAGMA table_info(mud_world_exits)")}
+    if "hidden" not in exit_columns:
+        database.execute("ALTER TABLE mud_world_exits ADD COLUMN hidden INTEGER NOT NULL DEFAULT 0 "
+                         "CHECK(hidden IN (0,1))")
+    if "local_id" not in exit_columns:
+        # Package-local exit names that triggers use to open, lock, or hide an exit.
+        database.execute("ALTER TABLE mud_world_exits ADD COLUMN local_id TEXT")
+    npc_columns = {row["name"] for row in database.execute("PRAGMA table_info(mud_npc_instances)")}
+    if "spawned_by_trigger" not in npc_columns:
+        database.execute("ALTER TABLE mud_npc_instances ADD COLUMN spawned_by_trigger TEXT")
+    _rebuild_with_check(database, "mud_quest_objectives", "'script'", "'deliver_item')", "'deliver_item','script')")
 
 
 def _migrate_mud_skills(database):

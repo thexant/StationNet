@@ -10,7 +10,7 @@ import zipfile
 
 from flask import current_app
 
-from . import mud_conditions, mud_world_dungeons
+from . import mud_conditions, mud_triggers, mud_world_dungeons
 
 
 MAX_ZIP_BYTES = 16 * 1024 * 1024
@@ -21,7 +21,8 @@ CONTENT_FILE = "content.json"
 ORIGINS_FILE = "origins.json"
 SKILLS_FILE = "skills.json"
 DUNGEONS_FILE = mud_world_dungeons.DUNGEONS_FILE
-OPTIONAL_FILES = {CONTENT_FILE, ORIGINS_FILE, SKILLS_FILE, DUNGEONS_FILE}
+EVENTS_FILE = "events.json"
+OPTIONAL_FILES = {CONTENT_FILE, ORIGINS_FILE, SKILLS_FILE, DUNGEONS_FILE, EVENTS_FILE}
 # Order follows foreign-key dependencies. Only these authored columns cross
 # the package boundary; player state and generated dungeon data never do.
 CONTENT_TABLES = {
@@ -64,7 +65,15 @@ REFERENCE_TABLE = {
 CONDITION_COLUMNS = {"mud_quests": ("conditions_json",),
                      "mud_dialogue_responses": ("conditions_json", "outcomes_json")}
 CONDITION_TABLES = {"item": "mud_item_definitions", "quest": "mud_quests",
-                    "objective": "mud_quest_objectives"}
+                    "objective": "mud_quest_objectives", "object": "mud_item_instances", "room": "rooms"}
+# What each kind of trigger reference names; exits and triggers are mapped separately.
+TRIGGER_TABLES = {**CONDITION_TABLES, "npc": "mud_npc_definitions", "npc_instance": "mud_npc_instances",
+                  "response": "mud_dialogue_responses"}
+OBJECTIVE_TYPES = ("talk_npc", "visit_room", "possess_item", "defeat_npc", "deliver_item", "script")
+# Script objectives are completed by triggers; their target is a free label.
+OBJECTIVE_TARGETS = {"talk_npc": "mud_npc_definitions", "defeat_npc": "mud_npc_definitions",
+                     "visit_room": "rooms", "possess_item": "mud_item_definitions",
+                     "deliver_item": "mud_item_definitions"}
 ORIGIN_KINDS = {"race": "races", "class": "classes"}
 DEFAULT_RESOURCE = {"enabled": True, "name": "Mana"}
 RESOURCE_NAME_RE = re.compile(r"^[^\W\d_][^\W\d_ '-]*(?:[ '-][^\W\d_]+)*$")
@@ -128,7 +137,7 @@ def read_package(payload):
         with zipfile.ZipFile(BytesIO(payload)) as archive:
             names = archive.namelist()
             if not FILES <= set(names) or set(names) - FILES - OPTIONAL_FILES or len(names) != len(set(names)):
-                raise WorldError("World ZIP must contain manifest.json, rooms.json, and exits.json at its root, with optional content.json, origins.json, skills.json, and dungeons.json.")
+                raise WorldError("World ZIP must contain manifest.json, rooms.json, and exits.json at its root, with optional content.json, origins.json, skills.json, dungeons.json, and events.json.")
             docs = {}
             for name in names:
                 info = archive.getinfo(name)
@@ -171,6 +180,7 @@ def read_package(payload):
     clean_exits = []
     exit_names = set()
     exit_directions = set()
+    exit_ids = set()
     for item in exits:
         item = _object(item, "Exit")
         source, target = item.get("from"), item.get("to")
@@ -202,9 +212,18 @@ def read_package(payload):
         message = item.get("conditions_message", "")
         if not isinstance(message, str) or len(message.strip()) > 200:
             raise WorldError("Exit conditions_message must be text up to 200 characters.")
+        exit_id = item.get("id")
+        if exit_id is not None and (not isinstance(exit_id, str) or not ID_RE.fullmatch(exit_id) or exit_id in exit_ids):
+            raise WorldError("Exit IDs must be unique lowercase IDs.")
+        if exit_id:
+            exit_ids.add(exit_id)
+        hidden = item.get("hidden", False)
+        if type(hidden) is not bool:
+            raise WorldError("Exit hidden must be true or false.")
         clean_exits.append({"from": source, "to": target, "name": label, "direction": direction,
                             "key_item_id": key_item_id, "pick_difficulty": pick_difficulty,
-                            "conditions": conditions, "conditions_message": " ".join(message.split())})
+                            "conditions": conditions, "conditions_message": " ".join(message.split()),
+                            "id": exit_id, "hidden": hidden})
     content = docs.get(CONTENT_FILE, {})
     if not isinstance(content, dict) or set(content) - set(CONTENT_TABLES):
         raise WorldError("content.json must be an object of supported content tables.")
@@ -238,12 +257,13 @@ def read_package(payload):
                     mud_conditions.validate_item_requirements(properties.get("requirements"))
                 except ValueError as problem:
                     raise WorldError(f"Invalid item requirements: {problem}") from problem
+                validate_object_properties(properties)
             elif table == "mud_npc_combat_profiles":
                 if any(row.get(key) is not None and not _whole(row[key], 0, 100)
                        for key in ("accuracy", "evasion")):
                     raise WorldError("NPC combat accuracy and evasion must be whole numbers from 0 to 100.")
             elif table == "mud_quest_objectives":
-                if row.get("objective_type") not in {"talk_npc", "visit_room", "possess_item", "defeat_npc", "deliver_item"} or not _whole(row.get("required_count", 1), 1, 100):
+                if row.get("objective_type") not in OBJECTIVE_TYPES or not _whole(row.get("required_count", 1), 1, 100):
                     raise WorldError("Quest objective type or required_count is invalid.")
                 if not _whole(row.get("optional", 0), 0, 1) or not _whole(row.get("consume_on_turn_in", 0), 0, 1):
                     raise WorldError("Quest objective optional and consume_on_turn_in must be 0 or 1.")
@@ -305,9 +325,32 @@ def read_package(payload):
         world_dungeons = mud_world_dungeons.read_document(docs.get(DUNGEONS_FILE), room_ids)
     except mud_world_dungeons.WorldDungeonError as problem:
         raise WorldError(str(problem)) from problem
+    try:
+        triggers = mud_triggers.validate_document(docs.get(EVENTS_FILE))
+    except ValueError as problem:
+        raise WorldError(f"Invalid events.json: {problem}") from problem
+    known = {kind: {row.get("id") for row in content.get(table, [])}
+             for kind, table in TRIGGER_TABLES.items() if table != "rooms"}
+    known.update(room=room_ids, exit=exit_ids, trigger={trigger["id"] for trigger in triggers})
+    for trigger in triggers:
+        for kind, ref in mud_triggers.references(trigger):
+            if kind in known and ref not in known[kind]:
+                raise WorldError(f"Trigger {trigger['id']} names an unknown {kind}: {ref}.")
     return {"id": world_id, "name": name, "author": author, "start_room": start, "resource": resource,
             "rooms": clean_rooms, "exits": clean_exits, "content": content, "origins": origins,
-            "skills": skills["skills"], "dungeons": world_dungeons}
+            "skills": skills["skills"], "dungeons": world_dungeons, "events": triggers}
+
+
+def validate_object_properties(properties):
+    """Trigger-facing item properties: fixed objects and per-state descriptions."""
+    if "fixed" in properties and type(properties["fixed"]) is not bool:
+        raise WorldError("Item fixed must be true or false.")
+    descriptions = properties.get("state_descriptions")
+    if descriptions is not None and (
+            not isinstance(descriptions, dict) or len(descriptions) > 20
+            or any(not isinstance(key, str) or len(key) > 40 or not isinstance(text, str) or len(text) > 500
+                   for key, text in descriptions.items())):
+        raise WorldError("Item state_descriptions must map up to 20 states to text of up to 500 characters.")
 
 
 def package_bytes(document):
@@ -342,6 +385,11 @@ def package_bytes(document):
             if len(encoded) > MAX_FILE_BYTES:
                 raise WorldError("dungeons.json is too large to export.")
             archive.writestr(DUNGEONS_FILE, encoded)
+        if document.get("events"):
+            encoded = (json.dumps({"triggers": document["events"]}, ensure_ascii=False, indent=2) + "\n").encode("utf-8")
+            if len(encoded) > MAX_FILE_BYTES:
+                raise WorldError("events.json is too large to export.")
+            archive.writestr(EVENTS_FILE, encoded)
     payload = stream.getvalue()
     if len(payload) > MAX_ZIP_BYTES:
         raise WorldError("World ZIP is too large to export.")
@@ -354,6 +402,9 @@ def template_bytes():
         "rooms": [{"id": "start", "name": "Starting Room",
                    "description": "The beginning of a world you can build from files."}],
         "exits": [],
+        "events": [{"id": "welcome", "name": "Welcome message", "event": "enter_room",
+                    "source": {"room": "start"}, "once": True,
+                    "actions": [{"type": "message", "text": "Welcome. Edit events.json to make this world react."}]}],
     })
 
 
@@ -457,9 +508,10 @@ def _insert_content(database, document, installation_key, skill_map=None):
                     if table == "mud_quest_objectives":
                         if not isinstance(row.get("objective_type"), str):
                             raise WorldError("Quest objective has an unsupported type.")
-                        ref_table = {"talk_npc": "mud_npc_definitions", "defeat_npc": "mud_npc_definitions",
-                                     "visit_room": "rooms", "possess_item": "mud_item_definitions",
-                                     "deliver_item": "mud_item_definitions"}.get(row.get("objective_type"))
+                        if row["objective_type"] == "script":
+                            fields[column] = _label(value, "Script objective target", 1, 80)
+                            continue
+                        ref_table = OBJECTIVE_TARGETS.get(row.get("objective_type"))
                     else:
                         ref_table = "mud_item_definitions"
                     if ref_table is None:
@@ -715,10 +767,10 @@ def install(database, payload, *, origin_mode="preserve", selected=None):
                              (prefix + room["id"], room["name"], room["description"], world_id))
         for ordinal, item in enumerate(document["exits"]):
             database.execute("INSERT INTO mud_world_exits(id,from_room_id,to_room_id,name,direction,pick_difficulty,"
-                             "conditions_json,conditions_message) VALUES(?,?,?,?,?,?,?,?)",
+                             "conditions_json,conditions_message,local_id,hidden) VALUES(?,?,?,?,?,?,?,?,?,?)",
                              (f"world:{world_id}:{installation_key}:exit:{ordinal}", prefix + item["from"],
                               prefix + item["to"], item["name"], item["direction"], item["pick_difficulty"],
-                              "[]", item["conditions_message"]))
+                              "[]", item["conditions_message"], item.get("id"), int(item.get("hidden", False))))
         maps = _insert_content(database, document, installation_key, skill_map)
         exit_mapper = _exit_condition_mapper(document, maps, skill_map)
         for ordinal, item in enumerate(document["exits"]):
@@ -739,6 +791,7 @@ def install(database, payload, *, origin_mode="preserve", selected=None):
                     maps, exit_mapper)
             except mud_world_dungeons.WorldDungeonError as problem:
                 raise WorldError(str(problem)) from problem
+        _install_triggers(database, document, installation_key, maps, exit_mapper)
         _install_origins(database, document, skill_map)
         set_availability(database, world_id, origin_mode, selected)
         with destination.open("xb") as target:
@@ -751,6 +804,51 @@ def install(database, payload, *, origin_mode="preserve", selected=None):
             destination.unlink(missing_ok=True)
         raise
     return document
+
+
+def _install_triggers(database, document, installation_key, maps, condition_mapper):
+    world_id = document["id"]
+    exits = {item["id"]: f"world:{world_id}:{installation_key}:exit:{ordinal}"
+             for ordinal, item in enumerate(document["exits"]) if item.get("id")}
+    triggers = {trigger["id"]: f"world:{world_id}:{installation_key}:trigger:{trigger['id']}"
+                for trigger in document.get("events", [])}
+
+    def mapper(kind, value):
+        if kind == "exit":
+            return exits[value]
+        if kind == "trigger":
+            return triggers[value]
+        if kind in TRIGGER_TABLES and kind not in CONDITION_TABLES:
+            return _mapped(maps, TRIGGER_TABLES[kind], value, f"trigger {kind}")
+        return condition_mapper(kind, value)
+
+    for trigger in document.get("events", []):
+        save_trigger(database, world_id, triggers[trigger["id"]], mud_triggers.remap(trigger, mapper))
+
+
+def save_trigger(database, world_id, trigger_id, trigger):
+    """Store a normalized trigger whose references already use installed IDs."""
+    database.execute(
+        "INSERT INTO mud_world_triggers(id,world_id,local_id,name,event,source_id,definition_json,enabled) "
+        "VALUES(?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET local_id=excluded.local_id,name=excluded.name,"
+        "event=excluded.event,source_id=excluded.source_id,definition_json=excluded.definition_json,"
+        "enabled=excluded.enabled,updated_at=CURRENT_TIMESTAMP",
+        (trigger_id, world_id, trigger["id"], trigger["name"], trigger["event"],
+         next(iter(trigger["source"].values()), None),
+         json.dumps(trigger, ensure_ascii=False, separators=(",", ":"), sort_keys=True), int(trigger["enabled"])))
+
+
+def world_triggers(database, world_id):
+    """A world's stored triggers as normalized dictionaries; unreadable rows are skipped."""
+    result = []
+    for row in database.execute("SELECT * FROM mud_world_triggers WHERE world_id=? ORDER BY name COLLATE NOCASE,id",
+                                (world_id,)):
+        try:
+            trigger = mud_triggers.validate_trigger(json.loads(row["definition_json"]))
+        except (ValueError, TypeError, json.JSONDecodeError):
+            continue
+        result.append({**trigger, "global_id": row["id"]})
+    return result
 
 
 def _condition_validator(column):
@@ -789,9 +887,15 @@ def _export_content(database, world_id, room_map):
     needed_items |= {row["item_definition_id"] for row in database.execute(
         "SELECT s.item_definition_id FROM mud_shop_stock s JOIN mud_npc_definitions n ON n.id=s.npc_definition_id WHERE n.world_id=?", (world_id,))}
     needed_npcs = {row["definition_id"] for row in database.execute(
-        "SELECT definition_id FROM mud_npc_instances WHERE room_id IN "
+        "SELECT definition_id FROM mud_npc_instances WHERE spawned_by_trigger IS NULL AND room_id IN "
         "(SELECT id FROM mud_world_rooms WHERE world_id=?)", (world_id,)
     )}
+    for trigger in world_triggers(database, world_id):
+        for kind, ref in mud_triggers.references(trigger):
+            if kind == "item":
+                needed_items.add(ref)
+            elif kind == "npc":
+                needed_npcs.add(ref)
     template_items, template_npcs = mud_world_dungeons.shared_references(database, world_id)
     needed_items |= template_items
     needed_npcs |= template_npcs
@@ -843,7 +947,9 @@ def _export_content(database, world_id, room_map):
         elif table in {"mud_item_spawns", "mud_room_discoveries"}:
             rows = [row for row in rows if row["room_id"] in room_map]
         elif table == "mud_npc_instances":
-            rows = [row for row in rows if row["room_id"] in room_map]
+            spawned = {row["id"] for row in database.execute(
+                "SELECT id FROM mud_npc_instances WHERE spawned_by_trigger IS NOT NULL")}
+            rows = [row for row in rows if row["room_id"] in room_map and row["id"] not in spawned]
         selected[table] = {row["id"]: row for row in rows} if table in ID_TABLES else rows
 
     prefixes = {"mud_item_definitions": "item", "mud_conversations": "conversation",
@@ -874,9 +980,10 @@ def _export_content(database, world_id, room_map):
                                      else "mud_npc_definitions")
                     value = _mapped(maps, ref_table, value, column)
                 elif column == "target_id":
-                    ref_table = ({"talk_npc": "mud_npc_definitions", "defeat_npc": "mud_npc_definitions",
-                                  "visit_room": "rooms", "possess_item": "mud_item_definitions",
-                                  "deliver_item": "mud_item_definitions"}.get(row["objective_type"])
+                    if table == "mud_quest_objectives" and row["objective_type"] == "script":
+                        result[column] = value
+                        continue
+                    ref_table = (OBJECTIVE_TARGETS.get(row["objective_type"])
                                  if table == "mud_quest_objectives" else "mud_item_definitions")
                     value = _mapped(maps, ref_table, value, column)
                 elif column in CONDITION_COLUMNS.get(table, ()):
@@ -926,19 +1033,30 @@ def export(database, world_id, *, origin_keys=None, skill_keys=None):
     if world["start_room_id"] not in ids:
         raise WorldError("World starting room is missing.")
     exits = database.execute(
-        "SELECT e.from_room_id,e.to_room_id,e.name,e.direction,e.key_item_id,e.pick_difficulty,"
-        "e.conditions_json,e.conditions_message FROM mud_world_exits e "
+        "SELECT e.id,e.from_room_id,e.to_room_id,e.name,e.direction,e.key_item_id,e.pick_difficulty,"
+        "e.conditions_json,e.conditions_message,e.local_id,e.hidden FROM mud_world_exits e "
         "JOIN mud_world_rooms r ON r.id=e.from_room_id WHERE r.world_id=? ORDER BY e.id", (world_id,)
     ).fetchall()
     content, maps = _export_content(database, world_id, ids)
+    triggers = world_triggers(database, world_id)
+    referenced_exits = {ref for trigger in triggers for kind, ref in mud_triggers.references(trigger) if kind == "exit"}
+    exit_ids, taken = {}, set()
+    for index, row in enumerate(exits, 1):
+        if row["to_room_id"] in ids and (row["local_id"] or row["id"] in referenced_exits):
+            local = row["local_id"] if row["local_id"] and row["local_id"] not in taken else f"exit-{index}"
+            exit_ids[row["id"]] = local
+            taken.add(local)
+    maps["exits"] = exit_ids
     document = {"id": world_id if world_id != "stationnet" else "my-world",
                 "name": world["name"], "author": world["author"],
                 "start_room": ids[world["start_room_id"]],
                 "resource": {"enabled": bool(world["resource_enabled"]), "name": world["resource_name"]},
                 "rooms": [{"id": ids[room["id"]], "name": room["name"],
                            "description": room["description"]} for room in rooms],
-                "exits": [{"from": ids[row["from_room_id"]], "to": ids[row["to_room_id"]],
+                "exits": [{**({"id": exit_ids[row["id"]]} if row["id"] in exit_ids else {}),
+                           "from": ids[row["from_room_id"]], "to": ids[row["to_room_id"]],
                            "name": row["name"], "direction": row["direction"],
+                           **({"hidden": True} if row["hidden"] else {}),
                            **({"key_item_id": _mapped(maps, "mud_item_definitions", row["key_item_id"], "key_item_id")}
                               if row["key_item_id"] else {}),
                            **({"pick_difficulty": row["pick_difficulty"]} if row["pick_difficulty"] else {}),
@@ -1006,7 +1124,34 @@ def export(database, world_id, *, origin_keys=None, skill_keys=None):
         database, world_id, ids, maps, _export_exit_reference(maps, local_reference))
     if world_dungeons:
         document["dungeons"] = world_dungeons
+    events = _export_triggers(triggers, maps, local_reference)
+    if events:
+        document["events"] = events
     return package_bytes(document)
+
+
+def _export_triggers(triggers, maps, local_reference):
+    local_ids = {trigger["global_id"]: trigger["id"] for trigger in triggers}
+
+    def mapper(kind, value):
+        if kind == "trigger":
+            if value not in local_ids:
+                raise WorldError(f"A trigger runs a trigger that no longer exists: {value}.")
+            return local_ids[value]
+        if kind == "exit":
+            if value not in maps["exits"]:
+                raise WorldError(f"A trigger names an exit outside this world: {value}.")
+            return maps["exits"][value]
+        if kind in ORIGIN_KINDS or kind == "skill":
+            return local_reference(kind, value)
+        return _mapped(maps, TRIGGER_TABLES[kind], value, f"trigger {kind}")
+
+    events = []
+    for trigger in triggers:
+        trigger = mud_triggers.remap({key: value for key, value in trigger.items() if key != "global_id"}, mapper)
+        events.append({key: value for key, value in trigger.items()
+                       if value not in (None, [], {}, "") or key in ("source", "actions")})
+    return events
 
 
 def _export_exit_reference(maps, local_reference):
@@ -1155,6 +1300,8 @@ def remove(database, world_id, *, remove_origins=False):
                 raise WorldError("Select another active world before removing this one.")
             associated = removal_origins(database, world_id)
             linked = world_origin_keys(database, world_id)
+            for table in ("mud_script_flags", "mud_trigger_fires", "mud_script_entity_states"):
+                database.execute(f"DELETE FROM {table} WHERE realm=?", (world_id,))
             selected = {kind: {entry["key"] for entry in associated[kind]}
                         for kind in (*character_creation.KINDS, "skills")}
             # Keep definitions referenced by a player's possessions or quest history,

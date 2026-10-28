@@ -529,41 +529,6 @@
       <button class="danger">REMOVE SELECTED CHOICES</button>
     </form>
     {% endif %}
-    <script>
-      (() => {
-        document.querySelectorAll('[data-origin-group]').forEach(group => {
-          const boxes = [...group.querySelectorAll('input[type="checkbox"][data-origin-source]')];
-          group.querySelectorAll('[data-origin-selection]').forEach(button => {
-            button.addEventListener('click', () => {
-              const action = button.dataset.originSelection;
-              boxes.forEach(box => {
-                box.checked = action === 'all' || box.dataset.originSource === action;
-              });
-            });
-          });
-        });
-        const removal = document.getElementById('mud-origin-removal');
-        if (removal) {
-          const boxes = [...removal.querySelectorAll('[data-remove-name]')];
-          const summary = removal.querySelector('.origin-removal-summary');
-          const confirmation = removal.querySelector('[name="confirm_remove"]');
-          const update = () => {
-            const chosen = boxes.filter(box => box.checked);
-            summary.textContent = chosen.length
-              ? `Remove ${chosen.length} choice${chosen.length === 1 ? '' : 's'}: ${chosen.map(box => `${box.dataset.removeKind}: ${box.dataset.removeName}`).join('; ')}`
-              : 'No imported choices selected.';
-            confirmation.checked = false;
-          };
-          boxes.forEach(box => box.addEventListener('change', update));
-          removal.addEventListener('submit', event => {
-            if (!boxes.some(box => box.checked)) {
-              event.preventDefault();
-              summary.textContent = 'Select at least one imported race or class.';
-            }
-          });
-        }
-      })();
-    </script>
   </section>
   <section id="mud-skills" aria-labelledby="mud-skills-heading">
     <h3 id="mud-skills-heading">Skills</h3>
@@ -590,15 +555,6 @@
       <small>At least {{ mud_starting_skill_choices }} skills offered at creation must remain enabled while either MUD mode is on.</small>
       <button>SAVE SKILLS</button>
     </form>
-    <script>
-      (() => {
-        const group = document.querySelector('[data-origin-group="skills"]');
-        const boxes = [...group.querySelectorAll('input[type="checkbox"][data-origin-source]')];
-        group.querySelectorAll('[data-origin-selection]').forEach(button => button.addEventListener('click', () => {
-          boxes.forEach(box => { box.checked = button.dataset.originSelection === 'all' || box.dataset.originSource === button.dataset.originSelection; });
-        }));
-      })();
-    </script>
     <h4>Import Skills</h4>
     <p><a href="{{ url_for('station.download_mud_skill_template') }}">DOWNLOAD SKILL TEMPLATE</a> · <a href="{{ url_for('station.download_mud_skill_pack_template') }}">DOWNLOAD SKILL PACK TEMPLATE</a></p>
     <form method="post" action="{{ url_for('station.import_mud_skill') }}" enctype="multipart/form-data" class="form-grid">
@@ -630,41 +586,9 @@
       <label class="deletion-checkbox"><input type="checkbox" name="confirm_remove" required> I reviewed the summary and confirm removal</label>
       <button class="danger">REMOVE SELECTED SKILLS</button>
     </form>
-    <script>
-      (() => {
-        const removal = document.getElementById('mud-skill-removal');
-        const boxes = [...removal.querySelectorAll('[data-remove-name]')];
-        const summary = removal.querySelector('.origin-removal-summary');
-        const confirmation = removal.querySelector('[name="confirm_remove"]');
-        const update = () => {
-          const chosen = boxes.filter(box => box.checked);
-          const chosenNames = new Set(chosen.map(box => `skill ${box.dataset.removeName}`));
-          const lines = chosen.map(box => {
-            const blockers = box.dataset.removeDependents.split(', ').filter(name => name && !chosenNames.has(name));
-            const holders = Number(box.dataset.removeHolders);
-            return `${box.dataset.removeName}${blockers.length ? ` (blocked by ${blockers.join(', ')})` : ''}${holders ? ` (kept inactive for ${holders} character${holders === 1 ? '' : 's'})` : ''}`;
-          });
-          summary.textContent = chosen.length
-            ? `Remove ${chosen.length} skill${chosen.length === 1 ? '' : 's'}: ${lines.join('; ')}`
-            : 'No imported skills selected.';
-          confirmation.checked = false;
-        };
-        boxes.forEach(box => box.addEventListener('change', update));
-        removal.querySelectorAll('[data-skill-removal]').forEach(button => button.addEventListener('click', () => {
-          boxes.forEach(box => { box.checked = button.dataset.skillRemoval === 'all'; });
-          update();
-        }));
-        removal.addEventListener('submit', event => {
-          if (!boxes.some(box => box.checked)) {
-            event.preventDefault();
-            summary.textContent = 'Select at least one imported skill.';
-          }
-        });
-      })();
-    </script>
     {% endif %}
   </section>
-  <section id="mud-worlds" aria-labelledby="mud-worlds-heading">
+  <section id="mud-worlds" aria-labelledby="mud-worlds-heading" data-world-linked="{{ mud_world_origin_keys|tojson|forceescape }}" data-world-removal="{{ mud_world_removal|tojson|forceescape }}">
     <h3 id="mud-worlds-heading">Traditional Worlds</h3>
     <p class="muted">World ZIPs can include rooms, content, trainers, and optional races, classes, and skills. Import installs a world without activating it or moving characters. World files live in <code>data/mud_worlds/</code>.</p>
     {% set managed = {'races': mud_origins.races, 'classes': mud_origins.classes, 'skills': mud_skill_entries} %}
@@ -681,7 +605,7 @@
       {% endfor %}
       <button>EXPORT WORLD ZIP</button>
     </form>
-    <form method="post" action="{{ url_for('station.import_mud_world') }}" enctype="multipart/form-data" class="form-grid" id="world-import-form">
+    <form method="post" action="{{ url_for('station.import_mud_world') }}" enctype="multipart/form-data" class="form-grid" id="world-import-form" data-preview-url="{{ url_for('station.preview_mud_world') }}">
       <input type="hidden" name="csrf_token" value="{{ session.csrf_token }}">
       <label>World ZIP<input type="file" name="world_file" id="world-import-file" accept=".zip,application/zip" required></label>
       <label>Race, class, and skill availability after import<select name="origin_mode" id="world-import-mode">
@@ -734,66 +658,6 @@
       <button class="secondary">REMOVE WORLD</button>
     </form>
     {% endif %}
-    <script>
-      (() => {
-        const linked = {{ mud_world_origin_keys|tojson }};
-        const removal = {{ mud_world_removal|tojson }};
-        const removeSelect = document.getElementById('world-remove-id');
-        const removeDetails = document.getElementById('world-remove-origins');
-        const updateRemove = () => {
-          const entries = removal[removeSelect.value];
-          removeDetails.replaceChildren();
-          if (!entries) return;
-          for (const kind of ['races', 'classes', 'skills']) {
-            const line = document.createElement('p');
-            const items = entries[kind];
-            line.textContent = `${kind}: ${items.length ? items.map(item => `${item.name} (${item.removable ? 'eligible for removal' : 'shared or unavailable; preserved'})`).join(', ') : 'none'}`;
-            removeDetails.append(line);
-          }
-        };
-        removeSelect?.addEventListener('change', updateRemove);
-        const exportSelect = document.getElementById('world-export-id');
-        exportSelect?.addEventListener('change', () => {
-          document.querySelectorAll('.world-export-origin').forEach(box => {
-            box.checked = (linked[exportSelect.value]?.[box.name] || []).includes(box.value);
-          });
-        });
-        for (const prefix of ['world-import', 'world-activate']) {
-          const mode = document.getElementById(`${prefix}-mode`);
-          const manual = document.getElementById(`${prefix}-manual`);
-          const update = () => { manual.hidden = mode.value !== 'manual'; };
-          mode?.addEventListener('change', update);
-          if (mode) update();
-        }
-        const file = document.getElementById('world-import-file');
-        file?.addEventListener('change', async () => {
-          for (const kind of ['races', 'classes', 'skills']) document.getElementById(`world-import-bundled-${kind}`).replaceChildren();
-          if (!file.files.length) return;
-          const data = new FormData();
-          data.append('csrf_token', document.querySelector('#world-import-form [name=csrf_token]').value);
-          data.append('world_file', file.files[0]);
-          try {
-            const response = await fetch('{{ url_for('station.preview_mud_world') }}', {method: 'POST', body: data});
-            const result = await response.json();
-            if (!response.ok) throw new Error(result.error || 'Could not preview archive.');
-            for (const kind of ['races', 'classes', 'skills']) {
-              const container = document.getElementById(`world-import-bundled-${kind}`);
-              for (const origin of result.origins[kind]) {
-                const label = document.createElement('label');
-                label.className = 'switch';
-                const box = document.createElement('input');
-                box.type = 'checkbox'; box.name = kind; box.value = origin.key; box.checked = true;
-                label.append(box, document.createTextNode(` ${origin.name} (bundled)`));
-                container.append(label);
-              }
-            }
-          } catch (error) {
-            const note = document.createElement('small'); note.textContent = error.message;
-            document.getElementById('world-import-bundled-races').append(note);
-          }
-        });
-      })();
-    </script>
   </section>
   <section id="dungeon-themes" aria-labelledby="dungeon-themes-heading">
     <h3 id="dungeon-themes-heading">Dungeon Themes</h3>
@@ -820,7 +684,7 @@
       {% else %}<p class="muted">No valid themes are installed.</p>{% endfor %}
     </div>
     {% if mud_dungeon_themes|selectattr('custom')|list %}
-    <form method="post" action="{{ url_for('station.remove_dungeon') }}" class="form-grid">
+    <form method="post" action="{{ url_for('station.remove_dungeon') }}" class="form-grid" data-dungeon-removal="{{ mud_dungeon_removal|tojson|forceescape }}">
       <input type="hidden" name="csrf_token" value="{{ session.csrf_token }}">
       <div class="divider">REMOVE CUSTOM DUNGEON THEME</div>
       <label>Installed dungeon theme
@@ -835,24 +699,6 @@
       <small>Existing runs and today's dungeon remain available. Future runs cannot select this theme.</small>
       <button type="submit" class="secondary">REMOVE DUNGEON</button>
     </form>
-    <script>
-      (() => {
-        const removal = {{ mud_dungeon_removal|tojson }};
-        const select = document.getElementById('dungeon-remove-id');
-        const details = document.getElementById('dungeon-remove-origins');
-        select.addEventListener('change', () => {
-          details.replaceChildren();
-          const entries = removal[select.value];
-          if (!entries) return;
-          for (const kind of ['races', 'classes', 'skills']) {
-            const line = document.createElement('p');
-            const items = entries[kind];
-            line.textContent = `${kind}: ${items.length ? items.map(item => `${item.name} (${item.removable ? 'eligible for removal' : 'shared or unavailable; preserved'})`).join(', ') : 'none'}`;
-            details.append(line);
-          }
-        });
-      })();
-    </script>
     {% endif %}
     <p class="muted">Enabled for new dungeons: {% for theme in mud_daily_themes %}{{ theme.name }} ({{ theme.id }}@{{ theme.version }}){{ ', ' if not loop.last }}{% else %}none. Existing dungeons remain available.{% endfor %}</p>
   </section>
@@ -1089,5 +935,6 @@
   {% endfor %}
   </div>
 </section>
+<script src="{{ url_for('static', filename='settings-mud.js', v='1') }}" defer></script>
 {% endblock %}
 

@@ -84,6 +84,30 @@ def remap_references(template, item_mapper, npc_mapper):
                 for entry in npc.get(key, []) if isinstance(npc, dict) else []:
                     if isinstance(entry, dict) and isinstance(entry.get("item_definition_id"), str):
                         entry["item_definition_id"] = item_mapper(entry["item_definition_id"])
+    # Triggers name embedded content by local ID and shared content by definition ID.
+    local = {kind: {entry.get("id") for entry in definitions.get(kind, []) if isinstance(entry, dict)}
+             for kind in ("items", "npcs", "enemies")} if definitions else {"items": set(), "npcs": set(), "enemies": set()}
+
+    def shared(kind, value):
+        if kind == "item" and isinstance(value, str) and value not in local["items"]:
+            return item_mapper(value)
+        if kind == "npc" and isinstance(value, str) and value not in local["npcs"] | local["enemies"]:
+            return npc_mapper(value)
+        return value
+
+    for trigger in template.get("triggers", []) if isinstance(template.get("triggers"), list) else []:
+        if not isinstance(trigger, dict):
+            continue
+        if isinstance(trigger.get("source"), dict):
+            trigger["source"] = {kind: shared(kind, value) for kind, value in trigger["source"].items()}
+        for action in trigger.get("actions", []) if isinstance(trigger.get("actions"), list) else []:
+            if isinstance(action, dict) and action.get("type") in ("give_item", "take_item"):
+                action["item"] = shared("item", action.get("item"))
+        if isinstance(trigger.get("conditions"), list):
+            for condition in trigger["conditions"]:
+                for entry in condition.get("any", [condition]) if isinstance(condition, dict) else []:
+                    if isinstance(entry, dict) and entry.get("type") == "has_item":
+                        entry["item"] = shared("item", entry.get("item"))
     return template
 
 

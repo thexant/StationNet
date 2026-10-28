@@ -8,12 +8,13 @@ context object supplied by the game. It never touches the database itself.
 A context must provide these methods:
     level() race() class_key() tags() coins() item_count(item_id) attribute(name)
     skill_rank(skill_key) quest_status(quest_id) objective_complete(objective_id)
-    state(key) claimed()
+    state(key) claimed() flag(scope, key) object_state(object_id) room_id()
 
 It also validates and checks equipment requirements, which gate items on
 attributes, level, and the wearer's race, class, or origin tags.
 """
 import json
+import re
 
 from .character_creation import ATTRIBUTES, KEY_RE
 
@@ -22,15 +23,21 @@ MAX_OUTCOMES = 10
 MAX_ID_LENGTH = 200
 QUEST_STATUSES = ("not_started", "active", "ready", "completed")
 CONDITION_TYPES = ("level", "race", "class", "tag", "has_item", "coins", "attribute", "skill",
-                   "quest", "objective", "state", "claimed")
+                   "quest", "objective", "state", "claimed", "flag", "object_state", "in_room")
 OUTCOME_TYPES = ("give_item", "take_item", "experience", "coins", "take_coins")
-# Condition types that only make sense where traditional-world quests exist.
-QUEST_CONDITION_TYPES = ("quest", "objective")
+# Condition types that only make sense in traditional worlds, where quests and
+# placed objects and rooms exist.
+QUEST_CONDITION_TYPES = ("quest", "objective", "object_state", "in_room")
+FLAG_SCOPES = ("player", "world")
+# Flag keys are short lowercase names such as gate.open or wardens_slain.
+FLAG_KEY_RE = re.compile(r"^[a-z0-9][a-z0-9_.:-]{0,79}$")
+MAX_FLAG_VALUE = 200
 # Which field of each condition/outcome names another piece of content.
 _REFERENCE_FIELDS = {
     "has_item": ("item", "item"), "skill": ("skill", "skill"),
     "quest": ("quest", "quest"), "objective": ("objective", "objective"),
     "give_item": ("item", "item"), "take_item": ("item", "item"),
+    "object_state": ("object", "object"), "in_room": ("room", "room"),
 }
 
 
@@ -42,6 +49,20 @@ def _identifier(value, label):
     if not isinstance(value, str) or not 1 <= len(value.strip()) <= MAX_ID_LENGTH:
         raise ValueError(f"{label} must name a content ID.")
     return value.strip()
+
+
+def flag_key(value, label="Flag key"):
+    if not isinstance(value, str) or not FLAG_KEY_RE.fullmatch(value.strip()):
+        raise ValueError(f"{label} must be 1 to 80 lowercase letters, digits, or . _ : -, such as gate.open.")
+    return value.strip()
+
+
+def flag_number(value):
+    """A stored flag value as a whole number; text and blanks count as 0."""
+    try:
+        return int(str(value).strip() or 0)
+    except ValueError:
+        return 0
 
 
 def _load(value, label):
@@ -142,6 +163,34 @@ def _condition(raw, allowed, nested):
         if not isinstance(value, str) or len(value) > 500:
             raise ValueError("State condition values must be text up to 500 characters.")
         result.update(key=" ".join(key.split()), value=value)
+    elif kind == "flag":
+        fields |= {"scope", "key", "value", "min", "max"}
+        scope = raw.get("scope", "player")
+        if scope not in FLAG_SCOPES:
+            raise ValueError("Flag conditions need scope player or world.")
+        result.update(scope=scope, key=flag_key(raw.get("key"), "Flag condition key"))
+        if "value" in raw and ("min" in raw or "max" in raw):
+            raise ValueError("Flag conditions use value or min/max, not both.")
+        if "value" in raw:
+            if not isinstance(raw["value"], str) or len(raw["value"]) > MAX_FLAG_VALUE:
+                raise ValueError(f"Flag condition values must be text up to {MAX_FLAG_VALUE} characters.")
+            result["value"] = raw["value"]
+        for bound in ("min", "max"):
+            if bound in raw:
+                if type(raw[bound]) is not int or abs(raw[bound]) > 1_000_000_000:
+                    raise ValueError("Flag min and max must be whole numbers.")
+                result[bound] = raw[bound]
+        if result.get("min", 0) > result.get("max", result.get("min", 0)):
+            raise ValueError("Flag min cannot exceed max.")
+    elif kind == "object_state":
+        fields |= {"object", "state"}
+        state = raw.get("state", "")
+        if not isinstance(state, str) or len(state) > 40:
+            raise ValueError("object_state conditions need a state of up to 40 characters.")
+        result.update(object=_identifier(raw.get("object"), "object_state object"), state=state.strip())
+    elif kind == "in_room":
+        fields |= {"room"}
+        result["room"] = _identifier(raw.get("room"), "in_room room")
     unknown = set(raw) - fields
     if unknown:
         raise ValueError(f"{kind} conditions do not accept: {', '.join(sorted(unknown))}.")
@@ -196,7 +245,7 @@ def _flatten(conditions):
 
 def references(conditions=(), outcomes=()):
     """Yield (kind, id) for every content reference; kinds are item, quest,
-    objective, skill, race, and class."""
+    objective, skill, race, class, object (a placed item), and room."""
     for entry in [*_flatten(conditions), *outcomes]:
         kind = entry.get("type")
         if kind in _REFERENCE_FIELDS:
@@ -253,6 +302,18 @@ def _holds(condition, context):
         return str(context.state(condition["key"])) == condition["value"]
     if kind == "claimed":
         return context.claimed()
+    if kind == "flag":
+        value = context.flag(condition["scope"], condition["key"])
+        if "min" in condition or "max" in condition:
+            number = flag_number(value)
+            return condition.get("min", number) <= number <= condition.get("max", number)
+        if "value" in condition:
+            return value == condition["value"]
+        return value != ""
+    if kind == "object_state":
+        return context.object_state(condition["object"]) == condition["state"]
+    if kind == "in_room":
+        return context.room_id() == condition["room"]
     return False
 
 

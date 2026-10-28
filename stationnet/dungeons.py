@@ -5,7 +5,7 @@ not start a run or move a character; Chunks 11 and 12 own those concerns.
 """
 from collections import deque
 from copy import deepcopy
-from . import mud_conditions, mud_effects, mud_firearms
+from . import mud_conditions, mud_effects, mud_firearms, mud_triggers
 import hashlib
 import json
 from pathlib import Path
@@ -792,7 +792,34 @@ def validate_template(template, database=None):
                         errors.append(f"{path}.{key}: unknown {target} pool {pool[key]!r}")
                 if "config" in pool and not isinstance(pool["config"], dict):
                     errors.append(f"{path}.config: must be an object")
+    role_names = {"entrance", "exit", "normal"} | ({rule.get("role") for rule in roles if isinstance(rule, dict)}
+                                                   if isinstance(roles, list) else set())
+    _validate_triggers(errors, template, embedded_ids, ids_by_kind.get("rooms", set()), role_names, database)
     return errors
+
+
+def _validate_triggers(errors, template, embedded_ids, room_templates, roles, database=None):
+    """Dungeon triggers name the template's own room roles, room templates, and definitions."""
+    if "triggers" not in template:
+        return
+    try:
+        triggers = mud_triggers.validate_list(template["triggers"], dungeon=True)
+    except ValueError as problem:
+        errors.append(f"$.triggers: {problem}")
+        return
+    npcs = embedded_ids.get("npcs", set()) | embedded_ids.get("enemies", set())
+    for trigger in triggers:
+        path = f"$.triggers[{trigger['id']}]"
+        for kind, ref in mud_triggers.references(trigger):
+            if kind == "room_role" and ref not in roles:
+                errors.append(f"{path}.source.room_role: unknown room role {ref!r}")
+            elif kind == "room_template" and ref not in room_templates:
+                errors.append(f"{path}.source.room_template: unknown room pool {ref!r}")
+            elif kind in ("item", "npc") and ref not in (embedded_ids.get("items", set()) if kind == "item" else npcs):
+                table = "mud_item_definitions" if kind == "item" else "mud_npc_definitions"
+                if database is not None and database.execute(
+                        f"SELECT 1 FROM {table} WHERE id=?", (ref,)).fetchone() is None:
+                    errors.append(f"{path}: {kind} {ref!r} is neither embedded nor an existing definition")
 
 
 def _weighted(rng, choices):

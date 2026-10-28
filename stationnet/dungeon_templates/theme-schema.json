@@ -78,7 +78,8 @@
         "items": {"type": "array", "items": {"$ref": "#/$defs/contentPool"}},
         "encounters": {"type": "array", "items": {"$ref": "#/$defs/encounterPool"}}
       }
-    }
+    },
+    "triggers": {"type": "array", "maxItems": 2000, "items": {"$ref": "#/$defs/trigger"}}
   },
   "$defs": {
     "id": {"type": "string", "pattern": "^[a-z0-9][a-z0-9._-]{0,63}$"},
@@ -263,6 +264,24 @@
         {"$ref": "#/$defs/poolBase"},
         {"type": "object", "properties": {"chance": {"type": "number", "minimum": 0, "maximum": 1}, "npc_pool": {"$ref": "#/$defs/id"}, "enemy_pool": {"$ref": "#/$defs/id"}, "item_pool": {"$ref": "#/$defs/id"}, "config": {"type": "object"}}}
       ]
+    },
+    "trigger": {
+      "type": "object", "required": ["id", "event", "actions"], "additionalProperties": false,
+      "properties": {
+        "id": {"type": "string", "pattern": "^[a-z][a-z0-9-]{0,63}$"},
+        "name": {"type": "string", "maxLength": 80},
+        "event": {"enum": ["enter_room", "use_object", "take_item", "say_phrase", "defeat_npc", "manual"]},
+        "source": {"type": "object", "maxProperties": 1, "additionalProperties": false, "properties": {"room_role": {"type": "string"}, "room_template": {"type": "string"}, "item": {"type": "string"}, "npc": {"type": "string"}}},
+        "phrase": {"type": "string", "maxLength": 200},
+        "scope": {"enum": ["character", "world"]},
+        "once": {"type": "boolean"},
+        "enabled": {"type": "boolean"},
+        "cooldown_seconds": {"type": "integer", "minimum": 0, "maximum": 604800},
+        "max_fires": {"type": ["integer", "null"], "minimum": 1},
+        "conditions": {"type": "array", "maxItems": 20, "items": {"type": "object"}},
+        "fail_message": {"type": "string", "maxLength": 200},
+        "actions": {"type": "array", "minItems": 1, "maxItems": 10, "items": {"type": "object", "required": ["type"], "properties": {"type": {"enum": ["message", "set_flag", "clear_flag", "give_item", "take_item", "experience", "coins", "take_coins", "heal", "damage", "run_trigger"]}, "delay_seconds": {"type": "integer", "minimum": 0, "maximum": 3600}}}}
+      }
     }
   }
 }
