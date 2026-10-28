@@ -46,6 +46,21 @@
       <input id="clock-start-hour" name="start_hour" type="number" min="0" max="23" value="{{ society.clock.start_hour }}">
       <button>SAVE CLOCK</button>
     </form>
+    <h3>Relationships</h3>
+    <p class="muted">NPCs remember how each player treats them. Regard runs from -100 to 100 and reads as hostile, unfriendly (below -20), neutral, friendly (20+) or trusted (60+). It changes through dialogue outcomes, triggers, gifts (<code>/give</code>), quests and attacks, and shifts prices by up to 10%. Hostile NPCs refuse to talk, and combat-capable ones attack. Players see it with <code>/relations</code>.</p>
+    <form method="post" action="{{ url_for('mud.builder_set_society', section='relationships') }}" class="builder-inline-form">
+      <input type="hidden" name="csrf_token" value="{{ session.csrf_token }}">
+      <label class="check"><input type="checkbox" name="enabled" value="1" {% if society.relationships.enabled %}checked{% endif %}> NPCs remember players</label>
+      <label for="relationships-quest">Completed quest</label>
+      <input id="relationships-quest" name="quest_complete" type="number" min="-100" max="100" value="{{ society.relationships.quest_complete }}">
+      <label for="relationships-attack">Unprovoked attack</label>
+      <input id="relationships-attack" name="attack" type="number" min="-100" max="100" value="{{ society.relationships.attack }}">
+      <label for="relationships-crime">Witnessed crime</label>
+      <input id="relationships-crime" name="crime" type="number" min="-100" max="100" value="{{ society.relationships.crime }}">
+      <label for="relationships-hostile">Hostile at or below</label>
+      <input id="relationships-hostile" name="hostile_at" type="number" min="-100" max="-21" value="{{ society.relationships.hostile_at }}">
+      <button>SAVE RELATIONSHIPS</button>
+    </form>
   </section>
 
   {% if g.user.is_admin %}
@@ -138,12 +153,16 @@
   <section class="terminal-card builder-create" aria-labelledby="npc-heading">
     <p class="eyebrow">NPC LIBRARY / REUSABLE DEFINITIONS</p><h2 id="npc-heading">NPCs</h2>
     <p class="muted">Optional behaviours: ambient speech, wander or patrol, and reactions to movement, speech, emotes, and items. See the custom world guide for JSON examples.</p>
-    <details class="builder-exits"><summary>Daily schedules</summary>
+    <details class="builder-exits"><summary>Daily schedules and relationships</summary>
       <p class="muted">With the world clock on, a <code>schedule</code> moves an NPC between rooms by the hour and sends it home otherwise. Entries run from <code>from</code> up to (not including) <code>to</code> and may wrap past midnight; the first matching entry wins. <code>open: true</code> lets a merchant or trainer trade there, and scheduled merchants and trainers are closed at other times. <code>lines</code> are shown in the room while the NPC is there. <code>travel</code> is <code>walk</code> (one room per tick, by the shortest route) or <code>teleport</code>. A schedule replaces wander and patrol.{% if not society.clock.enabled %} <strong>The clock is off, so schedules are paused.</strong>{% endif %}</p>
       <pre>{"schedule": {"interval_seconds": 30, "travel": "walk",
   "entries": [{"from": 8, "to": 18, "room": "ROOM-ID", "open": true,
                "lines": ["The smith hammers at a glowing blade."]},
               {"from": 18, "to": 22, "room": "ROOM-ID"}]}}</pre>
+      <p class="muted">A <code>relationship</code> tunes how this NPC regards players: a starting <code>default</code>, <code>gifts</code> it values (item ID → change), <code>greetings</code> per tier, <code>refuse_talk_below</code>, its own <code>quest_complete</code>, <code>attack</code> and <code>crime</code> changes, and <code>attacks_when_hostile</code>.</p>
+      <pre>{"relationship": {"default": 10, "gifts": {"ITEM-ID": 15},
+  "greetings": {"friendly": "Good to see you again!", "unfriendly": "What now?"},
+  "refuse_talk_below": -40}}</pre>
       <p class="muted">Room IDs for this world:</p>
       <ul class="builder-id-list">{% for room in rooms %}<li><code>{{ room.id }}</code> {{ room.name }}</li>{% endfor %}</ul>
     </details>

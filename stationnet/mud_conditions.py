@@ -11,7 +11,9 @@ A context must provide these methods:
     state(key) claimed() flag(scope, key) object_state(object_id) room_id()
     knows_destination(destination_id)
 
-Contexts may also provide game_hour(), the active world's hour or None.
+Contexts may also provide game_hour(), the active world's hour or None, and
+disposition(npc_definition_id), an NPC's (regard, tier) toward the character or
+None while relationships are off; a missing NPC means the one being spoken to.
 
 It also validates and checks equipment requirements, which gate items on
 attributes, level, and the wearer's race, class, or origin tags.
@@ -27,13 +29,15 @@ MAX_ID_LENGTH = 200
 QUEST_STATUSES = ("not_started", "active", "ready", "completed")
 CONDITION_TYPES = ("level", "race", "class", "tag", "has_item", "coins", "attribute", "skill",
                    "quest", "objective", "state", "claimed", "flag", "object_state", "in_room",
-                   "knows_destination", "time")
-OUTCOME_TYPES = ("give_item", "take_item", "experience", "coins", "take_coins", "learn_destination")
+                   "knows_destination", "time", "disposition")
+OUTCOME_TYPES = ("give_item", "take_item", "experience", "coins", "take_coins", "learn_destination", "disposition")
 # Condition types that only make sense in traditional worlds, where quests and
 # placed objects, rooms and wayfinding destinations exist.
-QUEST_CONDITION_TYPES = ("quest", "objective", "object_state", "in_room", "knows_destination", "time")
+QUEST_CONDITION_TYPES = ("quest", "objective", "object_state", "in_room", "knows_destination", "time",
+                         "disposition")
 # Outcomes that teach world knowledge; procedural dungeons have no destinations.
-WORLD_OUTCOME_TYPES = ("learn_destination",)
+WORLD_OUTCOME_TYPES = ("learn_destination", "disposition")
+DISPOSITION_TIERS = ("hostile", "unfriendly", "neutral", "friendly", "trusted")
 FLAG_SCOPES = ("player", "world")
 # Flag keys are short lowercase names such as gate.open or wardens_slain.
 FLAG_KEY_RE = re.compile(r"^[a-z0-9][a-z0-9_.:-]{0,79}$")
@@ -45,6 +49,8 @@ _REFERENCE_FIELDS = {
     "give_item": ("item", "item"), "take_item": ("item", "item"),
     "object_state": ("object", "object"), "in_room": ("room", "room"),
     "knows_destination": ("destination", "destination"), "learn_destination": ("destination", "destination"),
+    # Optional: without an NPC these mean the one being spoken to.
+    "disposition": ("npc", "npc"),
 }
 
 
@@ -201,6 +207,26 @@ def _condition(raw, allowed, nested):
     elif kind == "knows_destination":
         fields |= {"destination"}
         result["destination"] = _identifier(raw.get("destination"), "knows_destination destination")
+    elif kind == "disposition":
+        fields |= {"npc", "min", "max", "tier"}
+        if "npc" in raw:
+            result["npc"] = _identifier(raw["npc"], "disposition npc")
+        if "tier" in raw:
+            if "min" in raw or "max" in raw:
+                raise ValueError("Disposition conditions use tier or min/max, not both.")
+            tiers = [raw["tier"]] if isinstance(raw["tier"], str) else raw["tier"]
+            if not isinstance(tiers, list) or not tiers or any(tier not in DISPOSITION_TIERS for tier in tiers):
+                raise ValueError(f"Disposition tier must be one or more of {', '.join(DISPOSITION_TIERS)}.")
+            result["tier"] = [tier for tier in DISPOSITION_TIERS if tier in tiers]
+        elif "min" not in raw and "max" not in raw:
+            raise ValueError("Disposition conditions need tier, or min and/or max.")
+        for bound in ("min", "max"):
+            if bound in raw:
+                if not _whole(raw[bound], -100, 100):
+                    raise ValueError("Disposition bounds must be whole numbers from -100 to 100.")
+                result[bound] = raw[bound]
+        if result.get("min", -100) > result.get("max", 100):
+            raise ValueError("Disposition min cannot exceed max.")
     elif kind == "time":
         fields |= {"from", "to"}
         if not _whole(raw.get("from"), 0, 23) or not _whole(raw.get("to"), 0, 23) or raw["from"] == raw["to"]:
@@ -238,7 +264,14 @@ def validate_outcomes(value, *, allow_world=True):
         if kind not in allowed:
             raise ValueError(f"Unsupported outcome type {kind!r}; use one of {', '.join(allowed)}.")
         amount = raw.get("amount", 1)
-        if kind == "learn_destination":
+        if kind == "disposition":
+            if set(raw) - {"type", "npc", "amount"}:
+                raise ValueError("disposition outcomes accept only npc and amount.")
+            if not _whole(amount, -100, 100) or amount == 0:
+                raise ValueError("Disposition amounts must be nonzero whole numbers from -100 to 100.")
+            result.append({"type": kind, "amount": amount,
+                           **({"npc": _identifier(raw["npc"], "disposition npc")} if "npc" in raw else {})})
+        elif kind == "learn_destination":
             if set(raw) - {"type", "destination"}:
                 raise ValueError("learn_destination outcomes accept only destination.")
             result.append({"type": kind, "destination": _identifier(raw.get("destination"),
@@ -271,7 +304,8 @@ def references(conditions=(), outcomes=()):
         kind = entry.get("type")
         if kind in _REFERENCE_FIELDS:
             field, ref_kind = _REFERENCE_FIELDS[kind]
-            yield ref_kind, entry[field]
+            if field in entry:
+                yield ref_kind, entry[field]
         elif kind in ("race", "class"):
             for key in entry["keys"]:
                 yield kind, key
@@ -283,7 +317,7 @@ def _remap_entry(entry, mapper):
         return {**entry, "any": [_remap_entry(option, mapper) for option in entry["any"]]}
     if kind in _REFERENCE_FIELDS:
         field, ref_kind = _REFERENCE_FIELDS[kind]
-        return {**entry, field: mapper(ref_kind, entry[field])}
+        return {**entry, field: mapper(ref_kind, entry[field])} if field in entry else dict(entry)
     if kind in ("race", "class"):
         return {**entry, "keys": sorted({mapper(kind, key) for key in entry["keys"]})}
     return dict(entry)
@@ -338,6 +372,14 @@ def _holds(condition, context):
     if kind == "knows_destination":
         knows = getattr(context, "knows_destination", None)
         return bool(knows and knows(condition["destination"]))
+    if kind == "disposition":
+        found = getattr(context, "disposition", lambda npc: None)(condition.get("npc"))
+        if found is None:
+            return False
+        value, tier = found
+        if "tier" in condition:
+            return tier in condition["tier"]
+        return condition.get("min", -100) <= value <= condition.get("max", 100)
     if kind == "time":
         hour = getattr(context, "game_hour", lambda: None)()
         if hour is None:

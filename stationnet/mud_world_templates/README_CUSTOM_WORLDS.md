@@ -14,7 +14,7 @@ code or scripts run from a world package.
 Archives are limited to 16 MB, each JSON file to 8 MB, 1000 authored rooms, and 5000
 exits. Wilderness rooms do not count toward the room limit; a world may hold up
 to 1,000,000 of them. `content.json` may have up to 5,000 records in each supported array.
-The manifest may also turn on the optional [world life](#5f-world-life-clock-and-schedules)
+The manifest may also turn on the optional [world life](#5f-world-life)
 systems. The ZIP must contain only those three required files and optional
 `content.json`, `origins.json`, `skills.json`, `dungeons.json`,
 `events.json`, and `wilderness.json`, all at its root. Imports validate references
@@ -438,12 +438,13 @@ its entries holds; groups cannot be nested. A list holds up to 20 entries.
 | `object_state` | `object` (a placed item), `state` | The object's current state equals `state` (`""` until changed). |
 | `in_room` | `room` | The character is in that room. |
 | `knows_destination` | `destination` | The character has learned that [destination](#5e-wayfinding-destinations) (by visiting, dialogue, a trigger, or reading). Carrying a map does not count. |
-| `time` | `from`, `to` (hours 0–23) | The [world clock](#5f-world-life-clock-and-schedules) reads an hour from `from` up to, but not including, `to`. `{"from": 20, "to": 4}` wraps past midnight. Never holds while the clock is off. |
+| `disposition` | optional `npc` (definition), and `tier` (one or a list of `hostile`, `unfriendly`, `neutral`, `friendly`, `trusted`) or `min`/`max` (-100 to 100) | That NPC's [regard](#relationships) for the character matches. Without `npc` it means the NPC being spoken to. Never holds while relationships are off. |
+| `time` | `from`, `to` (hours 0–23) | The [world clock](#world-clock) reads an hour from `from` up to, but not including, `to`. `{"from": 20, "to": 4}` wraps past midnight. Never holds while the clock is off. |
 
 Flag keys are 1 to 80 lowercase letters, digits, and `. _ : -`, such as
 `gate.open` or `rats_slain`. Inside a procedural dungeon, `world` flags belong
-to that run. `object_state`, `in_room`, `knows_destination`, and `time` are not
-available in dungeon templates.
+to that run. `object_state`, `in_room`, `knows_destination`, `time`, and
+`disposition` are not available in dungeon templates.
 
 ### Outcomes
 
@@ -461,6 +462,7 @@ nothing is granted.
 | `coins` | `amount` (1–100,000) | Gives coins. |
 | `take_coins` | `amount` (1–100,000) | Charges coins (refused if too few). |
 | `learn_destination` | `destination` | Teaches the way to a [destination](#5e-wayfinding-destinations). Not available in dungeon templates. |
+| `disposition` | `amount` (-100 to 100, not 0), optional `npc` | Changes an NPC's [regard](#relationships) for the player; the NPC being spoken to unless `npc` names another. Not available in dungeon templates. |
 
 Item, quest, and objective IDs inside conditions and outcomes are local package
 IDs, like other references, and must exist in the package.
@@ -761,6 +763,7 @@ left the world, or the dungeon run, by the time it is due.
 | `complete_objective` | `objective` | Advances an objective by one, or completes it. Use it with `script` objectives, which only triggers can advance. |
 | `run_trigger` | `trigger` | Runs a `manual` trigger. The manual trigger's own conditions and limits still apply. |
 | `learn_destination`, `forget_destination` | `destination` | Teaches the player the way to a [destination](#5e-wayfinding-destinations), or makes them forget it. |
+| `disposition` | `npc` (definition), `amount` (-100 to 100, not 0) | Changes that NPC's [regard](#relationships) for the player. |
 
 Exits must have an `"id"` in `exits.json` before a trigger can name them.
 
@@ -1049,7 +1052,7 @@ or nothing if the place is off the grid. In the World Builder, each room card
 and the wilderness room inspector has a **Wayfinding destination** form. The
 item form chooses which destinations an item teaches.
 
-## 5f. World life: clock and schedules
+## 5f. World life
 
 These optional systems make a world feel inhabited. Each is **off** until the
 world turns it on, so existing worlds play exactly as before. Turn them on in
@@ -1104,6 +1107,63 @@ A `schedule` in an NPC's `behaviors_json` gives it a daily routine:
   the clock is off.
 - Rooms are local room IDs or `@x,y,z` wilderness squares, and must exist in
   the package.
+
+### Relationships
+
+With relationships on, every NPC definition remembers how much it likes each
+character: its **regard**, from -100 to 100. Regard belongs to the NPC
+definition, so it survives respawns and is shared by every placed copy. It
+reads as a tier:
+
+| Tier | Regard |
+| --- | --- |
+| `hostile` | at or below `hostile_at` (default -60) |
+| `unfriendly` | below -20 |
+| `neutral` | -20 to 19 |
+| `friendly` | 20 to 59 |
+| `trusted` | 60 and above |
+
+```json
+"relationships": {"enabled": true, "quest_complete": 5, "attack": -40, "crime": -25, "hostile_at": -60}
+```
+
+`quest_complete` is added for the quest's turn-in NPC (or each giver) when a
+quest pays out. `attack` applies when a player attacks an NPC that was not
+hostile to them, once per fight. `crime` is used by
+[crime](#crime-and-consequences) once that is enabled. Each is -100 to 100,
+and `hostile_at` is -100 to -21.
+
+Regard also changes through the `disposition` dialogue outcome and trigger
+action, and through gifts: `/give <item> to <npc>` hands over an item the NPC
+values and is refused for anything else. Its effects are:
+
+- The `disposition` condition can show, hide, or gate any dialogue response,
+  quest, exit, or trigger.
+- `/talk` opens with the NPC's greeting for the current tier. A hostile NPC
+  refuses to talk.
+- Merchants charge up to 10% less to trusted friends and up to 10% more to
+  enemies, and pay correspondingly for what they buy.
+- A combat-capable NPC at the hostile tier attacks that player on sight. Other
+  players are unaffected.
+
+Players check their standing with `/relations`. Each NPC can tune its own
+behaviour with `relationship` in `behaviors_json`:
+
+```json
+{"relationship": {"default": 10, "gifts": {"apple-pie": 15, "rotten-fish": -20},
+  "greetings": {"friendly": "Back again? Good!", "unfriendly": "Make it quick."},
+  "refuse_talk_below": -40, "quest_complete": 10, "attack": -80, "crime": -50,
+  "attacks_when_hostile": false}}
+```
+
+| Field | Meaning |
+| --- | --- |
+| `default` | Starting regard for every character (-100 to 100, default 0). |
+| `gifts` | Up to 20 item IDs, each with the change it makes when given (-100 to 100). |
+| `greetings` | Text per tier, shown when a conversation starts. |
+| `refuse_talk_below` | Talk only at or above this regard (default: refuse only at `hostile`). |
+| `quest_complete`, `attack`, `crime` | This NPC's own changes in place of the world's. |
+| `attacks_when_hostile` | `false` keeps a hostile NPC from attacking (default `true`). |
 
 ## 6. Import, edit, export, and remove
 

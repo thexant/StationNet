@@ -244,7 +244,7 @@ def _current_mode(database, user_id):
 
 
 # Commands that belong to an optional world-life system, hidden from help while it is off.
-SOCIETY_ACTIONS = {"time": "clock"}
+SOCIETY_ACTIONS = {"time": "clock", "relations": "relationships", "give": "relationships"}
 # Commands that only exist to spend the resource; worlds without it hide them.
 RESOURCE_ACTIONS = frozenset({"spells", "cast"})
 RESOURCE_DISABLED_DESCRIPTIONS = {
@@ -966,6 +966,7 @@ def _help_action(_database, _user, parameters):
             "learn": '/learn lockpicking from "Old Thief"', "practice_skill": '/practice blades',
             "pick": '/pick north', "interact": '/pull "Rusty Lever"', "travel": '/travel north',
             "directions": '/directions "Kessa Gate"', "use": '/read "Old Map"',
+            "give": '/give "Red Apple" to Baker',
         }
         body = f"/{name}: {_action_description(definition, resource)}\nAliases: " + ", ".join(f"/{alias}" for alias in aliases)
         if definition.key in examples:
@@ -2154,8 +2155,8 @@ def _item_value(row):
     return 8 if row["item_type"] == "misc" else 4
 
 
-def _resale_price(database, item, percent):
-    price = max(1, _item_value(item) * percent // 100)
+def _resale_price(database, item, percent, regard_percent=100):
+    price = max(1, _item_value(item) * percent * regard_percent // 10000)
     floor = database.execute("SELECT MIN(price) FROM mud_shop_stock WHERE item_definition_id=?",
                              (item["definition_id"],)).fetchone()[0]
     return min(price, floor) if floor is not None else price
@@ -2192,8 +2193,9 @@ def hub_state(database, user_id):
     }
 
 
-def _discounted(database, character_id, price):
-    """Apply Haggling-style merchant discounts; every purchase still costs a coin."""
+def _discounted(database, character_id, price, percent=100):
+    """Apply a merchant's percent for this player, then Haggling-style discounts; every purchase still costs a coin."""
+    price = max(1, price * percent // 100)
     discount = _character_effects(database, character_id)["shop_discount"]
     return max(1, price - price * discount // 100)
 
@@ -2294,7 +2296,8 @@ def _world_shop_action(database, user, parameters):
             "SELECT s.*,d.name FROM mud_shop_stock s JOIN mud_item_definitions d ON d.id=s.item_definition_id "
             "WHERE s.npc_definition_id=? AND (s.quantity IS NULL OR s.quantity>0) ORDER BY d.name COLLATE NOCASE",
             (npc["definition_id"],)).fetchall()
-        lines = [f"{npc['name']} offers:"] + [f"- {row['name']}: {_discounted(database, character['id'], row['price'])} coins" +
+        percent = _trade_percent(database, npc, user["id"])
+        lines = [f"{npc['name']} offers:"] + [f"- {row['name']}: {_discounted(database, character['id'], row['price'], percent)} coins" +
                  (f" ({row['quantity']} left)" if row["quantity"] is not None else "") for row in stock]
         if not stock:
             lines.append("No stock available.")
@@ -2311,7 +2314,7 @@ def _world_shop_action(database, user, parameters):
         if row["quantity"] is not None and not database.execute(
             "UPDATE mud_shop_stock SET quantity=quantity-1 WHERE id=? AND quantity>0", (row["id"],)).rowcount:
             raise ActionError("That item is out of stock.")
-        price = _discounted(database, character["id"], row["price"])
+        price = _discounted(database, character["id"], row["price"], _trade_percent(database, npc, user["id"]))
         _wallet(database, character["id"])
         if not database.execute("UPDATE mud_character_wallets SET coins=coins-? WHERE character_id=? AND coins>=?",
                                 (price, character["id"], price)).rowcount:
@@ -2329,7 +2332,7 @@ def _world_shop_action(database, user, parameters):
             raise ActionError("That item cannot be sold here.")
         if database.execute("SELECT 1 FROM mud_item_instances WHERE container_id=?", (item["id"],)).fetchone():
             raise ActionError("Empty this container before selling it.")
-        price = _resale_price(database, item, shop["sell_percent"])
+        price = _resale_price(database, item, shop["sell_percent"], 200 - _trade_percent(database, npc, user["id"]))
         if database.execute("DELETE FROM mud_item_instances WHERE id=? AND owner_character_id=?",
                             (item["id"], character["id"])).rowcount != 1:
             raise ActionError("That item is no longer yours.")
@@ -2517,6 +2520,15 @@ def _award_quest_rewards(database, user, quest_id):
     for reward in rewards:
         if reward["reward_type"] == "item":
             _record_objective_progress(database, user, "possess_item", reward["target_id"])
+    settings = society_settings(database)["relationships"]
+    if settings["enabled"]:
+        quest = database.execute("SELECT * FROM mud_quests WHERE id=?", (quest_id,)).fetchone()
+        for npc_id in sorted(_turn_in_npc_ids(database, quest)):
+            # A tier change is announced by the draft; the reward line only names the goodwill.
+            _change_disposition(database, user, npc_id, settings["quest_complete"], "quest_complete")
+            name = database.execute("SELECT name FROM mud_npc_definitions WHERE id=?", (npc_id,)).fetchone()
+            if name and settings["quest_complete"] > 0:
+                messages.append(f"{name['name']}'s goodwill")
     return messages
 
 
@@ -2859,6 +2871,22 @@ class _ConditionContext:
     def knows_destination(self, destination_id):
         return mud_wayfinding.knows(self.database, self._character()["id"], destination_id)
 
+    def disposition(self, npc_definition_id=None):
+        if self.dungeon:
+            return None
+        if npc_definition_id is None:
+            row = self.database.execute("SELECT definition_id FROM mud_npc_instances WHERE id=?",
+                                        (self.npc_id,)).fetchone() if self.npc_id else None
+            if row is None:
+                return None
+            npc_definition_id = row["definition_id"]
+        npc = self.database.execute("SELECT id AS definition_id,behaviors_json FROM mud_npc_definitions WHERE id=?",
+                                    (npc_definition_id,)).fetchone()
+        if npc is None:
+            return None
+        value, tier = _npc_regard(self.database, npc, self.user_id)
+        return None if value is None else (value, tier)
+
     def game_hour(self):
         moment = None if self.dungeon else _game_time(self.database)
         return moment["hour"] if moment else None
@@ -3127,7 +3155,7 @@ def _encounter_reward_drafts(database, encounter, npc):
 def validate_npc_behaviors(value):
     """Validate the small, supported authored behavior schema."""
     if not isinstance(value, dict) or set(value) - {"aggressive", "friendly", "neutral", "passive", "ambient", "wander", "patrol", "reactions",
-                                                    "schedule"}:
+                                                    "schedule", "relationship"}:
         raise ValueError("NPC behaviors contain an unsupported key.")
     if any(type(value[key]) is not bool for key in ("aggressive", "friendly", "neutral", "passive") if key in value):
         raise ValueError("aggressive, friendly, neutral, and passive must be true or false.")
@@ -3149,6 +3177,8 @@ def validate_npc_behaviors(value):
             raise ValueError("patrol directions must be supported exit directions.")
     if "wander" in value and "patrol" in value:
         raise ValueError("Choose either wander or patrol.")
+    if "relationship" in value:
+        mud_society.validate_relationship(value["relationship"])
     if "schedule" in value:
         mud_society.validate_schedule(value["schedule"])
         if "wander" in value or "patrol" in value:
@@ -3183,9 +3213,40 @@ def _engaged(database, encounter_id, character_id):
     ).fetchone() is not None
 
 
+def _world_npc(npc):
+    """Placed NPCs of the active world; dungeon content keeps its own rules."""
+    return "dungeon_content_id" not in npc.keys()
+
+
+def _social_hostility(database, npc, user_id, settings=None):
+    """True when this player's standing turns the NPC against them, False when it
+    calms an aggressive NPC, or None to keep its authored behaviour."""
+    if user_id is None or not _world_npc(npc):
+        return None
+    settings = settings or society_settings(database)
+    behaviors = _json_properties(npc["behaviors_json"])
+    if settings["relationships"]["enabled"]:
+        spec = behaviors.get("relationship") if isinstance(behaviors.get("relationship"), dict) else {}
+        if spec.get("attacks_when_hostile", True):
+            value, tier = _npc_regard(database, npc, user_id, settings)
+            if tier == "hostile":
+                return True
+    return None
+
+
+def _npc_hostile_to(database, npc, user_id, settings=None):
+    """Whether a combat NPC attacks this player on sight right now."""
+    if npc["combat_maximum_health"] is None:
+        return False
+    if _npc_passive(npc):
+        return False
+    verdict = _social_hostility(database, npc, user_id, settings)
+    return _npc_aggressive(npc) if verdict is None else verdict
+
+
 def _npc_stance(database, npc, user_id=None):
     """Hostile, Neutral, or Friendly as this player sees the NPC right now."""
-    if _npc_aggressive(npc):
+    if _npc_hostile_to(database, npc, user_id):
         return "Hostile"
     if user_id is not None and npc["combat_maximum_health"] is not None and not _npc_passive(npc):
         encounter = _encounter_row(database, npc, create=False)
@@ -3196,13 +3257,19 @@ def _npc_stance(database, npc, user_id=None):
 
 
 def _active_hostiles(database, room, user_id=None):
-    """Aggressive enemies, plus non-aggressive ones this player is already fighting."""
+    """Aggressive enemies, plus non-aggressive ones this player is already fighting.
+
+    Aggression is judged for this player, so relationships and standing can
+    turn a peaceful NPC against one character only.
+    """
     character_id = f"stationnet:character:{user_id}" if user_id is not None else None
     enemies = []
+    settings = society_settings(database)
     for npc in _room_npc_rows(database, room["id"], room.get("instance_id")):
         if npc["combat_maximum_health"] is None:
             continue
-        aggressive = _npc_aggressive(npc)
+        aggressive = (_npc_hostile_to(database, npc, user_id, settings) if user_id is not None
+                      else _npc_aggressive(npc))
         if not aggressive and (character_id is None or _npc_passive(npc)):
             continue
         encounter = _encounter_row(database, npc, create=aggressive)
@@ -3214,6 +3281,50 @@ def _active_hostiles(database, room, user_id=None):
               and _engaged(database, encounter["id"], character_id)):
             enemies.append((npc, encounter))
     return enemies
+
+
+def _relationship_spec(npc):
+    behaviors = _json_properties(npc["behaviors_json"])
+    return behaviors["relationship"] if isinstance(behaviors.get("relationship"), dict) else {}
+
+
+def _npc_regard(database, npc, user_id, settings=None):
+    """(disposition, tier) of a world NPC toward a player, or (None, None) while relationships are off."""
+    settings = settings or society_settings(database)
+    if not settings["relationships"]["enabled"] or not _world_npc(npc):
+        return None, None
+    value = mud_society.disposition(database, f"stationnet:character:{user_id}", npc["definition_id"],
+                                    _relationship_spec(npc).get("default", 0))
+    return value, mud_society.disposition_tier(value, settings["relationships"]["hostile_at"])
+
+
+def _change_disposition(database, user, npc_definition_id, amount, cause=None):
+    """Shift an NPC's regard for a player; mentions only a change of tier. No-op while relationships are off."""
+    settings = society_settings(database)
+    if not settings["relationships"]["enabled"] or not amount:
+        return []
+    npc = database.execute("SELECT id AS definition_id,name,behaviors_json FROM mud_npc_definitions WHERE id=?",
+                           (npc_definition_id,)).fetchone()
+    if npc is None:
+        return []
+    spec = _relationship_spec(npc)
+    if cause is not None:
+        amount = spec.get(cause, amount)
+        if not amount:
+            return []
+    hostile_at = settings["relationships"]["hostile_at"]
+    old, new = mud_society.adjust_disposition(database, f"stationnet:character:{user['id']}", npc_definition_id,
+                                              amount, spec.get("default", 0))
+    before, after = mud_society.disposition_tier(old, hostile_at), mud_society.disposition_tier(new, hostile_at)
+    if before == after:
+        return []
+    return [_private(user["id"], f"{npc['name']} now regards you as {after}.", "dialogue")]
+
+
+def _trade_percent(database, npc, user_id):
+    """Percent of the usual price this merchant charges this player (100 when nothing applies)."""
+    value, _tier = _npc_regard(database, npc, user_id)
+    return 100 if value is None else mud_society.disposition_price_percent(value)
 
 
 def _is_hidden(database, user_id):
@@ -3577,12 +3688,16 @@ def _attack_action(database, user, parameters):
         elif parameters.get("_firearm"):
             raise ActionError(f"{equipped_gun['name']} is empty. Use /reload first.")
     character = _character_row(database, user["id"])
+    # Striking an NPC that was not hostile to you is noticed and remembered.
+    provoked = (_world_npc(npc) and not _engaged(database, encounter["id"], character["id"])
+                and not _npc_hostile_to(database, npc, user["id"]))
     database.execute(
         "INSERT INTO mud_combat_participants(encounter_id,character_id) VALUES(?,?) "
         "ON CONFLICT(encounter_id,character_id) DO UPDATE SET left_at=NULL,"
         "defeated_at=NULL,last_action_at=CURRENT_TIMESTAMP",
         (encounter["id"], character["id"]),
     )
+    social = _provoked(database, user, npc) if provoked else []
     player_gear = _equipment_combat_totals(database, character_id=character["id"])
     enemy_gear = _equipment_combat_totals(database, npc_definition_id=npc["definition_id"])
     effects = _character_effects(database, character["id"], player_gear)
@@ -3657,7 +3772,7 @@ def _attack_action(database, user, parameters):
     drafts = [EventDraft(
         body, event_type="combat", audience_type=audience_type, audience_key=audience_key,
         recipient_ids=tuple(sorted(recipients)),
-    )] + practiced
+    )] + practiced + social
     if remaining > 0 and outcome == "hit":
         applications = parameters.get("_spell_effects") if spell_damage is not None else []
         if spell_damage is None:
@@ -3692,6 +3807,12 @@ def _attack_action(database, user, parameters):
         drafts += _encounter_reward_drafts(database, defeated, npc)
         return drafts
     return drafts + _enemy_turn(database, user, chosen=npc["id"])
+
+
+def _provoked(database, user, npc):
+    """Consequences of attacking an NPC that was not hostile to the attacker."""
+    return _change_disposition(database, user, npc["definition_id"],
+                               society_settings(database)["relationships"]["attack"], "attack")
 
 
 def _fire_action(database, user, parameters):
@@ -4459,6 +4580,7 @@ def _talk_action(database, user, parameters):
         raise ActionError("Talk to whom?")
     room = _current_room(database, user["id"])
     npc = _npc_match(_room_npc_rows(database, room["id"], room.get("instance_id")), target)
+    greeting = _talk_greeting(database, npc, user["id"])
     node = database.execute(
         "SELECT id FROM mud_dialogue_nodes WHERE conversation_id=? AND is_start=1",
         (npc["conversation_id"],),
@@ -4467,7 +4589,7 @@ def _talk_action(database, user, parameters):
         hints = _quest_hints(database, user, room, npc)
         if not hints:
             raise ActionError(f"{npc['name']} has nothing to say right now.")
-        events = [EventDraft(f"{npc['name']} has business with you.\n" + "\n".join(hints),
+        events = [EventDraft(greeting + f"{npc['name']} has business with you.\n" + "\n".join(hints),
                              event_type="dialogue")]
         if not room.get("instance_id"):
             events += _set_objective_progress(database, user, "talk_npc", npc["definition_id"])
@@ -4497,7 +4619,7 @@ def _talk_action(database, user, parameters):
     node, responses = _available_dialogue_responses(
         database, character["id"], npc["id"], node["id"], bool(room.get("instance_id"))
     )
-    body = _dialogue_text(npc["name"], node, responses)
+    body = greeting + _dialogue_text(npc["name"], node, responses)
     hints = _quest_hints(database, user, room, npc, responses)
     if hints:
         body += "\n\n" + "\n".join(hints)
@@ -4506,7 +4628,20 @@ def _talk_action(database, user, parameters):
     return events
 
 
-def _apply_dialogue_outcomes(database, user, response):
+def _talk_greeting(database, npc, user_id):
+    """A tier greeting line to open a conversation, or an ActionError when the NPC will not talk."""
+    value, tier = _npc_regard(database, npc, user_id)
+    if value is None:
+        return ""
+    spec = _relationship_spec(npc)
+    floor = spec.get("refuse_talk_below")
+    if tier == "hostile" if floor is None else value < floor:
+        raise ActionError(f"{npc['name']} refuses to speak with you.")
+    line = spec.get("greetings", {}).get(tier)
+    return f"{npc['name']} says: {line}\n\n" if line else ""
+
+
+def _apply_dialogue_outcomes(database, user, response, npc_definition_id=None):
     """Grant a response's outcomes once per character; later choices give nothing."""
     try:
         outcomes = mud_conditions.validate_outcomes(response["outcomes_json"])
@@ -4520,11 +4655,14 @@ def _apply_dialogue_outcomes(database, user, response):
         return []
     return _settle_outcomes(database, user, outcomes, lambda: database.execute(
         "INSERT OR IGNORE INTO mud_player_dialogue_claims(character_id,response_id) VALUES(?,?)",
-        (character["id"], response["id"])).rowcount > 0)
+        (character["id"], response["id"])).rowcount > 0, npc_definition_id=npc_definition_id)
 
 
-def _settle_outcomes(database, user, outcomes, claim=None, event_type="dialogue"):
-    """Pay an outcome list's costs, then grant its rewards; claim() may veto first."""
+def _settle_outcomes(database, user, outcomes, claim=None, event_type="dialogue", npc_definition_id=None):
+    """Pay an outcome list's costs, then grant its rewards; claim() may veto first.
+
+    npc_definition_id is the NPC being spoken to, for outcomes that name no NPC.
+    """
     character = _character_row(database, user["id"])
     # Check every cost before writing anything so a failed payment changes nothing.
     handed = []
@@ -4558,6 +4696,8 @@ def _settle_outcomes(database, user, outcomes, claim=None, event_type="dialogue"
             events += _set_objective_progress(database, user, "possess_item", outcome["item"])
         elif outcome["type"] == "learn_destination":
             events += _learn_destination(database, user, outcome["destination"], "dialogue")
+        elif outcome["type"] == "disposition" and (outcome.get("npc") or npc_definition_id):
+            events += _change_disposition(database, user, outcome.get("npc") or npc_definition_id, outcome["amount"])
     return events
 
 
@@ -4599,7 +4739,8 @@ def _respond_action(database, user, parameters):
         raise ActionError("Choose one of the current dialogue responses.")
     chosen = matches[0]
     events = [EventDraft(f"You: {chosen['response_text']}", event_type="dialogue")]
-    events += _apply_dialogue_outcomes(database, user, chosen)
+    events += _apply_dialogue_outcomes(database, user, chosen,
+                                       None if dungeon_session else session_row["definition_id"])
     if chosen["state_key"]:
         state_table = ("mud_dungeon_npc_player_states" if dungeon_session
                        else "mud_npc_player_states")
@@ -5833,7 +5974,7 @@ DIRECTION_ALIASES = {
 TRAVEL_SAFE_ACTIONS = frozenset({
     "travel", "stop", "look", "exits", "map", "say", "emote", "tell", "reply_player", "who",
     "help", "status", "character", "inventory", "quests", "skills", "spells", "description",
-    "block", "unblock", "directions", "destinations", "time",
+    "block", "unblock", "directions", "destinations", "time", "relations",
 })
 
 
@@ -6251,6 +6392,46 @@ def _directions_action(database, user, parameters):
     if selected is None or selected["destination_id"] != destination["id"]:
         lines.append("You keep this destination in mind; /directions checks again and /directions clear forgets it.")
     return [EventDraft("\n".join(lines), "travel")]
+
+
+def _relations_action(database, user, _parameters):
+    settings = society_settings(database)
+    if not settings["relationships"]["enabled"] or _current_room(database, user["id"]).get("instance_id"):
+        raise ActionError("Nobody here keeps track of how you treat them.")
+    rows = database.execute(
+        "SELECT d.name,r.disposition FROM mud_npc_relationships r JOIN mud_npc_definitions d "
+        "ON d.id=r.npc_definition_id WHERE r.character_id=? AND d.world_id=? ORDER BY r.disposition DESC,d.name",
+        (f"stationnet:character:{user['id']}", _active_world(database))).fetchall()
+    if not rows:
+        return [EventDraft("Nobody here has formed an opinion of you yet.")]
+    hostile_at = settings["relationships"]["hostile_at"]
+    return [EventDraft("How people regard you:\n" + "\n".join(
+        f"- {row['name']}: {mud_society.disposition_tier(row['disposition'], hostile_at)} ({row['disposition']:+d})"
+        for row in rows))]
+
+
+def _give_action(database, user, parameters):
+    text = " ".join(str(value) for value in parameters.get("arguments", [])).strip()
+    parts = re.split(r"\s+to\s+", text, maxsplit=1, flags=re.I)
+    if len(parts) != 2 or not all(part.strip() for part in parts):
+        raise ActionError("Use /give <item> to <person>.")
+    room = _current_room(database, user["id"])
+    if room.get("instance_id") or not society_settings(database)["relationships"]["enabled"]:
+        raise ActionError("There is nobody here to give gifts to.")
+    npc = _npc_match(_room_npc_rows(database, room["id"]), parts[1].strip())
+    if npc["combat_maximum_health"] is not None and _encounter_row(database, npc)["status"] == "defeated":
+        raise ActionError(f"{npc['name']} cannot take anything right now.")
+    item = _item_matches(list(_inventory_rows(database, user["id"])), parts[0].strip())
+    gifts = _relationship_spec(npc).get("gifts", {})
+    if item["definition_id"] not in gifts:
+        raise ActionError(f"{npc['name']} does not want {item['name']}.")
+    eligible = _handover_items(database, user, item["definition_id"], 1)
+    database.execute("DELETE FROM mud_item_instances WHERE id=? AND owner_character_id=?",
+                     (eligible[0]["id"], _character_row(database, user["id"])["id"]))
+    amount = gifts[item["definition_id"]]
+    reaction = "gladly accepts" if amount > 0 else "accepts" if amount == 0 else "grudgingly takes"
+    return [EventDraft(f"You give {item['name']} to {npc['name']}. {npc['name']} {reaction} it.", "dialogue")] + \
+        _change_disposition(database, user, npc["definition_id"], amount)
 
 
 def _time_action(database, user, _parameters):
@@ -6798,6 +6979,8 @@ def _trigger_action(database, user, trigger, index, realm, instance_id=None):
                                            action["objective"])
         if kind == "learn_destination":
             return _learn_destination(database, user, action["destination"], "script")
+        if kind == "disposition":
+            return _change_disposition(database, user, action["npc"], action["amount"])
         if kind == "forget_destination":
             mud_wayfinding.forget(database, _character_row(database, user_id)["id"], action["destination"])
             return []
@@ -7086,6 +7269,14 @@ actions.register(ActionDefinition(
     description="List the places you know the way to.",
     commands=("destinations", "places"), handler=_destinations_action,
     group="NAVIGATION",
+))
+actions.register(ActionDefinition(
+    key="relations", label="RELATIONSHIPS", description="See how the people of this world regard you.",
+    commands=("relations", "relationships"), handler=_relations_action, group="SOCIAL",
+))
+actions.register(ActionDefinition(
+    key="give", label="GIVE GIFT", description="Give a carried item to someone nearby as a gift.",
+    commands=("give", "gift"), handler=_give_action, group="SOCIAL", show_context=False,
 ))
 actions.register(ActionDefinition(
     key="time", label="TIME OF DAY", description="See the time of day in this world.",
@@ -8502,7 +8693,7 @@ def _builder_rules(database, field, validate):
         return None, str(problem)
     tables = {"item": "mud_item_definitions", "quest": "mud_quests", "objective": "mud_quest_objectives",
               "object": "mud_item_instances", "room": "mud_world_rooms",
-              "destination": "mud_world_destinations"}
+              "destination": "mud_world_destinations", "npc": "mud_npc_definitions"}
     origins = character_creation.catalog(database)
     known = {"race": {entry["key"] for entry in origins["races"]},
              "class": {entry["key"] for entry in origins["classes"]},

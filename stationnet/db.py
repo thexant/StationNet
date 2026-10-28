@@ -2054,7 +2054,7 @@ def _migrate_mud_world_packages(database):
 
 
 def _migrate_mud_society(database):
-    """Add optional world life: clock and schedule settings per world.
+    """Add optional world life: clock, schedule and relationship settings per world, and NPC regard.
 
     Settings live in one JSON column whose empty default keeps every system
     off, so existing worlds play exactly as before.
@@ -2062,6 +2062,17 @@ def _migrate_mud_society(database):
     columns = {row["name"] for row in database.execute("PRAGMA table_info(mud_world_packages)")}
     if "society_json" not in columns:
         database.execute("ALTER TABLE mud_world_packages ADD COLUMN society_json TEXT NOT NULL DEFAULT '{}'")
+    # An NPC's regard belongs to its definition, so it survives respawns and
+    # spans every placed copy; it cascades with the character like progression.
+    database.executescript("""
+    CREATE TABLE IF NOT EXISTS mud_npc_relationships (
+      character_id TEXT NOT NULL REFERENCES mud_characters(id) ON DELETE CASCADE,
+      npc_definition_id TEXT NOT NULL REFERENCES mud_npc_definitions(id) ON DELETE CASCADE,
+      disposition INTEGER NOT NULL DEFAULT 0 CHECK(disposition BETWEEN -100 AND 100),
+      updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      PRIMARY KEY(character_id,npc_definition_id));
+    CREATE INDEX IF NOT EXISTS idx_mud_npc_relationships_npc ON mud_npc_relationships(npc_definition_id);
+    """)
 
 
 def _migrate_mud_world_resource(database):

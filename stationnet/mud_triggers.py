@@ -51,13 +51,14 @@ SOURCE_LABELS = {"room": "room", "object": "placed object", "item": "item type",
 ACTION_TYPES = ("message", "set_flag", "clear_flag", "give_item", "take_item", "experience", "coins",
                 "take_coins", "heal", "damage", "set_object_state", "set_exit", "show", "hide",
                 "spawn_npc", "teleport", "start_quest", "complete_objective", "run_trigger",
-                "learn_destination", "forget_destination")
+                "learn_destination", "forget_destination", "disposition")
 OUTCOME_ACTIONS = ("give_item", "take_item", "experience", "coins", "take_coins")
 MESSAGE_TARGETS = ("actor", "room", "other_room")
 EXIT_STATES = ("open", "locked", "hidden", "default")
 # Actions that need a player to act on. Timer triggers have no player.
 _ACTOR_ACTIONS = {"give_item", "take_item", "experience", "coins", "take_coins", "heal", "damage",
-                  "teleport", "start_quest", "complete_objective", "learn_destination", "forget_destination"}
+                  "teleport", "start_quest", "complete_objective", "learn_destination", "forget_destination",
+                  "disposition"}
 # Procedural dungeons are generated fresh for each run, so their triggers only
 # use actions that make sense inside one run.
 DUNGEON_EVENTS = ("enter_room", "use_object", "take_item", "say_phrase", "defeat_npc", "manual")
@@ -76,6 +77,7 @@ _ACTION_REFERENCES = {
     "run_trigger": (("trigger", "trigger"),), "message": (("room", "room"),),
     "learn_destination": (("destination", "destination"),),
     "forget_destination": (("destination", "destination"),),
+    "disposition": (("npc", "npc"),),
 }
 
 
@@ -201,6 +203,11 @@ def _action(raw, index, dungeon):
     elif kind in ("learn_destination", "forget_destination"):
         fields |= {"destination"}
         result["destination"] = _identifier(raw.get("destination"), f"{where} destination")
+    elif kind == "disposition":
+        fields |= {"npc", "amount"}
+        if not _whole(raw.get("amount"), -100, 100) or raw["amount"] == 0:
+            raise ValueError(f"{where}: disposition amount must be a nonzero whole number from -100 to 100.")
+        result.update(npc=_identifier(raw.get("npc"), f"{where} npc"), amount=raw["amount"])
     unknown = set(raw) - fields
     if unknown:
         raise ValueError(f"{where}: {kind} does not accept {', '.join(sorted(unknown))}.")

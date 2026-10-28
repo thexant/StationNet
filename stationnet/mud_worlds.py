@@ -70,7 +70,7 @@ CONDITION_COLUMNS = {"mud_quests": ("conditions_json",),
                      "mud_world_destinations": ("conditions_json",)}
 CONDITION_TABLES = {"item": "mud_item_definitions", "quest": "mud_quests",
                     "objective": "mud_quest_objectives", "object": "mud_item_instances", "room": "rooms",
-                    "destination": "mud_world_destinations"}
+                    "destination": "mud_world_destinations", "npc": "mud_npc_definitions"}
 # What each kind of trigger reference names; exits and triggers are mapped separately.
 TRIGGER_TABLES = {**CONDITION_TABLES, "npc": "mud_npc_definitions", "npc_instance": "mud_npc_instances",
                   "response": "mud_dialogue_responses"}
@@ -1056,9 +1056,10 @@ def _export_content(database, world_id, room_map):
         "JOIN mud_world_rooms r ON r.id=e.from_room_id WHERE r.world_id=?",
         (world_id, world_id, world_id),
     ):
-        needed_items |= {ref for kind, ref in mud_conditions.references(
-            _stored_conditions(row["conditions_json"], "conditions_json"),
-            _stored_conditions(row["outcomes_json"], "outcomes_json")) if kind == "item"}
+        named = list(mud_conditions.references(_stored_conditions(row["conditions_json"], "conditions_json"),
+                                               _stored_conditions(row["outcomes_json"], "outcomes_json")))
+        needed_items |= {ref for kind, ref in named if kind == "item"}
+        needed_npcs |= {ref for kind, ref in named if kind == "npc"}
     selected = {}
     for table, columns in CONTENT_TABLES.items():
         rows = [dict(row) for row in database.execute(

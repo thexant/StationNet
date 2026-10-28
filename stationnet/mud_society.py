@@ -1,4 +1,4 @@
-"""Optional world life: a game clock and NPC schedules.
+"""Optional world life: a game clock, NPC schedules, and NPC relationships.
 
 Every system here is off until a world enables it in its manifest (or the
 World Builder), so worlds that never mention them play exactly as before.
@@ -10,7 +10,10 @@ import json
 import time
 
 CLOCK_DEFAULTS = {"enabled": False, "day_minutes": 120, "start_hour": 6}
-DEFAULT_SOCIETY = {"clock": CLOCK_DEFAULTS}
+# How much an NPC's regard changes for a completed quest, an unprovoked attack,
+# or a witnessed crime, and the disposition at or below which it turns hostile.
+RELATIONSHIP_DEFAULTS = {"enabled": False, "quest_complete": 5, "attack": -40, "crime": -25, "hostile_at": -60}
+DEFAULT_SOCIETY = {"clock": CLOCK_DEFAULTS, "relationships": RELATIONSHIP_DEFAULTS}
 SOCIETY_KEYS = tuple(DEFAULT_SOCIETY)
 # Hours at which each part of the day begins, in order.
 PERIODS = ((0, "night"), (5, "dawn"), (7, "morning"), (12, "afternoon"), (17, "evening"), (21, "night"))
@@ -49,8 +52,13 @@ def validate_clock(value):
     return _section(value, "clock", CLOCK_DEFAULTS, {"day_minutes": (5, 1440), "start_hour": (0, 23)})
 
 
-VALIDATORS = {"clock": validate_clock}
-SECTION_LABELS = {"clock": "clock"}
+def validate_relationships(value):
+    return _section(value, "relationships", RELATIONSHIP_DEFAULTS, {
+        "quest_complete": (-100, 100), "attack": (-100, 100), "crime": (-100, 100), "hostile_at": (-100, -21)})
+
+
+VALIDATORS = {"clock": validate_clock, "relationships": validate_relationships}
+SECTION_LABELS = {"clock": "clock", "relationships": "relationship"}
 
 
 def validate_settings(value):
@@ -172,6 +180,9 @@ def behavior_references(behaviors):
     if isinstance(behaviors.get("schedule"), dict):
         for room in schedule_rooms(behaviors["schedule"]):
             yield "room", room
+    if isinstance(behaviors.get("relationship"), dict):
+        for item in behaviors["relationship"].get("gifts", {}):
+            yield "item", item
 
 
 def remap_behaviors(behaviors, mapper):
@@ -183,7 +194,74 @@ def remap_behaviors(behaviors, mapper):
             del result["schedule"]
         else:
             result["schedule"] = schedule
+    if isinstance(behaviors.get("relationship"), dict) and "gifts" in behaviors["relationship"]:
+        gifts = {mapper("item", item): amount for item, amount in behaviors["relationship"]["gifts"].items()
+                 if mapper("item", item) is not None}
+        relationship = {key: value for key, value in behaviors["relationship"].items() if key != "gifts"}
+        result["relationship"] = {**relationship, **({"gifts": gifts} if gifts else {})}
     return result
+
+
+# --- Relationships ---------------------------------------------------------
+
+TIERS = ("hostile", "unfriendly", "neutral", "friendly", "trusted")
+# Shop prices move by up to this many percent with an NPC's regard.
+DISPOSITION_PRICE_PERCENT = 10
+
+
+def validate_relationship(spec):
+    """An NPC's own relationship settings inside behaviors_json; item IDs are checked by the caller."""
+    allowed = {"default", "gifts", "greetings", "refuse_talk_below", "quest_complete", "attack", "crime",
+               "attacks_when_hostile"}
+    if not isinstance(spec, dict) or set(spec) - allowed:
+        raise ValueError(f"relationship accepts only {', '.join(sorted(allowed))}.")
+    for key in ("default", "refuse_talk_below", "quest_complete", "attack", "crime"):
+        if key in spec and not _whole(spec[key], -100, 100):
+            raise ValueError(f"relationship {key} must be a whole number from -100 to 100.")
+    if type(spec.get("attacks_when_hostile", True)) is not bool:
+        raise ValueError("relationship attacks_when_hostile must be true or false.")
+    gifts = spec.get("gifts", {})
+    if not isinstance(gifts, dict) or len(gifts) > 20 or any(
+            not isinstance(item, str) or not 1 <= len(item) <= MAX_REFERENCE or not _whole(amount, -100, 100)
+            for item, amount in gifts.items()):
+        raise ValueError("relationship gifts must map up to 20 item IDs to changes from -100 to 100.")
+    greetings = spec.get("greetings", {})
+    if not isinstance(greetings, dict) or set(greetings) - set(TIERS) or any(
+            not isinstance(text, str) or not 1 <= len(text.strip()) <= 300 for text in greetings.values()):
+        raise ValueError(f"relationship greetings map {', '.join(TIERS)} to text of up to 300 characters.")
+    return spec
+
+
+def disposition_tier(value, hostile_at=RELATIONSHIP_DEFAULTS["hostile_at"]):
+    if value <= hostile_at:
+        return "hostile"
+    if value < -20:
+        return "unfriendly"
+    if value < 20:
+        return "neutral"
+    return "friendly" if value < 60 else "trusted"
+
+
+def disposition(database, character_id, npc_definition_id, default=0):
+    row = database.execute("SELECT disposition FROM mud_npc_relationships WHERE character_id=? "
+                           "AND npc_definition_id=?", (character_id, npc_definition_id)).fetchone()
+    return row["disposition"] if row else default
+
+
+def adjust_disposition(database, character_id, npc_definition_id, amount, default=0):
+    """Change and store an NPC's regard for a character, kept within -100..100; returns (old, new)."""
+    old = disposition(database, character_id, npc_definition_id, default)
+    new = max(-100, min(100, old + amount))
+    database.execute(
+        "INSERT INTO mud_npc_relationships(character_id,npc_definition_id,disposition) VALUES(?,?,?) "
+        "ON CONFLICT(character_id,npc_definition_id) DO UPDATE SET disposition=excluded.disposition,"
+        "updated_at=CURRENT_TIMESTAMP", (character_id, npc_definition_id, new))
+    return old, new
+
+
+def disposition_price_percent(value):
+    """100 for neutral regard; trusted friends pay up to 10% less, enemies up to 10% more."""
+    return 100 - value * DISPOSITION_PRICE_PERCENT // 100
 
 
 def active_entry(spec, hour):
