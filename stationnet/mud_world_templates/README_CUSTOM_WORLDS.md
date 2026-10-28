@@ -4,7 +4,7 @@ StationNet stores imported world ZIPs in `data/mud_worlds/` (or
 `<STATIONNET_DATA>/mud_worlds/`). You can build a traditional world with a text
 editor. Put three UTF-8 JSON files at the root of a ZIP archive:
 `manifest.json`, `rooms.json`, and `exits.json`. Add `content.json` for items,
-NPCs, dialogue, quests, trainers, and placements. Add `origins.json` for custom
+NPCs, dialogue, quests, professions, trainers, and placements. Add `origins.json` for custom
 races and classes, `skills.json` for custom skills, `dungeons.json` for
 procedural dungeons, `events.json` for [triggers](#5c-events-and-triggers-eventsjson)
 that make the world react to players, and `wilderness.json` for large
@@ -304,6 +304,9 @@ The supported arrays are:
 | `mud_gathering_nodes` | Harvesting, mining, scavenging, or collecting sources | `room_id`, `tool_definition_id`; reward item IDs in `rewards_json` |
 | `mud_room_discoveries` | One-time per-character search clues and items | `room_id`, `clue`, optional `item_definition_id`, optional `difficulty` |
 | `mud_npc_trainers` | Skills an NPC teaches for coins | `npc_definition_id`, `skill_key`, `price`, `max_rank` |
+| `mud_professions` | Professions joined through a recruiter | `recruiter_npc_definition_id` |
+| `mud_work_activities` | Immediate work and accepted jobs | `profession_id`; one room or provider NPC |
+| `mud_work_rewards` | Coins, experience, and item pay | `activity_id`, optional item `target_id` |
 | `mud_quest_givers` | NPCs that offer quests | `quest_id`, `npc_definition_id` |
 | `mud_world_destinations` | Places players can ask the way to with `/directions` | `room_id`, `map_items_json`; see [wayfinding](#5e-wayfinding-destinations) |
 | `mud_world_factions` | Factions players earn standing with; see [factions](#factions-and-reputation) | `id` |
@@ -334,6 +337,9 @@ must point to records in the same package, including room IDs in `rooms.json`.
 | `mud_gathering_nodes` | `room_id`, `name`, `activity`, `rewards_json`, `skill_key`, `min_rank`, `tool_definition_id`, `success_percent`, `respawn_seconds` |
 | `mud_room_discoveries` | `room_id`, `clue`, `item_definition_id`, `difficulty` |
 | `mud_npc_trainers` | `npc_definition_id`, `skill_key`, `price`, `max_rank` |
+| `mud_professions` | `name`, `description`, `recruiter_npc_definition_id`, `conditions_json` |
+| `mud_work_activities` | `profession_id`, `name`, `description`, `kind`, `room_id`, `provider_npc_definition_id`, `conditions_json`, `tool_definition_id`, `practice_skill_key`, `cooldown_seconds`, `objective_type`, `objective_target_id`, `required_count` |
+| `mud_work_rewards` | `activity_id`, `reward_type`, `target_id`, `amount` |
 | `mud_quest_givers` | `quest_id`, `npc_definition_id` (no `id` field) |
 | `mud_world_destinations` | `room_id`, `name`, `aliases`, `category`, `description`, `public`, `discover_on_visit`, `map_items_json`, `conditions_json`, `sort_order` |
 | `mud_world_factions` | `name`, `description`, `default_reputation`, `defeat_reputation`, `public`, `ranks_json`, `sort_order` |
@@ -558,6 +564,66 @@ attempt, including a failed roll, depletes the shared source for
 `respawn_seconds` (5–86,400). A success practices the required skill if that
 skill has the `gather` trigger. The `gathering` skill effect adds percentage
 points to success chance, capped at 100%.
+
+### Professions and repeatable work
+
+Define a profession, a recruiter NPC, work activities, and their rewards in
+`content.json`. The recruiter and any activity provider must be NPC definitions
+in this package. Place them with `mud_npc_instances` where players can meet them.
+Independent work instead names a room. For example:
+
+```json
+{
+  "mud_professions": [
+    {"id":"courier","name":"Courier","description":"Carry messages across town.",
+     "recruiter_npc_definition_id":"postmaster"}
+  ],
+  "mud_work_activities": [
+    {"id":"sort-mail","profession_id":"courier","name":"Sort mail",
+     "description":"Sort the morning post.","kind":"immediate","room_id":"post-office",
+     "cooldown_seconds":3600},
+    {"id":"forest-route","profession_id":"courier","name":"Forest route",
+     "description":"Visit the forest, then report to the postmaster.",
+     "kind":"assignment","provider_npc_definition_id":"postmaster",
+     "objective_type":"visit_room","objective_target_id":"forest",
+     "cooldown_seconds":3600}
+  ],
+  "mud_work_rewards": [
+    {"id":"sort-pay","activity_id":"sort-mail","reward_type":"coins","amount":5},
+    {"id":"route-pay","activity_id":"forest-route","reward_type":"experience","amount":20}
+  ]
+}
+```
+
+`conditions_json` on a profession controls enrollment; on an activity it
+controls doing or turning in work. Both use the existing [conditions](#conditions)
+format. An activity may require a carried or equipped `tool_definition_id` and
+may name a `practice_skill_key`. That skill advances only if the character
+already knows it and it is enabled. Joining never teaches a skill. A custom
+skill used only as a work rank requirement can list the `work` practice trigger.
+
+Each activity is either `immediate`, with exactly one `room_id` or
+`provider_npc_definition_id`, or `assignment`, with a provider NPC and one
+objective. An assignment objective is `visit_room`, `talk_npc`, `defeat_npc`,
+`possess_item`, or `deliver_item`; `objective_target_id` names the corresponding
+room, NPC, or item. `required_count` defaults to 1 and may be 1–100. Progress
+starts after acceptance. Possessed items must still be carried and unequipped
+at turn-in and are consumed then. Delivered items are consumed as they are
+handed over with `/work deliver <name>`.
+
+An activity needs at least one reward or a practice skill. Each activity may
+have up to ten `mud_work_rewards` rows: `coins` or `experience` amount 1–10,000,
+or `item` with an item `target_id` and amount 1–20. Rewards are deterministic.
+`cooldown_seconds` defaults to 3,600 and must be 60–604,800. It starts when
+payment succeeds, separately for each character and activity. Abandoning a job
+or leaving and rejoining a profession does not bypass it.
+
+Players use `/professions` to find recruiters, `/profession join <name>` and
+`/profession leave <name>` for enrollment, and `/work` to see nearby and active
+work. Use `/work do <name>` for immediate work, or `/work accept <name>`,
+`/work deliver <name>` when required, `/work turnin <name>`, and
+`/work abandon <name>` for an accepted job. When names repeat, use
+`<profession>/<activity>`.
 
 `mud_room_discoveries` reveals a clue and optional item once per character with
 `/search`. Set `difficulty` (0–200, default 0 = always found) to hide it

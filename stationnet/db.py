@@ -1477,6 +1477,7 @@ def init_db():
     _migrate_mud_wilderness(database)
     _migrate_mud_wayfinding(database)
     _migrate_mud_society(database)
+    _migrate_mud_work(database)
     database.execute("INSERT OR IGNORE INTO mud_portal_settings(id) VALUES(1)")
     database.execute("INSERT OR IGNORE INTO mud_crossover_settings(id) VALUES(1)")
     database.execute("INSERT OR IGNORE INTO mud_travel_settings(id) VALUES(1)")
@@ -2768,6 +2769,64 @@ def _migrate_mud_expeditions(database):
         "ON mud_combat_encounters(dungeon_content_id) "
         "WHERE dungeon_content_id IS NOT NULL AND status IN ('ready','active')"
     )
+
+def _migrate_mud_work(database):
+    """Install authored professions without changing older character rows."""
+    database.executescript("""
+    CREATE TABLE IF NOT EXISTS mud_professions (
+      id TEXT PRIMARY KEY,
+      world_id TEXT NOT NULL REFERENCES mud_world_packages(id) ON DELETE CASCADE,
+      name TEXT NOT NULL,
+      description TEXT NOT NULL,
+      recruiter_npc_definition_id TEXT NOT NULL REFERENCES mud_npc_definitions(id) ON DELETE RESTRICT,
+      conditions_json TEXT NOT NULL DEFAULT '[]',
+      UNIQUE(world_id,name COLLATE NOCASE));
+    CREATE TABLE IF NOT EXISTS mud_work_activities (
+      id TEXT PRIMARY KEY,
+      profession_id TEXT NOT NULL REFERENCES mud_professions(id) ON DELETE CASCADE,
+      name TEXT NOT NULL,
+      description TEXT NOT NULL,
+      kind TEXT NOT NULL CHECK(kind IN ('immediate','assignment')),
+      room_id TEXT REFERENCES mud_world_rooms(id) ON DELETE RESTRICT,
+      provider_npc_definition_id TEXT REFERENCES mud_npc_definitions(id) ON DELETE RESTRICT,
+      conditions_json TEXT NOT NULL DEFAULT '[]',
+      tool_definition_id TEXT REFERENCES mud_item_definitions(id) ON DELETE RESTRICT,
+      practice_skill_key TEXT,
+      cooldown_seconds INTEGER NOT NULL DEFAULT 3600 CHECK(cooldown_seconds BETWEEN 60 AND 604800),
+      objective_type TEXT CHECK(objective_type IN ('visit_room','talk_npc','defeat_npc','possess_item','deliver_item')),
+      objective_target_id TEXT,
+      required_count INTEGER NOT NULL DEFAULT 1 CHECK(required_count BETWEEN 1 AND 100),
+      CHECK((room_id IS NOT NULL) != (provider_npc_definition_id IS NOT NULL)),
+      CHECK((kind='immediate' AND objective_type IS NULL AND objective_target_id IS NULL)
+        OR (kind='assignment' AND provider_npc_definition_id IS NOT NULL
+          AND objective_type IS NOT NULL AND objective_target_id IS NOT NULL)),
+      UNIQUE(profession_id,name COLLATE NOCASE));
+    CREATE TABLE IF NOT EXISTS mud_work_rewards (
+      id TEXT PRIMARY KEY,
+      activity_id TEXT NOT NULL REFERENCES mud_work_activities(id) ON DELETE CASCADE,
+      reward_type TEXT NOT NULL CHECK(reward_type IN ('coins','experience','item')),
+      target_id TEXT REFERENCES mud_item_definitions(id) ON DELETE RESTRICT,
+      amount INTEGER NOT NULL CHECK(amount BETWEEN 1 AND 10000),
+      CHECK((reward_type='item' AND target_id IS NOT NULL AND amount<=20)
+        OR (reward_type IN ('coins','experience') AND target_id IS NULL)));
+    CREATE INDEX IF NOT EXISTS idx_mud_work_rewards_activity ON mud_work_rewards(activity_id,id);
+    CREATE TABLE IF NOT EXISTS mud_character_professions (
+      character_id TEXT NOT NULL REFERENCES mud_characters(id) ON DELETE CASCADE,
+      profession_id TEXT NOT NULL REFERENCES mud_professions(id) ON DELETE CASCADE,
+      joined_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      PRIMARY KEY(character_id,profession_id));
+    CREATE TABLE IF NOT EXISTS mud_character_work (
+      character_id TEXT NOT NULL REFERENCES mud_characters(id) ON DELETE CASCADE,
+      activity_id TEXT NOT NULL REFERENCES mud_work_activities(id) ON DELETE CASCADE,
+      status TEXT NOT NULL DEFAULT 'idle' CHECK(status IN ('idle','active','ready')),
+      progress INTEGER NOT NULL DEFAULT 0 CHECK(progress BETWEEN 0 AND 100),
+      accepted_at TEXT,
+      last_paid_at TEXT,
+      available_at TEXT,
+      completions INTEGER NOT NULL DEFAULT 0 CHECK(completions>=0),
+      PRIMARY KEY(character_id,activity_id));
+    """)
+
 
 def _migrate_legacy_callsigns(database):
     """Replace callsigns created under earlier, prefixed formats."""

@@ -19,7 +19,7 @@ from flask import Blueprint, abort, flash, g, jsonify, redirect, render_template
 
 from .auth import admin_required, login_required
 from .db import get_db
-from . import dungeons, character_creation, mud_combat, mud_conditions, mud_effects, mud_firearms, mud_compat, mud_gathering, mud_skills, mud_society, mud_triggers, mud_wayfinding, mud_wilderness, moderation
+from . import dungeons, character_creation, mud_combat, mud_conditions, mud_effects, mud_firearms, mud_compat, mud_gathering, mud_work, mud_skills, mud_society, mud_triggers, mud_wayfinding, mud_wilderness, moderation
 from .security import validate_csrf
 
 bp = Blueprint("mud", __name__, url_prefix="/mud")
@@ -2555,6 +2555,7 @@ def _award_quest_rewards(database, user, quest_id):
     for reward in rewards:
         if reward["reward_type"] == "item":
             _record_objective_progress(database, user, "possess_item", reward["target_id"])
+            _record_work_progress(database, user, "possess_item", reward["target_id"])
     settings = society_settings(database)["relationships"]
     if settings["enabled"]:
         quest = database.execute("SELECT * FROM mud_quests WHERE id=?", (quest_id,)).fetchone()
@@ -2673,7 +2674,7 @@ def _sync_held_items(database, user):
 def _set_objective_progress(database, user, objective_type, target_id, objective_id=None):
     if _record_objective_progress(database, user, objective_type, target_id, objective_id):
         _sync_held_items(database, user)
-    return _finish_ready_quests(database, user)
+    return _finish_ready_quests(database, user) + _record_work_progress(database, user, objective_type, target_id)
 
 
 def _quest_status(database, character_id, quest_id):
@@ -4815,7 +4816,7 @@ def _talk_action(database, user, parameters):
         (npc["conversation_id"],),
     ).fetchone() if npc["conversation_id"] else None
     if node is None:
-        hints = _quest_hints(database, user, room, npc)
+        hints = _quest_hints(database, user, room, npc) + _work_npc_hints(database, user, npc)
         if not hints:
             raise ActionError(f"{npc['name']} has nothing to say right now.")
         events = [EventDraft(greeting + f"{npc['name']} has business with you.\n" + "\n".join(hints),
@@ -4849,7 +4850,7 @@ def _talk_action(database, user, parameters):
         database, character["id"], npc["id"], node["id"], bool(room.get("instance_id"))
     )
     body = greeting + _dialogue_text(npc["name"], node, responses)
-    hints = _quest_hints(database, user, room, npc, responses)
+    hints = _quest_hints(database, user, room, npc, responses) + _work_npc_hints(database, user, npc)
     if hints:
         body += "\n\n" + "\n".join(hints)
     events = [EventDraft(body, event_type="dialogue")]
@@ -7508,6 +7509,324 @@ def _interact_action(database, user, parameters):
     return drafts + script
 
 
+def _work_room(database, user):
+    room = _current_room(database, user["id"])
+    if room.get("instance_id") or room.get("system_managed") or not database.execute(
+        "SELECT 1 FROM mud_world_rooms WHERE id=? AND world_id=(SELECT id FROM mud_world_packages WHERE active=1)",
+        (room["id"],),
+    ).fetchone():
+        raise ActionError("Professions are available in the active authored world.")
+    return room
+
+
+def _work_professions(database):
+    return database.execute(
+        "SELECT * FROM mud_professions WHERE world_id=(SELECT id FROM mud_world_packages WHERE active=1) "
+        "ORDER BY name COLLATE NOCASE,id").fetchall()
+
+
+def _work_npc_hints(database, user, npc):
+    if isinstance(npc, dict) and npc.get("instance_id"):
+        return []
+    lines = []
+    recruiters = [row["name"] for row in database.execute(
+        "SELECT name FROM mud_professions WHERE recruiter_npc_definition_id=? AND "
+        "world_id=(SELECT id FROM mud_world_packages WHERE active=1)", (npc["definition_id"],))]
+    if recruiters:
+        lines.append("Profession recruiter: " + ", ".join(recruiters) + ". Use /profession join <name>.")
+    providers = [row["name"] for row in database.execute(
+        "SELECT a.name FROM mud_work_activities a JOIN mud_professions p ON p.id=a.profession_id "
+        "WHERE a.provider_npc_definition_id=? AND p.world_id=(SELECT id FROM mud_world_packages WHERE active=1)",
+        (npc["definition_id"],))]
+    if providers:
+        lines.append("Work offered: " + ", ".join(providers) + ". Use /work for details.")
+    character = _character_row(database, user["id"])
+    if database.execute("SELECT 1 FROM mud_character_work s JOIN mud_work_activities a ON a.id=s.activity_id "
+                        "JOIN mud_professions p ON p.id=a.profession_id "
+                        "WHERE s.character_id=? AND s.status='active' AND a.objective_type='talk_npc' "
+                        "AND a.objective_target_id=? AND p.world_id=(SELECT id FROM mud_world_packages WHERE active=1)",
+                        (character["id"], npc["definition_id"])).fetchone():
+        lines.append("They listen to your work report.")
+    return lines
+
+
+def _work_activities(database):
+    return database.execute(
+        "SELECT a.*,p.name AS profession_name,p.world_id FROM mud_work_activities a "
+        "JOIN mud_professions p ON p.id=a.profession_id "
+        "WHERE p.world_id=(SELECT id FROM mud_world_packages WHERE active=1) "
+        "ORDER BY p.name COLLATE NOCASE,a.name COLLATE NOCASE,a.id").fetchall()
+
+
+def _work_goal_text(database, activity):
+    goal = activity["objective_type"]
+    if not goal:
+        return ""
+    table = ("mud_world_rooms" if goal == "visit_room" else
+             "mud_npc_definitions" if goal in {"talk_npc", "defeat_npc"} else "mud_item_definitions")
+    target = database.execute(f"SELECT name FROM {table} WHERE id=?",
+                              (activity["objective_target_id"],)).fetchone()
+    verb = {"visit_room": "visit", "talk_npc": "talk to", "defeat_npc": "defeat",
+            "possess_item": "bring", "deliver_item": "deliver"}[goal]
+    return f"{verb} {target['name'] if target else activity['objective_target_id']} × {activity['required_count']}"
+
+
+def _work_reward_text(database, activity):
+    parts = []
+    for reward in database.execute("SELECT r.*,i.name AS item_name FROM mud_work_rewards r "
+                                   "LEFT JOIN mud_item_definitions i ON i.id=r.target_id "
+                                   "WHERE r.activity_id=? ORDER BY r.id", (activity["id"],)):
+        parts.append(f"{reward['amount']} {reward['item_name'] or reward['reward_type']}")
+    if activity["practice_skill_key"]:
+        skill = mud_skills.definitions(database, include_inactive=True).get(activity["practice_skill_key"])
+        parts.append(f"{skill['name'] if skill else activity['practice_skill_key']} practice when known")
+    return ", ".join(parts)
+
+
+def _work_match(rows, target, label):
+    key = " ".join(target.casefold().split())
+    matches = [row for row in rows if row["id"] == target or row["name"].casefold() == key]
+    if not matches and "/" in target:
+        profession, _, name = target.partition("/")
+        matches = [row for row in rows if "profession_name" in row.keys()
+                   and row["profession_name"].casefold() == profession.strip().casefold()
+                   and row["name"].casefold() == name.strip().casefold()]
+    if not matches:
+        raise ActionError(f"No {label} matches {target!r}.")
+    if len(matches) > 1:
+        raise ActionError(f"Several activities are named {target!r}; use profession/activity.")
+    return matches[0]
+
+
+def _work_provider(database, user, npc_definition_id, room):
+    for npc in _room_npc_rows(database, room["id"]):
+        if npc["definition_id"] == npc_definition_id and not _npc_closed(database, npc):
+            _talk_greeting(database, npc, user["id"])
+            return npc
+    raise ActionError("The required NPC is not available here.")
+
+
+def _work_member(database, character_id, profession_id):
+    return database.execute("SELECT 1 FROM mud_character_professions WHERE character_id=? AND profession_id=?",
+                            (character_id, profession_id)).fetchone() is not None
+
+
+def _work_state(database, character_id, activity_id):
+    return database.execute("SELECT * FROM mud_character_work WHERE character_id=? AND activity_id=?",
+                            (character_id, activity_id)).fetchone()
+
+
+def _work_eligible(database, user, activity, room):
+    character = _character_row(database, user["id"])
+    if not _work_member(database, character["id"], activity["profession_id"]):
+        raise ActionError(f"Join {activity['profession_name']} before doing this work.")
+    if activity["room_id"]:
+        if room["id"] != activity["room_id"]:
+            raise ActionError("This activity is located elsewhere.")
+    else:
+        _work_provider(database, user, activity["provider_npc_definition_id"], room)
+    if _active_hostiles(database, room, user["id"]):
+        raise ActionError("A hostile enemy blocks work. Fight or flee first.", 409)
+    if not mud_conditions.evaluate(activity["conditions_json"], _ConditionContext(database, user["id"])):
+        raise ActionError("You do not meet this activity's requirements.")
+    if activity["tool_definition_id"] and not any(
+        item["definition_id"] == activity["tool_definition_id"] for item in
+        (*_inventory_rows(database, user["id"]), *_inventory_rows(database, user["id"], True))
+    ):
+        raise ActionError("You need the required tool to do this work.")
+
+
+def _work_due(state):
+    return state is None or state["available_at"] is None or state["available_at"] <= datetime.now(timezone.utc).isoformat()
+
+
+def _work_handover_count(database, user, item_id):
+    return sum(item["definition_id"] == item_id and not item["acquired_run_id"] and
+               database.execute("SELECT 1 FROM mud_item_instances WHERE container_id=?", (item["id"],)).fetchone() is None
+               for item in _inventory_rows(database, user["id"]))
+
+
+def _record_work_progress(database, user, objective_type, target_id):
+    """Advance accepted assignments on the same real events used by quests."""
+    try:
+        location = _current_room(database, user["id"])
+    except ActionError:
+        return []
+    if location.get("instance_id") or location.get("system_managed"):
+        return []
+    character = _character_row(database, user["id"])
+    rows = database.execute(
+        "SELECT a.*,s.progress FROM mud_work_activities a JOIN mud_character_work s ON s.activity_id=a.id "
+        "JOIN mud_character_professions m ON m.profession_id=a.profession_id AND m.character_id=s.character_id "
+        "JOIN mud_professions p ON p.id=a.profession_id "
+        "WHERE s.character_id=? AND s.status='active' AND a.objective_type=? AND a.objective_target_id=? "
+        "AND p.world_id=(SELECT id FROM mud_world_packages WHERE active=1)",
+        (character["id"], objective_type, target_id)).fetchall()
+    drafts = []
+    for activity in rows:
+        if objective_type == "deliver_item":
+            continue  # Delivery advances only when the item is handed over.
+        progress = (min(activity["required_count"], _work_handover_count(database, user, target_id))
+                    if objective_type == "possess_item" else
+                    min(activity["required_count"], activity["progress"] + 1))
+        ready = progress >= activity["required_count"]
+        database.execute("UPDATE mud_character_work SET progress=?,status=? WHERE character_id=? AND activity_id=? "
+                         "AND status='active'", (progress, "ready" if ready else "active", character["id"], activity["id"]))
+        if ready:
+            drafts.append(EventDraft(f"Work ready: {activity['name']}. Return to its provider and use /work turnin {activity['name']}.",
+                                     event_type="quest"))
+    return drafts
+
+
+def _work_payout(database, user, activity, state_status):
+    character = _character_row(database, user["id"])
+    now = datetime.now(timezone.utc).replace(microsecond=0)
+    database.execute("INSERT OR IGNORE INTO mud_character_work(character_id,activity_id) VALUES(?,?)",
+                     (character["id"], activity["id"]))
+    claimed = database.execute(
+        "UPDATE mud_character_work SET status='idle',progress=0,accepted_at=NULL,last_paid_at=?,available_at=?,"
+        "completions=completions+1 WHERE character_id=? AND activity_id=? AND status=? "
+        "AND (available_at IS NULL OR available_at<=?)",
+        (now.isoformat(), (now + timedelta(seconds=activity["cooldown_seconds"])).isoformat(),
+         character["id"], activity["id"], state_status, now.isoformat())).rowcount
+    if not claimed:
+        raise ActionError("That work is already paid or still cooling down.")
+    rewards = database.execute("SELECT * FROM mud_work_rewards WHERE activity_id=? ORDER BY id", (activity["id"],)).fetchall()
+    received = _grant_rewards(database, user, rewards)
+    drafts = []
+    for reward in rewards:
+        if reward["reward_type"] == "item":
+            drafts += _set_objective_progress(database, user, "possess_item", reward["target_id"])
+    skill = activity["practice_skill_key"]
+    if skill and skill in mud_skills.active_ranks(database, character["id"]):
+        received += mud_skills.practice(database, character["id"], "work", skill_key=skill, force_skill=True)
+    return [EventDraft(f"Work complete: {activity['name']}. " +
+                       ("Rewards: " + ", ".join(received) + "." if received else "Your work is recorded."),
+                       event_type="reward")] + drafts
+
+
+def _professions_action(database, user, parameters):
+    room = _work_room(database, user)
+    character = _character_row(database, user["id"])
+    lines = []
+    for profession in _work_professions(database):
+        joined = _work_member(database, character["id"], profession["id"])
+        nearby = any(npc["definition_id"] == profession["recruiter_npc_definition_id"]
+                     for npc in _room_npc_rows(database, room["id"]))
+        lines.append(f"{profession['name']} ({'joined' if joined else 'not joined'}"
+                     f"{' · recruiter here' if nearby else ''}) — {profession['description']}")
+    return [EventDraft("Professions:\n" + "\n".join(lines) if lines else "No professions are defined here.",
+                       event_type="character")]
+
+
+def _profession_action(database, user, parameters):
+    args = [str(value) for value in parameters.get("arguments", [])]
+    verb = args.pop(0).casefold() if args else ""
+    if verb not in {"join", "leave"} or not args:
+        raise ActionError("Use /profession join <name> or /profession leave <name>.")
+    room = _work_room(database, user)
+    profession = _work_match(_work_professions(database), " ".join(args), "profession")
+    character = _character_row(database, user["id"])
+    joined = _work_member(database, character["id"], profession["id"])
+    if verb == "join":
+        if joined:
+            raise ActionError("You already belong to that profession.")
+        _work_provider(database, user, profession["recruiter_npc_definition_id"], room)
+        if not mud_conditions.evaluate(profession["conditions_json"], _ConditionContext(database, user["id"])):
+            raise ActionError("You do not meet this profession's requirements.")
+        database.execute("INSERT INTO mud_character_professions(character_id,profession_id) VALUES(?,?)",
+                         (character["id"], profession["id"]))
+        return [EventDraft(f"You join {profession['name']}.", event_type="character")]
+    if not joined:
+        raise ActionError("You are not a member of that profession.")
+    database.execute("UPDATE mud_character_work SET status='idle',progress=0,accepted_at=NULL "
+                     "WHERE character_id=? AND activity_id IN "
+                     "(SELECT id FROM mud_work_activities WHERE profession_id=?)",
+                     (character["id"], profession["id"]))
+    database.execute("DELETE FROM mud_character_professions WHERE character_id=? AND profession_id=?",
+                     (character["id"], profession["id"]))
+    return [EventDraft(f"You leave {profession['name']}. Active job progress is cleared.", event_type="character")]
+
+
+def _work_action(database, user, parameters):
+    room = _work_room(database, user)
+    character = _character_row(database, user["id"])
+    args = [str(value) for value in parameters.get("arguments", [])]
+    verb = args.pop(0).casefold() if args else ""
+    if not verb or verb == "list":
+        lines = []
+        for activity in _work_activities(database):
+            state = _work_state(database, character["id"], activity["id"])
+            nearby = activity["room_id"] == room["id"] or any(
+                npc["definition_id"] == activity["provider_npc_definition_id"]
+                for npc in _room_npc_rows(database, room["id"]))
+            if nearby or state and state["status"] != "idle":
+                status = state["status"] if state and state["status"] != "idle" else (
+                    f"cooldown until {state['available_at']}" if not _work_due(state) else "available")
+                goal = _work_goal_text(database, activity)
+                lines.append(f"{activity['profession_name']}/{activity['name']} · {activity['kind']} · {status} — "
+                             f"{activity['description']}" + (f" Goal: {goal}." if goal else "") +
+                             f" Rewards: {_work_reward_text(database, activity)}.")
+        return [EventDraft("Work:\n" + "\n".join(lines) if lines else "No nearby or active work. Use /professions to find a recruiter.",
+                           event_type="quest")]
+    if verb not in {"do", "accept", "deliver", "turnin", "abandon"} or not args:
+        raise ActionError("Use /work [list|do|accept|deliver|turnin|abandon] <name>.")
+    activity = _work_match(_work_activities(database), " ".join(args), "work activity")
+    if not _work_member(database, character["id"], activity["profession_id"]):
+        raise ActionError(f"Join {activity['profession_name']} before doing this work.")
+    state = _work_state(database, character["id"], activity["id"])
+    if verb == "abandon":
+        if activity["kind"] != "assignment" or state is None or state["status"] == "idle":
+            raise ActionError("You have not accepted that job.")
+        database.execute("UPDATE mud_character_work SET status='idle',progress=0,accepted_at=NULL "
+                         "WHERE character_id=? AND activity_id=?", (character["id"], activity["id"]))
+        return [EventDraft(f"You abandon {activity['name']}. Its progress is cleared.", event_type="quest")]
+    _work_eligible(database, user, activity, room)
+    if verb == "do":
+        if activity["kind"] != "immediate":
+            raise ActionError("Accept this job first.")
+        return _work_payout(database, user, activity, "idle")
+    if activity["kind"] != "assignment":
+        raise ActionError("This activity is immediate work; use /work do.")
+    if verb == "accept":
+        if state and state["status"] != "idle":
+            raise ActionError("You have already accepted that job.")
+        if not _work_due(state):
+            raise ActionError("This job is still cooling down.")
+        database.execute("INSERT INTO mud_character_work(character_id,activity_id,status,accepted_at) "
+                         "VALUES(?,?,'active',?) ON CONFLICT(character_id,activity_id) DO UPDATE SET "
+                         "status='active',progress=0,accepted_at=excluded.accepted_at",
+                         (character["id"], activity["id"], datetime.now(timezone.utc).isoformat()))
+        drafts = [EventDraft(f"Job accepted: {activity['name']}. {activity['description']} "
+                             f"Goal: {_work_goal_text(database, activity)}. Return to the provider to turn it in.",
+                             event_type="quest")]
+        if activity["objective_type"] == "possess_item":
+            drafts += _record_work_progress(database, user, "possess_item", activity["objective_target_id"])
+        return drafts
+    if state is None or state["status"] == "idle":
+        raise ActionError("Accept this job first.")
+    if verb == "deliver":
+        if activity["objective_type"] != "deliver_item" or state["status"] != "active":
+            raise ActionError("This job is not waiting for a delivery.")
+        item = _handover_items(database, user, activity["objective_target_id"], 1)[0]
+        database.execute("DELETE FROM mud_item_instances WHERE id=? AND owner_character_id=?",
+                         (item["id"], character["id"]))
+        progress = state["progress"] + 1
+        database.execute("UPDATE mud_character_work SET progress=?,status=? WHERE character_id=? AND activity_id=?",
+                         (progress, "ready" if progress >= activity["required_count"] else "active",
+                          character["id"], activity["id"]))
+        return [EventDraft(f"You deliver {item['name']} for {activity['name']} "
+                           f"({progress}/{activity['required_count']}).", event_type="quest")]
+    if state["status"] != "ready":
+        raise ActionError("You have not finished this job's objective.")
+    if activity["objective_type"] == "possess_item":
+        items = _handover_items(database, user, activity["objective_target_id"], activity["required_count"])
+        for item in items:
+            database.execute("DELETE FROM mud_item_instances WHERE id=? AND owner_character_id=?",
+                             (item["id"], character["id"]))
+    return _work_payout(database, user, activity, "ready")
+
+
 def _gather_action(database, user, parameters):
     arguments = [str(value) for value in parameters.get("arguments", [])]
     activity = ""
@@ -7658,6 +7977,9 @@ actions.register(ActionDefinition(key="interact", label="INTERACT", description=
 actions.register(ActionDefinition(key="gather", label="GATHER", description="Gather materials from a room source: /gather [name]. Also /harvest, /mine, /scavenge, /collect.", commands=("gather",), handler=_gather_action, group="ITEMS", show_context=False))
 for _activity in mud_gathering.ACTIVITIES:
     actions.register_command(_activity, actions.get("gather"), (f":{_activity}",))
+actions.register(ActionDefinition(key="professions", label="PROFESSIONS", description="List authored professions and recruiters.", commands=("professions",), handler=_professions_action, group="CHARACTER"))
+actions.register(ActionDefinition(key="profession", label="JOIN PROFESSION", description="Join near a recruiter or leave: /profession join|leave <name>.", commands=("profession",), handler=_profession_action, group="CHARACTER", show_context=False))
+actions.register(ActionDefinition(key="work", label="WORK", description="List work or use /work do|accept|deliver|turnin|abandon <name>.", commands=("work", "jobs"), handler=_work_action, group="QUESTS", show_context=False))
 actions.register(ActionDefinition(key="shop", label="SHOP", description="Browse, buy, or sell with a nearby merchant; the portal trader also serves the hub.", commands=("shop",), handler=_shop_action, group="HUB", show_context=False))
 actions.register(ActionDefinition(key="storage", label="PERSONAL STORAGE", description="Deposit or withdraw personal items in the portal room.", commands=("storage", "stash"), handler=_storage_action, group="HUB", show_context=False))
 actions.register(ActionDefinition(key="talk", label="TALK", description="Talk to a nearby NPC.", commands=("talk", "speak"), handler=_talk_action, group="NPCS", show_context=False))
@@ -8909,6 +9231,17 @@ def builder():
         rewards_by_quest.setdefault(row["quest_id"], []).append(dict(row))
     for row in database.execute("SELECT * FROM mud_quest_givers"):
         givers_by_quest.setdefault(row["quest_id"], set()).add(row["npc_definition_id"])
+    professions = [dict(row) for row in database.execute(
+        "SELECT * FROM mud_professions WHERE world_id=(SELECT id FROM mud_world_packages WHERE active=1) "
+        "ORDER BY name COLLATE NOCASE,id")]
+    work_by_profession = {row["id"]: [] for row in professions}
+    rewards_by_work = {}
+    for row in database.execute("SELECT a.* FROM mud_work_activities a JOIN mud_professions p "
+                                "ON p.id=a.profession_id WHERE p.world_id=? ORDER BY a.name COLLATE NOCASE,a.id",
+                                (_active_world(database),)):
+        work_by_profession[row["profession_id"]].append(dict(row))
+        rewards_by_work[row["id"]] = [dict(reward) for reward in database.execute(
+            "SELECT * FROM mud_work_rewards WHERE activity_id=? ORDER BY id", (row["id"],))]
     dungeon_context = _builder_dungeon_context(database)
     trigger_context = _builder_trigger_context(database, rooms, exits_by_room, items_by_room, npcs_by_room,
                                                nodes_by_conversation, responses_by_node, conversations)
@@ -8921,6 +9254,7 @@ def builder():
         responses_by_node=responses_by_node, npc_definitions=npc_definitions,
         npcs_by_room=npcs_by_room, quests=quests, objectives_by_quest=objectives_by_quest,
         rewards_by_quest=rewards_by_quest, givers_by_quest=givers_by_quest,
+        professions=professions, work_by_profession=work_by_profession, rewards_by_work=rewards_by_work,
         npc_equipment=npc_equipment, npc_combat_rewards=npc_combat_rewards,
         npc_shops=npc_shops, shop_stock=shop_stock, discoveries_by_room=discoveries_by_room,
         world_destinations=world_destinations, destinations_by_room=destinations_by_room,
@@ -9519,6 +9853,244 @@ def builder_delete_npc_instance(instance_id):
     if npc is None: abort(404)
     if request.form.get("confirmation") != "delete": flash("NPC removal was not confirmed.", "error"); return _builder_redirect(npc["room_id"])
     database.execute("DELETE FROM mud_npc_instances WHERE id=?", (instance_id,)); database.commit(); flash(f"Removed {npc['name']} from the room.", "success"); return _builder_redirect(npc["room_id"])
+
+
+def _work_builder_redirect():
+    return redirect(url_for("mud.builder", _anchor="profession-heading"))
+
+
+def _builder_profession(database):
+    conditions, error = _builder_rules(database, "conditions_json", mud_conditions.validate_conditions)
+    if error:
+        return None, error
+    row = {"name": request.form.get("name"), "description": request.form.get("description"),
+           "recruiter_npc_definition_id": request.form.get("recruiter_npc_definition_id", "").strip(),
+           "conditions_json": conditions}
+    try:
+        clean = mud_work.profession(row)
+    except ValueError as problem:
+        return None, str(problem)
+    if database.execute("SELECT 1 FROM mud_npc_definitions WHERE id=? AND world_id=?",
+                        (row["recruiter_npc_definition_id"], _active_world(database))).fetchone() is None:
+        return None, "Choose a recruiter NPC from this world."
+    return {**clean, "conditions_json": conditions,
+            "recruiter_npc_definition_id": row["recruiter_npc_definition_id"]}, None
+
+
+@bp.post("/builder/professions")
+@builder_required
+def builder_create_profession():
+    validate_csrf()
+    database = get_db()
+    fields, error = _builder_profession(database)
+    if error:
+        flash(error, "error"); return _work_builder_redirect()
+    try:
+        database.execute("INSERT INTO mud_professions(id,world_id,name,description,recruiter_npc_definition_id,conditions_json) "
+                         "VALUES(?,?,?,?,?,?)", (f"world:profession:{uuid.uuid4().hex}", _active_world(database),
+                         fields["name"], fields["description"], fields["recruiter_npc_definition_id"], fields["conditions_json"]))
+        database.commit()
+    except sqlite3.IntegrityError:
+        database.rollback(); flash("A profession with that name already exists.", "error"); return _work_builder_redirect()
+    flash("Profession created.", "success")
+    return _work_builder_redirect()
+
+
+@bp.post("/builder/professions/<path:profession_id>")
+@builder_required
+def builder_update_profession(profession_id):
+    validate_csrf()
+    database = get_db()
+    if database.execute("SELECT 1 FROM mud_professions WHERE id=? AND world_id=?",
+                        (profession_id, _active_world(database))).fetchone() is None: abort(404)
+    fields, error = _builder_profession(database)
+    if error:
+        flash(error, "error"); return _work_builder_redirect()
+    try:
+        database.execute("UPDATE mud_professions SET name=?,description=?,recruiter_npc_definition_id=?,conditions_json=? "
+                         "WHERE id=?", (fields["name"], fields["description"],
+                                        fields["recruiter_npc_definition_id"], fields["conditions_json"], profession_id))
+        database.commit()
+    except sqlite3.IntegrityError:
+        database.rollback(); flash("A profession with that name already exists.", "error"); return _work_builder_redirect()
+    flash("Profession updated.", "success")
+    return _work_builder_redirect()
+
+
+@bp.post("/builder/professions/<path:profession_id>/delete")
+@builder_required
+def builder_delete_profession(profession_id):
+    validate_csrf()
+    if request.form.get("confirmation") != "delete":
+        flash("Confirm profession removal.", "error"); return _work_builder_redirect()
+    database = get_db()
+    if database.execute("DELETE FROM mud_professions WHERE id=? AND world_id=?",
+                        (profession_id, _active_world(database))).rowcount == 0: abort(404)
+    database.commit(); flash("Profession removed.", "success")
+    return _work_builder_redirect()
+
+
+def _builder_work_activity(database, profession_id, activity_id=None):
+    if database.execute("SELECT 1 FROM mud_professions WHERE id=? AND world_id=?",
+                        (profession_id, _active_world(database))).fetchone() is None: abort(404)
+    conditions, error = _builder_rules(database, "conditions_json", mud_conditions.validate_conditions)
+    if error:
+        return None, error
+    row = {"name": request.form.get("name"), "description": request.form.get("description"),
+           "kind": request.form.get("kind"), "room_id": request.form.get("room_id") or None,
+           "provider_npc_definition_id": request.form.get("provider_npc_definition_id") or None,
+           "conditions_json": conditions, "tool_definition_id": request.form.get("tool_definition_id") or None,
+           "practice_skill_key": request.form.get("practice_skill_key") or None,
+           "cooldown_seconds": request.form.get("cooldown_seconds", type=int),
+           "objective_type": request.form.get("objective_type") or None,
+           "objective_target_id": request.form.get("objective_target_id") or None,
+           "required_count": request.form.get("required_count", type=int)}
+    try:
+        clean = mud_work.activity(row)
+    except ValueError as problem:
+        return None, str(problem)
+    checks = (("room_id", "mud_world_rooms", "room"),
+              ("provider_npc_definition_id", "mud_npc_definitions", "provider NPC"),
+              ("tool_definition_id", "mud_item_definitions", "tool"))
+    for field, table, label in checks:
+        if clean[field] and database.execute(f"SELECT 1 FROM {table} WHERE id=? AND world_id=?",
+                                             (clean[field], _active_world(database))).fetchone() is None:
+            return None, f"Choose a {label} from this world."
+    goal = clean["objective_type"]
+    target_table = ("mud_world_rooms" if goal == "visit_room" else
+                    "mud_npc_definitions" if goal in {"talk_npc", "defeat_npc"} else "mud_item_definitions")
+    if goal and database.execute(f"SELECT 1 FROM {target_table} WHERE id=? AND world_id=?",
+                                 (clean["objective_target_id"], _active_world(database))).fetchone() is None:
+        return None, "Choose an objective target from this world."
+    if clean["practice_skill_key"] and clean["practice_skill_key"] not in mud_skills.definitions(database):
+        return None, "Choose an enabled skill to practice."
+    if activity_id and not clean["practice_skill_key"] and database.execute(
+        "SELECT 1 FROM mud_work_rewards WHERE activity_id=?", (activity_id,)).fetchone() is None:
+        return None, "Work needs a reward or practice skill."
+    return {**clean, "conditions_json": conditions}, None
+
+
+@bp.post("/builder/professions/<path:profession_id>/activities")
+@builder_required
+def builder_create_work_activity(profession_id):
+    validate_csrf()
+    database = get_db()
+    fields, error = _builder_work_activity(database, profession_id)
+    reward_type = request.form.get("reward_type")
+    initial = None
+    if reward_type and reward_type != "none":
+        try:
+            initial = mud_work.reward({"reward_type": reward_type,
+                                       "target_id": request.form.get("reward_target_id") or None,
+                                       "amount": request.form.get("reward_amount", type=int)})
+        except ValueError as problem:
+            error = str(problem)
+    if not error and not initial and not fields["practice_skill_key"]:
+        error = "Work needs a reward or practice skill."
+    if not error and initial and initial["target_id"] and database.execute(
+        "SELECT 1 FROM mud_item_definitions WHERE id=? AND world_id=?",
+        (initial["target_id"], _active_world(database))).fetchone() is None:
+        error = "Choose a reward item from this world."
+    if error:
+        flash(error, "error"); return _work_builder_redirect()
+    activity_id = f"world:work:{uuid.uuid4().hex}"
+    try:
+        database.execute(f"INSERT INTO mud_work_activities(id,profession_id,{','.join(fields)}) "
+                         f"VALUES({','.join('?' for _ in range(len(fields)+2))})",
+                         (activity_id, profession_id, *fields.values()))
+        if initial:
+            database.execute("INSERT INTO mud_work_rewards(id,activity_id,reward_type,target_id,amount) "
+                             "VALUES(?,?,?,?,?)", (f"world:work-reward:{uuid.uuid4().hex}", activity_id,
+                                              *initial.values()))
+        database.commit()
+    except sqlite3.IntegrityError:
+        database.rollback(); flash("That work activity already exists or has invalid references.", "error"); return _work_builder_redirect()
+    flash("Work activity created.", "success")
+    return _work_builder_redirect()
+
+
+@bp.post("/builder/work/<path:activity_id>")
+@builder_required
+def builder_update_work_activity(activity_id):
+    validate_csrf()
+    database = get_db()
+    row = database.execute("SELECT a.profession_id,a.kind,a.objective_type,a.objective_target_id,a.required_count "
+                           "FROM mud_work_activities a JOIN mud_professions p "
+                           "ON p.id=a.profession_id WHERE a.id=? AND p.world_id=?",
+                           (activity_id, _active_world(database))).fetchone()
+    if row is None: abort(404)
+    fields, error = _builder_work_activity(database, row["profession_id"], activity_id)
+    if error:
+        flash(error, "error"); return _work_builder_redirect()
+    try:
+        database.execute(f"UPDATE mud_work_activities SET {','.join(f'{key}=?' for key in fields)} WHERE id=?",
+                         (*fields.values(), activity_id))
+        if any(row[key] != fields[key] for key in ("kind", "objective_type", "objective_target_id", "required_count")):
+            database.execute("UPDATE mud_character_work SET status='idle',progress=0,accepted_at=NULL "
+                             "WHERE activity_id=?", (activity_id,))
+        database.commit()
+    except sqlite3.IntegrityError:
+        database.rollback(); flash("That work activity already exists or has invalid references.", "error"); return _work_builder_redirect()
+    flash("Work activity updated.", "success")
+    return _work_builder_redirect()
+
+
+@bp.post("/builder/work/<path:activity_id>/delete")
+@builder_required
+def builder_delete_work_activity(activity_id):
+    validate_csrf()
+    if request.form.get("confirmation") != "delete":
+        flash("Confirm work removal.", "error"); return _work_builder_redirect()
+    database = get_db()
+    if database.execute("DELETE FROM mud_work_activities WHERE id=? AND profession_id IN "
+                        "(SELECT id FROM mud_professions WHERE world_id=?)",
+                        (activity_id, _active_world(database))).rowcount == 0: abort(404)
+    database.commit(); flash("Work activity removed.", "success")
+    return _work_builder_redirect()
+
+
+@bp.post("/builder/work/<path:activity_id>/rewards")
+@builder_required
+def builder_create_work_reward(activity_id):
+    validate_csrf()
+    database = get_db()
+    if database.execute("SELECT 1 FROM mud_work_activities a JOIN mud_professions p ON p.id=a.profession_id "
+                        "WHERE a.id=? AND p.world_id=?", (activity_id, _active_world(database))).fetchone() is None: abort(404)
+    if database.execute("SELECT COUNT(*) FROM mud_work_rewards WHERE activity_id=?", (activity_id,)).fetchone()[0] >= 10:
+        flash("Work has at most ten rewards.", "error"); return _work_builder_redirect()
+    try:
+        reward = mud_work.reward({"reward_type": request.form.get("reward_type"),
+                                  "target_id": request.form.get("target_id") or None,
+                                  "amount": request.form.get("amount", type=int)})
+    except ValueError as problem:
+        flash(str(problem), "error"); return _work_builder_redirect()
+    if reward["target_id"] and database.execute("SELECT 1 FROM mud_item_definitions WHERE id=? AND world_id=?",
+                                                (reward["target_id"], _active_world(database))).fetchone() is None:
+        flash("Choose an item from this world.", "error"); return _work_builder_redirect()
+    database.execute("INSERT INTO mud_work_rewards(id,activity_id,reward_type,target_id,amount) VALUES(?,?,?,?,?)",
+                     (f"world:work-reward:{uuid.uuid4().hex}", activity_id, *reward.values()))
+    database.commit(); flash("Work reward added.", "success")
+    return _work_builder_redirect()
+
+
+@bp.post("/builder/work-rewards/<path:reward_id>/delete")
+@builder_required
+def builder_delete_work_reward(reward_id):
+    validate_csrf()
+    if request.form.get("confirmation") != "delete":
+        flash("Confirm reward removal.", "error"); return _work_builder_redirect()
+    database = get_db()
+    row = database.execute("SELECT r.activity_id,a.practice_skill_key FROM mud_work_rewards r "
+                           "JOIN mud_work_activities a ON a.id=r.activity_id "
+                           "JOIN mud_professions p ON p.id=a.profession_id WHERE r.id=? AND p.world_id=?",
+                           (reward_id, _active_world(database))).fetchone()
+    if row is None: abort(404)
+    if not row["practice_skill_key"] and database.execute(
+        "SELECT COUNT(*) FROM mud_work_rewards WHERE activity_id=?", (row["activity_id"],)).fetchone()[0] <= 1:
+        flash("Keep one reward or a practice skill.", "error"); return _work_builder_redirect()
+    database.execute("DELETE FROM mud_work_rewards WHERE id=?", (reward_id,))
+    database.commit(); flash("Work reward removed.", "success")
+    return _work_builder_redirect()
 
 
 def _quest_fields(database, quest_id=None):
@@ -10134,6 +10706,12 @@ def builder_delete_room(room_id):
             return _builder_redirect(room_id)
         if room["is_start"]:
             flash("The current starting room cannot be deleted. Designate another valid start first.", "error")
+            database.rollback()
+            return _builder_redirect(room_id)
+        if database.execute("SELECT 1 FROM mud_work_activities WHERE room_id=? OR "
+                            "(objective_type='visit_room' AND objective_target_id=?)",
+                            (room_id, room_id)).fetchone():
+            flash("Move or remove work activities using this room before deleting it.", "error")
             database.rollback()
             return _builder_redirect(room_id)
         start = _start_room(database)

@@ -42,6 +42,7 @@ TRIGGERS = {
     "experience_gained": "earning experience",
     "purchase": "buying from merchants",
     "gather": "successfully gathering materials",
+    "work": "completing an authored work activity",
 }
 # Category-bound practice only counts while matching gear is equipped.
 CATEGORY_TRIGGERS = {"melee_hit", "firearm_hit", "damage_taken", "defend"}
@@ -147,7 +148,7 @@ def normalize(document, *, known_skills=None, known_origins=None):
         raise ValueError(f"Practice triggers must be distinct values from: {', '.join(TRIGGERS)}.")
     definition["practice"] = {"triggers": list(triggers),
                               "rate": _whole(practice.get("rate", 1), 1, 10, "Practice rate")}
-    if not parsed_effects and not any(definition["proficiencies"].values()):
+    if not parsed_effects and not any(definition["proficiencies"].values()) and "work" not in triggers:
         raise ValueError("A skill needs at least one effect or proficiency to affect play.")
 
     learn = document.get("learn", {})
@@ -526,7 +527,7 @@ def _skill_categories(definition):
     return set(definition["proficiencies"]["weapons"]) | set(definition["proficiencies"]["armor"])
 
 
-def practice(database, character_id, trigger, amount=1, *, categories=None, skill_key=None):
+def practice(database, character_id, trigger, amount=1, *, categories=None, skill_key=None, force_skill=False):
     """Advance skills that respond to a trigger; returns player-facing notices."""
     if trigger not in TRIGGERS:
         raise ValueError("Unknown practice trigger.")
@@ -536,7 +537,7 @@ def practice(database, character_id, trigger, amount=1, *, categories=None, skil
     for key, (definition, rank) in active_ranks(database, character_id).items():
         if skill_key is not None and key != skill_key:
             continue
-        if trigger not in definition["practice"]["triggers"]:
+        if trigger not in definition["practice"]["triggers"] and not (force_skill and skill_key == key):
             continue
         if (categories is not None and trigger in CATEGORY_TRIGGERS and _skill_categories(definition)
                 and not _skill_categories(definition) & set(categories)):

@@ -140,6 +140,7 @@ Builders set difficulties in the World Builder.
 | `experience_gained` | The character earns experience: one practice per 25 XP, minimum one. |
 | `purchase` | The character buys from a merchant. |
 | `gather` | The character successfully gathers from a replenishing room source that requires this skill. |
+| `work` | The character completes an authored work activity. An activity's selected skill practices on payment even if it does not list this trigger. A skill used only for work may omit effects and proficiencies when it lists `work`. |
 
 A skill with `proficiencies` practices `melee_hit`, `firearm_hit`,
 `damage_taken`, and `defend` only while the character has matching gear

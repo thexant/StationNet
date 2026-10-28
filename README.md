@@ -9,6 +9,7 @@ Authored worlds can configure the following:
 - quests that complete automatically, or that the player turns in to an NPC
 - staged (sequential) and optional objectives
 - quest deliveries and enemy defeats
+- NPC-provided jobs and independent, repeatable profession work
 - conditional dialogue that checks level, race, class, origin traits, inventory, coins, attributes, skills, and quest status
 - races and classes with lasting gameplay effects: traits, proficiencies, resistances, skill affinities, innate abilities, and health, mana, and skill-point growth
 - one-time dialogue rewards and costs
@@ -19,7 +20,7 @@ Authored worlds can configure the following:
 - searchable discoveries
 - keyed exits
 
-Players interact with these using `/quests`, `/quest available`, `/quest accept`, `/quest turnin`, `/quest abandon`, `/deliver`, `/shop`, `/search`, and `/unlock`. Builder exports include the corresponding settings.
+Players interact with these using `/quests`, `/quest available`, `/quest accept`, `/quest turnin`, `/quest abandon`, `/deliver`, `/shop`, `/search`, and `/unlock`. Authored worlds also offer professions and repeatable work through `/professions`, `/profession join`, and `/work`. Builder exports include the corresponding settings.
 
 ## Why this stack
 

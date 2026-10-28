@@ -10,7 +10,7 @@ import zipfile
 
 from flask import current_app
 
-from . import mud_conditions, mud_gathering, mud_society, mud_triggers, mud_wayfinding, mud_wilderness, mud_world_dungeons
+from . import mud_conditions, mud_gathering, mud_work, mud_society, mud_triggers, mud_wayfinding, mud_wilderness, mud_world_dungeons
 
 
 MAX_ZIP_BYTES = 16 * 1024 * 1024
@@ -37,6 +37,12 @@ CONTENT_TABLES = {
                    "turn_in_npc_definition_id", "sequential", "abandonable", "conditions_json"),
     "mud_npc_definitions": ("id", "name", "description", "conversation_id", "properties_json", "behaviors_json",
                             "faction_id"),
+    "mud_professions": ("id", "name", "description", "recruiter_npc_definition_id", "conditions_json"),
+    "mud_work_activities": ("id", "profession_id", "name", "description", "kind", "room_id",
+                            "provider_npc_definition_id", "conditions_json", "tool_definition_id",
+                            "practice_skill_key", "cooldown_seconds", "objective_type", "objective_target_id",
+                            "required_count"),
+    "mud_work_rewards": ("id", "activity_id", "reward_type", "target_id", "amount"),
     "mud_npc_combat_profiles": ("npc_definition_id", "maximum_health", "attack", "defense", "experience_reward", "respawn_seconds", "accuracy", "evasion"),
     "mud_npc_equipment": ("npc_definition_id", "equipment_slot", "item_definition_id"),
     "mud_npc_combat_rewards": ("id", "npc_definition_id", "reward_type", "target_id", "amount", "chance_percent"),
@@ -71,9 +77,14 @@ REFERENCE_TABLE = {
     "turn_in_npc_definition_id": "mud_npc_definitions",
     "recipient_npc_definition_id": "mud_npc_definitions", "turn_in_quest_id": "mud_quests",
     "faction_id": "mud_world_factions", "other_faction_id": "mud_world_factions",
+    "recruiter_npc_definition_id": "mud_npc_definitions",
+    "provider_npc_definition_id": "mud_npc_definitions",
+    "profession_id": "mud_professions", "activity_id": "mud_work_activities",
 }
 # Quests and dialogue responses carry condition/outcome lists that name content.
 CONDITION_COLUMNS = {"mud_quests": ("conditions_json",),
+                     "mud_professions": ("conditions_json",),
+                     "mud_work_activities": ("conditions_json",),
                      "mud_dialogue_responses": ("conditions_json", "outcomes_json"),
                      "mud_world_destinations": ("conditions_json",),
                      "mud_shop_stock": ("conditions_json",)}
@@ -344,6 +355,46 @@ def read_package(payload):
                 if any(row.get(key) is not None and not _whole(row[key], 0, 100)
                        for key in ("accuracy", "evasion")):
                     raise WorldError("NPC combat accuracy and evasion must be whole numbers from 0 to 100.")
+            elif table == "mud_professions":
+                try:
+                    mud_work.profession(row)
+                except ValueError as problem:
+                    raise WorldError(f"Invalid profession: {problem}") from problem
+                if row["recruiter_npc_definition_id"] not in raw_ids("mud_npc_definitions"):
+                    raise WorldError("Profession recruiter must name an NPC in content.json.")
+            elif table == "mud_work_activities":
+                try:
+                    work = mud_work.activity(row)
+                except ValueError as problem:
+                    raise WorldError(f"Invalid work activity: {problem}") from problem
+                if row.get("profession_id") not in raw_ids("mud_professions"):
+                    raise WorldError("Work activity must name a profession in content.json.")
+                if work["provider_npc_definition_id"] and work["provider_npc_definition_id"] not in raw_ids("mud_npc_definitions"):
+                    raise WorldError("Work provider must name an NPC in content.json.")
+                if work["room_id"] and work["room_id"] not in room_ids:
+                    raise WorldError("Independent work must name a room in the world.")
+                if work["tool_definition_id"] and work["tool_definition_id"] not in raw_ids("mud_item_definitions"):
+                    raise WorldError("Work tool must name an item in content.json.")
+                target_table = ("rooms" if work["objective_type"] == "visit_room" else
+                                "mud_npc_definitions" if work["objective_type"] in {"talk_npc", "defeat_npc"} else
+                                "mud_item_definitions")
+                if work["objective_target_id"] and work["objective_target_id"] not in (
+                        room_ids if target_table == "rooms" else raw_ids(target_table)):
+                    raise WorldError("Work objective must name content in this world.")
+                configured_rewards = content.get("mud_work_rewards", [])
+                if (isinstance(configured_rewards, list) and not any(
+                        isinstance(reward, dict) and reward.get("activity_id") == row.get("id")
+                        for reward in configured_rewards) and not work["practice_skill_key"]):
+                    raise WorldError("A work activity needs a reward or practice skill.")
+            elif table == "mud_work_rewards":
+                try:
+                    clean = mud_work.reward(row)
+                except ValueError as problem:
+                    raise WorldError(f"Invalid work reward: {problem}") from problem
+                if row.get("activity_id") not in raw_ids("mud_work_activities"):
+                    raise WorldError("Work reward must name an activity in content.json.")
+                if clean["target_id"] and clean["target_id"] not in raw_ids("mud_item_definitions"):
+                    raise WorldError("Work reward item must exist in content.json.")
             elif table == "mud_quest_objectives":
                 if row.get("objective_type") not in OBJECTIVE_TYPES or not _whole(row.get("required_count", 1), 1, 100):
                     raise WorldError("Quest objective type or required_count is invalid.")
@@ -412,6 +463,12 @@ def read_package(payload):
                     _condition_validator(column)(row.get(column))
                 except ValueError as problem:
                     raise WorldError(f"Invalid {table} {column}: {problem}") from problem
+    reward_counts = {}
+    for row in content.get("mud_work_rewards", []):
+        activity_id = row["activity_id"]
+        reward_counts[activity_id] = reward_counts.get(activity_id, 0) + 1
+        if reward_counts[activity_id] > 10:
+            raise WorldError("A work activity may have at most ten rewards.")
     key_ids = {row.get("id") for row in content.get("mud_item_definitions", []) if row.get("item_type") == "key"}
     if any(item["key_item_id"] and item["key_item_id"] not in key_ids for item in clean_exits):
         raise WorldError("Locked exits must reference a key item definition in content.json.")
@@ -674,11 +731,18 @@ def _insert_content(database, document, installation_key, skill_map=None):
                     if ref_table is None:
                         raise WorldError("Quest objective has an unsupported type.")
                     value = _mapped(maps, ref_table, value, column)
-                elif column == "skill_key":
+                elif column in {"skill_key", "practice_skill_key"}:
                     # Trainers name a bundled skill by its local key or an installed skill.
                     value = (skill_map or {}).get(value, value)
                     if value is not None and value not in installed_skills:
                         raise WorldError(f"Skill {row[column]!r} is not bundled or installed.")
+                elif table == "mud_work_activities" and column == "objective_target_id":
+                    if value:
+                        goal = row.get("objective_type")
+                        ref_table = ("rooms" if goal == "visit_room" else
+                                     "mud_npc_definitions" if goal in {"talk_npc", "defeat_npc"} else
+                                     "mud_item_definitions")
+                        value = _mapped(maps, ref_table, value, column)
                 elif table == "mud_gathering_nodes" and column == "rewards_json":
                     value = json.dumps([{"item_id": _mapped(maps, "mud_item_definitions", reward["item_id"], column),
                                          "amount": reward["amount"]} for reward in mud_gathering.rewards(value)])
@@ -710,7 +774,7 @@ def _insert_content(database, document, installation_key, skill_map=None):
                     raise WorldError(f"{table}.{column} must be a scalar value.")
                 fields[column] = value
             if table in {"mud_item_definitions", "mud_npc_definitions", "mud_conversations", "mud_quests",
-                         "mud_world_destinations", "mud_world_factions"}:
+                         "mud_world_destinations", "mud_world_factions", "mud_professions"}:
                 fields["world_id"] = world_id
             names = list(fields)
             database.execute(
@@ -1054,7 +1118,7 @@ def _stored_conditions(value, column):
 
 
 def _export_content(database, world_id, room_map):
-    roots = {"mud_item_definitions", "mud_conversations", "mud_npc_definitions", "mud_quests", "mud_world_factions"}
+    roots = {"mud_item_definitions", "mud_conversations", "mud_npc_definitions", "mud_quests", "mud_world_factions", "mud_professions"}
     all_placed_items = [dict(row) for row in database.execute(
         "SELECT id,definition_id,room_id,container_id FROM mud_item_instances "
         "WHERE spawn_source_id IS NULL AND id NOT LIKE 'world:wild-item:%'"
@@ -1082,10 +1146,30 @@ def _export_content(database, world_id, room_map):
         "SELECT s.item_definition_id FROM mud_shop_stock s JOIN mud_npc_definitions n ON n.id=s.npc_definition_id WHERE n.world_id=?", (world_id,))}
     for row in database.execute("SELECT map_items_json FROM mud_world_destinations WHERE world_id=?", (world_id,)):
         needed_items |= set(mud_wayfinding.map_items(row))
+    for row in database.execute("SELECT a.tool_definition_id,a.objective_type,a.objective_target_id "
+                                "FROM mud_work_activities a JOIN mud_professions p ON p.id=a.profession_id "
+                                "WHERE p.world_id=?", (world_id,)):
+        if row["tool_definition_id"]:
+            needed_items.add(row["tool_definition_id"])
+        if row["objective_type"] in {"possess_item", "deliver_item"}:
+            needed_items.add(row["objective_target_id"])
+    needed_items |= {row["target_id"] for row in database.execute(
+        "SELECT r.target_id FROM mud_work_rewards r JOIN mud_work_activities a ON a.id=r.activity_id "
+        "JOIN mud_professions p ON p.id=a.profession_id WHERE p.world_id=? AND r.target_id IS NOT NULL",
+        (world_id,))}
     needed_npcs = {row["definition_id"] for row in database.execute(
         "SELECT definition_id FROM mud_npc_instances WHERE spawned_by_trigger IS NULL AND room_id IN "
         "(SELECT id FROM mud_world_rooms WHERE world_id=?)", (world_id,)
     )}
+    needed_npcs |= {row["recruiter_npc_definition_id"] for row in database.execute(
+        "SELECT recruiter_npc_definition_id FROM mud_professions WHERE world_id=?", (world_id,))}
+    for row in database.execute("SELECT a.provider_npc_definition_id,a.objective_type,a.objective_target_id "
+                                "FROM mud_work_activities a JOIN mud_professions p ON p.id=a.profession_id "
+                                "WHERE p.world_id=?", (world_id,)):
+        if row["provider_npc_definition_id"]:
+            needed_npcs.add(row["provider_npc_definition_id"])
+        if row["objective_type"] in {"talk_npc", "defeat_npc"}:
+            needed_npcs.add(row["objective_target_id"])
     for trigger in world_triggers(database, world_id):
         for kind, ref in mud_triggers.references(trigger):
             if kind == "item":
@@ -1107,13 +1191,19 @@ def _export_content(database, world_id, room_map):
         f"SELECT conversation_id FROM mud_npc_definitions WHERE id IN ({','.join('?' for _ in template_npcs)})",
         tuple(template_npcs),
     ) if row["conversation_id"]} if template_npcs else set()
+    needed_conversations |= {row["conversation_id"] for row in database.execute(
+        "SELECT id,conversation_id FROM mud_npc_definitions WHERE world_id=?", (world_id,))
+        if row["id"] in needed_npcs and row["conversation_id"]}
     for row in database.execute(
         "SELECT r.conditions_json,r.outcomes_json FROM mud_dialogue_responses r "
         "JOIN mud_dialogue_nodes n ON n.id=r.node_id JOIN mud_conversations c ON c.id=n.conversation_id "
         "WHERE c.world_id=? UNION ALL SELECT conditions_json,'[]' FROM mud_quests WHERE world_id=? "
         "UNION ALL SELECT e.conditions_json,'[]' FROM mud_world_exits e "
-        "JOIN mud_world_rooms r ON r.id=e.from_room_id WHERE r.world_id=?",
-        (world_id, world_id, world_id),
+        "JOIN mud_world_rooms r ON r.id=e.from_room_id WHERE r.world_id=? "
+        "UNION ALL SELECT conditions_json,'[]' FROM mud_professions WHERE world_id=? "
+        "UNION ALL SELECT a.conditions_json,'[]' FROM mud_work_activities a "
+        "JOIN mud_professions p ON p.id=a.profession_id WHERE p.world_id=?",
+        (world_id, world_id, world_id, world_id, world_id),
     ):
         named = list(mud_conditions.references(_stored_conditions(row["conditions_json"], "conditions_json"),
                                                _stored_conditions(row["outcomes_json"], "outcomes_json")))
@@ -1143,6 +1233,10 @@ def _export_content(database, world_id, room_map):
             rows = [row for row in rows if row["npc_definition_id"] in selected["mud_npc_definitions"]]
         elif table in {"mud_quest_objectives", "mud_quest_rewards", "mud_quest_givers"}:
             rows = [row for row in rows if row["quest_id"] in selected["mud_quests"]]
+        elif table == "mud_work_activities":
+            rows = [row for row in rows if row["profession_id"] in selected["mud_professions"]]
+        elif table == "mud_work_rewards":
+            rows = [row for row in rows if row["activity_id"] in selected["mud_work_activities"]]
         elif table == "mud_dialogue_responses":
             rows = [row for row in rows if row["node_id"] in selected["mud_dialogue_nodes"]]
         elif table == "mud_item_instances":
@@ -1165,6 +1259,8 @@ def _export_content(database, world_id, room_map):
                 "mud_gathering_nodes": "gathering-node",
                 "mud_world_destinations": "destination", "mud_world_factions": "faction",
                 "mud_faction_relations": "faction-relation"}
+    prefixes.update({"mud_professions": "profession", "mud_work_activities": "work",
+                     "mud_work_rewards": "work-reward"})
     maps = {"rooms": room_map}
     for table in ID_TABLES:
         maps[table] = {key: f"{prefixes[table]}-{index}"
@@ -1193,6 +1289,13 @@ def _export_content(database, world_id, room_map):
                                  else "mud_world_factions" if row.get("reward_type") == "reputation"
                                  else "mud_item_definitions")
                     value = _mapped(maps, ref_table, value, column)
+                elif table == "mud_work_activities" and column == "objective_target_id":
+                    if value:
+                        goal = row["objective_type"]
+                        ref_table = ("rooms" if goal == "visit_room" else
+                                     "mud_npc_definitions" if goal in {"talk_npc", "defeat_npc"} else
+                                     "mud_item_definitions")
+                        value = _mapped(maps, ref_table, value, column)
                 elif table == "mud_gathering_nodes" and column == "rewards_json":
                     value = [{"item_id": _mapped(maps, "mud_item_definitions", reward["item_id"], column),
                               "amount": reward["amount"]} for reward in mud_gathering.rewards(value)]
@@ -1322,6 +1425,13 @@ def export(database, world_id, *, origin_keys=None, skill_keys=None):
         raise WorldError("Choose only installed custom skills to export.")
     content_skills = {row["skill_key"] for table in ("mud_npc_trainers", "mud_gathering_nodes")
                       for row in content.get(table, []) if row.get("skill_key")}
+    content_skills |= {row["practice_skill_key"] for row in content.get("mud_work_activities", [])
+                       if row.get("practice_skill_key")}
+    for table, columns in CONDITION_COLUMNS.items():
+        for row in content.get(table, []):
+            for column in columns:
+                content_skills |= {ref for kind, ref in mud_conditions.references(row.get(column, []))
+                                   if kind == "skill"}
     wanted |= content_skills & set(skill_entries)
     wanted = _skill_closure(skill_entries, [installed[pair]["definition"] for pair in chosen], wanted)
     local_skill = {key: skill_links.get(key, key) for key in wanted}
@@ -1346,6 +1456,9 @@ def export(database, world_id, *, origin_keys=None, skill_keys=None):
         for row in content.get(table, []):
             if row.get("skill_key"):
                 row["skill_key"] = local_skill.get(row["skill_key"], row["skill_key"])
+    for row in content.get("mud_work_activities", []):
+        if row.get("practice_skill_key"):
+            row["practice_skill_key"] = local_skill.get(row["practice_skill_key"], row["practice_skill_key"])
 
     def local_reference(kind, ref):
         if kind in ORIGIN_KINDS:
@@ -1572,6 +1685,7 @@ def remove(database, world_id, *, remove_origins=False):
             ).fetchall()
             for item in items:
                 database.execute("DELETE FROM mud_item_instances WHERE id=?", (item["id"],))
+            database.execute("DELETE FROM mud_professions WHERE world_id=?", (world_id,))
             database.execute("DELETE FROM mud_world_rooms WHERE world_id=?", (world_id,))
             database.execute("DELETE FROM mud_world_packages WHERE id=?", (world_id,))
             if remove_origins and any(selected[kind] for kind in character_creation.KINDS):
