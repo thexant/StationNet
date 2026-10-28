@@ -301,6 +301,7 @@ The supported arrays are:
 | `mud_npc_shops` | NPC merchant settings | `npc_definition_id`, `buys_items`, `sell_percent` |
 | `mud_shop_stock` | Merchant merchandise and prices | `npc_definition_id`, `item_definition_id`, `price`, optional `quantity` |
 | `mud_item_spawns` | Renewable room-floor items | `definition_id`, `room_id`, `respawn_seconds` |
+| `mud_gathering_nodes` | Harvesting, mining, scavenging, or collecting sources | `room_id`, `tool_definition_id`; reward item IDs in `rewards_json` |
 | `mud_room_discoveries` | One-time per-character search clues and items | `room_id`, `clue`, optional `item_definition_id`, optional `difficulty` |
 | `mud_npc_trainers` | Skills an NPC teaches for coins | `npc_definition_id`, `skill_key`, `price`, `max_rank` |
 | `mud_quest_givers` | NPCs that offer quests | `quest_id`, `npc_definition_id` |
@@ -330,6 +331,7 @@ must point to records in the same package, including room IDs in `rooms.json`.
 | `mud_npc_shops` | `npc_definition_id`, `buys_items`, `sell_percent` (no `id`) |
 | `mud_shop_stock` | `npc_definition_id`, `item_definition_id`, `price`, `quantity`, `conditions_json` |
 | `mud_item_spawns` | `definition_id`, `room_id`, `respawn_seconds` |
+| `mud_gathering_nodes` | `room_id`, `name`, `activity`, `rewards_json`, `skill_key`, `min_rank`, `tool_definition_id`, `success_percent`, `respawn_seconds` |
 | `mud_room_discoveries` | `room_id`, `clue`, `item_definition_id`, `difficulty` |
 | `mud_npc_trainers` | `npc_definition_id`, `skill_key`, `price`, `max_rank` |
 | `mud_quest_givers` | `quest_id`, `npc_definition_id` (no `id` field) |
@@ -537,6 +539,26 @@ A stock row's optional `conditions_json` hides it from players who do not meet
 the [conditions](#conditions), for example a `reputation` rank.
 For renewable room-floor resources, add `mud_item_spawns` with a 5–86,400 second
 `respawn_seconds`; do not also place an ordinary item instance for that spawn.
+For an active gathering action, add a `mud_gathering_nodes` row:
+
+```json
+{"id":"copper-vein","room_id":"cave","name":"Copper vein","activity":"mine",
+ "rewards_json":[{"item_id":"copper-ore","amount":2}],
+ "skill_key":"mining","min_rank":2,"tool_definition_id":"pickaxe",
+ "success_percent":70,"respawn_seconds":600}
+```
+
+`activity` is `harvest`, `mine`, `scavenge`, or `collect`. `rewards_json`
+lists 1–10 existing items, each with `item_id` and `amount` (1–20).
+`skill_key`, `min_rank` (0–20), and `tool_definition_id` are optional.
+Setting `skill_key` requires the player to know that skill, even at rank 0;
+`min_rank` raises the requirement. `skill_key` may name a bundled or installed skill. `success_percent` defaults
+to 100. Players use `/gather <name>` or the matching activity command. Every
+attempt, including a failed roll, depletes the shared source for
+`respawn_seconds` (5–86,400). A success practices the required skill if that
+skill has the `gather` trigger. The `gathering` skill effect adds percentage
+points to success chance, capped at 100%.
+
 `mud_room_discoveries` reveals a clue and optional item once per character with
 `/search`. Set `difficulty` (0–200, default 0 = always found) to hide it
 better; the Perception skill and Intellect improve the odds, and only rooms

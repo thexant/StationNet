@@ -27,6 +27,7 @@ for(const mud of document.querySelectorAll("[data-mud]")){
   const roomExits=mud.querySelector("[data-mud-room-exits]");
   const roomItems=mud.querySelector("[data-mud-room-items]");
   const roomNpcs=mud.querySelector("[data-mud-room-npcs]");
+  const roomGathering=mud.querySelector("[data-mud-room-gathering]");
   const combat=mud.querySelector("[data-mud-combat]");
   const occupants=mud.querySelector("[data-mud-occupants] > div");
   const characterName=mud.querySelector("[data-character-name]");
@@ -177,6 +178,7 @@ for(const mud of document.querySelectorAll("[data-mud]")){
     roomExits.textContent=(room.exits||[]).map(exit=>exit.direction||exit.name).join(", ")||"none";
     if(roomItems)roomItems.textContent=(room.items||[]).map(item=>item.display_name||item.name).join(", ")||"none";
     if(roomNpcs)roomNpcs.textContent=(room.npcs||[]).map(npc=>npc.display_name||npc.name).join(", ")||"none";
+    if(roomGathering)roomGathering.textContent=(room.gathering||[]).map(node=>`${node.display_name||node.name} (${node.activity}${node.available?"":", replenishing"})`).join(", ")||"none";
     occupants.replaceChildren();
     if(!room.occupants?.length){
       const empty=document.createElement("span");

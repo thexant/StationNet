@@ -115,6 +115,7 @@ bonus at rank *r* is `(r // every) × per_rank`, capped at `max` if given.
 | `flee` | Percentage points added to escape chance (total at most 95%). |
 | `search` | Score for `/search` against discoveries with a search difficulty. |
 | `lockpick` | Score for `/pick` against exits with a lock difficulty. |
+| `gathering` | Percentage points added to gathering success chance, capped at 100%. |
 | `shop_discount` | Percentage off merchant prices; all sources together are capped at 50%. |
 
 Search and lockpicking use one formula: chance = 50% + skill score +
@@ -138,6 +139,7 @@ Builders set difficulties in the World Builder.
 | `pick_lock` | The character attempts `/pick`. |
 | `experience_gained` | The character earns experience: one practice per 25 XP, minimum one. |
 | `purchase` | The character buys from a merchant. |
+| `gather` | The character successfully gathers from a replenishing room source that requires this skill. |
 
 A skill with `proficiencies` practices `melee_hit`, `firearm_hit`,
 `damage_taken`, and `defend` only while the character has matching gear

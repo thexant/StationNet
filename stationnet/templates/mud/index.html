@@ -45,6 +45,7 @@
               <div><dt>EXITS</dt><dd data-mud-room-exits>{% if room.exits %}{% for exit in room.exits %}{{ exit.direction or exit.name }}{% if not loop.last %}, {% endif %}{% endfor %}{% else %}none{% endif %}</dd></div>
               <div><dt>ITEMS</dt><dd data-mud-room-items>{% if room['items'] %}{% for item in room['items'] %}{{ item.display_name }}{% if not loop.last %}, {% endif %}{% endfor %}{% else %}none{% endif %}</dd></div>
               <div><dt>NPCS</dt><dd data-mud-room-npcs>{% if room.npcs %}{% for npc in room.npcs %}{{ npc.display_name }}{% if not loop.last %}, {% endif %}{% endfor %}{% else %}none{% endif %}</dd></div>
+              <div><dt>GATHERING</dt><dd data-mud-room-gathering>{% if room.gathering %}{% for node in room.gathering %}{{ node.display_name }} ({{ node.activity }}{% if not node.available %}, replenishing{% endif %}){% if not loop.last %}, {% endif %}{% endfor %}{% else %}none{% endif %}</dd></div>
             </dl>
             <div class="mud-combat-status" data-mud-combat aria-label="Nearby enemies">
               {% for enemy in combat.enemies %}<article class="mud-enemy {% if enemy.status=='defeated' %}defeated{% endif %}"><span><strong>{{ enemy.display_name }}</strong><small>{{ enemy.status|upper }}</small></span><progress value="{{ enemy.health }}" max="{{ enemy.maximum_health }}">{{ enemy.health }}/{{ enemy.maximum_health }}</progress><output>{{ enemy.health }} / {{ enemy.maximum_health }} HP</output></article>{% endfor %}

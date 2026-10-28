@@ -1354,6 +1354,19 @@ def _migrate_mud_authored_features(database):
       room_id TEXT NOT NULL REFERENCES mud_world_rooms(id) ON DELETE CASCADE,
       respawn_seconds INTEGER NOT NULL CHECK(respawn_seconds BETWEEN 5 AND 86400),
       live_instance_id TEXT UNIQUE);
+    CREATE TABLE IF NOT EXISTS mud_gathering_nodes (
+      id TEXT PRIMARY KEY,
+      room_id TEXT NOT NULL REFERENCES mud_world_rooms(id) ON DELETE CASCADE,
+      name TEXT NOT NULL,
+      activity TEXT NOT NULL CHECK(activity IN ('harvest','mine','scavenge','collect')),
+      rewards_json TEXT NOT NULL,
+      skill_key TEXT,
+      min_rank INTEGER NOT NULL DEFAULT 0 CHECK(min_rank BETWEEN 0 AND 20),
+      tool_definition_id TEXT REFERENCES mud_item_definitions(id) ON DELETE RESTRICT,
+      success_percent INTEGER NOT NULL DEFAULT 100 CHECK(success_percent BETWEEN 1 AND 100),
+      respawn_seconds INTEGER NOT NULL CHECK(respawn_seconds BETWEEN 5 AND 86400),
+      available_at TEXT);
+    CREATE INDEX IF NOT EXISTS idx_mud_gathering_room ON mud_gathering_nodes(room_id);
     CREATE TABLE IF NOT EXISTS mud_room_discoveries (
       id TEXT PRIMARY KEY,
       room_id TEXT NOT NULL REFERENCES mud_world_rooms(id) ON DELETE CASCADE,

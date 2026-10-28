@@ -21,6 +21,7 @@ EFFECT_TYPES = {
     "flee": "% escape chance",
     "search": "search score for hidden discoveries",
     "lockpick": "lockpicking score",
+    "gathering": "% gathering success chance",
     "shop_discount": "% merchant discount",
 }
 WEAPON_FILTERED = {"attack", "melee_damage", "firearm_damage", "accuracy"}
@@ -40,6 +41,7 @@ TRIGGERS = {
     "pick_lock": "picking locks",
     "experience_gained": "earning experience",
     "purchase": "buying from merchants",
+    "gather": "successfully gathering materials",
 }
 # Category-bound practice only counts while matching gear is equipped.
 CATEGORY_TRIGGERS = {"melee_hit", "firearm_hit", "damage_taken", "defend"}

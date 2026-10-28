@@ -19,7 +19,7 @@ from flask import Blueprint, abort, flash, g, jsonify, redirect, render_template
 
 from .auth import admin_required, login_required
 from .db import get_db
-from . import dungeons, character_creation, mud_combat, mud_conditions, mud_effects, mud_firearms, mud_compat, mud_skills, mud_society, mud_triggers, mud_wayfinding, mud_wilderness, moderation
+from . import dungeons, character_creation, mud_combat, mud_conditions, mud_effects, mud_firearms, mud_compat, mud_gathering, mud_skills, mud_society, mud_triggers, mud_wayfinding, mud_wilderness, moderation
 from .security import validate_csrf
 
 bp = Blueprint("mud", __name__, url_prefix="/mud")
@@ -1812,6 +1812,13 @@ def _room_state(database, user_id):
                   for item, label in _numbered_items(
                        _room_item_rows(database, room["id"], instance_id))],
         "npcs": npcs,
+        "gathering": ([{"id": node["id"], "name": node["name"], "display_name": label,
+                        "activity": node["activity"],
+                        "available": not node["available_at"] or node["available_at"] <= _scheduled_now()}
+                       for node, label in _numbered_items(database.execute(
+                           "SELECT id,name,activity,available_at FROM mud_gathering_nodes "
+                           "WHERE room_id=? ORDER BY name,id", (room["id"],)))]
+                      if not instance_id and not portal else []),
         "dialogue_responses": dialogue_responses,
         "wilderness": room.get("kind") == "wild" and not instance_id,
         "travel": travel_state(database, user_id),
@@ -1830,6 +1837,8 @@ def _describe_room(database, room, viewer_id=None):
         _room_item_rows(database, room["id"], instance_id))) or "none"
     npcs = ", ".join(label for _, label in _numbered_npcs(
         _room_npc_rows(database, room["id"], instance_id))) or "none"
+    gathering = ", ".join(f"{label} ({row['activity']})" for row, label in _numbered_items(database.execute(
+        "SELECT id,name,activity FROM mud_gathering_nodes WHERE room_id=? ORDER BY name,id", (room["id"],)))) if not instance_id else ""
     instructions = (
         f"\n\n{room['instructions']}"
         if room["id"] == PORTAL_ROOM_ID else ""
@@ -1851,6 +1860,7 @@ def _describe_room(database, room, viewer_id=None):
     return (
         f"{room['name']}\n{room['description']}" + (f"\n\n{states}" if states else "") + f"{instructions}\n\n"
         f"Exits: {routes}\nOther players: {people}\nNPCs: {npcs}\nItems: {items}"
+        + (f"\nGathering: {gathering} (use /gather <name>)" if gathering else "")
     )
 
 
@@ -7498,6 +7508,77 @@ def _interact_action(database, user, parameters):
     return drafts + script
 
 
+def _gather_action(database, user, parameters):
+    arguments = [str(value) for value in parameters.get("arguments", [])]
+    activity = ""
+    if arguments and arguments[0].startswith(":"):
+        activity = arguments.pop(0)[1:]
+    target = " ".join(arguments).strip()
+    room = _current_room(database, user["id"])
+    if room.get("instance_id") or room.get("system_managed"):
+        raise ActionError("There is nothing to gather here.")
+    if _active_hostiles(database, room, user["id"]):
+        raise ActionError("A hostile enemy blocks gathering. Fight or flee first.", 409)
+    nodes = database.execute(
+        "SELECT * FROM mud_gathering_nodes WHERE room_id=? ORDER BY name,id", (room["id"],)).fetchall()
+    if not target:
+        names = ", ".join(f"{label} ({node['activity']})" for node, label in _numbered_items(nodes))
+        return [EventDraft(f"Gathering here: {names}. Use /gather <name>." if names else
+                           "There is nothing to gather here.", event_type="item")]
+    candidates = [node for node in nodes if not activity or node["activity"] == activity]
+    node = _item_matches(candidates, target)
+    character = _character_row(database, user["id"])
+    ranks = mud_skills.active_ranks(database, character["id"])
+    skill_key = node["skill_key"]
+    if skill_key and (skill_key not in ranks or ranks[skill_key][1] < node["min_rank"]):
+        skill = mud_skills.definitions(database).get(skill_key)
+        label = skill["name"] if skill else skill_key
+        raise ActionError(f"You need {label} rank {node['min_rank']} to {node['activity']} {node['name']}.")
+    if node["tool_definition_id"] and not any(
+        item["definition_id"] == node["tool_definition_id"] for item in
+        (*_inventory_rows(database, user["id"]), *_inventory_rows(database, user["id"], True))
+    ):
+        tool = database.execute("SELECT name FROM mud_item_definitions WHERE id=?",
+                                (node["tool_definition_id"],)).fetchone()
+        raise ActionError(f"You need {tool['name'] if tool else 'a tool'} to {node['activity']} {node['name']}.")
+    now = datetime.now(timezone.utc).replace(microsecond=0)
+    due = (now + timedelta(seconds=node["respawn_seconds"])).isoformat()
+    # A failed attempt also consumes this shared opportunity. The action request runs
+    # under BEGIN IMMEDIATE, and this conditional update protects against stale reads.
+    claimed = database.execute(
+        "UPDATE mud_gathering_nodes SET available_at=? WHERE id=? AND "
+        "(available_at IS NULL OR available_at<=?)",
+        (due, node["id"], now.isoformat())).rowcount
+    if not claimed:
+        return [EventDraft(f"{node['name']} is depleted. Try again after it replenishes.", event_type="item")]
+    chance = min(100, node["success_percent"] + mud_skills.bonuses(database, character["id"])["gathering"])
+    if secrets.randbelow(100) >= chance:
+        return [EventDraft(f"You try to {node['activity']} {node['name']}, but find nothing usable. "
+                           "It will replenish later.", event_type="item")]
+    rewards = mud_gathering.rewards(node["rewards_json"])
+    found = []
+    drafts = []
+    for reward in rewards:
+        definition = database.execute("SELECT name FROM mud_item_definitions WHERE id=?",
+                                      (reward["item_id"],)).fetchone()
+        if definition is None:
+            continue
+        for _ in range(reward["amount"]):
+            _grant_item(database, user["id"], reward["item_id"], "gather:item")
+        found.append(f"{reward['amount']} × {definition['name']}")
+        drafts += _set_objective_progress(database, user, "possess_item", reward["item_id"])
+    if not found:
+        return [EventDraft(f"{node['name']} yields nothing usable.", event_type="item")]
+    result = [EventDraft(f"You {node['activity']} {node['name']} and collect {', '.join(found)}. "
+                         "It will replenish later.", event_type="item"),
+              _room_item_event(database, user, room,
+                               f"{character['display_name']} {node['activity']}s {node['name']}.")]
+    if skill_key:
+        result += [EventDraft(notice, event_type="character") for notice in
+                   mud_skills.practice(database, character["id"], "gather", skill_key=skill_key)]
+    return result + drafts
+
+
 actions = ActionRegistry()
 actions.register(ActionDefinition(
     key="status", label="SYSTEM STATUS",
@@ -7574,6 +7655,9 @@ actions.register(ActionDefinition(key="equip", label="EQUIP", description="Equip
 actions.register(ActionDefinition(key="unequip", label="UNEQUIP", description="Remove equipped gear.", commands=("unequip", "remove"), handler=_unequip_action, group="ITEMS", show_context=False))
 actions.register(ActionDefinition(key="use", label="USE", description="Use or read a carried item, or use an object in this room.", commands=("use", "read"), handler=_use_action, group="ITEMS", show_context=False))
 actions.register(ActionDefinition(key="interact", label="INTERACT", description="Work an object in this room; also /push, /pull, /press, /touch, /turn, or /activate <object>.", commands=("interact",), handler=_interact_action, group="ITEMS", show_context=False))
+actions.register(ActionDefinition(key="gather", label="GATHER", description="Gather materials from a room source: /gather [name]. Also /harvest, /mine, /scavenge, /collect.", commands=("gather",), handler=_gather_action, group="ITEMS", show_context=False))
+for _activity in mud_gathering.ACTIVITIES:
+    actions.register_command(_activity, actions.get("gather"), (f":{_activity}",))
 actions.register(ActionDefinition(key="shop", label="SHOP", description="Browse, buy, or sell with a nearby merchant; the portal trader also serves the hub.", commands=("shop",), handler=_shop_action, group="HUB", show_context=False))
 actions.register(ActionDefinition(key="storage", label="PERSONAL STORAGE", description="Deposit or withdraw personal items in the portal room.", commands=("storage", "stash"), handler=_storage_action, group="HUB", show_context=False))
 actions.register(ActionDefinition(key="talk", label="TALK", description="Talk to a nearby NPC.", commands=("talk", "speak"), handler=_talk_action, group="NPCS", show_context=False))
@@ -8746,6 +8830,13 @@ def builder():
     spawns_by_room = {room["id"]: [] for room in rooms}
     for row in database.execute("SELECT s.*,d.name FROM mud_item_spawns s JOIN mud_item_definitions d ON d.id=s.definition_id ORDER BY s.room_id,d.name"):
         spawns_by_room.setdefault(row["room_id"], []).append(dict(row))
+    gathering_by_room = {room["id"]: [] for room in rooms}
+    for row in database.execute("SELECT * FROM mud_gathering_nodes ORDER BY room_id,name,id"):
+        node = dict(row)
+        node["rewards"] = [{**reward, "name": database.execute(
+            "SELECT name FROM mud_item_definitions WHERE id=?", (reward["item_id"],)).fetchone()["name"]}
+                           for reward in mud_gathering.rewards(row["rewards_json"])]
+        gathering_by_room.setdefault(row["room_id"], []).append(node)
     discoveries_by_room = {room["id"]: [] for room in rooms}
     for row in database.execute("SELECT * FROM mud_room_discoveries ORDER BY room_id,id"):
         discoveries_by_room.setdefault(row["room_id"], []).append(dict(row))
@@ -8824,7 +8915,8 @@ def builder():
     return render_template(
         "mud/builder.html", rooms=rooms, exits_by_room=exits_by_room,
         users=users, directions=DIRECTIONS, definitions=definitions, items_by_room=items_by_room,
-        spawns_by_room=spawns_by_room,
+        spawns_by_room=spawns_by_room, gathering_by_room=gathering_by_room,
+        gathering_activities=mud_gathering.ACTIVITIES,
         conversations=conversations, nodes_by_conversation=nodes_by_conversation,
         responses_by_node=responses_by_node, npc_definitions=npc_definitions,
         npcs_by_room=npcs_by_room, quests=quests, objectives_by_quest=objectives_by_quest,
@@ -9745,6 +9837,137 @@ def builder_delete_item_spawn(spawn_id):
                          (spawn["live_instance_id"], spawn["room_id"]))
     database.execute("DELETE FROM mud_item_spawns WHERE id=?", (spawn_id,))
     database.commit(); flash("Renewable placement removed.", "success"); return _builder_redirect(spawn["room_id"])
+
+
+def _builder_gathering_values(database, room_id, *, rewards=None):
+    if database.execute("SELECT 1 FROM mud_world_rooms WHERE id=? AND world_id=?",
+                        (room_id, _active_world(database))).fetchone() is None:
+        abort(404)
+    skill_key = request.form.get("skill_key", "").strip() or None
+    tool_id = request.form.get("tool_definition_id", "").strip() or None
+    if skill_key and skill_key not in mud_skills.definitions(database):
+        raise ValueError("Choose an active skill.")
+    if tool_id and database.execute("SELECT 1 FROM mud_item_definitions WHERE id=? AND world_id=?",
+                                    (tool_id, _active_world(database))).fetchone() is None:
+        raise ValueError("Choose a tool item from this world.")
+    values = {"name": " ".join(request.form.get("name", "").split()),
+              "activity": request.form.get("activity", ""),
+              "rewards_json": rewards,
+              "skill_key": skill_key, "tool_definition_id": tool_id,
+              "min_rank": request.form.get("min_rank", 0, type=int),
+              "success_percent": request.form.get("success_percent", 100, type=int),
+              "respawn_seconds": request.form.get("respawn_seconds", 3600, type=int)}
+    mud_gathering.validate(values)
+    return values
+
+
+@bp.post("/builder/gathering-nodes")
+@builder_required
+def builder_create_gathering_node():
+    validate_csrf(); database = get_db(); room_id = request.form.get("room_id", "").strip()
+    item_id = request.form.get("item_id", "").strip()
+    amount = request.form.get("amount", 1, type=int)
+    if database.execute("SELECT 1 FROM mud_item_definitions WHERE id=? AND world_id=?",
+                        (item_id, _active_world(database))).fetchone() is None:
+        flash("Choose a reward item from this world.", "error"); return _builder_redirect(room_id)
+    try:
+        values = _builder_gathering_values(database, room_id,
+                                           rewards=[{"item_id": item_id, "amount": amount}])
+    except ValueError as problem:
+        flash(str(problem), "error"); return _builder_redirect(room_id)
+    database.execute("INSERT INTO mud_gathering_nodes(id,room_id,name,activity,rewards_json,skill_key,min_rank,"
+                     "tool_definition_id,success_percent,respawn_seconds) VALUES(?,?,?,?,?,?,?,?,?,?)",
+                     (f"world:gather:{uuid.uuid4().hex}", room_id, values["name"], values["activity"],
+                      json.dumps(values["rewards_json"]), values["skill_key"], values["min_rank"],
+                      values["tool_definition_id"], values["success_percent"], values["respawn_seconds"]))
+    database.commit(); flash("Gathering source added.", "success"); return _builder_redirect(room_id)
+
+
+@bp.post("/builder/gathering-nodes/<path:node_id>/update")
+@builder_required
+def builder_update_gathering_node(node_id):
+    validate_csrf(); database = get_db()
+    node = database.execute("SELECT n.* FROM mud_gathering_nodes n JOIN mud_world_rooms r ON r.id=n.room_id "
+                            "WHERE n.id=? AND r.world_id=?", (node_id, _active_world(database))).fetchone()
+    if node is None: abort(404)
+    try:
+        values = _builder_gathering_values(database, node["room_id"],
+                                           rewards=mud_gathering.rewards(node["rewards_json"]))
+    except ValueError as problem:
+        flash(str(problem), "error"); return _builder_redirect(node["room_id"])
+    database.execute("UPDATE mud_gathering_nodes SET name=?,activity=?,skill_key=?,min_rank=?,"
+                     "tool_definition_id=?,success_percent=?,respawn_seconds=? WHERE id=?",
+                     (values["name"], values["activity"], values["skill_key"], values["min_rank"],
+                      values["tool_definition_id"], values["success_percent"], values["respawn_seconds"], node_id))
+    database.commit(); flash("Gathering source updated.", "success"); return _builder_redirect(node["room_id"])
+
+
+@bp.post("/builder/gathering-nodes/<path:node_id>/rewards")
+@builder_required
+def builder_add_gathering_reward(node_id):
+    validate_csrf(); database = get_db()
+    node = database.execute("SELECT n.* FROM mud_gathering_nodes n JOIN mud_world_rooms r ON r.id=n.room_id "
+                            "WHERE n.id=? AND r.world_id=?", (node_id, _active_world(database))).fetchone()
+    if node is None: abort(404)
+    item_id = request.form.get("item_id", "").strip(); amount = request.form.get("amount", 1, type=int)
+    if database.execute("SELECT 1 FROM mud_item_definitions WHERE id=? AND world_id=?",
+                        (item_id, _active_world(database))).fetchone() is None:
+        flash("Choose a reward item from this world.", "error"); return _builder_redirect(node["room_id"])
+    try:
+        rewards = mud_gathering.rewards([*mud_gathering.rewards(node["rewards_json"]),
+                                         {"item_id": item_id, "amount": amount}])
+    except ValueError as problem:
+        flash(str(problem), "error"); return _builder_redirect(node["room_id"])
+    database.execute("UPDATE mud_gathering_nodes SET rewards_json=? WHERE id=?", (json.dumps(rewards), node_id))
+    database.commit(); flash("Gathering reward added.", "success"); return _builder_redirect(node["room_id"])
+
+
+@bp.post("/builder/gathering-nodes/<path:node_id>/rewards/delete")
+@builder_required
+def builder_delete_gathering_reward(node_id):
+    validate_csrf(); database = get_db()
+    node = database.execute("SELECT n.* FROM mud_gathering_nodes n JOIN mud_world_rooms r ON r.id=n.room_id "
+                            "WHERE n.id=? AND r.world_id=?", (node_id, _active_world(database))).fetchone()
+    if node is None: abort(404)
+    rewards = [reward for reward in mud_gathering.rewards(node["rewards_json"])
+               if reward["item_id"] != request.form.get("item_id")]
+    if not rewards:
+        flash("A gathering source needs at least one reward.", "error"); return _builder_redirect(node["room_id"])
+    database.execute("UPDATE mud_gathering_nodes SET rewards_json=? WHERE id=?", (json.dumps(rewards), node_id))
+    database.commit(); flash("Gathering reward removed.", "success"); return _builder_redirect(node["room_id"])
+
+
+@bp.post("/builder/gathering-nodes/<path:node_id>/rewards/update")
+@builder_required
+def builder_update_gathering_reward(node_id):
+    validate_csrf(); database = get_db()
+    node = database.execute("SELECT n.* FROM mud_gathering_nodes n JOIN mud_world_rooms r ON r.id=n.room_id "
+                            "WHERE n.id=? AND r.world_id=?", (node_id, _active_world(database))).fetchone()
+    if node is None: abort(404)
+    item_id = request.form.get("item_id", "")
+    amount = request.form.get("amount", type=int)
+    original = mud_gathering.rewards(node["rewards_json"])
+    if not any(reward["item_id"] == item_id for reward in original): abort(404)
+    try:
+        rewards = mud_gathering.rewards([
+            {**reward, "amount": amount} if reward["item_id"] == item_id else reward
+            for reward in original])
+    except ValueError as problem:
+        flash(str(problem), "error"); return _builder_redirect(node["room_id"])
+    database.execute("UPDATE mud_gathering_nodes SET rewards_json=? WHERE id=?", (json.dumps(rewards), node_id))
+    database.commit(); flash("Gathering reward updated.", "success"); return _builder_redirect(node["room_id"])
+
+
+@bp.post("/builder/gathering-nodes/<path:node_id>/delete")
+@builder_required
+def builder_delete_gathering_node(node_id):
+    validate_csrf(); database = get_db()
+    if request.form.get("confirmation") != "delete": abort(400)
+    node = database.execute("SELECT n.room_id FROM mud_gathering_nodes n JOIN mud_world_rooms r ON r.id=n.room_id "
+                            "WHERE n.id=? AND r.world_id=?", (node_id, _active_world(database))).fetchone()
+    if node is None: abort(404)
+    database.execute("DELETE FROM mud_gathering_nodes WHERE id=?", (node_id,))
+    database.commit(); flash("Gathering source removed.", "success"); return _builder_redirect(node["room_id"])
 
 
 @bp.post("/builder/item-instances/<path:instance_id>/owner")

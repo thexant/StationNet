@@ -10,7 +10,7 @@ import zipfile
 
 from flask import current_app
 
-from . import mud_conditions, mud_society, mud_triggers, mud_wayfinding, mud_wilderness, mud_world_dungeons
+from . import mud_conditions, mud_gathering, mud_society, mud_triggers, mud_wayfinding, mud_wilderness, mud_world_dungeons
 
 
 MAX_ZIP_BYTES = 16 * 1024 * 1024
@@ -51,6 +51,8 @@ CONTENT_TABLES = {
                                "conditions_json", "outcomes_json", "turn_in_quest_id"),
     "mud_item_instances": ("id", "definition_id", "room_id", "container_id", "is_open", "state_json"),
     "mud_item_spawns": ("id", "definition_id", "room_id", "respawn_seconds"),
+    "mud_gathering_nodes": ("id", "room_id", "name", "activity", "rewards_json", "skill_key",
+                            "min_rank", "tool_definition_id", "success_percent", "respawn_seconds"),
     "mud_room_discoveries": ("id", "room_id", "clue", "item_definition_id", "difficulty"),
     "mud_npc_instances": ("id", "definition_id", "room_id", "state_json"),
     "mud_world_destinations": ("id", "room_id", "name", "aliases", "category", "description", "public",
@@ -65,6 +67,7 @@ REFERENCE_TABLE = {
     "item_definition_id": "mud_item_definitions", "quest_id": "mud_quests",
     "definition_id": None, "room_id": "rooms", "container_id": "mud_item_instances",
     "key_item_id": "mud_item_definitions",
+    "tool_definition_id": "mud_item_definitions",
     "turn_in_npc_definition_id": "mud_npc_definitions",
     "recipient_npc_definition_id": "mud_npc_definitions", "turn_in_quest_id": "mud_quests",
     "faction_id": "mud_world_factions", "other_faction_id": "mud_world_factions",
@@ -392,6 +395,13 @@ def read_package(payload):
             elif table == "mud_item_spawns":
                 if not _whole(row.get("respawn_seconds"), 5, 86400):
                     raise WorldError("Item respawn_seconds must be 5 to 86,400.")
+            elif table == "mud_gathering_nodes":
+                try:
+                    rewards = mud_gathering.validate(row)
+                except ValueError as problem:
+                    raise WorldError(str(problem)) from problem
+                if any(reward["item_id"] not in raw_ids("mud_item_definitions") for reward in rewards):
+                    raise WorldError("Gathering rewards must name items in content.json.")
             elif table == "mud_room_discoveries":
                 if not isinstance(row.get("clue"), str) or not 1 <= len(row["clue"].strip()) <= 500:
                     raise WorldError("Room discovery clue must be 1 to 500 characters.")
@@ -667,8 +677,11 @@ def _insert_content(database, document, installation_key, skill_map=None):
                 elif column == "skill_key":
                     # Trainers name a bundled skill by its local key or an installed skill.
                     value = (skill_map or {}).get(value, value)
-                    if value not in installed_skills:
-                        raise WorldError(f"Trainer skill {row[column]!r} is not bundled or installed.")
+                    if value is not None and value not in installed_skills:
+                        raise WorldError(f"Skill {row[column]!r} is not bundled or installed.")
+                elif table == "mud_gathering_nodes" and column == "rewards_json":
+                    value = json.dumps([{"item_id": _mapped(maps, "mud_item_definitions", reward["item_id"], column),
+                                         "amount": reward["amount"]} for reward in mud_gathering.rewards(value)])
                 elif column in CONDITION_COLUMNS.get(table, ()):
                     value = json.dumps(mud_conditions.remap(_condition_validator(column)(value), condition_mapper),
                                        ensure_ascii=False, separators=(",", ":"))
@@ -1056,6 +1069,11 @@ def _export_content(database, world_id, room_map):
     needed_items = {row["definition_id"] for row in all_placed_items if row["id"] in placed_item_ids}
     needed_items |= {row["definition_id"] for row in database.execute(
         "SELECT definition_id FROM mud_item_spawns WHERE room_id IN (SELECT id FROM mud_world_rooms WHERE world_id=?)", (world_id,))}
+    for row in database.execute("SELECT rewards_json,tool_definition_id FROM mud_gathering_nodes WHERE room_id IN "
+                                "(SELECT id FROM mud_world_rooms WHERE world_id=?)", (world_id,)):
+        needed_items |= {reward["item_id"] for reward in mud_gathering.rewards(row["rewards_json"])}
+        if row["tool_definition_id"]:
+            needed_items.add(row["tool_definition_id"])
     needed_items |= {row["item_definition_id"] for row in database.execute(
         "SELECT item_definition_id FROM mud_room_discoveries WHERE room_id IN (SELECT id FROM mud_world_rooms WHERE world_id=?) AND item_definition_id IS NOT NULL", (world_id,))}
     needed_items |= {row["key_item_id"] for row in database.execute(
@@ -1129,7 +1147,7 @@ def _export_content(database, world_id, room_map):
             rows = [row for row in rows if row["node_id"] in selected["mud_dialogue_nodes"]]
         elif table == "mud_item_instances":
             rows = [row for row in rows if row["id"] in placed_item_ids]
-        elif table in {"mud_item_spawns", "mud_room_discoveries", "mud_world_destinations"}:
+        elif table in {"mud_item_spawns", "mud_gathering_nodes", "mud_room_discoveries", "mud_world_destinations"}:
             rows = [row for row in rows if row["room_id"] in room_map]
         elif table == "mud_npc_instances":
             spawned = {row["id"] for row in database.execute(
@@ -1144,6 +1162,7 @@ def _export_content(database, world_id, room_map):
                 "mud_dialogue_responses": "response", "mud_item_instances": "placed-item",
                 "mud_npc_instances": "placed-npc", "mud_shop_stock": "stock", "mud_npc_trainers": "trainer",
                 "mud_item_spawns": "spawn", "mud_room_discoveries": "discovery",
+                "mud_gathering_nodes": "gathering-node",
                 "mud_world_destinations": "destination", "mud_world_factions": "faction",
                 "mud_faction_relations": "faction-relation"}
     maps = {"rooms": room_map}
@@ -1174,6 +1193,9 @@ def _export_content(database, world_id, room_map):
                                  else "mud_world_factions" if row.get("reward_type") == "reputation"
                                  else "mud_item_definitions")
                     value = _mapped(maps, ref_table, value, column)
+                elif table == "mud_gathering_nodes" and column == "rewards_json":
+                    value = [{"item_id": _mapped(maps, "mud_item_definitions", reward["item_id"], column),
+                              "amount": reward["amount"]} for reward in mud_gathering.rewards(value)]
                 elif column in CONDITION_COLUMNS.get(table, ()):
                     # Origins and skills are renamed in export() once their local keys are known.
                     value = mud_conditions.remap(
@@ -1298,8 +1320,9 @@ def export(database, world_id, *, origin_keys=None, skill_keys=None):
     wanted = set(skill_links) if skill_keys is None else set(skill_keys)
     if wanted - set(skill_entries):
         raise WorldError("Choose only installed custom skills to export.")
-    trainer_skills = {row["skill_key"] for row in content.get("mud_npc_trainers", [])}
-    wanted |= trainer_skills & set(skill_entries)
+    content_skills = {row["skill_key"] for table in ("mud_npc_trainers", "mud_gathering_nodes")
+                      for row in content.get(table, []) if row.get("skill_key")}
+    wanted |= content_skills & set(skill_entries)
     wanted = _skill_closure(skill_entries, [installed[pair]["definition"] for pair in chosen], wanted)
     local_skill = {key: skill_links.get(key, key) for key in wanted}
     if len(set(local_skill.values())) != len(local_skill):
@@ -1319,8 +1342,10 @@ def export(database, world_id, *, origin_keys=None, skill_keys=None):
         skills.append(definition)
     if skills:
         document["skills"] = skills
-    for row in content.get("mud_npc_trainers", []):
-        row["skill_key"] = local_skill.get(row["skill_key"], row["skill_key"])
+    for table in ("mud_npc_trainers", "mud_gathering_nodes"):
+        for row in content.get(table, []):
+            if row.get("skill_key"):
+                row["skill_key"] = local_skill.get(row["skill_key"], row["skill_key"])
 
     def local_reference(kind, ref):
         if kind in ORIGIN_KINDS:
