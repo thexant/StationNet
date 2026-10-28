@@ -1,8 +1,13 @@
 import { pbkdf2Async } from '@noble/hashes/pbkdf2.js';
 import { sha256 } from '@noble/hashes/sha2.js';
 import { gcm } from '@noble/ciphers/aes.js';
+import JSZip from 'jszip';
 import { rememberOfficeKey, readOfficeKey, forgetOfficeKey } from '../office_vault.js';
-import { PROTOCOL, MAX_SOURCE_CHARS, blankProgram, normalizeProgram, cleanTitle, decodeBas, encodeBas, basFilename, titleFromFilename, readRunnerMessage } from './model.js';
+import {
+  MAX_SOURCE_CHARS, blankProgram, normalizeProgram, cleanTitle, decodeBas, encodeBas, basFilename, titleFromFilename,
+  PACKAGE_ENTRYPOINT, PACKAGE_MAX_FILES, PACKAGE_MAX_FILE_BYTES, PACKAGE_MAX_EXPANDED_BYTES, assetPath, buildManifest, defaultPackage, packageSlug,
+} from './model.js';
+import { createRunnerSession } from './session.js';
 import { EXAMPLES } from './examples.js';
 
 const app = document.querySelector('.basic-app');
@@ -17,7 +22,7 @@ function start() {
   const un64 = value => Uint8Array.from(atob(value), char => char.charCodeAt(0));
   let key = null, records = [], id = null, revision = null, program = blankProgram();
   let dirty = false, saving = false, conflict = false, generation = 0, timer = null, loading = false;
-  let frame = null, runId = null, pendingSource = null, beatAt = 0, watchdog = null, runState = 'idle', markers = [];
+  let markers = [];
 
   // CodeMirror measures its gutter once, so it is created when the workspace is
   // first shown and web fonts are ready rather than while the page is hidden.
@@ -126,65 +131,28 @@ function start() {
   }
   function clearMarkers() { for (const handle of markers) { editor.setGutterMarker(handle, 'basic-errors', null); editor.removeLineClass(handle, 'background', 'basic-error-line'); } markers = []; }
 
-  // Programs run in a sandboxed, opaque-origin frame. Each run gets a fresh
-  // frame; stopping discards it, which ends timers, audio, and runaway code.
-  function setRunState(state, label) {
-    runState = state; const node = $('#basic-run-state'); node.dataset.state = state; node.textContent = label;
-    $('#basic-stop').disabled = !frame;
-  }
-  function destroyFrame() { clearInterval(watchdog); watchdog = null; pendingSource = null; runId = null; frame?.remove(); frame = null; }
+  // Programs run through the shared runner session (session.js).
+  const session = createRunnerSession({
+    container: $('#basic-screen'), runnerUrl: app.dataset.runner, onLog: log, onMessage: receive,
+    onState: (state, label) => {
+      const node = $('#basic-run-state'); node.dataset.state = state; node.textContent = label;
+      $('#basic-stop').disabled = !session.active;
+      if (state === 'ended') log('info', 'Program finished.');
+      if (!session.active) { $('#basic-screen-idle').textContent = 'Program stopped. Press RUN (F5) to start it again.'; $('#basic-screen-idle').hidden = false; }
+    },
+  });
   function run() {
     if (!key) return;
-    destroyFrame(); clearMarkers();
+    clearMarkers();
     const source = editor.getValue();
     if (source.length > MAX_SOURCE_CHARS) { log('error', 'Programs are limited to 2 MB of text.'); return; }
-    runId = crypto.randomUUID(); pendingSource = source;
-    let attempts = 0;
-    mountFrame();
+    $('#basic-screen-idle').hidden = true;
     log('info', `— RUN ${cleanTitle($('#basic-title').value)} —`);
-    setRunState('starting', 'STARTING…'); showView('run');
-    watchdog = setInterval(() => {
-      const quiet = Date.now() - beatAt;
-      if (runState === 'starting' && quiet > 4000) {
-        // A stopped runaway program can keep the browser's sandbox process busy
-        // for a few seconds; a fresh frame starts once the browser reclaims it.
-        if (attempts++ < 5) { if (attempts === 1) log('info', 'Waiting for the program sandbox…'); mountFrame(); }
-        else { log('error', 'The program sandbox did not start. Press RUN to try again, or reload the page.'); stop('ERROR', 'error'); }
-      } else if ((runState === 'running' || runState === 'compiling') && quiet > 5000) setRunState('stalled', 'NOT RESPONDING — PRESS STOP');
-    }, 1000);
+    session.run(source); showView('run');
   }
-  function mountFrame() {
-    frame?.remove(); beatAt = Date.now();
-    frame = document.createElement('iframe');
-    frame.setAttribute('sandbox', 'allow-scripts');
-    frame.setAttribute('allow', 'autoplay; fullscreen; gamepad');
-    frame.setAttribute('referrerpolicy', 'no-referrer');
-    frame.title = 'BASIC program screen';
-    frame.src = app.dataset.runner;
-    $('#basic-screen-idle').hidden = true; $('#basic-screen').append(frame);
-  }
-  function stop(label = 'STOPPED', state = 'idle') {
-    if (!frame) return;
-    try { frame.contentWindow?.postMessage({ protocol: PROTOCOL, type: 'stop', runId }, '*'); } catch { /* The frame is discarded below. */ }
-    destroyFrame();
-    $('#basic-screen-idle').textContent = 'Program stopped. Press RUN (F5) to start it again.'; $('#basic-screen-idle').hidden = false;
-    setRunState(state, label);
-  }
-  function receive(event) {
-    if (!frame || event.source !== frame.contentWindow || event.origin !== 'null') return;
-    const data = readRunnerMessage(event.data, runId);
-    if (!data) return;
-    beatAt = Date.now();
-    if (data.type === 'ready') {
-      if (pendingSource === null) return;
-      frame.contentWindow.postMessage({ protocol: PROTOCOL, type: 'run', runId, source: pendingSource }, '*'); pendingSource = null;
-    } else if (data.type === 'heartbeat') { if (runState === 'stalled') setRunState('running', 'RUNNING'); }
-    else if (data.type === 'state') {
-      const labels = { compiling: 'COMPILING…', running: 'RUNNING', ended: 'FINISHED', error: 'ERROR' };
-      setRunState(data.state, labels[data.state]);
-      if (data.state === 'running') { frame.focus(); frame.contentWindow.postMessage({ protocol: PROTOCOL, type: 'focus', runId }, '*'); }
-      if (data.state === 'ended') log('info', 'Program finished.');
-    } else if (data.type === 'warnings') {
+  function stop() { session.stop(); }
+  function receive(data) {
+    if (data.type === 'warnings') {
       for (const item of data.items) {
         const where = item.module ? `${item.module} line ${item.line}: ` : '';
         log(item.error ? 'error' : 'warning', `${item.error ? 'ERROR' : 'WARN'} ${where}${item.text}`, item.module ? 0 : item.line);
@@ -206,6 +174,67 @@ function start() {
 
   function download(blob, name) { const url = URL.createObjectURL(blob), a = document.createElement('a'); a.href = url; a.download = name; a.click(); setTimeout(() => URL.revokeObjectURL(url), 30000); }
   function exportBas() { download(new Blob([encodeBas(editor.getValue())], { type: 'text/plain;charset=utf-8' }), basFilename($('#basic-title').value)); }
+
+  // Export as a .bas file or as a StationNet Package: a ZIP with a generated
+  // manifest that a sysop can install through Manage Programs. Exporting never
+  // installs anything; the ZIP is only downloaded.
+  const exportDialog = $('#basic-export-dialog'), exportForm = $('#basic-export-form');
+  let slugEdited = false;
+  function exportFormat() { return exportForm.elements.format.value; }
+  function showExportFields() { $('#basic-package-fields').hidden = exportFormat() !== 'package'; }
+  function exportError(text) { const node = $('#basic-export-error'); node.textContent = text; node.hidden = !text; }
+  function openExport() {
+    const defaults = defaultPackage($('#basic-title').value, app.dataset.author), fields = exportForm.elements;
+    for (const name of ['name', 'slug', 'description', 'author', 'version', 'category', 'platforms', 'presentation']) fields[name].value = defaults[name];
+    for (const box of exportForm.querySelectorAll('input[name=inputs]')) box.checked = false;
+    fields.assets.value = ''; slugEdited = false;
+    for (const node of exportForm.querySelectorAll('[data-error-for]')) node.textContent = '';
+    exportError(''); showExportFields(); exportDialog.showModal();
+  }
+  function packageAssets(files) {
+    if (files.length > PACKAGE_MAX_FILES - 2) throw new Error(`Packages can include at most ${PACKAGE_MAX_FILES - 2} asset files.`);
+    const result = new Map(); let total = 0;
+    for (const file of files) {
+      const path = assetPath(file.name);
+      if ([...result.keys()].some(item => item.toLowerCase() === path.toLowerCase())) throw new Error(`Two assets would both be named ${path}.`);
+      if (file.size > PACKAGE_MAX_FILE_BYTES) throw new Error(`${file.name} is larger than the 1 MiB per-file limit.`);
+      total += file.size; result.set(path, file);
+    }
+    return { files: result, total };
+  }
+  async function exportPackage() {
+    const fields = exportForm.elements;
+    const { manifest, errors } = buildManifest({
+      name: fields.name.value, slug: fields.slug.value, description: fields.description.value, author: fields.author.value,
+      version: fields.version.value, category: fields.category.value, platforms: fields.platforms.value,
+      presentation: fields.presentation.value, inputs: [...exportForm.querySelectorAll('input[name=inputs]:checked')].map(box => box.value),
+    });
+    for (const node of exportForm.querySelectorAll('[data-error-for]')) node.textContent = errors[node.dataset.errorFor] || '';
+    if (!manifest) { exportError('Check the highlighted fields.'); return false; }
+    const source = encodeBas(editor.getValue());
+    if (!editor.getValue().trim()) { exportError('Write a program before exporting it as a package.'); return false; }
+    if (source.byteLength > PACKAGE_MAX_FILE_BYTES) { exportError('Packaged programs are limited to 1 MiB of source.'); return false; }
+    const { files, total } = packageAssets([...fields.assets.files]);
+    const manifestBytes = new TextEncoder().encode(`${JSON.stringify(manifest, null, 2)}\n`);
+    if (total + source.byteLength + manifestBytes.byteLength > PACKAGE_MAX_EXPANDED_BYTES) { exportError('Packages are limited to 4 MiB of files in total.'); return false; }
+    const zip = new JSZip();
+    zip.file('manifest.json', manifestBytes); zip.file(PACKAGE_ENTRYPOINT, source);
+    for (const [path, file] of files) zip.file(path, await file.arrayBuffer(), { createFolders: false });
+    download(await zip.generateAsync({ type: 'blob', compression: 'DEFLATE', mimeType: 'application/zip' }), `${manifest.slug}.zip`);
+    log('info', `Exported ${manifest.name} as ${manifest.slug}.zip. A sysop can install it from Manage Programs.`);
+    return true;
+  }
+  exportForm.onchange = event => { if (event.target.name === 'format') showExportFields(); };
+  exportForm.elements.slug.oninput = () => { slugEdited = true; };
+  exportForm.elements.name.oninput = () => { if (!slugEdited) exportForm.elements.slug.value = packageSlug(exportForm.elements.name.value); };
+  for (const button of exportDialog.querySelectorAll('[data-close]')) button.onclick = () => exportDialog.close();
+  exportForm.onsubmit = async event => {
+    event.preventDefault(); exportError('');
+    try {
+      if (exportFormat() === 'bas') { exportBas(); exportDialog.close(); }
+      else if (await exportPackage()) exportDialog.close();
+    } catch (error) { exportError(`Export failed: ${error.message}`); }
+  };
   async function importBas(file) {
     if (!file) return;
     try {
@@ -246,8 +275,8 @@ function start() {
     if (example) await openUnsaved(blankProgram(example.title, example.source), 'EXAMPLE — NOT SAVED');
   };
   $('#basic-unlock-form').onsubmit = unlock; $('#basic-lock').onclick = lock; $('#basic-save').onclick = saveNow; $('#basic-new').onclick = makeNew; $('#basic-title').oninput = markDirty;
-  $('#basic-run').onclick = () => run(); $('#basic-stop').onclick = () => stop(); $('#basic-export').onclick = exportBas;
-  $('#basic-fullscreen').onclick = () => { const screen = $('#basic-screen'); (document.fullscreenElement ? document.exitFullscreen() : screen.requestFullscreen?.())?.catch?.(() => {}); frame?.focus(); };
+  $('#basic-run').onclick = () => run(); $('#basic-stop').onclick = () => stop(); $('#basic-export').onclick = openExport;
+  $('#basic-fullscreen').onclick = () => { const screen = $('#basic-screen'); (document.fullscreenElement ? document.exitFullscreen() : screen.requestFullscreen?.())?.catch?.(() => {}); session.focus(); };
   $('#basic-console-clear').onclick = () => consoleList.replaceChildren();
   $('#basic-import').onclick = () => $('#basic-import-file').click();
   $('#basic-import-file').onchange = event => { const file = event.target.files[0]; event.target.value = ''; importBas(file); };
@@ -257,7 +286,6 @@ function start() {
     catch (error) { message(error.message); }
   };
   for (const tab of app.querySelectorAll('button[data-view]')) tab.onclick = () => showView(tab.dataset.view);
-  window.addEventListener('message', receive);
   document.addEventListener('keydown', event => {
     if ($('#basic-workspace').hidden) return;
     if (event.key === 'F5') { event.preventDefault(); run(); }

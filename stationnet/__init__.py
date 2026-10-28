@@ -187,7 +187,7 @@ def create_app(test_config=None):
                 "frame-src 'none'; worker-src blob:; base-uri 'none'; "
                 "form-action 'none'; frame-ancestors 'self'"
             )
-        if request.endpoint == "office.basic_runner":
+        if request.endpoint in {"office.basic_runner", "applications.basic_runner"}:
             # Framed with sandbox="allow-scripts" (opaque origin). QBJS runs
             # compiled programs through AsyncFunction, so eval is allowed only
             # here; scripts are limited to the bundled QBJS files and every

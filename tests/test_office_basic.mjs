@@ -3,6 +3,8 @@ import { readFileSync } from 'node:fs';
 import {
   PROTOCOL, MAX_SOURCE_CHARS, blankProgram, normalizeProgram, cleanTitle, decodeBas, encodeBas, basFilename,
   titleFromFilename, readRunnerMessage, readHostMessage, errorJsLine,
+  packageSlug, assetPath, defaultPackage, buildManifest, packageFiles, storageItems, safePackagePath,
+  PACKAGE_MAX_FILES, PACKAGE_MAX_FILE_BYTES, MAX_STORAGE_BYTES,
 } from '../stationnet/office_basic/model.js';
 import { EXAMPLES } from '../stationnet/office_basic/examples.js';
 
@@ -49,6 +51,59 @@ assert.deepEqual(readHostMessage({ protocol: PROTOCOL, type: 'run', runId: 'r1',
 assert.equal(readHostMessage({ protocol: PROTOCOL, type: 'run', runId: 'r1', source: 7 }), null);
 assert.deepEqual(readHostMessage({ protocol: PROTOCOL, type: 'stop', runId: 'r1' }), { type: 'stop', runId: 'r1' });
 assert.equal(readHostMessage({ protocol: 'other', type: 'stop', runId: 'r1' }), null);
+
+// Installed programs also send package files and saved localStorage.
+const run = extra => readHostMessage({ protocol: PROTOCOL, type: 'run', runId: 'r1', source: 'CLS', ...extra });
+const png = new ArrayBuffer(8);
+assert.deepEqual(run({ files: { 'main.bas': png, 'assets/ship.png': png }, storage: { hi: '9' } }),
+  { type: 'run', runId: 'r1', source: 'CLS', files: { 'main.bas': png, 'assets/ship.png': png }, storage: { hi: '9' } });
+assert.equal(run({ files: { '../escape.bas': png } }), null);
+assert.equal(run({ files: { '/abs.bas': png } }), null);
+assert.equal(run({ files: { 'assets/CON.png': png } }), null);
+assert.equal(run({ files: { 'a.bas': 'text' } }), null);
+assert.equal(run({ files: { 'a.bas': new ArrayBuffer(PACKAGE_MAX_FILE_BYTES + 1) } }), null);
+assert.equal(run({ files: Object.fromEntries(Array.from({ length: PACKAGE_MAX_FILES + 1 }, (_, i) => [`f${i}.bin`, png])) }), null);
+assert.equal(run({ files: Object.fromEntries(Array.from({ length: 5 }, (_, i) => [`f${i}.bin`, new ArrayBuffer(PACKAGE_MAX_FILE_BYTES)])) }), null);
+assert.equal(run({ storage: { n: 5 } }), null);
+assert.equal(run({ storage: ['x'] }), null);
+assert.deepEqual(packageFiles({}), {});
+assert.equal(safePackagePath('assets/sub/ok-1.wav'), true);
+assert.equal(safePackagePath('assets/trailing.'), false);
+assert.deepEqual(storageItems({ a: 'b' }), { a: 'b' });
+assert.equal(storageItems({ big: 'x'.repeat(MAX_STORAGE_BYTES) }), null);
+assert.deepEqual(readRunnerMessage(msg('storage', { items: { score: '12' } }), 'r1'), { type: 'storage', items: { score: '12' } });
+assert.equal(readRunnerMessage(msg('storage', { items: { score: 12 } }), 'r1'), null);
+assert.equal(readRunnerMessage(msg('storage', { items: { score: '1' } }), 'other'), null);
+
+// StationNet Package manifests mirror the server's validation.
+assert.equal(packageSlug('Star Catcher!'), 'star-catcher');
+assert.equal(packageSlug('  Ça va? Über__Game  '), 'ca-va-uber-game');
+assert.equal(packageSlug('!!!'), 'basic-program');
+assert.equal(packageSlug('Office Basic'), 'office-basic-program');
+assert.ok(packageSlug('x'.repeat(200)).length <= 64);
+assert.equal(assetPath('C:\\fakepath\\My Ship.png'), 'assets/My-Ship.png');
+assert.equal(assetPath('theme.wav'), 'assets/theme.wav');
+assert.throws(() => assetPath('...'), /Rename/);
+assert.throws(() => assetPath('nul.txt'), /Rename/);
+const defaults = defaultPackage('Star Catcher', 'coder');
+assert.deepEqual(defaults, {
+  name: 'Star Catcher', slug: 'star-catcher', description: 'A BASIC program by coder.', author: 'coder', version: '1.0.0',
+  category: 'Games', platforms: 'universal', inputs: [], presentation: 'standard',
+});
+assert.equal(defaultPackage('', '').author, 'StationNet user');
+const built = buildManifest({ ...defaults, inputs: ['keyboard', 'keyboard'], platforms: 'desktop', presentation: 'immersive' });
+assert.deepEqual(built.errors, {});
+assert.deepEqual(built.manifest, {
+  package_format: 1, runtime: 'basic', slug: 'star-catcher', name: 'Star Catcher', description: 'A BASIC program by coder.',
+  author: 'coder', version: '1.0.0', category: 'Games', entrypoint: 'main.bas', platforms: ['desktop'],
+  required_inputs: ['keyboard'], preferred_presentation: 'immersive', fullscreen_target: 'application',
+});
+assert.equal(buildManifest(defaults).manifest.platforms, 'universal');
+const invalid = buildManifest({ ...defaults, name: ' ', slug: 'Bad Slug', description: 'x'.repeat(501), author: '', version: '', category: 'Apps', platforms: 'tv', inputs: ['mind'], presentation: 'cinema' });
+assert.equal(invalid.manifest, null);
+assert.deepEqual(Object.keys(invalid.errors).sort(), ['author', 'category', 'description', 'inputs', 'name', 'platforms', 'presentation', 'slug', 'version']);
+assert.match(buildManifest({ ...defaults, slug: 'office-draw' }).errors.slug, /reserved/);
+assert.equal(buildManifest({ ...defaults, name: '  Padded  ' }).manifest.name, 'Padded');
 
 // Stack lines from compiled AsyncFunction code map back like the QBJS IDE.
 assert.equal(errorJsLine({ stack: 'Error: x\n    at eval (eval at run (https://h/static/office-basic-runner.js:1:99), <anonymous>:14:7)\n    at run (x.js:1:1)' }), 12);

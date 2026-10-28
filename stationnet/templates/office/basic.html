@@ -3,8 +3,8 @@
 {% block content %}
 <link rel="stylesheet" href="{{ url_for('static', filename='vendor/qbjs/codemirror/codemirror.min.css', v='0.11.5') }}">
 <link rel="stylesheet" href="{{ url_for('static', filename='vendor/qbjs/codemirror/dialog.css', v='0.11.5') }}">
-<link rel="stylesheet" href="{{ url_for('static', filename='office-basic.css', v='1') }}">
-<div class="basic-app" data-api="{{ url_for('office.basic_list') }}" data-documents-api="{{ url_for('office.document_list') }}" data-sheets-api="{{ url_for('office.sheet_list') }}" data-presentations-api="{{ url_for('office.presentation_list') }}" data-agenda-api="{{ url_for('office.agenda_get') }}" data-draw-api="{{ url_for('office.drawing_list') }}" data-vault="{{ url_for('office.vault') }}" data-runner="{{ url_for('office.basic_runner') }}" data-csrf="{{ session.csrf_token }}">
+<link rel="stylesheet" href="{{ url_for('static', filename='office-basic.css', v='2') }}">
+<div class="basic-app" data-api="{{ url_for('office.basic_list') }}" data-documents-api="{{ url_for('office.document_list') }}" data-sheets-api="{{ url_for('office.sheet_list') }}" data-presentations-api="{{ url_for('office.presentation_list') }}" data-agenda-api="{{ url_for('office.agenda_get') }}" data-draw-api="{{ url_for('office.drawing_list') }}" data-vault="{{ url_for('office.vault') }}" data-runner="{{ url_for('office.basic_runner') }}" data-author="{{ g.user['username'] }}" data-csrf="{{ session.csrf_token }}">
   <header class="basic-head"><div><p class="eyebrow"><a href="{{ url_for('office.index') }}">OFFICE</a> / BASIC</p><h1>BASIC</h1><p>PROGRAMS / GRAPHICS / SOUND / POWERED BY QBJS</p></div><div><span id="basic-status" role="status" aria-live="polite">LOCKED</span> <button id="basic-lock" type="button" class="secondary" hidden>LOCK</button></div></header>
   <section id="basic-unlock" class="terminal-card basic-unlock"><h2>Unlock OFFICE</h2><p>One OFFICE Password unlocks Documents, Sheets, Presentations, Agenda, Draw, and BASIC in this browser tab. Programs and titles are encrypted before saving. Lost passwords cannot be recovered.</p><form id="basic-unlock-form" class="form-grid"><label>OFFICE Password<input id="basic-password" type="password" minlength="12" required autocomplete="off"></label><label id="basic-confirm-row" hidden>Confirm new OFFICE Password<input id="basic-confirm" type="password" minlength="12" autocomplete="off"></label><button type="submit">UNLOCK BASIC</button></form><p id="basic-unlock-error" role="alert" hidden></p></section>
   <div id="basic-workspace" class="basic-workspace" hidden>
@@ -16,7 +16,7 @@
       <p>Programs are private. Select one to reopen it.</p>
     </aside>
     <main class="terminal-card basic-editor">
-      <div class="basic-file-row"><input id="basic-title" aria-label="Program title" maxlength="160" value="Untitled program"><div><button id="basic-save" type="button" class="secondary">SAVE</button><button id="basic-export" type="button" class="secondary">EXPORT .BAS</button><button id="basic-delete" type="button" class="danger">DELETE</button></div></div>
+      <div class="basic-file-row"><input id="basic-title" aria-label="Program title" maxlength="160" value="Untitled program"><div><button id="basic-save" type="button" class="secondary">SAVE</button><button id="basic-export" type="button" class="secondary" aria-haspopup="dialog">EXPORT…</button><button id="basic-delete" type="button" class="danger">DELETE</button></div></div>
       <div id="basic-message" role="alert" hidden></div>
       <div class="basic-run-row" role="toolbar" aria-label="Program controls"><button id="basic-run" type="button">RUN ▶</button><button id="basic-stop" type="button" class="secondary" disabled>STOP ■</button><button id="basic-fullscreen" type="button" class="secondary">FULLSCREEN</button><span id="basic-run-state" data-state="idle" aria-live="polite">READY</span>
         <div class="basic-view-tabs" role="tablist" aria-label="View"><button type="button" role="tab" data-view="code" aria-selected="true">CODE</button><button type="button" role="tab" data-view="run" aria-selected="false">SCREEN</button></div></div>
@@ -31,6 +31,32 @@
       <p class="basic-help">F5 or Ctrl+Enter runs, Esc in the editor or STOP stops, Ctrl+S saves, Ctrl+F searches. Click the program screen to type into a running program. Programs run in an isolated sandbox with no network access; files they create last only while they run.</p>
     </main>
   </div>
+  <dialog id="basic-export-dialog" class="basic-export-dialog" aria-labelledby="basic-export-heading">
+    <form id="basic-export-form" novalidate>
+      <header><h2 id="basic-export-heading">EXPORT PROGRAM</h2><button type="button" class="secondary" data-close aria-label="Close">×</button></header>
+      <fieldset class="basic-export-format"><legend>FORMAT</legend>
+        <label><input type="radio" name="format" value="bas" checked> BASIC file (.bas)<small>Plain source for QBJS, QB64, or another BASIC.</small></label>
+        <label><input type="radio" name="format" value="package"> StationNet Package (.zip)<small>Source plus a manifest, ready for a sysop to install in Games &amp; Apps.</small></label>
+      </fieldset>
+      <div id="basic-package-fields" class="basic-export-grid" hidden>
+        <label>Name<input name="name" maxlength="100" autocomplete="off"><small data-error-for="name"></small></label>
+        <label>Identifier<input name="slug" maxlength="80" autocomplete="off" spellcheck="false"><small data-error-for="slug"></small></label>
+        <label class="wide">Description<textarea name="description" rows="2" maxlength="500"></textarea><small data-error-for="description"></small></label>
+        <label>Author<input name="author" maxlength="100" autocomplete="off"><small data-error-for="author"></small></label>
+        <label>Version<input name="version" maxlength="30" autocomplete="off"><small data-error-for="version"></small></label>
+        <label>Category<select name="category"><option>Games</option><option>Utilities</option><option>Creative</option><option>Educational</option><option>Productivity</option><option>Other</option></select><small data-error-for="category"></small></label>
+        <label>Devices<select name="platforms"><option value="universal">Desktop and touch</option><option value="desktop">Desktop only</option><option value="touch">Touch only</option></select><small data-error-for="platforms"></small></label>
+        <label>Presentation<select name="presentation"><option value="standard">Standard</option><option value="immersive">Immersive</option></select><small data-error-for="presentation"></small></label>
+        <fieldset class="wide basic-export-inputs"><legend>REQUIRES</legend>
+          <label><input type="checkbox" name="inputs" value="keyboard"> Keyboard</label><label><input type="checkbox" name="inputs" value="pointer"> Pointer</label><label><input type="checkbox" name="inputs" value="touch"> Touch</label><label><input type="checkbox" name="inputs" value="gamepad"> Gamepad</label>
+          <small data-error-for="inputs"></small></fieldset>
+        <label class="wide">Assets (optional)<input name="assets" type="file" multiple><small>Images, sounds, and data files your program loads, such as <code>_LOADIMAGE("assets/ship.png")</code>. Up to 62 files, 1 MiB each, 4 MiB in total. They are added to the ZIP only, not saved with this program.</small></label>
+        <p class="wide basic-export-note">Only a sysop can install a package for the whole station. Send the downloaded ZIP to your sysop.</p>
+      </div>
+      <p id="basic-export-error" role="alert" hidden></p>
+      <div class="basic-export-actions"><button type="button" class="secondary" data-close>CANCEL</button><button type="submit">EXPORT</button></div>
+    </form>
+  </dialog>
 </div>
 <script src="{{ url_for('static', filename='vendor/qbjs/codemirror/codemirror.min.js', v='0.11.5') }}" defer></script>
 <script src="{{ url_for('static', filename='vendor/qbjs/codemirror/qb-lang.js', v='0.11.5') }}" defer></script>
@@ -38,5 +64,5 @@
 <script src="{{ url_for('static', filename='vendor/qbjs/codemirror/searchcursor.js', v='0.11.5') }}" defer></script>
 <script src="{{ url_for('static', filename='vendor/qbjs/codemirror/dialog.js', v='0.11.5') }}" defer></script>
 <script src="{{ url_for('static', filename='vendor/qbjs/codemirror/search.js', v='0.11.5') }}" defer></script>
-<script src="{{ url_for('static', filename='office-basic.js', v='1') }}" defer></script>
+<script src="{{ url_for('static', filename='office-basic.js', v='2') }}" defer></script>
 {% endblock %}

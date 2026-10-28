@@ -16,8 +16,8 @@ def test_gamepad_is_a_bounded_manifest_input():
 def test_fullscreen_target_defaults_to_application_and_validates_canvas():
     base = dict(slug="fullscreen-test", name="Fullscreen test", description="Test",
                 author="Test", version="1", category="Games")
-    assert _manifest_capabilities({})[-1] == "application"
-    assert _manifest_capabilities({"fullscreen_target": "canvas"})[-1] == "canvas"
+    assert _manifest_capabilities({})[3] == "application"
+    assert _manifest_capabilities({"fullscreen_target": "canvas"})[3] == "canvas"
     _validate_metadata(Application(**base, fullscreen_target="canvas"))
     with pytest.raises(ValueError, match="fullscreen target"):
         _validate_metadata(Application(**base, fullscreen_target="unknown"))

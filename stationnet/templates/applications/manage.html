@@ -5,7 +5,7 @@
   <div>
     <p class="eyebrow">SYSOP CONTROL / APPLICATION REGISTRY</p>
     <h1>Manage programs</h1>
-    <p class="muted">Install portable StationNet ZIP packages and control station availability.</p>
+    <p class="muted">Install portable StationNet ZIP packages (JavaScript or BASIC) and control station availability.</p>
   </div>
   <a class="button secondary" href="{{ url_for('station.settings') }}">&lt; SYSOP CONTROL</a>
 </header>
@@ -13,7 +13,7 @@
 <section class="terminal-card settings-section">
   <p class="eyebrow">PACKAGE RECEIVER / FORMAT 01</p>
   <h2>Install application</h2>
-  <p class="muted">Uploaded programs are stored in the station data directory under <code>applications/</code>. Back up that directory with the station data to preserve them. Maximum upload: 5 MiB.</p>
+  <p class="muted">Accepts JavaScript packages and BASIC packages exported from OFFICE BASIC. Uploaded programs are stored in the station data directory under <code>applications/</code>. Back up that directory with the station data to preserve them. Maximum upload: 5 MiB.</p>
   <form method="post" action="{{ url_for('application_admin.install') }}" enctype="multipart/form-data" class="form-grid">
     <input type="hidden" name="csrf_token" value="{{ session.csrf_token }}">
     <label>StationNet application ZIP<input type="file" name="package" accept=".zip,application/zip" required></label>
@@ -28,7 +28,7 @@
     {% for application in applications %}
     <article class="application-admin-row">
       <div class="application-copy">
-        <span>{{ 'BUILT-IN' if application.builtin else 'THIRD-PARTY' }} / {{ application.category|upper }} / V{{ application.version }}</span>
+        <span>{{ 'BUILT-IN' if application.builtin else 'THIRD-PARTY' }} / {{ application.runtime|upper }} / {{ application.category|upper }} / V{{ application.version }}</span>
         <h3>{{ application.name }}</h3>
         <p>{{ application.description }}</p>
         <small>{{ 'UNIVERSAL' if application.platforms|length == 2 else application.platforms|join(' + ')|upper }}{% if application.required_inputs %} / INPUT: {{ application.required_inputs|join(' + ')|upper }}{% endif %} / PRESENTATION: {{ application.preferred_presentation|upper }}</small>

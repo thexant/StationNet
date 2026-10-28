@@ -34,6 +34,7 @@ PACKAGE_MAX_FILE_BYTES = 1024 * 1024
 PACKAGE_MAX_FILES = 64
 SLUG_RE = re.compile(r"[a-z0-9]+(?:-[a-z0-9]+)*")
 ENTRYPOINT_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,79}\.js")
+BASIC_ENTRYPOINT_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,79}\.bas", re.IGNORECASE)
 PACKAGE_PART_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,79}")
 WINDOWS_DEVICE_NAMES = {"CON", "PRN", "AUX", "NUL", *(f"COM{i}" for i in range(1, 10)), *(f"LPT{i}" for i in range(1, 10))}
 STORAGE_KEY_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,79}$")
@@ -47,6 +48,9 @@ MANIFEST_PLATFORMS = frozenset({"desktop", "touch"})
 MANIFEST_INPUTS = frozenset({"keyboard", "pointer", "fine-pointer", "touch", "pointer-lock", "gamepad"})
 PRESENTATION_MODES = frozenset({"standard", "immersive"})
 FULLSCREEN_TARGETS = frozenset({"application", "canvas"})
+JAVASCRIPT = "javascript"
+BASIC = "basic"
+RUNTIMES = frozenset({JAVASCRIPT, BASIC})
 
 
 class PackageError(ValueError):
@@ -70,6 +74,7 @@ class Application:
     preferred_presentation: str = "standard"
     fullscreen_target: str = "application"
     launch_endpoint: str | None = None
+    runtime: str = JAVASCRIPT
 
     @property
     def runnable(self) -> bool:
@@ -170,6 +175,17 @@ def _validate_metadata(application: Application) -> None:
         raise ValueError(f"Invalid preferred presentation: {application.slug}")
     if application.fullscreen_target not in FULLSCREEN_TARGETS:
         raise ValueError(f"Invalid fullscreen target: {application.slug}")
+    if application.runtime not in RUNTIMES:
+        raise ValueError(f"Unknown application runtime: {application.slug}")
+    if application.runtime == BASIC:
+        # QBJS programs run in the BASIC sandbox, which has no multiplayer
+        # relay, and always fit their screen to the whole application frame.
+        if application.permissions:
+            raise ValueError(f"BASIC applications cannot request permissions: {application.slug}")
+        if application.fullscreen_target != "application":
+            raise ValueError(f"BASIC applications use the application fullscreen target: {application.slug}")
+        if application.entrypoint and not BASIC_ENTRYPOINT_RE.fullmatch(PurePosixPath(application.entrypoint).name):
+            raise ValueError(f"BASIC entrypoint must name a .bas file: {application.slug}")
 
 
 def _manifest_capabilities(data: dict, error_type=ValueError):
@@ -190,7 +206,22 @@ def _manifest_capabilities(data: dict, error_type=ValueError):
     fullscreen_target = data.get("fullscreen_target", "application")
     if not isinstance(fullscreen_target, str) or fullscreen_target not in FULLSCREEN_TARGETS:
         raise error_type("Manifest fullscreen_target must be 'application' or 'canvas'.")
-    return tuple(platforms), tuple(required_inputs), presentation, fullscreen_target
+    runtime = data.get("runtime", JAVASCRIPT)
+    if not isinstance(runtime, str) or runtime not in RUNTIMES:
+        raise error_type("Manifest runtime must be 'javascript' or 'basic'.")
+    return tuple(platforms), tuple(required_inputs), presentation, fullscreen_target, runtime
+
+
+def decode_basic_source(content: bytes) -> str:
+    """Decode a .bas file the way Office BASIC does: UTF-8, else Latin-1."""
+    try:
+        text = content.decode("utf-8")
+    except UnicodeDecodeError:
+        text = content.decode("iso-8859-1")
+    text = text.removeprefix("\ufeff")
+    if "\x00" in text:
+        raise ValueError("BASIC program must be a text file.")
+    return text
 
 
 def register(application: Application) -> None:
@@ -252,7 +283,7 @@ def catalog() -> tuple[Application, ...]:
         if row["slug"] in bundled_slugs:
             continue
         capabilities = json.loads(row["capabilities_json"] or "{}")
-        platforms, required_inputs, presentation, fullscreen_target = _manifest_capabilities(capabilities)
+        platforms, required_inputs, presentation, fullscreen_target, runtime = _manifest_capabilities(capabilities)
         applications.append(Application(
             slug=row["slug"], name=row["name"], description=row["description"],
             author=row["author"], version=row["version"], category=row["category"],
@@ -261,6 +292,7 @@ def catalog() -> tuple[Application, ...]:
             permissions=tuple(json.loads(row["permissions_json"] or "[]")),
             platforms=platforms, required_inputs=required_inputs,
             preferred_presentation=presentation, fullscreen_target=fullscreen_target,
+            runtime=runtime,
         ))
     return tuple(applications)
 
@@ -281,7 +313,7 @@ def _load_package(folder: str) -> Application:
     permissions = data.get("permissions", [])
     if not isinstance(permissions, list) or any(not isinstance(item, str) for item in permissions):
         raise ValueError(f"Invalid application manifest: {manifest_path}")
-    platforms, required_inputs, presentation, fullscreen_target = _manifest_capabilities(data)
+    platforms, required_inputs, presentation, fullscreen_target, runtime = _manifest_capabilities(data)
     application = Application(
         slug=data["slug"], name=data["name"], description=data["description"],
         author=data["author"], version=data["version"], category=data["category"],
@@ -289,6 +321,7 @@ def _load_package(folder: str) -> Application:
         permissions=tuple(permissions),
         platforms=platforms, required_inputs=required_inputs,
         preferred_presentation=presentation, fullscreen_target=fullscreen_target,
+        runtime=runtime,
     )
     _validate_metadata(application)
     return application
@@ -380,20 +413,21 @@ def validate_package(package_bytes: bytes) -> tuple[Application, dict[str, bytes
             raise PackageError("Manifest is missing required text fields.")
         if type(manifest.get("package_format")) is not int or manifest["package_format"] != PACKAGE_FORMAT:
             raise PackageError(f"Unsupported package format; expected package_format {PACKAGE_FORMAT}.")
+        platforms, required_inputs, presentation, fullscreen_target, runtime = _manifest_capabilities(manifest, PackageError)
+        kind = "BASIC (.bas)" if runtime == BASIC else "JavaScript (.js)"
         entrypoint = manifest["entrypoint"]
         try:
             entry_path = _safe_archive_name(entrypoint)
         except PackageError:
-            raise PackageError("Entrypoint must be a safe package-relative JavaScript (.js) path.") from None
-        if not ENTRYPOINT_RE.fullmatch(entry_path.name):
-            raise PackageError("Entrypoint must name a JavaScript (.js) file.")
+            raise PackageError(f"Entrypoint must be a safe package-relative {kind} path.") from None
+        if not (BASIC_ENTRYPOINT_RE if runtime == BASIC else ENTRYPOINT_RE).fullmatch(entry_path.name):
+            raise PackageError(f"Entrypoint must name a {kind} file.")
         entry_info = names.get(entrypoint.casefold())
         if entry_info is None or entry_info.filename != entrypoint:
             raise PackageError(f"Package entrypoint is missing: {entrypoint}.")
         permissions = manifest.get("permissions", [])
         if not isinstance(permissions, list) or any(not isinstance(item, str) for item in permissions):
             raise PackageError("Manifest permissions must be an array of supported permission names.")
-        platforms, required_inputs, presentation, fullscreen_target = _manifest_capabilities(manifest, PackageError)
         application = Application(
             slug=manifest["slug"], name=manifest["name"],
             description=manifest["description"], author=manifest["author"],
@@ -401,12 +435,21 @@ def validate_package(package_bytes: bytes) -> tuple[Application, dict[str, bytes
             entrypoint=entrypoint, builtin=False, permissions=tuple(permissions),
             platforms=platforms, required_inputs=required_inputs,
             preferred_presentation=presentation, fullscreen_target=fullscreen_target,
+            runtime=runtime,
         )
         try:
             _validate_metadata(application)
         except ValueError as error:
             raise PackageError(str(error)) from None
         contents = {info.filename: _read_archive_file(archive, info) for info in files}
+        if runtime == BASIC:
+            try:
+                source = decode_basic_source(contents[entrypoint])
+            except ValueError as error:
+                raise PackageError(str(error)) from None
+            if not source.strip():
+                raise PackageError("BASIC program cannot be empty.")
+            return application, contents
         try:
             script = contents[entrypoint]
             script.decode("utf-8")
@@ -451,6 +494,7 @@ def install_package(package_bytes: bytes) -> Application:
                  "required_inputs": application.required_inputs,
                  "preferred_presentation": application.preferred_presentation,
                  "fullscreen_target": application.fullscreen_target,
+                 "runtime": application.runtime,
              })),
         )
         database.execute(
@@ -809,7 +853,8 @@ def multiplayer(slug):
 def runtime(slug):
     """Return the tiny sandbox document used to execute an application."""
     application = find(slug)
-    entrypoint = _entrypoint(application) if application is not None and application.enabled else None
+    entrypoint = (_entrypoint(application) if application is not None and application.enabled
+                  and application.runtime == JAVASCRIPT else None)
     if application is None or entrypoint is None:
         abort(404)
     worker = Path(__file__).with_name("static") / "application_runtime.js"
@@ -835,12 +880,51 @@ def runtime(slug):
 def source(slug):
     """Serve only a registered entrypoint; paths never come from the request."""
     application = find(slug)
-    if application is None or not application.enabled or not application.entrypoint:
+    if (application is None or not application.enabled or not application.entrypoint
+            or application.runtime != JAVASCRIPT):
         abort(404)
     path = _entrypoint(application)
     if path is None:
         abort(404)
     response = make_response(path.read_text(encoding="utf-8"))
     response.mimetype = "application/javascript"
+    response.headers["Cache-Control"] = "no-store"
+    return response
+
+
+def _basic_application(slug: str) -> Application:
+    application = find(slug)
+    if (application is None or not application.enabled or application.runtime != BASIC
+            or _entrypoint(application) is None):
+        abort(404)
+    return application
+
+
+@bp.get("/<slug>/basic-runner")
+@login_required
+def basic_runner(slug):
+    """Return the QBJS sandbox document for an installed BASIC program.
+
+    This is the Office BASIC runner, framed with sandbox="allow-scripts" and
+    given the same restrictive CSP. Program files arrive by postMessage from
+    the trusted display page, so the document never embeds package data.
+    """
+    _basic_application(slug)
+    response = make_response(render_template("office/basic_runner.html"))
+    response.headers["Cache-Control"] = "no-store"
+    return response
+
+
+@bp.get("/<slug>/program.json")
+@login_required
+def basic_program(slug):
+    """Return a BASIC program's entrypoint path and its bounded package files."""
+    application = _basic_application(slug)
+    try:
+        files = _package_files(application)
+    except (OSError, PackageError):
+        abort(404)
+    entrypoint = application.entrypoint.split("/", 1)[1] if application.builtin else application.entrypoint
+    response = jsonify(ok=True, entrypoint=entrypoint, files=files)
     response.headers["Cache-Control"] = "no-store"
     return response

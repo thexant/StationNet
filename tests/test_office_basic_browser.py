@@ -1,12 +1,17 @@
 """Browser tests for Office BASIC: QBJS runs in an isolated sandbox frame."""
+import io
+import json
 import threading
+import zipfile
 
 import pytest
 from flask import session
 from werkzeug.serving import make_server
 
 from stationnet import create_app
+from stationnet.applications import validate_package
 from stationnet.db import get_db
+from basic_package_support import png
 
 PASSWORD = "correct horse battery staple"
 
@@ -205,8 +210,12 @@ def test_basic_save_reopen_import_and_export(basic_page, tmp_path):
     assert page.evaluate("document.querySelector('.CodeMirror').CodeMirror.getValue()") == 'PRINT "saved program"\n'
     assert page.locator("#basic-list button", has_text="Round trip").count() == 1
 
+    page.locator("#basic-export").click()
+    assert page.locator("#basic-export-dialog input[name=format][value=bas]").is_checked()
+    assert page.locator("#basic-package-fields").is_hidden()
     with page.expect_download() as download:
-        page.locator("#basic-export").click()
+        page.locator("#basic-export-dialog button[type=submit]").click()
+    assert page.locator("#basic-export-dialog").is_hidden()
     exported = tmp_path / "export.bas"
     download.value.save_as(exported)
     assert download.value.suggested_filename == "Round trip.bas"
@@ -219,4 +228,55 @@ def test_basic_save_reopen_import_and_export(basic_page, tmp_path):
     assert page.locator("#basic-title").input_value() == "GREETING"
     # CodeMirror normalizes line endings; EXPORT writes CRLF again.
     assert page.evaluate("document.querySelector('.CodeMirror').CodeMirror.getValue()") == 'PRINT "café"\n'
+    assert not page.errors
+
+
+def test_basic_exports_a_stationnet_package(basic_page, tmp_path):
+    page = basic_page
+    page.locator("#basic-title").fill("Star Catcher")
+    set_source(page, 'img& = _LOADIMAGE("assets/ship.png")\nPRINT "ship"; img&\n')
+    page.locator("#basic-export").click()
+    dialog = page.locator("#basic-export-dialog")
+    dialog.locator("input[name=format][value=package]").check()
+    # Defaults come from the program title and the signed-in user.
+    assert dialog.locator("input[name=name]").input_value() == "Star Catcher"
+    assert dialog.locator("input[name=slug]").input_value() == "star-catcher"
+    assert dialog.locator("input[name=author]").input_value() == "coder"
+    assert dialog.locator("textarea[name=description]").input_value() == "A BASIC program by coder."
+    dialog.locator("input[name=name]").fill("Star Catcher Deluxe")
+    assert dialog.locator("input[name=slug]").input_value() == "star-catcher-deluxe"
+
+    dialog.locator("input[name=version]").fill("")
+    dialog.locator("button[type=submit]").click()
+    assert "1-30 characters" in dialog.locator("[data-error-for=version]").inner_text()
+    assert dialog.is_visible()
+
+    dialog.locator("input[name=version]").fill("2.1")
+    dialog.locator("select[name=category]").select_option("Educational")
+    dialog.locator("select[name=platforms]").select_option("desktop")
+    dialog.locator("input[name=inputs][value=keyboard]").check()
+    asset = tmp_path / "ship.png"
+    asset.write_bytes(png())
+    dialog.locator("input[name=assets]").set_input_files(str(asset))
+    with page.expect_download() as download:
+        dialog.locator("button[type=submit]").click()
+    assert download.value.suggested_filename == "star-catcher-deluxe.zip"
+    exported = tmp_path / "package.zip"
+    download.value.save_as(exported)
+
+    data = exported.read_bytes()
+    with zipfile.ZipFile(io.BytesIO(data)) as archive:
+        assert sorted(archive.namelist()) == ["assets/ship.png", "main.bas", "manifest.json"]
+        manifest = json.loads(archive.read("manifest.json"))
+        assert archive.read("main.bas") == b'img& = _LOADIMAGE("assets/ship.png")\r\nPRINT "ship"; img&\r\n'
+    assert manifest == {
+        "package_format": 1, "runtime": "basic", "slug": "star-catcher-deluxe", "name": "Star Catcher Deluxe",
+        "description": "A BASIC program by coder.", "author": "coder", "version": "2.1", "category": "Educational",
+        "entrypoint": "main.bas", "platforms": ["desktop"], "required_inputs": ["keyboard"],
+        "preferred_presentation": "standard", "fullscreen_target": "application",
+    }
+    # The export is exactly what the station's package validation accepts.
+    application, files = validate_package(data)
+    assert application.slug == "star-catcher-deluxe" and application.runtime == "basic"
+    assert files["assets/ship.png"] == png()
     assert not page.errors

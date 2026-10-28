@@ -1,7 +1,9 @@
 // Office BASIC runner. This document is framed with sandbox="allow-scripts", so it
 // has an opaque origin: no StationNet cookies, storage, or DOM. Its CSP closes
 // network, frame, and worker access. One frame compiles and runs one program;
-// the editor discards the frame to stop it or to run again.
+// the editor discards the frame to stop it or to run again. Installed BASIC
+// applications use this same runner; their host also sends package files and
+// the user's saved localStorage, and receives localStorage changes back.
 import { PROTOCOL, MAX_ECHO_CHARS, readHostMessage, errorJsLine } from './model.js';
 import { fonts, binaryFiles, textFiles } from './assets.js';
 
@@ -9,6 +11,7 @@ import { fonts, binaryFiles, textFiles } from './assets.js';
 const AsyncFunction = Object.getPrototypeOf(async function () {}).constructor;
 const container = document.getElementById('gx-container');
 let runId = null, started = false, echoCount = 0;
+let persistent = false, storageTimer = null;
 
 function post(type, data = {}, transfer = []) {
   window.parent.postMessage({ protocol: PROTOCOL, type, runId, ...data }, '*', transfer);
@@ -18,16 +21,25 @@ function lock(target, name, value) {
   try { Object.defineProperty(target, name, { value, writable: false, configurable: false }); } catch { /* Not present in this browser. */ }
 }
 
-function memoryStorage() {
+function memoryStorage(changed = () => {}) {
   const items = new Map();
-  return Object.freeze({
+  const storage = Object.freeze({
     get length() { return items.size; },
     key: index => [...items.keys()][index] ?? null,
     getItem: key => items.has(String(key)) ? items.get(String(key)) : null,
-    setItem: (key, value) => { items.set(String(key), String(value)); },
-    removeItem: key => { items.delete(String(key)); },
-    clear: () => items.clear(),
+    setItem: (key, value) => { items.set(String(key), String(value)); changed(); },
+    removeItem: key => { items.delete(String(key)); changed(); },
+    clear: () => { items.clear(); changed(); },
   });
+  return { storage, items };
+}
+
+// Changes made in one task are sent together as soon as it ends, so stopping
+// the program right after a write keeps it. The host batches the saves.
+const local = memoryStorage(() => { if (persistent && !storageTimer) storageTimer = setTimeout(flushStorage, 0); });
+function flushStorage() {
+  clearTimeout(storageTimer); storageTimer = null;
+  if (persistent) post('storage', { items: Object.fromEntries(local.items) });
 }
 
 // Defence in depth. CSP already blocks fetch, sockets, frames, and workers;
@@ -38,8 +50,8 @@ function harden() {
     'WebTransport', 'WebSocket', 'EventSource', 'Worker', 'SharedWorker', 'PresentationRequest']) lock(window, name, undefined);
   lock(window, 'open', () => null);
   // Opaque origins have no web storage; lib/web/storage.bas gets per-run memory.
-  lock(window, 'localStorage', memoryStorage());
-  lock(window, 'sessionStorage', memoryStorage());
+  lock(window, 'localStorage', local.storage);
+  lock(window, 'sessionStorage', memoryStorage().storage);
   // A same-origin about:blank child would expose fresh copies of the globals above.
   for (const type of ['HTMLIFrameElement', 'HTMLFrameElement', 'HTMLObjectElement', 'HTMLEmbedElement']) {
     if (!window[type]) continue;
@@ -132,11 +144,15 @@ function focusScreen() { (document.getElementById('gx-canvas') || container).foc
 // and compiled code can run for a long time on microtasks alone.
 const nextTask = () => new Promise(resolve => setTimeout(resolve, 0));
 
-async function run(source) {
+async function run(source, files = {}, storage = null) {
   started = true;
   post('state', { state: 'compiling' });
   await nextTask();
   GX.reset();
+  // Package files keep their package-relative paths, so programs load them
+  // with ordinary names such as _LOADIMAGE("assets/ship.png").
+  for (const [path, data] of Object.entries(files)) writeFile(path, data);
+  if (storage) { for (const [key, value] of Object.entries(storage)) local.items.set(key, value); persistent = true; }
   QB.start();
   QB.resize(window.innerWidth, window.innerHeight);
   let compiler = null, js;
@@ -161,12 +177,14 @@ async function run(source) {
   await nextTask();
   try {
     await new AsyncFunction(js)();
+    if (storageTimer) flushStorage();
     post('state', { state: 'ended' });
   } catch (error) {
     let line = 0;
     try { const jsLine = errorJsLine(error); line = jsLine ? Number(compiler.getSourceLine(jsLine)) || 0 : 0; } catch { line = 0; }
     post('error', { line, text: safeString(error) });
     QB.halt(); GX.sceneStop();
+    if (storageTimer) flushStorage();
     post('state', { state: 'error' });
   }
 }
@@ -175,9 +193,9 @@ window.addEventListener('message', event => {
   if (event.source !== window.parent || event.origin !== location.origin) return;
   const message = readHostMessage(event.data);
   if (!message) return;
-  if (message.type === 'run' && !started) { runId = message.runId; run(message.source); }
+  if (message.type === 'run' && !started) { runId = message.runId; run(message.source, message.files, message.storage); }
   else if (message.runId !== runId) return;
-  else if (message.type === 'stop') { QB.halt(); GX.sceneStop(); }
+  else if (message.type === 'stop') { QB.halt(); GX.sceneStop(); if (storageTimer) flushStorage(); }
   else if (message.type === 'focus') focusScreen();
 });
 window.addEventListener('resize', () => { if (started) QB.resize(window.innerWidth, window.innerHeight); });

@@ -5,7 +5,8 @@
   data-app-platforms='{{ application.platforms|list|tojson }}'
   data-app-inputs='{{ application.required_inputs|list|tojson }}'
   data-app-presentation="{{ application.preferred_presentation }}"
-  data-app-fullscreen-target="{{ application.fullscreen_target }}">
+  data-app-fullscreen-target="{{ application.fullscreen_target }}"
+  data-app-runtime-kind="{{ application.runtime }}" data-app-name="{{ application.name }}">
   <header class="application-display-header">
     <div>
       <p class="eyebrow">STATION APPLICATION DISPLAY / {{ application.category|upper }}</p>
@@ -29,7 +30,25 @@
   </div>
 
   <div class="application-viewport">
-    {% if application.runnable %}
+    {% if application.runtime == 'basic' %}
+    <div class="application-status" data-app-status>PROGRAM STATUS / INITIALIZING</div>
+    <div class="application-basic-controls" role="toolbar" aria-label="Program controls">
+      <button type="button" class="secondary" data-basic-stop disabled>STOP ■</button>
+      <button type="button" class="secondary" data-basic-restart>RUN AGAIN ▶</button>
+      <span class="muted">BASIC / QBJS SANDBOX</span>
+    </div>
+    <div class="application-basic-screen" data-basic-screen
+      data-basic-runner-url="{{ url_for('applications.basic_runner', slug=application.slug) }}"
+      data-basic-program-url="{{ url_for('applications.basic_program', slug=application.slug) }}"
+      data-app-storage-url="{{ url_for('applications.storage', slug=application.slug) }}"
+      data-app-csrf="{{ session.csrf_token }}">
+      <p class="application-basic-idle" data-basic-idle>Establishing isolated program session...</p>
+    </div>
+    <details class="application-basic-console" data-basic-console-panel>
+      <summary>CONSOLE</summary>
+      <ol data-basic-console aria-live="polite" aria-label="Program messages"></ol>
+    </details>
+    {% elif application.runnable %}
     <div class="application-status" data-app-status>PROGRAM STATUS / INITIALIZING</div>
     <div class="application-surface" data-app-surface aria-live="polite"
       data-app-storage-url="{{ url_for('applications.storage', slug=application.slug) }}"
@@ -66,5 +85,6 @@
   <a class="button application-return" href="{{ url_for('applications.index') }}">&lt; RETURN TO PROGRAM MANAGER</a>
 </section>
 {% if application.runnable %}<button type="button" class="application-immersive-exit" data-app-immersive-exit hidden aria-label="Exit immersive application mode">EXIT IMMERSIVE</button>{% endif %}
-{% if application.runnable %}<script src="{{ url_for('static', filename='application_host.js', v='fullscreen-2') }}" defer></script>{% endif %}
+{% if application.runtime == 'basic' %}<script src="{{ url_for('static', filename='application-basic-host.js', v='1') }}" defer></script>
+{% elif application.runnable %}<script src="{{ url_for('static', filename='application_host.js', v='fullscreen-2') }}" defer></script>{% endif %}
 {% endblock %}

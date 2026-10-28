@@ -126,10 +126,106 @@ StationNet.start(async (ui) => {
 export function greeting(name) { return `Hello, ${name}!`; }
 ```
 
+## BASIC packages
+
+A package can contain a BASIC program instead of JavaScript. BASIC programs run
+on the QBJS compiler and runtime bundled with StationNet (the same one OFFICE
+BASIC uses), so a package carries only its source and assets, never an
+interpreter.
+
+```text
+manifest.json
+main.bas
+assets/ship.png
+assets/theme.wav
+```
+
+```json
+{
+  "package_format": 1,
+  "runtime": "basic",
+  "slug": "star-catcher",
+  "name": "Star Catcher",
+  "description": "Catch falling stars with the arrow keys.",
+  "author": "coder",
+  "version": "1.0.0",
+  "category": "Games",
+  "entrypoint": "main.bas",
+  "platforms": ["desktop"],
+  "required_inputs": ["keyboard"],
+  "preferred_presentation": "standard",
+  "fullscreen_target": "application"
+}
+```
+
+`runtime` is optional and defaults to `"javascript"`, so existing manifests are
+unchanged. With `"runtime": "basic"`:
+
+- `entrypoint` must name a `.bas` file (any letter case, in any folder). It is
+  read as UTF-8, or as Latin-1/code page text when it is not valid UTF-8, the
+  same as OFFICE BASIC's import. It must not be empty or binary.
+- `permissions` must be empty: BASIC programs cannot use multiplayer.
+- `fullscreen_target` must be `"application"` (the default). The runner scales
+  the program's screen to fit the frame in standard, immersive, and fullscreen
+  layouts and on phones.
+- `platforms`, `required_inputs`, and `preferred_presentation` work as for
+  JavaScript applications, including the **Launch anyway** check.
+- The file limits above apply to the whole package.
+
+### How BASIC programs run
+
+The display page frames the QBJS runner with `sandbox="allow-scripts"` (an
+opaque origin) and a Content Security Policy that blocks every network, frame,
+worker, and navigation channel. The program cannot reach StationNet pages,
+cookies, the account, other applications' data, or the network.
+
+Every package file except `manifest.json` is placed in the program's virtual
+file system at its package path before the program compiles, so ordinary BASIC
+file commands find them:
+
+```basic
+ship& = _LOADIMAGE("assets/ship.png")
+theme& = _SNDOPEN("assets/theme.wav")
+OPEN "assets/levels.txt" FOR INPUT AS #1
+Import Util From "lib/util.bas"
+```
+
+The bundled QBJS libraries under `lib/` (for example `lib/web/storage.bas`)
+are always available. Files the program writes last only for that run. Files a
+program offers with `FS.DownloadFile` (from `lib/io/fs.bas`) appear in the
+page's console with a **SAVE FILE** button.
+
+`localStorage` (for example through `lib/web/storage.bas`) is saved per user.
+When the program changes it, the host saves the whole map as one JSON value in
+the application's user storage (key `basic.localStorage`, using the storage
+API's 2 MiB value limit) and loads it again on the next launch.
+`sessionStorage` lasts for one run only. Uninstalling keeps saved data, as for
+JavaScript applications.
+
+The page shows the program's status, a console for compile and runtime errors
+and `_ECHO` output, **STOP**, and **RUN AGAIN**. Stopping discards the
+sandbox frame, which ends timers, sound, and runaway loops.
+
+### Export from OFFICE BASIC
+
+In OFFICE BASIC, choose **EXPORT…**, then **StationNet Package (.zip)**. The
+dialog fills in the name from the program title, an identifier from the name,
+and the signed-in user as author; change any field before exporting. Optional
+asset files are added under `assets/` (they are not saved with the private
+program, so choose them each time you export). **BASIC file (.bas)** still
+exports plain source.
+
+Exporting only downloads the ZIP. Send it to a sysop, who installs it with the
+steps below; members cannot install programs station-wide.
+
+You can also build a BASIC package by hand with the manifest above and the ZIP
+steps in [Create a package](#create-a-package).
+
 ## Install and manage
 
 Sign in as a sysop, open **SYSOP CONTROL**, then **MANAGE PROGRAMS**. Upload
-the ZIP to install it. A valid package is enabled immediately and appears in the
+the ZIP to install it. JavaScript and BASIC packages use the same form; the
+registry labels each program **JAVASCRIPT** or **BASIC**. A valid package is enabled immediately and appears in the
 normal Programs directory. The same page can disable, re-enable, or
 uninstall it. Disabled applications cannot be opened or use storage endpoints.
 

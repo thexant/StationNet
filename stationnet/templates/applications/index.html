@@ -61,7 +61,7 @@
     <div class="program-panel-heading"><span>02 / PROGRAM INFO</span><h2 id="program-details-title">Details</h2></div>
     {% for application in applications %}
     <article class="program-detail" data-program-detail="{{ application.slug }}"{% if selected != application.slug %} hidden{% endif %}>
-      <p class="program-detail-type">{{ application.category|upper }} / {{ 'BUILT-IN' if application.builtin else 'THIRD-PARTY' }}</p>
+      <p class="program-detail-type">{{ application.category|upper }} / {{ 'BUILT-IN' if application.builtin else 'THIRD-PARTY' }}{% if application.runtime == 'basic' %} / BASIC{% endif %}</p>
       <h3>{{ application.name }}</h3>
       <p class="program-description">{{ application.description }}</p>
       <dl class="program-facts">

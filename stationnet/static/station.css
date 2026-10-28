@@ -809,6 +809,28 @@ body.application-immersive .app-canvas { width: 100%; max-height: var(--app-canv
 .application-display:fullscreen[data-fullscreen-target="canvas"] [data-fullscreen-canvas] > .app-canvas { width: 100%; }
 body:has(.application-display:fullscreen) :is(.station-header,.flash-stack,.radio-player,.statusbar,.application-immersive-exit) { display: none; }
 
+/* Installed BASIC programs: the QBJS sandbox frame fills the program screen,
+   and the runner scales the program's canvas to fit it. */
+.application-basic-controls { display: flex; flex-wrap: wrap; align-items: center; gap: .45rem; padding: .4rem .55rem; border-bottom: 1px dotted var(--green-dim); font-size: var(--text-xs); }
+.application-basic-controls .muted { margin-left: auto; letter-spacing: .08em; }
+.application-basic-screen { position: relative; width: 100%; aspect-ratio: 4 / 3; max-height: 75dvh; overflow: hidden; background: #000; }
+.application-basic-screen:focus-within { outline: 1px dotted var(--cyan); outline-offset: -2px; }
+.application-basic-screen iframe { position: absolute; inset: 0; display: block; width: 100%; height: 100%; border: 0; background: #000; }
+.application-basic-idle { position: absolute; inset: 0; display: grid; place-items: center; margin: 0; padding: 1rem; color: var(--grey); text-align: center; font-size: var(--text-xs); }
+.application-basic-idle[hidden] { display: none; }
+.application-basic-console { border-top: 1px dotted var(--green-dim); font-size: var(--text-xs); }
+.application-basic-console summary { padding: .4rem .55rem; color: var(--cyan); cursor: pointer; letter-spacing: .08em; }
+.application-basic-console ol { max-height: 12rem; margin: 0; padding: .3rem .55rem .55rem; overflow: auto; list-style: none; font-family: var(--mono); }
+.application-basic-console li { color: var(--green); white-space: pre-wrap; overflow-wrap: anywhere; }
+.application-basic-console li[data-kind=error] { color: var(--red); }
+.application-basic-console li[data-kind=warning] { color: var(--amber); }
+.application-basic-console li[data-kind=info] { color: var(--grey); }
+body.application-immersive .application-basic-screen,
+.application-display:fullscreen .application-basic-screen { flex: 1 1 0; aspect-ratio: auto; max-height: none; min-height: 0; }
+body.application-immersive .application-basic-console { display: none; }
+.application-display:fullscreen :is(.application-basic-controls,.application-basic-console) { display: none; }
+@media (max-width: 700px) { .application-basic-screen { aspect-ratio: 1 / 1; max-height: 70dvh; } }
+
 .live-chat { width: min(820px,100%); }
 .chat-log { height: min(52vh,30rem); margin: 1rem 0; padding: .7rem; overflow-y: auto; border: 1px solid var(--green-dim); background: var(--surface-field); }
 .chat-message { padding: .55rem .3rem; border-bottom: 1px dotted var(--border-soft); }
