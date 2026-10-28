@@ -26,6 +26,8 @@ function available(command, state) {
     case "world": return portal && (room.exits || []).some(exit => exit.direction === "out");
     case "portal": return (room.exits || []).some(exit => exit.direction === "portals");
     case "go": case "exits": return (room.exits || []).length > 0;
+    case "travel": return Boolean(room.wilderness || room.travel);
+    case "stop": return Boolean(room.travel);
     case "attack": case "fire": case "melee": case "hide":
     case "defend": case "flee": return enemies.length > 0;
     case "talk": return (room.npcs || []).some(npc => !npc.hostile);
@@ -76,6 +78,7 @@ export function commandSuggestions(value, state, catalog, limit = 6) {
   for (const exit of room.exits || []) {
     const direction = exit.direction || exit.name;
     if (direction) add(`/go ${direction}`, "Room exit");
+    if (room.wilderness && exit.direction) add(`/travel ${exit.direction}`, "Travel onward");
     if (direction) add(`/look ${direction}`, "Inspect exit");
   }
   for (const item of inventory.inventory || []) {

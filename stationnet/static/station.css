@@ -829,6 +829,8 @@ button:disabled { opacity: .5; cursor: not-allowed; }
 .mud-game-location, .mud-game-preview { display: block; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .mud-game-location { color: var(--green-bright); font-size: .78rem; line-height: 1.3; }
 .mud-game-preview { color: var(--grey); font-size: .62rem; line-height: 1.3; }
+.mud-game-travel { display: block; color: var(--amber); font-size: .62rem; line-height: 1.3; letter-spacing: .04em; }
+.mud-game-travel[hidden] { display: none; }
 .mud-game-jumps { display: flex; flex: none; gap: .3rem; margin-left: auto; }
 .mud-game-jumps button { min-height: 1.75rem; padding: .15rem .45rem; border-color: var(--green-dim); background: transparent; color: var(--cyan); font-size: .62rem; letter-spacing: .05em; }
 .mud-game-jumps button:hover, .mud-game-jumps button:focus-visible { color: #000; background: var(--cyan); }
@@ -868,6 +870,7 @@ button:disabled { opacity: .5; cursor: not-allowed; }
 .mud-event-chat span { color: var(--magenta); }
 .mud-event-arrival p { color: var(--green-bright); }
 .mud-event-departure p { color: var(--grey); }
+.mud-event-travel p { color: var(--amber); }
 .mud-event-map p { font-family: var(--mono); line-height: 1.2; white-space: pre; overflow-x: auto; overflow-wrap: normal; }
 .mud-command { padding: .45rem .65rem .5rem; border-top: 1px solid var(--green-dim); background: var(--black); }
 .mud-command .mud-command-row { display: grid; grid-template-columns: minmax(0,1fr) auto; gap: .5rem; }

@@ -466,6 +466,8 @@
       </select>
       <small>Every item keeps its acquisition mode. Shared view combines both inventories; independent view exposes only the current mode and its equipment.</small>
     </label>
+    <label>Wilderness travel step interval (seconds)<input type="number" name="mud_travel_interval" min="3" max="30" required value="{{ mud_travel.interval_seconds if mud_travel else 6 }}"><small>How often /travel walks a player one room through wilderness preset rooms.</small></label>
+    <label>Wilderness travel step limit<input type="number" name="mud_travel_max_steps" min="1" max="1000" required value="{{ mud_travel.max_steps if mud_travel else 200 }}"><small>Rooms walked before a single /travel journey pauses on its own.</small></label>
     <label>Portal room name<input name="mud_portal_name" maxlength="80" required value="{{ mud_portal.name }}"></label>
     <label>Portal room description<textarea name="mud_portal_description" maxlength="2000" required>{{ mud_portal.description }}</textarea><small>The gameplay explanation and gateway controls are system-managed and cannot be edited here or in the world builder.</small></label>
     <button>SAVE MUD MODES</button>

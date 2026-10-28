@@ -870,6 +870,20 @@ CREATE TABLE IF NOT EXISTS mud_crossover_settings (
  progression_shared INTEGER NOT NULL DEFAULT 1 CHECK(progression_shared IN (0,1)),
  inventory_shared INTEGER NOT NULL DEFAULT 1 CHECK(inventory_shared IN (0,1)),
  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);
+CREATE TABLE IF NOT EXISTS mud_travel_settings (
+ id INTEGER PRIMARY KEY CHECK(id=1),
+ interval_seconds INTEGER NOT NULL DEFAULT 6 CHECK(interval_seconds BETWEEN 3 AND 30),
+ max_steps INTEGER NOT NULL DEFAULT 200 CHECK(max_steps BETWEEN 1 AND 1000),
+ updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);
+CREATE TABLE IF NOT EXISTS mud_travel (
+ user_id INTEGER PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+ direction TEXT NOT NULL,
+ room_id TEXT NOT NULL,
+ preset_id TEXT,
+ steps INTEGER NOT NULL DEFAULT 0,
+ next_due TEXT NOT NULL,
+ started_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);
+CREATE INDEX IF NOT EXISTS idx_mud_travel_due ON mud_travel(next_due);
 CREATE TABLE IF NOT EXISTS mud_daily_dungeon_settings (
  id INTEGER PRIMARY KEY CHECK(id=1),
  timezone TEXT NOT NULL DEFAULT 'UTC',
@@ -1440,6 +1454,7 @@ def init_db():
     _migrate_mud_wilderness(database)
     database.execute("INSERT OR IGNORE INTO mud_portal_settings(id) VALUES(1)")
     database.execute("INSERT OR IGNORE INTO mud_crossover_settings(id) VALUES(1)")
+    database.execute("INSERT OR IGNORE INTO mud_travel_settings(id) VALUES(1)")
     database.execute(
         "INSERT OR IGNORE INTO mud_daily_dungeon_settings(id,station_seed) VALUES(1,?)",
         (secrets.token_hex(32),),

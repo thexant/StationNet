@@ -942,11 +942,16 @@ def _help_action(_database, _user, parameters):
             "description": '/description A traveler in a blue coat',
             "train": '/train strength 2', "skills": '/skills stealth',
             "learn": '/learn lockpicking from "Old Thief"', "practice_skill": '/practice blades',
-            "pick": '/pick north', "interact": '/pull "Rusty Lever"',
+            "pick": '/pick north', "interact": '/pull "Rusty Lever"', "travel": '/travel north',
         }
         body = f"/{name}: {_action_description(definition, resource)}\nAliases: " + ", ".join(f"/{alias}" for alias in aliases)
         if definition.key in examples:
             body += f"\nExample: {examples[definition.key]}"
+        if definition.key in {"travel", "stop"}:
+            body += (f"\nWilderness only. Moves one room every {_travel_settings(_database)['interval_seconds']} "
+                     "seconds and stops for creatures, other players, paths out of the wilds, terrain changes, "
+                     "blocked routes, or combat. Most other commands, including moving by hand, also stop it. "
+                     "Use /travel alone to see progress and /stop to halt.")
         if definition.key in {"look", "get", "put", "open", "close"}:
             body += "\nQuote multiword targets. For duplicates use a number: Apple 2 or Apple (2)."
         return [EventDraft(body)]
@@ -958,6 +963,8 @@ def _help_action(_database, _user, parameters):
     lines.append('Use /help <command> for details. Quote multiword names; use "Name 2" or "Name (2)" for duplicates.')
     lines.append('Use /get <item> from <container>, /put <item> in|into <container>, and /open or /close <container>.')
     lines.append('Direction shortcuts include /n, /s, /e, /w, /u, and /d. Plain text speaks to the room.')
+    lines.append('In the wilderness, /travel <direction> walks you onward room by room until something '
+                 'needs your attention; /stop halts.')
     return [EventDraft("\n".join(lines))]
 
 
@@ -1765,6 +1772,8 @@ def _room_state(database, user_id):
                        _room_item_rows(database, room["id"], instance_id))],
         "npcs": npcs,
         "dialogue_responses": dialogue_responses,
+        "wilderness": room.get("kind") == "wild" and not instance_id,
+        "travel": travel_state(database, user_id),
     }
 
 
@@ -5633,7 +5642,8 @@ def _pick_action(database, user, parameters):
     return [EventDraft(f"You pick the lock on {chosen['name']}.", event_type="room")] + practiced
 
 
-def _go_action(database, user, parameters):
+def _go_action(database, user, parameters, *, travel_step=None):
+    """Move through one exit; travel_step swaps the full room view for a one-line progress note."""
     character = character_state(database, user["id"])
     room = _current_room(database, user["id"])
     exit_id = str(parameters.get("exit_id", "")).strip()
@@ -5689,6 +5699,7 @@ def _go_action(database, user, parameters):
     old_recipients = _occupant_ids(database, room["id"], user["id"], instance_id)
     _leave_combat(database, user["id"], "instance" if instance_id else "room",
                   instance_id or room["id"])
+    found = []
     if instance_id:
         _set_player_location(database, user["id"], _run_mode(database, instance_id), "dungeon_instance",
                              chosen["to_room_id"], instance_id)
@@ -5697,17 +5708,18 @@ def _go_action(database, user, parameters):
     else:
         _set_player_location(database, user["id"], "traditional", "world_room", chosen["to_room_id"])
         destination_room = _world_room(database, chosen["to_room_id"])
-        mud_wilderness.roll_resources(database, destination_room)
+        found = mud_wilderness.roll_resources(database, destination_room)
     route = chosen["direction"] or chosen["name"]
     new_recipients = _occupant_ids(database, destination_room["id"], user["id"], instance_id)
     audience_type = "instance" if instance_id else "room"
     audience_key = instance_id or room["id"]
-    events = [
-        EventDraft(
-            f"You go {route}.",
-            event_type="movement",
-        ),
-        _room_entry_event(database, user),
+    if travel_step is None:
+        events = [EventDraft(f"You go {route}.", event_type="movement"), _room_entry_event(database, user)]
+    else:
+        note = f" You notice {', '.join(found)}." if found else ""
+        events = [EventDraft(f"You travel {route} to {destination_room['name']} "
+                             f"({travel_step} room{'s' if travel_step != 1 else ''}).{note}", event_type="travel")]
+    events += [
         EventDraft(
             f"{character['name']} leaves via {route}.",
             event_type="departure", audience_type=audience_type, audience_key=audience_key,
@@ -5738,6 +5750,201 @@ def _wilderness_encounter(database, room):
                      (instance_id, _scheduled_now(datetime.now(timezone.utc)
                                                   + timedelta(seconds=encounter["despawn_seconds"]))))
     return [EventDraft(f"{encounter['name']} appears.", "npc", "room", room["id"], _occupant_ids(database, room["id"]))]
+
+
+# --- Wilderness travel --------------------------------------------------------
+# /travel walks a player one real room per interval through wilderness preset
+# rooms, using _go_action for every step. The scheduled tick advances it.
+
+DIRECTION_ALIASES = {
+    "north": "north", "n": "north", "south": "south", "s": "south",
+    "east": "east", "e": "east", "west": "west", "w": "west",
+    "northeast": "northeast", "ne": "northeast",
+    "northwest": "northwest", "nw": "northwest",
+    "southeast": "southeast", "se": "southeast",
+    "southwest": "southwest", "sw": "southwest",
+    "up": "up", "u": "up", "down": "down", "d": "down",
+    "in": "in", "out": "out",
+}
+# Commands that leave a journey running; any other action stops it first.
+TRAVEL_SAFE_ACTIONS = frozenset({
+    "travel", "stop", "look", "exits", "map", "say", "emote", "tell", "reply_player", "who",
+    "help", "status", "character", "inventory", "quests", "skills", "spells", "description",
+    "block", "unblock",
+})
+
+
+def _travel_settings(database):
+    row = database.execute("SELECT interval_seconds,max_steps FROM mud_travel_settings WHERE id=1").fetchone()
+    return {"interval_seconds": row["interval_seconds"] if row else 6,
+            "max_steps": row["max_steps"] if row else 200}
+
+
+def _travel_row(database, user_id):
+    return database.execute("SELECT * FROM mud_travel WHERE user_id=?", (user_id,)).fetchone()
+
+
+def travel_state(database, user_id):
+    row = _travel_row(database, user_id)
+    return {"direction": row["direction"], "steps": row["steps"]} if row else None
+
+
+def _cancel_travel(database, user_id, reason):
+    """End a journey; returns the player's notice, or nothing if they were not travelling."""
+    if database.execute("DELETE FROM mud_travel WHERE user_id=?", (user_id,)).rowcount == 0:
+        return []
+    return [_private(user_id, reason, "travel")] if reason else []
+
+
+def _preset_name(database, room):
+    preset = mud_wilderness.preset_for(database, room.get("preset_id"))
+    return preset["name"].casefold() if preset else "wilds"
+
+
+def _travel_exit(database, user_id, room, direction):
+    return next((row for row in _room_exits(database, room["id"], None, user_id)
+                 if (row["direction"] or "").casefold() == direction), None)
+
+
+def _travel_barrier(database, user_id, room, direction):
+    """Why a step in this direction cannot be taken, or None."""
+    if _active_hostiles(database, room, user_id) and not _is_hidden(database, user_id):
+        return "A hostile enemy blocks your route."
+    chosen = _travel_exit(database, user_id, room, direction)
+    if chosen is None:
+        return f"You can go no further {direction}."
+    if not _exit_open_to(database, user_id, chosen):
+        return _exit_barred_message(chosen)
+    if _exit_sealed(chosen):
+        return f"The way {direction} is sealed."
+    if _exit_locked(chosen) and not database.execute(
+            "SELECT 1 FROM mud_exit_unlocks WHERE character_id=? AND exit_id=?",
+            (_character_row(database, user_id)["id"], chosen["id"])).fetchone():
+        return f"The way {direction} is locked."
+    return None
+
+
+def _travel_action(database, user, parameters):
+    arguments = [str(item).casefold() for item in parameters.get("arguments", [])]
+    if not arguments or arguments[0] == "status":
+        row = _travel_row(database, user["id"])
+        if row is None:
+            return [EventDraft("You are not travelling. Use /travel <direction> in the wilderness.", "travel")]
+        return [EventDraft(f"Travelling {row['direction']}: {row['steps']} room{'s' if row['steps'] != 1 else ''} "
+                           f"so far, one every {_travel_settings(database)['interval_seconds']} seconds. "
+                           "Use /stop to halt.", "travel")]
+    direction = DIRECTION_ALIASES.get(arguments[0])
+    if direction is None or len(arguments) > 1:
+        raise ActionError("Travel which way? Use /travel <direction>, such as /travel north.")
+    room = _current_room(database, user["id"])
+    if room.get("instance_id") or room.get("system_managed") or room.get("kind") != "wild":
+        raise ActionError("Long-distance travel is only possible in the wilderness.")
+    if mud_wilderness.effective_for_room(database, room) is None:
+        raise ActionError("This land is uncharted; travel through it room by room.")
+    barrier = _travel_barrier(database, user["id"], room, direction)
+    if barrier:
+        raise ActionError(barrier)
+    settings = _travel_settings(database)
+    replaced = _travel_row(database, user["id"]) is not None
+    database.execute(
+        "INSERT INTO mud_travel(user_id,direction,room_id,preset_id,steps,next_due) VALUES(?,?,?,?,0,?) "
+        "ON CONFLICT(user_id) DO UPDATE SET direction=excluded.direction,room_id=excluded.room_id,"
+        "preset_id=excluded.preset_id,steps=0,next_due=excluded.next_due,started_at=CURRENT_TIMESTAMP",
+        (user["id"], direction, room["id"], room.get("preset_id"),
+         _scheduled_now(datetime.now(timezone.utc) + timedelta(seconds=settings["interval_seconds"]))),
+    )
+    verb = "turn and head" if replaced else "set off"
+    return [EventDraft(f"You {verb} {direction} across the {_preset_name(database, room)}. "
+                       "Use /stop to halt.", "travel")]
+
+
+def _stop_action(database, user, _parameters):
+    row = _travel_row(database, user["id"])
+    if row is None:
+        return [EventDraft("You are not travelling.", "travel")]
+    return _cancel_travel(database, user["id"], f"You stop travelling after {row['steps']} "
+                                                f"room{'s' if row['steps'] != 1 else ''}.")
+
+
+def _travel_interruption(database, user_id, journey, room, direction, step, settings):
+    """Why travel should stop in the room just entered, or None to keep walking."""
+    if _active_hostiles(database, room, user_id) or any(
+            enemy["status"] == "active" for enemy in combat_state(database, user_id)["enemies"]):
+        return "Your journey is interrupted by combat!"
+    for npc in _room_npc_rows(database, room["id"]):
+        if npc["combat_maximum_health"] is not None:
+            encounter = _encounter_row(database, npc, create=False)
+            if encounter is not None and encounter["status"] == "defeated":
+                continue
+        return f"You stop: {npc['name']} is here."
+    others = _room_occupants(database, room["id"], user_id)
+    if others:
+        return f"You stop: {others[0]['character_name']} is here."
+    if room.get("kind") != "wild":
+        return f"You arrive at {room['name']}."
+    if room.get("preset_id") != journey["preset_id"]:
+        return f"The land changes; you stop at the edge of the {_preset_name(database, room)}."
+    if (any(not str(row["id"]).startswith("grid:") for row in _room_exits(database, room["id"], None, user_id))
+            or _room_entrances(database, room["id"])):
+        return "You stop: a path here leads out of the wilderness."
+    if step >= settings["max_steps"]:
+        return f"You pause after {step} rooms on the road."
+    return _travel_barrier(database, user_id, room, direction)
+
+
+def _present(database, user_id):
+    return database.execute(
+        "SELECT 1 FROM mud_presence WHERE user_id=? AND disconnected_at IS NULL AND last_seen>=? LIMIT 1",
+        (user_id, _timestamp_before(PRESENCE_SECONDS)),
+    ).fetchone() is not None
+
+
+def _travel_step(database, journey, settings, now):
+    user_id = journey["user_id"]
+    user = database.execute("SELECT * FROM users WHERE id=?", (user_id,)).fetchone()
+    if user is None or not _present(database, user_id):
+        _cancel_travel(database, user_id, None)
+        return []
+    if database.execute("SELECT 1 FROM mud_death_summaries WHERE user_id=?", (user_id,)).fetchone():
+        _cancel_travel(database, user_id, None)
+        return []
+    location = database.execute("SELECT location_type,location_key FROM mud_player_locations WHERE user_id=?",
+                                (user_id,)).fetchone()
+    if (location is None or location["location_type"] != "world_room"
+            or location["location_key"] != journey["room_id"]):
+        return _cancel_travel(database, user_id, "Your journey ends here.")
+    room = _current_room(database, user_id)
+    direction = journey["direction"]
+    barrier = _travel_barrier(database, user_id, room, direction)
+    if barrier:
+        return _cancel_travel(database, user_id, barrier)
+    step = journey["steps"] + 1
+    try:
+        drafts = _go_action(database, user, {"arguments": [direction]}, travel_step=step)
+    except ActionError as problem:
+        return _cancel_travel(database, user_id, str(problem))
+    drafts += _npc_reactions(database, user, "go")
+    room = _current_room(database, user_id)
+    reason = _travel_interruption(database, user_id, journey, room, direction, step, settings)
+    if reason:
+        return drafts + _cancel_travel(database, user_id, reason) + [_room_entry_event(database, user)]
+    database.execute(
+        "UPDATE mud_travel SET room_id=?,steps=?,next_due=? WHERE user_id=?",
+        (room["id"], step, _scheduled_now(now + timedelta(seconds=settings["interval_seconds"])), user_id),
+    )
+    return drafts
+
+
+def process_travel(database, now=None, limit=50):
+    """Advance due journeys one room each. Call inside a write transaction."""
+    now = now or datetime.now(timezone.utc)
+    settings = _travel_settings(database)
+    journeys = database.execute("SELECT * FROM mud_travel WHERE next_due<=? ORDER BY next_due,user_id LIMIT ?",
+                                (_scheduled_now(now), limit)).fetchall()
+    for journey in journeys:
+        for draft in _travel_step(database, journey, settings, now):
+            _insert_event(database, draft, default_user_id=journey["user_id"])
+    return len(journeys)
 
 
 def _say_action(database, user, parameters):
@@ -6518,6 +6725,18 @@ actions.register(ActionDefinition(
     commands=("go", "move", "walk"), handler=_go_action,
     group="NAVIGATION", show_context=False,
 ))
+actions.register(ActionDefinition(
+    key="travel", label="TRAVEL",
+    description="Walk steadily in one direction across the wilderness, one room at a time.",
+    commands=("travel",), handler=_travel_action,
+    group="NAVIGATION", show_context=False,
+))
+actions.register(ActionDefinition(
+    key="stop", label="STOP TRAVELLING",
+    description="Halt long-distance wilderness travel.",
+    commands=("stop", "halt"), handler=_stop_action,
+    group="NAVIGATION", show_context=False,
+))
 actions.register(ActionDefinition(key="unlock", label="UNLOCK EXIT", description="Unlock a nearby keyed exit with a carried key.", commands=("unlock",), handler=_unlock_action, group="NAVIGATION", show_context=False))
 actions.register(ActionDefinition(key="pick", label="PICK LOCK", description="Pick a nearby lock using Lockpicking and Agility.", commands=("pick", "picklock"), handler=_pick_action, group="NAVIGATION", show_context=False))
 actions.register(ActionDefinition(key="search", label="SEARCH ROOM", description="Search this room for authored discoveries.", commands=("search",), handler=_search_action, group="NAVIGATION", show_context=False))
@@ -6593,16 +6812,7 @@ actions.register(ActionDefinition(
     commands=("run",), handler=_expedition_status_action,
     group="EXPEDITIONS", show_context=False,
 ))
-for alias, direction in {
-    "north": "north", "n": "north", "south": "south", "s": "south",
-    "east": "east", "e": "east", "west": "west", "w": "west",
-    "northeast": "northeast", "ne": "northeast",
-    "northwest": "northwest", "nw": "northwest",
-    "southeast": "southeast", "se": "southeast",
-    "southwest": "southwest", "sw": "southwest",
-    "up": "up", "u": "up", "down": "down", "d": "down",
-    "in": "in", "out": "out",
-}.items():
+for alias, direction in DIRECTION_ALIASES.items():
     actions.register_command(alias, actions.get("go"), (direction,))
 for verb in INTERACT_VERBS:
     if verb not in ("interact", "use"):
@@ -6930,6 +7140,7 @@ def run_scheduled_tick(app, now=None):
             sync_npc_schedule(database, now)
             sync_trigger_schedule(database, now)
             count = process_scheduled_events(database, now)
+            count += process_travel(database, now)
             database.commit()
             return count
         except Exception:
@@ -7034,7 +7245,10 @@ class MudService:
                     )["name"]
                 except ActionError:
                     used_item = None
-            drafts = action_request.definition.handler(
+            drafts = []
+            if action_request.definition.key not in TRAVEL_SAFE_ACTIONS:
+                drafts += _cancel_travel(database, user["id"], "You stop travelling.")
+            drafts += action_request.definition.handler(
                 database, user, action_request.parameters
             )
             if used_item:

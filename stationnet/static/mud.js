@@ -19,6 +19,7 @@ for(const mud of document.querySelectorAll("[data-mud]")){
   const error=mud.querySelector("[data-mud-error]");
   const roomName=mud.querySelector("[data-mud-room-name]");
   const roomPreview=mud.querySelector("[data-mud-room-preview]");
+  const travelStatus=mud.querySelector("[data-mud-travel]");
   const sceneName=mud.querySelector("[data-mud-scene-name]");
   const roomDescription=mud.querySelector("[data-mud-room-description]");
   const roomInstructions=mud.querySelector("[data-mud-room-instructions]");
@@ -157,6 +158,10 @@ for(const mud of document.querySelectorAll("[data-mud]")){
     if(death!==showingDeath){showingDeath=death;showRoom(death)}
     roomName.textContent=room.name||"Unknown Location";
     roomPreview.textContent=room.description||"";
+    if(travelStatus){
+      travelStatus.hidden=!room.travel;
+      travelStatus.textContent=room.travel?`TRAVELLING ${room.travel.direction.toUpperCase()} · ${room.travel.steps} ROOM${room.travel.steps===1?"":"S"} · /stop`:"";
+    }
     sceneName.textContent=room.name||"Unknown Location";
     roomDescription.textContent=room.description||"";
     if(roomInstructions){roomInstructions.textContent=room.instructions||"";roomInstructions.hidden=!room.instructions}

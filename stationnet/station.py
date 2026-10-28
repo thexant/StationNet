@@ -496,6 +496,9 @@ def mud_settings():
     current_crossover = database.execute(
         "SELECT progression_shared,inventory_shared FROM mud_crossover_settings WHERE id=1"
     ).fetchone()
+    current_travel = database.execute(
+        "SELECT interval_seconds,max_steps FROM mud_travel_settings WHERE id=1"
+    ).fetchone()
     legacy = ("mud_traditional_enabled" not in request.form and
               "mud_procedural_enabled" not in request.form and
               "mud_enabled" in request.form)
@@ -530,6 +533,19 @@ def mud_settings():
     if not 1 <= len(portal_description) <= 2000:
         flash("Portal room description must be between 1 and 2000 characters.", "error")
         return redirect(url_for("station.settings") + "#mud-service")
+    try:
+        travel_interval = int(request.form.get(
+            "mud_travel_interval", current_travel["interval_seconds"] if current_travel else 6))
+        travel_steps = int(request.form.get(
+            "mud_travel_max_steps", current_travel["max_steps"] if current_travel else 200))
+    except ValueError:
+        travel_interval = travel_steps = 0
+    if not 3 <= travel_interval <= 30:
+        flash("Wilderness travel interval must be between 3 and 30 seconds.", "error")
+        return redirect(url_for("station.settings") + "#mud-service")
+    if not 1 <= travel_steps <= 1000:
+        flash("Wilderness travel step limit must be between 1 and 1000 rooms.", "error")
+        return redirect(url_for("station.settings") + "#mud-service")
     if traditional or procedural:
         try:
             character_creation.require_available(database)
@@ -559,6 +575,12 @@ def mud_settings():
         "progression_shared=excluded.progression_shared,"
         "inventory_shared=excluded.inventory_shared,updated_at=CURRENT_TIMESTAMP",
         (progression_shared, inventory_shared),
+    )
+    database.execute(
+        "INSERT INTO mud_travel_settings(id,interval_seconds,max_steps) VALUES(1,?,?) "
+        "ON CONFLICT(id) DO UPDATE SET interval_seconds=excluded.interval_seconds,"
+        "max_steps=excluded.max_steps,updated_at=CURRENT_TIMESTAMP",
+        (travel_interval, travel_steps),
     )
     from .mud import reconcile_mode_locations
     reconcile_mode_locations(database)
@@ -1554,6 +1576,9 @@ def settings():
     mud_crossover = database.execute(
         "SELECT progression_shared,inventory_shared FROM mud_crossover_settings WHERE id=1"
     ).fetchone()
+    mud_travel = database.execute(
+        "SELECT interval_seconds,max_steps FROM mud_travel_settings WHERE id=1"
+    ).fetchone()
     mud_world_list = database.execute(
         "SELECT id,name,author,imported,active FROM mud_world_packages ORDER BY active DESC,name COLLATE NOCASE"
     ).fetchall()
@@ -1634,7 +1659,7 @@ def settings():
                            assignments=assignments, broadcast_sessions=broadcast_sessions,
                            rules_by_group=rules_by_group, invitations=invitations,
                            mud_portal=mud_portal,
-                           mud_crossover=mud_crossover,
+                           mud_crossover=mud_crossover, mud_travel=mud_travel,
                            mud_world_list=mud_world_list,
                            mud_origins=mud_origins,
                            mud_skill_entries=mud_skill_entries,
