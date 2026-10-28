@@ -66,19 +66,20 @@ Bundled choices support every field in that guide, including `tags`,
 `resistances`, `proficiencies`, `skill_affinities`, and `progression`. Response
 conditions and item requirements that name a bundled race or class by its local
 key are mapped to the installed key automatically.
-Imported choices start inactive; enable them under MUD race and class availability
-when ready. The theme removal form lists its linked choices and offers optional
-cleanup. Definitions still linked to another installed world or theme are preserved.
-If cleanup leaves no active races or classes, StationNet re-enables the built-in
-choices for that category.
+Imported choices are not offered anywhere yet; add them to the procedural
+world (or any other world) on its **RACES, CLASSES & SKILLS** page when ready.
+The theme removal form lists its linked choices and offers optional cleanup.
+Definitions still linked to another installed world or theme are preserved.
+If cleanup leaves a world without any race or class, that world offers the
+built-in choices again.
 
 Themes may also include a top-level `skills` array of up to 100 skill
 definitions in the [skills guide](../mud_skill_templates/README_SKILLS.md)
 format. Bundled races and classes may name these skills by their local keys,
-and StationNet rewrites them to the installed keys. Bundled skills start
-inactive. Enable them under MUD Skills. Optional cleanup on theme removal
-removes unshared skills last, after the origins that used them, and re-enables
-the default starting skills if too few remain.
+and StationNet rewrites them to the installed keys. Bundled skills are not
+offered anywhere until added to a world's selection. Optional cleanup on theme
+removal removes unshared skills last, after the origins that used them, and a
+world left with too few starting skills offers the default ones again.
 
 The starter's `"$schema": "./theme-schema.json"` line lets most editors validate
 and autocomplete the file as you type. Keep `theme-schema.json` next to your

@@ -44,9 +44,9 @@ def test_module_switches_hide_navigation_and_block_routes(tmp_path):
     assert b'name="station_enabled"' not in settings.data
     assert b'name="moderation_enabled"' not in settings.data
     assert b'href="/board"' not in settings.data
-    assert b'href="/mud/builder"' not in settings.data
+    assert b'href="/mud/w/stationnet/builder"' not in settings.data
     for path in ("/board", "/chat/messages", "/mail/notifications", "/radio/state",
-                 "/games-apps", "/sysop/applications", "/mud", "/mud/builder"):
+                 "/games-apps", "/sysop/applications", "/mud/w/stationnet", "/mud/w/stationnet/builder"):
         assert client.get(path).status_code == 404, path
 
     with app.app_context():
@@ -62,7 +62,7 @@ def test_module_switches_hide_navigation_and_block_routes(tmp_path):
     })
     assert client.get("/board").status_code == 200
     assert client.get("/games-apps").status_code == 200
-    assert client.get("/mud/builder").status_code == 200
+    assert client.get("/mud/w/stationnet/builder").status_code == 200
 
     # Required Station and Moderation routes remain available when all optional services are off.
     client.post("/sysop/settings", data={
@@ -76,6 +76,6 @@ def test_module_switches_hide_navigation_and_block_routes(tmp_path):
     for path in ("/board", "/announcements", "/events", "/wiki/",
                  "/videos", "/library", "/arcade/", "/chat/messages",
                  "/mail/notifications", "/radio/state", "/files", "/users/presence",
-                 "/office", "/games-apps", "/mud/builder"):
+                 "/office", "/games-apps", "/mud/w/stationnet/builder"):
         assert client.get(path).status_code == 404, path
     assert client.post("/feeds/users/1/posts").status_code == 404

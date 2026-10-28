@@ -7,6 +7,7 @@ import uuid
 
 import pytest
 
+from mud_world_helpers import activate_world, url
 from stationnet import create_app, character_creation, dungeons, mud, mud_triggers, mud_world_dungeons, mud_worlds
 from stationnet.db import get_db
 
@@ -143,8 +144,7 @@ def game():
             users.append(uid)
         db.commit()
         mud_worlds.install(db, mud_worlds.package_bytes(_document()))
-        db.execute("UPDATE mud_world_packages SET active=0")
-        db.execute("UPDATE mud_world_packages SET active=1 WHERE id='trigworld'")
+        activate_world(db, 'trigworld')
         for uid in users:
             _move(db, uid, "hall")
         db.commit()
@@ -168,8 +168,8 @@ def _move(db, uid, local):
     room = _room(db, local)
     mud._set_player_location(db, uid, "traditional", "world_room", room)
     db.execute("DELETE FROM mud_presence WHERE user_id=?", (uid,))
-    db.execute("INSERT INTO mud_presence(user_id,connection_id,client_id,room_id,location_type,location_key,last_seen) "
-               "VALUES(?,?,?,?,?,?,?)", (uid, f"connection-{uid}", f"client-{uid}-1", room, "world_room", room,
+    db.execute("INSERT INTO mud_presence(world_key,user_id,connection_id,client_id,room_id,location_type,location_key,last_seen) "
+               "VALUES(mud_world(),?,?,?,?,?,?,?)", (uid, f"connection-{uid}", f"client-{uid}-1", room, "world_room", room,
                                          mud._scheduled_now()))
 
 
@@ -459,8 +459,7 @@ def test_delayed_actions_skip_players_who_left_the_world(game):
         db = get_db()
         mud._interact_action(db, _user(db, one), {"arguments": [":pull", "Rusty Lever"]})
         mud._go_action(db, _user(db, one), {"arguments": ["north"]})
-        db.execute("UPDATE mud_world_packages SET active=0")
-        db.execute("UPDATE mud_world_packages SET active=1 WHERE id='stationnet'")
+        activate_world(db, 'stationnet')
         mud.process_scheduled_events(db, datetime.now(timezone.utc) + timedelta(seconds=90))
         assert "An echo answers." not in [row["body"] for row in mud._events_for_user(db, one)]
 
@@ -528,9 +527,8 @@ def test_removing_a_world_removes_its_triggers_and_state(game):
     with app.app_context():
         db = get_db()
         mud._interact_action(db, _user(db, one), {"arguments": [":pull", "Rusty Lever"]})
-        db.execute("UPDATE mud_world_packages SET active=0")
-        db.execute("UPDATE mud_world_packages SET active=1 WHERE id='stationnet'")
-        mud._set_player_location(db, one, "traditional", "world_room", mud._start_room(db)["id"])
+        # Only a disabled world can be removed; its runs and state go with it.
+        mud_worlds.set_enabled(db, "trigworld", False)
         db.commit()
         mud_worlds.remove(db, "trigworld")
         for table in ("mud_world_triggers",):
@@ -552,43 +550,43 @@ def _client(app, user_id):
 def test_builder_creates_edits_and_removes_triggers(game):
     app, (sysop, player, _three), _data = game
     client = _client(app, sysop)
-    page = client.get("/mud/builder")
+    page = client.get(url("/builder"))
     assert page.status_code == 200 and b"events-heading" in page.data and b"Pull the lever" in page.data
     with app.app_context():
         hall = _room(get_db(), "hall")
     form = {"csrf_token": "test-token", "name": "Ring the hall", "event": "enter_room", "source": f"room|{hall}",
             "scope": "character", "enabled": "1", "cooldown_seconds": "0",
             "actions": json.dumps([{"type": "message", "text": "Ding."}])}
-    response = client.post("/mud/builder/triggers", data=form, follow_redirects=True)
+    response = client.post(url("/builder/triggers"), data=form, follow_redirects=True)
     assert b"Trigger Ring the hall created." in response.data
     with app.app_context():
         row = get_db().execute("SELECT * FROM mud_world_triggers WHERE local_id='ring-the-hall'").fetchone()
         assert row["world_id"] == "trigworld" and row["source_id"] == hall
-    bad = client.post("/mud/builder/triggers", data={**form, "name": "Broken", "actions": "[not json"},
+    bad = client.post(url("/builder/triggers"), data={**form, "name": "Broken", "actions": "[not json"},
                       follow_redirects=True)
     assert b"Actions must be valid JSON" in bad.data
-    missing = client.post("/mud/builder/triggers", data={
+    missing = client.post(url("/builder/triggers"), data={
         **form, "name": "Missing", "actions": json.dumps([{"type": "teleport", "room": "world:nowhere"}])},
         follow_redirects=True)
     assert b"unknown room" in missing.data
-    updated = client.post(f"/mud/builder/triggers/{row['id']}", data={**form, "once": "1"}, follow_redirects=True)
+    updated = client.post(url(f"/builder/triggers/{row['id']}"), data={**form, "once": "1"}, follow_redirects=True)
     assert b"saved" in updated.data
     with app.app_context():
         assert json.loads(get_db().execute("SELECT definition_json FROM mud_world_triggers WHERE id=?",
                                            (row["id"],)).fetchone()[0])["once"] is True
     with app.app_context():
         bless = get_db().execute("SELECT id FROM mud_world_triggers WHERE local_id='bless'").fetchone()["id"]
-    blocked = client.post(f"/mud/builder/triggers/{bless}/delete", data={"csrf_token": "test-token",
+    blocked = client.post(url(f"/builder/triggers/{bless}/delete"), data={"csrf_token": "test-token",
                                                                          "confirmation": "delete"},
                           follow_redirects=True)
     assert b"Remove the run_trigger actions" in blocked.data
-    removed = client.post(f"/mud/builder/triggers/{row['id']}/delete",
+    removed = client.post(url(f"/builder/triggers/{row['id']}/delete"),
                           data={"csrf_token": "test-token", "confirmation": "delete"}, follow_redirects=True)
     assert b"removed" in removed.data
-    reset = client.post("/mud/builder/triggers/reset-state", data={"csrf_token": "test-token",
+    reset = client.post(url("/builder/triggers/reset-state"), data={"csrf_token": "test-token",
                                                                    "confirmation": "reset"}, follow_redirects=True)
     assert b"reset" in reset.data
-    assert _client(app, player).post("/mud/builder/triggers", data=form).status_code == 403
+    assert _client(app, player).post(url("/builder/triggers"), data=form).status_code == 403
 
 
 def test_builder_saves_hidden_exits_and_script_objectives(game):
@@ -598,9 +596,9 @@ def test_builder_saves_hidden_exits_and_script_objectives(game):
         db = get_db()
         hall, garden = _room(db, "hall"), _room(db, "garden")
         quest = db.execute("SELECT id FROM mud_quests WHERE name='Pilgrimage'").fetchone()["id"]
-    client.post("/mud/builder/exits", data={"csrf_token": "test-token", "from_room_id": hall, "to_room_id": garden,
+    client.post(url("/builder/exits"), data={"csrf_token": "test-token", "from_room_id": hall, "to_room_id": garden,
                                             "name": "secret path", "hidden": "1"})
-    client.post(f"/mud/builder/quests/{quest}/objectives", data={
+    client.post(url(f"/builder/quests/{quest}/objectives"), data={
         "csrf_token": "test-token", "objective_type": "script", "target_id": hall,
         "description": "Ring the bell", "required_count": "1"})
     with app.app_context():

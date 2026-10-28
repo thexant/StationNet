@@ -11,7 +11,7 @@ A context must provide these methods:
     state(key) claimed() flag(scope, key) object_state(object_id) room_id()
     knows_destination(destination_id)
 
-Contexts may also provide game_hour(), the active world's hour or None, and
+Contexts may also provide game_hour(), the current world's hour or None, and
 disposition(npc_definition_id), an NPC's (regard, tier) toward the character or
 None while relationships are off; a missing NPC means the one being spoken to;
 reputation(faction_id), the character's (standing, rank key) with a faction; and

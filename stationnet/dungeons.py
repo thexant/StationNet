@@ -277,9 +277,8 @@ def remove_template(database, theme_id, path, *, remove_origins=False):
                                       mud_skills.remove_linked(database, associated["skills"])}
             preserved = {kind: len(linked[kind]) - (len(selected[kind]) if remove_origins else 0)
                          for kind in selected}
-            restored = character_creation.restore_missing_defaults(database)
-            if mud_skills.restore_missing_defaults(database):
-                restored.append("skills")
+            # Worlds left without a race, class, or starting skills fall back to the built-ins.
+            restored = character_creation.restore_world_defaults(database)
     except Exception:
         staged.rename(path)
         raise

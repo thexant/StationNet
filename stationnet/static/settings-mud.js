@@ -3,8 +3,9 @@ for (const group of document.querySelectorAll('[data-origin-group]')) {
   for (const button of group.querySelectorAll('[data-origin-selection]')) {
     button.addEventListener('click', () => {
       for (const box of boxes) {
-        box.checked = button.dataset.originSelection === 'all' ||
-          box.dataset.originSource === button.dataset.originSelection;
+        const selection = button.dataset.originSelection;
+        box.checked = selection === 'all' || box.dataset.originSource === selection ||
+          (selection === 'bundled' && box.dataset.bundled === 'true');
       }
     });
   }
@@ -92,7 +93,7 @@ if (worlds) {
     }
   });
 
-  for (const prefix of ['world-import', 'world-activate']) {
+  for (const prefix of ['world-import']) {
     const mode = document.getElementById(`${prefix}-mode`);
     const manual = document.getElementById(`${prefix}-manual`);
     if (!mode || !manual) continue;

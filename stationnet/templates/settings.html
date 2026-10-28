@@ -440,65 +440,109 @@
   </div>
 </section>
 
+{% macro offer_world_choices() %}<fieldset class="offer-worlds"><legend>Offer in these worlds</legend><input type="hidden" name="offer_form" value="1">{% for world in mud_worlds_all %}<label class="switch"><input type="checkbox" name="offer_worlds" value="{{ world.key }}" {% if world.enabled %}checked{% endif %}> {{ world.name }}{% if not world.enabled %} (disabled){% endif %}</label>{% endfor %}<small>Other worlds can add it later from their RACES, CLASSES &amp; SKILLS page.</small></fieldset>{% endmacro %}
 <section class="narrow terminal-card settings-section collapsible-panel" id="mud-service" data-collapsible-panel data-panel-key="sysop-mud-service">
   <button type="button" class="collapsible-panel-toggle" data-panel-toggle aria-expanded="true" aria-controls="mud-service-content">
     <span class="collapsible-panel-heading"><span class="eyebrow">SYSOP CONTROL / NATIVE MUD</span><span class="collapsible-panel-title" role="heading" aria-level="2">MUD service</span></span>
     <span class="collapsible-panel-chevron" aria-hidden="true"></span>
   </button>
   <div id="mud-service-content" data-panel-content>
-  <p class="muted">Enable either experience independently. Disabling a mode preserves its world, characters, and history and safely relocates affected players. Use Module availability above to turn off the entire MUD while keeping both mode settings.</p>
+  <p class="muted">The station can run several MUD worlds at once. Each enabled world appears on the MUD page as its own game, and every account creates a separate character in each world it plays. Enable or disable worlds in the Worlds list below. Use Module availability above to turn off the entire MUD.</p>
   <form method="post" action="{{ url_for('station.mud_settings') }}" class="form-grid">
     <input type="hidden" name="csrf_token" value="{{ session.csrf_token }}">
-    <input type="hidden" name="mud_mode_form" value="1">
-    <label class="switch"><input type="checkbox" name="mud_traditional_enabled" {% if g.station.mud_traditional_enabled %}checked{% endif %}> Enable traditional builder-managed world</label>
-    <label class="switch"><input type="checkbox" name="mud_procedural_enabled" {% if g.station.mud_procedural_enabled %}checked{% endif %}> Enable procedural dungeon mode</label>
-    <label>Progression crossover
-      <select name="mud_progression_policy">
-        <option value="shared" {% if mud_crossover.progression_shared %}selected{% endif %}>Shared across both modes</option>
-        <option value="independent" {% if not mud_crossover.progression_shared %}selected{% endif %}>Independent mode tracks</option>
-      </select>
-      <small>Independent mode tracks retain their own level, experience, health, attributes, and statistics. Changing this never merges or deletes another track.</small>
-    </label>
-    <label>Inventory and equipment crossover
-      <select name="mud_inventory_policy">
-        <option value="shared" {% if mud_crossover.inventory_shared %}selected{% endif %}>Shared inventory and loadout</option>
-        <option value="independent" {% if not mud_crossover.inventory_shared %}selected{% endif %}>Independent mode inventories and loadouts</option>
-      </select>
-      <small>Every item keeps its acquisition mode. Shared view combines both inventories; independent view exposes only the current mode and its equipment.</small>
-    </label>
     <label>Wilderness travel step interval (seconds)<input type="number" name="mud_travel_interval" min="3" max="30" required value="{{ mud_travel.interval_seconds if mud_travel else 6 }}"><small>How often /travel walks a player one room through wilderness preset rooms.</small></label>
     <label>Wilderness travel step limit<input type="number" name="mud_travel_max_steps" min="1" max="1000" required value="{{ mud_travel.max_steps if mud_travel else 200 }}"><small>Rooms walked before a single /travel journey pauses on its own.</small></label>
-    <label>Portal room name<input name="mud_portal_name" maxlength="80" required value="{{ mud_portal.name }}"></label>
+    <label>Portal room name<input name="mud_portal_name" maxlength="80" required value="{{ mud_portal.name }}"><small>Also the procedural dungeon world's name on the world list.</small></label>
     <label>Portal room description<textarea name="mud_portal_description" maxlength="2000" required>{{ mud_portal.description }}</textarea><small>The gameplay explanation and gateway controls are system-managed and cannot be edited here or in the world builder.</small></label>
-    <button>SAVE MUD MODES</button>
+    <button>SAVE MUD SETTINGS</button>
   </form>
+  <section id="mud-worlds" aria-labelledby="mud-worlds-heading" data-world-linked="{{ mud_world_origin_keys|tojson|forceescape }}" data-world-removal="{{ mud_world_removal|tojson|forceescape }}">
+    <h3 id="mud-worlds-heading">Worlds</h3>
+    <p class="muted">Disabling a world hides it from players without deleting its content or anyone's character; enable it again to resume. Each world chooses its own races, classes, and skills from the installed definitions.</p>
+    <div class="file-list mud-world-list">
+      {% for world in mud_worlds_all %}
+      <article class="file-row mud-world-row">
+        <div>
+          <h2>{{ world.name }}</h2>
+          <p>{% if world.kind == 'procedural' %}Procedural dungeons{% elif world.imported %}Imported world by {{ world.author }}{% else %}World Builder home world{% endif %} · {{ world.characters }} character{{ 's' if world.characters != 1 }}</p>
+          <span class="origin-badge {{ 'default' if world.enabled else 'imported' }}">{{ 'ENABLED' if world.enabled else 'DISABLED' }}</span>
+        </div>
+        <div class="button-row">
+          <form method="post" action="{{ url_for('station.set_mud_world_enabled') }}" class="inline-form">
+            <input type="hidden" name="csrf_token" value="{{ session.csrf_token }}">
+            <input type="hidden" name="world_id" value="{{ world.key }}">
+            <input type="hidden" name="enabled" value="{{ '0' if world.enabled else '1' }}">
+            <button class="{{ 'secondary' if world.enabled else '' }}">{{ 'DISABLE' if world.enabled else 'ENABLE' }}</button>
+          </form>
+          <a class="button secondary" href="{{ url_for('station.mud_world_availability', world_id=world.key) }}">RACES, CLASSES &amp; SKILLS</a>
+          {% if world.kind == 'authored' and g.station.mud_enabled %}<a class="button secondary" href="{{ url_for('mud.builder', world_key=world.key) }}">WORLD BUILDER</a>{% endif %}
+        </div>
+      </article>
+      {% endfor %}
+    </div>
+    {% set managed = {'races': mud_origins.races, 'classes': mud_origins.classes, 'skills': mud_skill_entries} %}
+    <h4>Import a World</h4>
+    <p class="muted">World ZIPs can include rooms, content, trainers, and optional races, classes, and skills. Importing adds a world without changing any other world. World files live in <code>data/mud_worlds/</code>.</p>
+    <p><a href="{{ url_for('station.download_mud_world_template') }}">DOWNLOAD WORLD TEMPLATE ZIP</a></p>
+    <form method="post" action="{{ url_for('station.import_mud_world') }}" enctype="multipart/form-data" class="form-grid" id="world-import-form" data-preview-url="{{ url_for('station.preview_mud_world') }}">
+      <input type="hidden" name="csrf_token" value="{{ session.csrf_token }}">
+      <label>World ZIP<input type="file" name="world_file" id="world-import-file" accept=".zip,application/zip" required></label>
+      <label>Races, classes, and skills this world offers<select name="origin_mode" id="world-import-mode">
+        <option value="">Automatic: its bundled choices, or the built-ins if it bundles none (default)</option>
+        <option value="only">Only this world's bundled choices</option>
+        <option value="combine">This world's bundled choices plus the built-ins</option>
+        <option value="manual">Select choices manually</option>
+      </select><small>Only the imported world is affected. You can change its selection later.</small></label>
+      <div id="world-import-manual" hidden>
+        <small>Select an archive to show its bundled races, classes, and skills.</small>
+        {% for kind in ('races', 'classes', 'skills') %}
+        <div class="divider">{{ kind|upper }}</div>
+        {% for entry in managed[kind] %}
+        <label class="switch"><input type="checkbox" name="{{ kind }}" value="{{ entry.key }}" {% if not entry.imported %}checked{% endif %}> {{ entry.definition.name }}</label>
+        {% endfor %}
+        <div id="world-import-bundled-{{ kind }}"></div>
+        {% endfor %}
+      </div>
+      <label class="switch"><input type="checkbox" name="enable"> Enable it for players right away</label>
+      <button>IMPORT WORLD</button>
+    </form>
+    {% if mud_world_list %}
+    <h4>Export a World</h4>
+    <form method="post" action="{{ url_for('station.export_mud_world') }}" class="form-grid">
+      <input type="hidden" name="csrf_token" value="{{ session.csrf_token }}">
+      <label>World to export<select name="world_id" id="world-export-id">{% for world in mud_world_list %}<option value="{{ world.id }}">{{ world.name }} by {{ world.author }}</option>{% endfor %}</select></label>
+      <small>Choose custom races, classes, and skills to include. The world's own definitions and the custom ones it offers are selected by default. Skills that bundled races, classes, or skills depend on are included automatically.</small>
+      {% for kind in ('races', 'classes', 'skills') %}
+      <div class="divider">{{ kind|upper }} TO BUNDLE</div>
+      {% for entry in managed[kind] if entry.imported %}
+      <label class="switch"><input type="checkbox" class="world-export-origin" name="{{ kind }}" value="{{ entry.key }}" {% if entry.key in mud_world_origin_keys[mud_world_list[0].id][kind] %}checked{% endif %}> {{ entry.definition.name }}</label>
+      {% endfor %}
+      {% endfor %}
+      <button>EXPORT WORLD ZIP</button>
+    </form>
+    {% endif %}
+    {% if mud_world_list|selectattr('imported')|list %}
+    <h4>Remove a World</h4>
+    <form method="post" action="{{ url_for('station.remove_mud_world') }}" class="form-grid">
+      <input type="hidden" name="csrf_token" value="{{ session.csrf_token }}">
+      <label>Remove custom world<select name="world_id" id="world-remove-id" required><option value="">Select a world</option>{% for world in mud_world_list if world.imported %}<option value="{{ world.id }}" {% if world.enabled %}disabled{% endif %}>{{ world.name }}{% if world.enabled %} (enabled; disable first){% endif %}</option>{% endfor %}</select></label>
+      <div id="world-remove-origins" aria-live="polite"></div>
+      <small>Removal deletes the world's rooms and content and ends its dungeon runs. Its characters are kept, hidden, and return if a world with the same ID is installed again.</small>
+      <label class="switch"><input type="checkbox" name="remove_origins"> Also remove this world's unshared races, classes, and skills from every world</label>
+      <label class="switch"><input type="checkbox" name="confirm_remove" required> Confirm world removal</label>
+      <button class="secondary">REMOVE WORLD</button>
+    </form>
+    {% endif %}
+  </section>
   <section id="mud-origins" aria-labelledby="mud-origins-heading">
     <h3 id="mud-origins-heading">Races and Classes</h3>
-    <p class="muted">Import individual JSON definitions or a pack containing races, classes, or both. Enabled choices appear in character creation for both MUD modes. Characters using a disabled or removed choice retain their saved progress and choose a replacement on their next visit. Beyond attributes, definitions can grant traits (tags), proficiencies, resistances, skill affinities, abilities, starting gear, and health, mana, or skill-point growth; hover a choice to see its features.</p>
-    <form method="post" action="{{ url_for('station.mud_origin_availability') }}" class="form-grid" id="mud-origin-availability">
-      <input type="hidden" name="csrf_token" value="{{ session.csrf_token }}">
-      {% for kind in ('races', 'classes') %}
-      <div class="origin-group" data-origin-group="{{ kind }}">
-      <div class="divider">{{ kind|upper }}</div>
-      <div class="button-row origin-shortcuts" aria-label="{{ kind|title }} selection shortcuts">
-        <button type="button" class="secondary" data-origin-selection="all">SELECT ALL</button>
-        <button type="button" class="secondary" data-origin-selection="none">SELECT NONE</button>
-        <button type="button" class="secondary" data-origin-selection="default">SELECT DEFAULT</button>
-        <button type="button" class="secondary" data-origin-selection="imported">SELECT IMPORTED</button>
-      </div>
-      {% for entry in mud_origins[kind] %}
-      {% set origin = entry.definition %}<label class="switch origin-choice" title="{{ origin.traits }}{% if origin.get('tags') %} · traits: {{ origin.tags|join(', ') }}{% endif %}{% if origin.get('spells') %} · abilities: {{ origin.spells|join(', ') }}{% endif %}{% if origin.get('resistances') %} · resists: {% for key,value in origin.resistances.items() %}{{ key }} {{ value }}%{% if not loop.last %}, {% endif %}{% endfor %}{% endif %}{% if origin.get('proficiencies') %} · trained with: {{ (origin.proficiencies.get('weapons', []) + origin.proficiencies.get('armor', []))|join(', ') }}{% endif %}"><input type="checkbox" name="{{ kind }}" value="{{ entry.key }}" data-origin-source="{{ 'imported' if entry.imported else 'default' }}" {% if entry.enabled %}checked{% endif %}> <span>{{ entry.definition.name }}</span><span class="origin-badge {{ 'imported' if entry.imported else 'default' }}">{{ 'IMPORTED' if entry.imported else 'DEFAULT' }}</span></label>
-      {% endfor %}
-      </div>
-      {% endfor %}
-      <small>At least one race and one class must remain enabled while either MUD mode is on.</small>
-      <button>SAVE RACES AND CLASSES</button>
-    </form>
+    <p class="muted">Installed races and classes are shared by the whole station; each world chooses which ones its players may pick from the world's RACES, CLASSES &amp; SKILLS page. Import individual JSON definitions or a pack containing races, classes, or both. Beyond attributes, definitions can grant traits (tags), proficiencies, resistances, skill affinities, abilities, starting gear, and health, mana, or skill-point growth.</p>
     <h4>Origin Pack</h4>
     <p><a href="{{ url_for('station.download_mud_origin_pack_template') }}">DOWNLOAD PACK TEMPLATE</a></p>
     <form method="post" action="{{ url_for('station.import_mud_origin_pack') }}" enctype="multipart/form-data" class="form-grid">
       <input type="hidden" name="csrf_token" value="{{ session.csrf_token }}">
       <label>Race/Class Pack JSON<input type="file" name="origin_pack" accept=".json,application/json" required><small>A pack may contain up to 100 races and 100 classes. The entire pack is rejected if any entry is invalid or conflicts with an installed key or name.</small></label>
+      {{ offer_world_choices() }}
       <button>IMPORT ORIGIN PACK</button>
     </form>
     {% for kind in ('races', 'classes') %}
@@ -508,6 +552,7 @@
     <form method="post" action="{{ url_for('station.import_mud_origin', kind=kind) }}" enctype="multipart/form-data" class="form-grid">
       <input type="hidden" name="csrf_token" value="{{ session.csrf_token }}">
       <label>{{ singular|title }} JSON<input type="file" name="origin_file" accept=".json,application/json" required></label>
+      {{ offer_world_choices() }}
       <button>IMPORT {{ singular|upper }}</button>
     </form>
     {% endfor %}
@@ -515,7 +560,7 @@
     <form method="post" action="{{ url_for('station.remove_mud_origins') }}" class="form-grid origin-removal" id="mud-origin-removal">
       <input type="hidden" name="csrf_token" value="{{ session.csrf_token }}">
       <div class="divider">REMOVE IMPORTED CHOICES</div>
-      <p class="muted">Select any imported races and classes to remove together. Defaults cannot be removed. If removal leaves no enabled race or class while the MUD is on, the first default choice of that type is enabled automatically.</p>
+      <p class="muted">Removal takes a race or class out of every world. Defaults cannot be removed. Characters already using a removed choice keep their progress and pick a replacement on their next visit. A world left without any race or class falls back to the built-in choices.</p>
       {% for kind in ('races', 'classes') %}
       {% if mud_origins[kind]|selectattr('imported')|list %}
       <fieldset>
@@ -534,46 +579,26 @@
   </section>
   <section id="mud-skills" aria-labelledby="mud-skills-heading">
     <h3 id="mud-skills-heading">Skills</h3>
-    <p class="muted">Skills give characters combat, weapon and armor proficiency, magic, stealth, exploration, and merchant bonuses. Characters choose {{ mud_starting_skill_choices }} starting skills, are granted others by their race and class, improve skills through use, and learn more with skill points or World Builder trainers. Disabling or removing a skill leaves characters' ranks in place but inactive until it returns.</p>
-    <form method="post" action="{{ url_for('station.mud_skill_availability') }}" class="form-grid" id="mud-skill-availability">
-      <input type="hidden" name="csrf_token" value="{{ session.csrf_token }}">
-      <div class="origin-group" data-origin-group="skills">
-      <div class="button-row origin-shortcuts" aria-label="Skill selection shortcuts">
-        <button type="button" class="secondary" data-origin-selection="all">SELECT ALL</button>
-        <button type="button" class="secondary" data-origin-selection="none">SELECT NONE</button>
-        <button type="button" class="secondary" data-origin-selection="default">SELECT DEFAULT</button>
-        <button type="button" class="secondary" data-origin-selection="imported">SELECT IMPORTED</button>
-      </div>
-      {% for group in mud_skill_groups %}
-      {% set members = mud_skill_entries|selectattr('definition.group', 'equalto', group)|list %}
-      {% if members %}
-      <div class="divider">{{ group|upper }}</div>
-      {% for entry in members %}
-      <label class="switch origin-choice"><input type="checkbox" name="skills" value="{{ entry.key }}" data-origin-source="{{ 'imported' if entry.imported else 'default' }}" {% if entry.enabled %}checked{% endif %}> <span title="{{ entry.summary }}">{{ entry.definition.name }}</span><span class="origin-badge {{ 'imported' if entry.imported else 'default' }}">{{ 'IMPORTED' if entry.imported else 'DEFAULT' }}</span>{% if not entry.definition.starting %}<small>not offered at creation</small>{% endif %}{% if entry.holders %}<small>{{ entry.holders }} character{{ 's' if entry.holders != 1 }}</small>{% endif %}</label>
-      {% endfor %}
-      {% endif %}
-      {% endfor %}
-      </div>
-      <small>At least {{ mud_starting_skill_choices }} skills offered at creation must remain enabled while either MUD mode is on.</small>
-      <button>SAVE SKILLS</button>
-    </form>
+    <p class="muted">Skills give characters combat, weapon and armor proficiency, magic, stealth, exploration, and merchant bonuses. Characters choose {{ mud_starting_skill_choices }} starting skills, are granted others by their race and class, improve skills through use, and learn more with skill points or World Builder trainers. Installed skills are shared by the station; each world chooses which ones it offers. A skill a world does not offer stays on its characters but is inactive there.</p>
     <h4>Import Skills</h4>
     <p><a href="{{ url_for('station.download_mud_skill_template') }}">DOWNLOAD SKILL TEMPLATE</a> · <a href="{{ url_for('station.download_mud_skill_pack_template') }}">DOWNLOAD SKILL PACK TEMPLATE</a></p>
     <form method="post" action="{{ url_for('station.import_mud_skill') }}" enctype="multipart/form-data" class="form-grid">
       <input type="hidden" name="csrf_token" value="{{ session.csrf_token }}">
       <label>Skill JSON<input type="file" name="skill_file" accept=".json,application/json" required></label>
+      {{ offer_world_choices() }}
       <button>IMPORT SKILL</button>
     </form>
     <form method="post" action="{{ url_for('station.import_mud_skill_pack') }}" enctype="multipart/form-data" class="form-grid">
       <input type="hidden" name="csrf_token" value="{{ session.csrf_token }}">
       <label>Skill Pack JSON<input type="file" name="skill_pack" accept=".json,application/json" required><small>A pack holds up to 100 skills and may reference its own skills as requirements. The entire pack is rejected if any skill is invalid or conflicts with an installed key or name.</small></label>
+      {{ offer_world_choices() }}
       <button>IMPORT SKILL PACK</button>
     </form>
     {% if mud_skill_entries|selectattr('imported')|list %}
     <form method="post" action="{{ url_for('station.remove_mud_skills') }}" class="form-grid origin-removal" id="mud-skill-removal">
       <input type="hidden" name="csrf_token" value="{{ session.csrf_token }}">
       <div class="divider">REMOVE IMPORTED SKILLS</div>
-      <p class="muted">Default skills can be disabled but not removed. A skill still required by an installed race, class, or skill cannot be removed until those are updated or removed with it.</p>
+      <p class="muted">Removal takes a skill out of every world. Default skills cannot be removed. A skill still required by an installed race, class, or skill cannot be removed until those are updated or removed with it.</p>
       <div class="button-row origin-shortcuts" aria-label="Skill removal shortcuts">
         <button type="button" class="secondary" data-skill-removal="all">SELECT ALL IMPORTED</button>
         <button type="button" class="secondary" data-skill-removal="none">SELECT NONE</button>
@@ -587,77 +612,6 @@
       <div class="deletion-alert origin-removal-summary" aria-live="polite">No imported skills selected.</div>
       <label class="deletion-checkbox"><input type="checkbox" name="confirm_remove" required> I reviewed the summary and confirm removal</label>
       <button class="danger">REMOVE SELECTED SKILLS</button>
-    </form>
-    {% endif %}
-  </section>
-  <section id="mud-worlds" aria-labelledby="mud-worlds-heading" data-world-linked="{{ mud_world_origin_keys|tojson|forceescape }}" data-world-removal="{{ mud_world_removal|tojson|forceescape }}">
-    <h3 id="mud-worlds-heading">Traditional Worlds</h3>
-    <p class="muted">World ZIPs can include rooms, content, trainers, and optional races, classes, and skills. Import installs a world without activating it or moving characters. World files live in <code>data/mud_worlds/</code>.</p>
-    {% set managed = {'races': mud_origins.races, 'classes': mud_origins.classes, 'skills': mud_skill_entries} %}
-    <p><a href="{{ url_for('station.download_mud_world_template') }}">DOWNLOAD WORLD TEMPLATE ZIP</a></p>
-    <form method="post" action="{{ url_for('station.export_mud_world') }}" class="form-grid">
-      <input type="hidden" name="csrf_token" value="{{ session.csrf_token }}">
-      <label>World to export<select name="world_id" id="world-export-id">{% for world in mud_world_list %}<option value="{{ world.id }}" {% if world.active %}selected{% endif %}>{{ world.name }} by {{ world.author }}</option>{% endfor %}</select></label>
-      <small>Choose custom races, classes, and skills to include. The active world's linked definitions are selected by default. Skills that bundled races, classes, or skills depend on are included automatically.</small>
-      {% for kind in ('races', 'classes', 'skills') %}
-      <div class="divider">{{ kind|upper }} TO BUNDLE</div>
-      {% for entry in managed[kind] if entry.imported %}
-      <label class="switch"><input type="checkbox" class="world-export-origin" name="{{ kind }}" value="{{ entry.key }}" {% if entry.key in mud_world_origin_keys[mud_world_list[0].id][kind] %}checked{% endif %}> {{ entry.definition.name }}</label>
-      {% endfor %}
-      {% endfor %}
-      <button>EXPORT WORLD ZIP</button>
-    </form>
-    <form method="post" action="{{ url_for('station.import_mud_world') }}" enctype="multipart/form-data" class="form-grid" id="world-import-form" data-preview-url="{{ url_for('station.preview_mud_world') }}">
-      <input type="hidden" name="csrf_token" value="{{ session.csrf_token }}">
-      <label>World ZIP<input type="file" name="world_file" id="world-import-file" accept=".zip,application/zip" required></label>
-      <label>Race, class, and skill availability after import<select name="origin_mode" id="world-import-mode">
-        <option value="preserve">Keep current choices (default)</option>
-        <option value="only">Use only this world's bundled choices</option>
-        <option value="combine">Combine bundled and current choices</option>
-        <option value="manual">Select choices manually</option>
-      </select></label>
-      <div id="world-import-manual" hidden>
-        <small>Select an archive to show its bundled races, classes, and skills.</small>
-        {% for kind in ('races', 'classes', 'skills') %}
-        <div class="divider">{{ kind|upper }}</div>
-        {% for entry in managed[kind] %}
-        <label class="switch"><input type="checkbox" name="{{ kind }}" value="{{ entry.key }}" {% if entry.enabled %}checked{% endif %}> {{ entry.definition.name }}</label>
-        {% endfor %}
-        <div id="world-import-bundled-{{ kind }}"></div>
-        {% endfor %}
-      </div>
-      <button>IMPORT WORLD</button>
-    </form>
-    {% if mud_world_list|length > 1 %}
-    <form method="post" action="{{ url_for('station.preview_mud_world_activation') }}" class="form-grid">
-      <input type="hidden" name="csrf_token" value="{{ session.csrf_token }}">
-      <label>Active world<select name="world_id" required>{% for world in mud_world_list %}<option value="{{ world.id }}" {% if world.active %}selected{% endif %}>{{ world.name }} by {{ world.author }}</option>{% endfor %}</select></label>
-      <label>Race, class, and skill availability<select name="origin_mode" id="world-activate-mode">
-        <option value="combine">Combine this world's bundled and current choices</option>
-        <option value="only">Use only this world's bundled choices</option>
-        <option value="manual">Select choices manually</option>
-        <option value="preserve">Keep current choices</option>
-      </select></label>
-      <div id="world-activate-manual" hidden>
-        {% for kind in ('races', 'classes', 'skills') %}
-        <div class="divider">{{ kind|upper }}</div>
-        {% for entry in managed[kind] %}
-        <label class="switch"><input type="checkbox" name="{{ kind }}" value="{{ entry.key }}" {% if entry.enabled %}checked{% endif %}> {{ entry.definition.name }}</label>
-        {% endfor %}
-        {% endfor %}
-      </div>
-      <small>Review the effect on characters before changing worlds.</small>
-      <button>PREVIEW WORLD ACTIVATION</button>
-    </form>
-    {% endif %}
-    {% if mud_world_list|selectattr('imported')|list %}
-    <form method="post" action="{{ url_for('station.remove_mud_world') }}" class="form-grid">
-      <input type="hidden" name="csrf_token" value="{{ session.csrf_token }}">
-      <label>Remove custom world<select name="world_id" id="world-remove-id" required><option value="">Select a world</option>{% for world in mud_world_list if world.imported %}<option value="{{ world.id }}">{{ world.name }}{% if world.active %} (active; switch first){% endif %}</option>{% endfor %}</select></label>
-      <div id="world-remove-origins" aria-live="polite"></div>
-      <label class="switch"><input type="checkbox" name="remove_origins"> Also remove this world's unshared races, classes, and skills</label>
-      <label class="switch"><input type="checkbox" name="confirm_remove" required> Confirm world removal</label>
-      <button class="secondary">REMOVE WORLD</button>
     </form>
     {% endif %}
   </section>
@@ -937,6 +891,6 @@
   {% endfor %}
   </div>
 </section>
-<script src="{{ url_for('static', filename='settings-mud.js', v='1') }}" defer></script>
+<script src="{{ url_for('static', filename='settings-mud.js', v='2') }}" defer></script>
 {% endblock %}
 

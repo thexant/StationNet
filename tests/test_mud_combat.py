@@ -7,6 +7,7 @@ from pathlib import Path
 
 import pytest
 
+from stationnet import mud_scope
 from stationnet import create_app, character_creation, db as db_module, mud, mud_combat, mud_effects, mud_worlds
 from stationnet.db import get_db
 
@@ -403,7 +404,7 @@ def delve():
                        "VALUES('Test','Test','TST',1,1)")
             uid = db.execute("INSERT INTO users(username,callsign,password_hash) VALUES('delver','DLV','unused')"
                              ).lastrowid
-            db.execute("UPDATE mud_characters SET creation_state='complete' WHERE user_id=?", (uid,))
+            db.execute("UPDATE mud_characters SET creation_state=\'complete\' WHERE id=?", (mud._character_id(db, uid),))
             mud._set_player_location(db, uid, "procedural", "portal", mud.PORTAL_ROOM_ID)
             db.commit()
         yield app, uid
@@ -412,6 +413,7 @@ def delve():
         shutil.rmtree(data_path)
 
 
+@pytest.mark.mud_world(mud_scope.PROCEDURAL)
 def test_dungeon_scaling_rest_and_death_follow_procedural_rules(delve):
     app, uid = delve
     with app.app_context():

@@ -41,6 +41,14 @@ def _post_pack(client, document, *, follow_redirects=False):
     }, follow_redirects=follow_redirects)
 
 
+def _offer(client, world="stationnet", **kinds):
+    """Save one world's selection; skills default to the built-in starting skills."""
+    with client.application.app_context():
+        skills = sorted(character_creation.default_availability()["skills"])
+    return client.post(f"/sysop/settings/mud-worlds/{world}/availability", data={
+        "csrf_token": "test-token", "skills": skills, **kinds})
+
+
 def _template(kind):
     path = Path(character_creation.__file__).with_name("mud_origin_templates") / f"{character_creation.KIND_NAMES[kind]}.json"
     return json.loads(path.read_text(encoding="utf-8"))
@@ -79,18 +87,17 @@ def test_import_availability_and_existing_characters(data_path):
             assert {item["key"] for item in character_creation.options(db)["races"]} >= {"riverfolk"}
             assert {item["key"] for item in character_creation.options(db)["classes"]} >= {"pathfinder"}
         _login(client, player)
-        page = client.get("/mud/create")
+        page = client.get("/mud/w/stationnet/create")
         assert b"Riverfolk" in page.data and b"Pathfinder" in page.data
         assert b"Riverfolk (imported)" not in page.data
         assert b"Pathfinder (imported)" not in page.data
         build = {"name": "River Walker", "race": "riverfolk", "class": "pathfinder",
                  "attributes": dict.fromkeys(character_creation.ATTRIBUTES, 11),
                  "skills": ["guard", "lore"]}
-        assert client.post("/mud/create", data={"csrf_token": "test-token",
+        assert client.post("/mud/w/stationnet/create", data={"csrf_token": "test-token",
                                                 "build": json.dumps(build)}).status_code == 302
         _login(client, admin)
-        availability = client.post("/sysop/settings/mud-origins/availability", data={
-            "csrf_token": "test-token", "races": ["human"], "classes": ["warrior"]})
+        availability = _offer(client, races=["human"], classes=["warrior"])
         assert availability.status_code == 302
         with app.app_context():
             db = get_db()
@@ -103,8 +110,8 @@ def test_import_availability_and_existing_characters(data_path):
                                   "VALUES('newcomer','NEW','unused')").lastrowid
             db.commit()
         _login(client, newcomer)
-        assert b"Riverfolk" not in client.get("/mud/create").data
-        rejected = client.post("/mud/create", data={"csrf_token": "test-token",
+        assert b"Riverfolk" not in client.get("/mud/w/stationnet/create").data
+        rejected = client.post("/mud/w/stationnet/create", data={"csrf_token": "test-token",
                                                     "build": json.dumps({**build, "name": "New Walker"})})
         assert rejected.status_code == 200 and b"Choose a valid race" in rejected.data
         _login(client, admin)
@@ -137,34 +144,30 @@ def test_empty_choices_cannot_support_enabled_mud(data_path):
             db.commit()
         client = app.test_client()
         _login(client, admin)
-        response = client.post("/sysop/settings/mud-origins/availability", data={
-            "csrf_token": "test-token", "races": ["human"]})
-        assert response.status_code == 302
+        response = _offer(client, races=["human"])
+        assert b"at least one race and one class" in response.data
         with app.app_context():
-            assert character_creation.active_counts(get_db())["classes"] > 0
+            assert character_creation.world_availability(get_db(), "stationnet")["classes"]
         assert _post_json(client, "races", _template("races")).status_code == 302
         assert _post_json(client, "classes", _template("classes")).status_code == 302
-        client.post("/sysop/settings/mud-origins/availability", data={
-            "csrf_token": "test-token", "races": ["riverfolk"], "classes": ["pathfinder"]})
+        _offer(client, races=["riverfolk"], classes=["pathfinder"])
         client.post("/sysop/settings/mud-origins/races/remove", data={
             "csrf_token": "test-token", "key": "riverfolk", "confirm_remove": "on"})
         with app.app_context():
             db = get_db()
-            assert character_creation.active_counts(db) == {"races": 1, "classes": 1}
+            chosen = character_creation.world_availability(db, "stationnet")
+            # The world lost its only race, so it falls back to the built-in races.
+            assert chosen["races"] == character_creation.default_availability()["races"]
+            assert chosen["classes"] == {"pathfinder"}
             assert all(entry["key"] != "riverfolk" for entry in character_creation.catalog(db)["races"])
-            assert {entry["key"] for entry in character_creation.options(db)["races"]} == {"human"}
-        # Choices may be cleared while the entire MUD is off, but enabling it is rejected.
+        # Every world keeps at least one race and one class, even while the MUD is off.
         with app.app_context():
             db = get_db()
             db.execute("UPDATE station SET mud_enabled=0,mud_procedural_enabled=0")
             db.commit()
-        client.post("/sysop/settings/mud-origins/availability", data={"csrf_token": "test-token"})
+        _offer(client)
         with app.app_context():
-            assert character_creation.active_counts(get_db()) == {"races": 0, "classes": 0}
-        client.post("/sysop/settings/mud", data={
-            "csrf_token": "test-token", "mud_traditional_enabled": "on"})
-        with app.app_context():
-            assert get_db().execute("SELECT mud_enabled FROM station").fetchone()[0] == 0
+            assert character_creation.world_availability(get_db(), "stationnet")["classes"] == {"pathfinder"}
     finally:
         coordinator = app.extensions.get("broadcast_coordinator")
         if coordinator:
@@ -199,7 +202,7 @@ def test_pack_import_is_atomic_and_bulk_removal_handles_both_kinds(data_path):
         imported = _post_pack(client, {"races": [race], "classes": [archetype]},
                               follow_redirects=True)
         assert b"Imported origin pack: 1 races, 1 classes" in imported.data
-        assert b"SELECT DEFAULT" in imported.data and b"SELECT IMPORTED" in imported.data
+        assert b"RACES, CLASSES &amp; SKILLS" in imported.data
         assert b"DEFAULT" in imported.data and b"IMPORTED" in imported.data
         assert b"origin-removal-summary" in imported.data
         assert b'data-remove-name="Marshfolk"' in imported.data
@@ -213,10 +216,7 @@ def test_pack_import_is_atomic_and_bulk_removal_handles_both_kinds(data_path):
             assert "marshfolk" in {item["key"] for item in available["races"]}
             assert "trailwarden" in {item["key"] for item in available["classes"]}
 
-        client.post("/sysop/settings/mud-origins/availability", data={
-            "csrf_token": "test-token", "races": ["marshfolk"],
-            "classes": ["trailwarden"],
-        })
+        _offer(client, races=["marshfolk"], classes=["trailwarden"])
 
         unconfirmed = client.post("/sysop/settings/mud-origins/remove", data={
             "csrf_token": "test-token", "races": ["marshfolk"],
@@ -239,8 +239,10 @@ def test_pack_import_is_atomic_and_bulk_removal_handles_both_kinds(data_path):
             assert db.execute(
                 "SELECT 1 FROM mud_origin_definitions WHERE key IN ('marshfolk','trailwarden')"
             ).fetchone() is None
-            assert {item["key"] for item in character_creation.options(db)["races"]} == {"human"}
-            assert {item["key"] for item in character_creation.options(db)["classes"]} == {"warrior"}
+            # The world offered only the removed choices, so it falls back to the built-ins.
+            defaults = character_creation.default_availability()
+            assert {item["key"] for item in character_creation.options(db)["races"]} == defaults["races"]
+            assert {item["key"] for item in character_creation.options(db)["classes"]} == defaults["classes"]
 
         race_only = {**_template("races"), "key": "reedfolk", "name": "Reedfolk"}
         class_only = {**_template("classes"), "key": "wayfinder", "name": "Wayfinder"}

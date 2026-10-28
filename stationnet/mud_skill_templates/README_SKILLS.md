@@ -35,27 +35,35 @@ skills. `/skills <name>` shows one skill in detail.
 Skills can also travel with content. World ZIPs may include `skills.json` (see
 the [world guide](../mud_world_templates/README_CUSTOM_WORLDS.md)), and dungeon
 themes may include a top-level `skills` array (see the
-[dungeon guide](../dungeon_templates/README_DUNGEON_THEMES.md)). Bundled skills
-start disabled unless the world import mode enables them.
+[dungeon guide](../dungeon_templates/README_DUNGEON_THEMES.md)). A world's
+bundled skills are offered in that world according to its import choice; no
+other world offers them until a SYSOP adds them.
 
-### Disabling and removing
+### Per-world availability and removal
 
-- **Disabled skills go dormant.** Characters keep their ranks and progress, but
-  the skill gives no effect and does not practice. It is shown as inactive.
-  Skill points spent on it are returned while it is disabled. Re-enabling it
-  restores everything.
-- **Default skills** can be disabled but never removed.
+Installed skills are shared by the whole station, and each world chooses which
+ones it offers on its **RACES, CLASSES & SKILLS** page in SYSOP Settings.
+Standalone imports are offered in the worlds ticked on the import form (by
+default, every enabled world).
+
+- **Skills a world does not offer go dormant there.** Characters in that world
+  keep their ranks and progress, but the skill gives no effect and does not
+  practice. It is shown as inactive. Skill points spent on it are returned
+  while it is not offered. Offering it again restores everything. Other worlds
+  are unaffected.
+- **Default skills** can be withdrawn from a world but never removed.
 - **Blocked removals.** An imported skill cannot be removed while an installed
   race or class names it (as `skill` or in `skills`), or while another installed
   skill requires it. Remove those together, or update them first.
+- **Removal reaches every world.** A removed skill leaves every world's
+  selection.
 - **Skills characters still hold** are kept as removed-but-reserved definitions
   (including skills in archived campaigns), so ranks stay readable and the key
   cannot be reused for a different skill.
 - **Trainer lessons** for a removed skill are deleted.
-- **Minimum enabled.** While either MUD mode is on, at least
-  `starting_skill_choices` skills with `"starting": true` must stay enabled.
-  If removing a world or theme would break that, the default starting skills
-  are re-enabled.
+- **Minimum offered.** Every world offers at least `starting_skill_choices`
+  skills with `"starting": true`. If a removal would leave a world short, that
+  world offers the default starting skills again.
 
 ## Example
 
@@ -189,7 +197,7 @@ The default skills cover these categories:
 
 Races and classes may grant skills with `"skills": {"perception": 1}` (ranks
 1–5). Granted skills are added at creation, don't count toward the starting
-choices, and are added (never lowered) when a character replaces a disabled
+choices, and are added (never lowered) when a character replaces a removed
 race or class. A class's favored `skill` starts at rank 2 if the player picks
 it.
 

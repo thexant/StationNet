@@ -6,6 +6,7 @@ import uuid
 
 import pytest
 
+from mud_world_helpers import activate_world, retire_origin
 from stationnet import (create_app, character_creation, dungeons, mud, mud_compat, mud_conditions,
                         mud_effects, mud_skills, mud_worlds)
 from stationnet.db import get_db
@@ -180,7 +181,7 @@ def test_replacing_origins_resyncs_growth(game):
     with app.app_context():
         db = get_db()
         before = mud.character_state(db, users["deep"])["maximum_health"]
-        db.execute("UPDATE mud_origin_definitions SET enabled=0 WHERE key='stoneblood'")
+        retire_origin(db, _cid(users["deep"]), "races")
         mud_compat.replace_origins(db, users["deep"], "plainfolk", "ashcaller")
         after = mud.character_state(db, users["deep"])
         assert before - after["maximum_health"] == 20
@@ -303,7 +304,7 @@ def test_world_content_responds_to_origins_and_round_trips(game):
         db = get_db()
         document = _world()
         mud_worlds.install(db, mud_worlds.package_bytes(document))
-        db.execute("UPDATE mud_world_packages SET active=CASE WHEN id='deeproads' THEN 1 ELSE 0 END")
+        activate_world(db, 'deeproads')
         rooms = {row["name"]: row["id"] for row in db.execute(
             "SELECT id,name FROM mud_world_rooms WHERE world_id='deeproads'")}
         deepkin = mud_worlds.bundled_key("deeproads", "races", "deepkin")

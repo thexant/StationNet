@@ -545,6 +545,9 @@ CREATE TABLE IF NOT EXISTS application_multiplayer_events (
  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);
 CREATE INDEX IF NOT EXISTS idx_application_multiplayer_events
  ON application_multiplayer_events(session_id,id);
+-- The MUD tables below keep their original single-world shape here; the last
+-- migration, _migrate_mud_multiworld, adds world keys so fresh and upgraded
+-- stations end up identical. Accounts get one character per world.
 CREATE TABLE IF NOT EXISTS mud_characters (
  id TEXT PRIMARY KEY,
  user_id INTEGER NOT NULL UNIQUE REFERENCES users(id) ON DELETE CASCADE,
@@ -680,10 +683,6 @@ CREATE TABLE IF NOT EXISTS mud_dungeon_origins (
  origin_key TEXT NOT NULL,
  local_key TEXT NOT NULL,
  PRIMARY KEY(theme_id,kind,origin_key));
-CREATE UNIQUE INDEX IF NOT EXISTS idx_mud_world_one_active
- ON mud_world_packages(active) WHERE active=1;
-CREATE UNIQUE INDEX IF NOT EXISTS idx_mud_world_single_start
- ON mud_world_rooms(is_start) WHERE is_start=1;
 CREATE TABLE IF NOT EXISTS mud_world_exits (
  id TEXT PRIMARY KEY,
  from_room_id TEXT NOT NULL REFERENCES mud_world_rooms(id) ON DELETE CASCADE,
@@ -866,11 +865,6 @@ CREATE TABLE IF NOT EXISTS mud_portal_settings (
  id INTEGER PRIMARY KEY CHECK(id=1),
  name TEXT NOT NULL DEFAULT 'Dungeon Portals',
  description TEXT NOT NULL DEFAULT 'A threshold of dormant gateways hums with unrealized possibility.',
- updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);
-CREATE TABLE IF NOT EXISTS mud_crossover_settings (
- id INTEGER PRIMARY KEY CHECK(id=1),
- progression_shared INTEGER NOT NULL DEFAULT 1 CHECK(progression_shared IN (0,1)),
- inventory_shared INTEGER NOT NULL DEFAULT 1 CHECK(inventory_shared IN (0,1)),
  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);
 CREATE TABLE IF NOT EXISTS mud_travel_settings (
  id INTEGER PRIMARY KEY CHECK(id=1),
@@ -1201,18 +1195,6 @@ BEGIN
  INSERT OR IGNORE INTO radio_group_memberships(user_id,group_id)
  SELECT NEW.id,id FROM radio_permission_groups WHERE is_default=1;
 END;
-CREATE TRIGGER IF NOT EXISTS mud_character_after_user_insert
-AFTER INSERT ON users
-BEGIN
- INSERT OR IGNORE INTO mud_characters(id,user_id,display_name,creation_state)
- VALUES('stationnet:character:' || NEW.id,NEW.id,NEW.callsign,'pending');
- INSERT OR IGNORE INTO mud_character_progression(character_id,track_key)
- VALUES('stationnet:character:' || NEW.id,'shared');
- INSERT OR IGNORE INTO mud_character_progression(character_id,track_key)
- VALUES('stationnet:character:' || NEW.id,'traditional');
- INSERT OR IGNORE INTO mud_character_progression(character_id,track_key)
- VALUES('stationnet:character:' || NEW.id,'procedural');
-END;
 """
 
 DEFAULT_RADIO_BANDS = (
@@ -1239,10 +1221,17 @@ LEGACY_DEFAULT_RADIO_BANDS = (
     (5, "EXPERIMENTAL / UNRESTRICTED", 145000, 145999, "members"),
 )
 
+def _register_mud_functions(connection):
+    """mud_world() is the MUD world the current request or tick acts in; SQL compares content to it."""
+    from . import mud_scope
+    connection.create_function("mud_world", 0, mud_scope.current)
+
+
 def get_db():
     if "db" not in g:
         g.db = sqlite3.connect(current_app.config["DATABASE"])
         g.db.row_factory = sqlite3.Row
+        _register_mud_functions(g.db)
         g.db.execute("PRAGMA foreign_keys=ON")
         g.db.execute("PRAGMA journal_mode=WAL")
         g.db.execute("PRAGMA busy_timeout=5000")
@@ -1486,8 +1475,8 @@ def init_db():
     _migrate_mud_work(database)
     _migrate_mud_discoveries(database)
     _migrate_mud_banking(database)
+    _migrate_mud_multiworld(database)
     database.execute("INSERT OR IGNORE INTO mud_portal_settings(id) VALUES(1)")
-    database.execute("INSERT OR IGNORE INTO mud_crossover_settings(id) VALUES(1)")
     database.execute("INSERT OR IGNORE INTO mud_travel_settings(id) VALUES(1)")
     database.execute(
         "INSERT OR IGNORE INTO mud_daily_dungeon_settings(id,station_seed) VALUES(1,?)",
@@ -2019,7 +2008,13 @@ def _migrate_mud_skills(database):
 
 
 def _initialize_mud_characters(database):
-    """Backfill one identity and non-destructive mode-ready tracks per account."""
+    """Backfill one identity and non-destructive mode-ready tracks per account.
+
+    Only single-world databases need this; afterwards characters are created
+    per world on first visit.
+    """
+    if "world_key" in {row["name"] for row in database.execute("PRAGMA table_info(mud_characters)")}:
+        return
     database.execute(
         "INSERT OR IGNORE INTO mud_characters(id,user_id,display_name,creation_state) "
         "SELECT 'stationnet:character:' || id,id,callsign,'pending' FROM users"
@@ -2063,16 +2058,20 @@ def _migrate_mud_world_packages(database):
         columns = {row["name"] for row in database.execute(f"PRAGMA table_info({table})")}
         if "world_id" not in columns:
             database.execute(f"ALTER TABLE {table} ADD COLUMN world_id TEXT NOT NULL DEFAULT 'stationnet'")
-    start = database.execute("SELECT id FROM mud_world_rooms WHERE is_start=1").fetchone()
+    start = database.execute(
+        "SELECT id FROM mud_world_rooms WHERE is_start=1 ORDER BY world_id<>'stationnet' LIMIT 1").fetchone()
     if start:
         database.execute(
             "INSERT OR IGNORE INTO mud_world_packages(id,name,author,start_room_id,imported,active) "
             "VALUES('stationnet','Station World','Station builders',?,0,1)", (start["id"],)
         )
-        database.execute(
-            "UPDATE mud_world_packages SET start_room_id=? WHERE id='stationnet' AND active=1",
-            (start["id"],),
-        )
+        # Single-world stations kept the one start room in sync with the active home world;
+        # with several worlds each package names its own start room instead.
+        if "enabled" not in {row["name"] for row in database.execute("PRAGMA table_info(mud_world_packages)")}:
+            database.execute(
+                "UPDATE mud_world_packages SET start_room_id=? WHERE id='stationnet' AND active=1",
+                (start["id"],),
+            )
 
 
 def _migrate_mud_society(database):
@@ -2890,3 +2889,365 @@ def get_station():
 def init_app(app):
     app.teardown_appcontext(close_db)
 
+
+
+MUD_PROCEDURAL_WORLD = "stationnet:procedural"
+MUD_PORTAL_ROOM = "stationnet:portal"
+
+
+def _mud_world_keyed_tables():
+    """Per-account MUD state that now belongs to one world: table -> (columns, indexes)."""
+    return {
+        "mud_player_locations": (
+            "mode TEXT NOT NULL CHECK(mode IN ('traditional','procedural')),"
+            "location_type TEXT NOT NULL CHECK(location_type IN ('world_room','portal','dungeon_instance')),"
+            "location_key TEXT NOT NULL,"
+            "instance_id TEXT REFERENCES mud_procedural_instances(id) ON DELETE SET NULL,"
+            "updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP",
+            ("CREATE INDEX IF NOT EXISTS idx_mud_player_location_scope "
+             "ON mud_player_locations(location_type,location_key,user_id)",)),
+        "mud_world_locations": (
+            "room_id TEXT REFERENCES mud_world_rooms(id) ON DELETE SET NULL,"
+            "updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP", ()),
+        "mud_player_stealth": ("hidden INTEGER NOT NULL DEFAULT 0 CHECK(hidden IN (0,1))", ()),
+        "mud_death_summaries": (
+            "instance_id TEXT NOT NULL REFERENCES mud_procedural_instances(id) ON DELETE CASCADE,"
+            "summary TEXT NOT NULL,created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP", ()),
+        "mud_wayfinding": (
+            "destination_id TEXT NOT NULL REFERENCES mud_world_destinations(id) ON DELETE CASCADE,"
+            "last_hint TEXT NOT NULL DEFAULT '',last_direction TEXT NOT NULL DEFAULT '',"
+            "selected_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP", ()),
+        "mud_travel": (
+            "direction TEXT NOT NULL,room_id TEXT NOT NULL,preset_id TEXT,"
+            "steps INTEGER NOT NULL DEFAULT 0,next_due TEXT NOT NULL,"
+            "started_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP",
+            ("CREATE INDEX IF NOT EXISTS idx_mud_travel_due ON mud_travel(next_due)",)),
+        "mud_event_views": ("cleared_through_id INTEGER NOT NULL DEFAULT 0", ()),
+        "mud_tell_history": ("other_user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE", ()),
+    }
+
+
+def _ensure_mud_multiworld_structures(database):
+    """Columns, tables, and indexes the multi-world MUD needs; safe to repeat."""
+    database.executescript("""
+    CREATE TABLE IF NOT EXISTS mud_world_availability (
+      world_key TEXT NOT NULL,
+      kind TEXT NOT NULL CHECK(kind IN ('races','classes','skills')),
+      definition_key TEXT NOT NULL,
+      PRIMARY KEY(world_key,kind,definition_key));
+    CREATE INDEX IF NOT EXISTS idx_mud_world_availability_definition
+      ON mud_world_availability(kind,definition_key);
+    DROP TRIGGER IF EXISTS mud_character_after_user_insert;
+    DROP INDEX IF EXISTS idx_mud_world_one_active;
+    DROP INDEX IF EXISTS idx_mud_world_single_start;
+    """)
+    additions = (
+        ("mud_world_packages", "enabled", "INTEGER NOT NULL DEFAULT 0 CHECK(enabled IN (0,1))"),
+        ("mud_events", "world_key", "TEXT"),
+        ("mud_campaign_archives", "converted_at", "TEXT"),
+    )
+    for table, column, declaration in additions:
+        if column not in {row["name"] for row in database.execute(f"PRAGMA table_info({table})")}:
+            database.execute(f"ALTER TABLE {table} ADD COLUMN {column} {declaration}")
+    database.execute("CREATE INDEX IF NOT EXISTS idx_mud_events_world ON mud_events(world_key,id)")
+
+
+def _ensure_mud_multiworld_indexes(database):
+    database.executescript("""
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_mud_world_start_per_world
+      ON mud_world_rooms(world_id) WHERE is_start=1;
+    CREATE INDEX IF NOT EXISTS idx_mud_characters_world_name
+      ON mud_characters(world_key,display_name COLLATE NOCASE);
+    """)
+
+
+def _backup_before_mud_multiworld(database):
+    """Keep an untouched copy of the database before characters are split by world."""
+    from datetime import datetime, timezone
+    from pathlib import Path
+    location = current_app.config.get("DATABASE")
+    if not location or str(location) == ":memory:":
+        return None
+    folder = Path(location).parent / "backups"
+    folder.mkdir(parents=True, exist_ok=True)
+    target = folder / f"mud-pre-multiworld-{datetime.now(timezone.utc):%Y%m%dT%H%M%S%fZ}.sqlite3"
+    database.commit()
+    copy = sqlite3.connect(target)
+    try:
+        database.backup(copy)
+    finally:
+        copy.close()
+    return target
+
+
+def _legacy_mud_availability(database):
+    """The single station-wide race, class, and skill selection of the one-world MUD."""
+    from . import character_creation, mud_skills
+    built_in = character_creation._built_in_options()
+    rows = database.execute("SELECT kind,key,imported,installed,enabled FROM mud_origin_definitions").fetchall()
+    chosen = {}
+    for kind in character_creation.KINDS:
+        overrides = {row["key"]: row for row in rows if row["kind"] == kind}
+        keys = {item["key"] for item in built_in[kind]
+                if overrides.get(item["key"]) is None or overrides[item["key"]]["enabled"]}
+        keys |= {row["key"] for row in overrides.values()
+                 if row["imported"] and row["installed"] and row["enabled"]}
+        chosen[kind] = keys
+    skill_rows = {row["key"]: row for row in database.execute(
+        "SELECT key,imported,installed,enabled FROM mud_skill_definitions")}
+    skills = {item["key"] for item in mud_skills._built_in()
+              if skill_rows.get(item["key"]) is None or skill_rows[item["key"]]["enabled"]}
+    skills |= {key for key, row in skill_rows.items() if row["imported"] and row["installed"] and row["enabled"]}
+    chosen["skills"] = skills
+    return chosen
+
+
+def copy_mud_rows(database, table, match, replace):
+    """Insert copies of the rows matching ``match`` with the columns in ``replace`` overridden."""
+    columns = [row["name"] for row in database.execute(f"PRAGMA table_info({table})")]
+    where = " AND ".join(f"{column}=?" for column in match)
+    selected = ",".join("?" if column in replace else column for column in columns)
+    database.execute(
+        f"INSERT OR IGNORE INTO {table}({','.join(columns)}) SELECT {selected} FROM {table} WHERE {where}",
+        [*(replace[column] for column in columns if column in replace), *match.values()])
+
+
+def normalize_mud_character(database, character_id, mode, track_source, loadout_source):
+    """Leave a character exactly one progression track and loadout, both named for its mode.
+
+    The source track or loadout (the old shared one, or the mode's own) wins;
+    the rest are dropped because a character now lives in only one world.
+    """
+    tracks = {row["track_key"] for row in database.execute(
+        "SELECT track_key FROM mud_character_progression WHERE character_id=?", (character_id,))}
+    source = next((key for key in (track_source, mode, "shared", "traditional", "procedural") if key in tracks), None)
+    if source is None:
+        database.execute("INSERT INTO mud_character_progression(character_id,track_key) VALUES(?,?)",
+                         (character_id, mode))
+    elif source != mode:
+        database.execute("DELETE FROM mud_character_progression WHERE character_id=? AND track_key=?",
+                         (character_id, mode))
+        database.execute("UPDATE mud_character_progression SET track_key=? WHERE character_id=? AND track_key=?",
+                         (mode, character_id, source))
+    database.execute("DELETE FROM mud_character_progression WHERE character_id=? AND track_key<>?",
+                     (character_id, mode))
+    loadouts = {row["loadout_key"] for row in database.execute(
+        "SELECT DISTINCT loadout_key FROM mud_character_equipment WHERE character_id=?", (character_id,))}
+    loadout = next((key for key in (loadout_source, mode, "shared") if key in loadouts), None)
+    database.execute("DELETE FROM mud_character_equipment WHERE character_id=? AND loadout_key<>?",
+                     (character_id, loadout or ""))
+    database.execute("UPDATE mud_character_equipment SET loadout_key=? WHERE character_id=?", (mode, character_id))
+    database.execute(
+        "DELETE FROM mud_character_equipment WHERE character_id=? AND item_instance_id NOT IN ("
+        "SELECT id FROM mud_item_instances WHERE owner_character_id=?)", (character_id, character_id))
+    database.execute("UPDATE mud_item_instances SET possession_mode=? WHERE owner_character_id=?",
+                     (mode, character_id))
+
+
+def _split_procedural_character(database, character, policy, procedural_only):
+    """Give an account with Dungeon Portals history its own procedural-world character."""
+    cid, user_id = character["id"], character["user_id"]
+    portal_runs = "SELECT id FROM mud_procedural_instances WHERE world_id IS NULL"
+    evidence = (
+        ("SELECT 1 FROM mud_player_locations WHERE user_id=? AND world_key=?", (user_id, MUD_PROCEDURAL_WORLD)),
+        (f"SELECT 1 FROM mud_expedition_participants WHERE character_id=? AND instance_id IN ({portal_runs})",
+         (cid,)),
+        ("SELECT 1 FROM mud_daily_participation WHERE user_id=?", (user_id,)),
+        ("SELECT 1 FROM mud_item_instances WHERE owner_character_id=? AND possession_mode='procedural'", (cid,)),
+        ("SELECT 1 FROM mud_character_progression WHERE character_id=? AND track_key='procedural' "
+         "AND (level>1 OR experience>0)", (cid,)),
+    )
+    if not any(database.execute(sql, values).fetchone() for sql, values in evidence):
+        return None
+    if database.execute("SELECT 1 FROM mud_characters WHERE user_id=? AND world_key=?",
+                        (user_id, MUD_PROCEDURAL_WORLD)).fetchone():
+        return None
+    pid = f"stationnet:character:{user_id}:{MUD_PROCEDURAL_WORLD}"
+    copy_mud_rows(database, "mud_characters", {"id": cid}, {"id": pid, "world_key": MUD_PROCEDURAL_WORLD})
+    # Skill ranks were shared by both modes, so each new character keeps them.
+    copy_mud_rows(database, "mud_character_skills", {"character_id": cid}, {"character_id": pid})
+    track = "shared" if policy["progression_shared"] else "procedural"
+    if not database.execute("SELECT 1 FROM mud_character_progression WHERE character_id=? AND track_key=?",
+                            (cid, track)).fetchone():
+        track = "shared"
+    copy_mud_rows(database, "mud_character_progression", {"character_id": cid, "track_key": track},
+                  {"character_id": pid, "track_key": "procedural"})
+    # Run loot always follows its run; other items follow their mode only when inventories were separate.
+    moved = [row["id"] for row in database.execute(
+        f"SELECT id FROM mud_item_instances WHERE owner_character_id=? AND (acquired_run_id IN ({portal_runs})"
+        + (" OR possession_mode='procedural'" if not policy["inventory_shared"] else "") + ")", (cid,))]
+    loadout = "shared" if policy["inventory_shared"] else "procedural"
+    for item_id in moved:
+        database.execute("UPDATE mud_item_instances SET owner_character_id=? WHERE id=?", (pid, item_id))
+        database.execute("UPDATE mud_character_storage SET character_id=? WHERE item_instance_id=?", (pid, item_id))
+        database.execute("UPDATE mud_character_equipment SET character_id=?,loadout_key='procedural' "
+                         "WHERE character_id=? AND item_instance_id=? AND loadout_key=?",
+                         (pid, cid, item_id, loadout))
+    for table, column, scope in (
+            ("mud_expedition_participants", "instance_id", portal_runs),
+            ("mud_dungeon_conversation_sessions", "instance_id", portal_runs),
+            ("mud_dungeon_npc_player_states", "content_id",
+             f"SELECT id FROM mud_dungeon_content WHERE instance_id IN ({portal_runs})"),
+            ("mud_combat_participants", "encounter_id",
+             f"SELECT id FROM mud_combat_encounters WHERE scope_type='instance' AND scope_key IN ({portal_runs})")):
+        database.execute(f"UPDATE {table} SET character_id=? WHERE character_id=? AND {column} IN ({scope})",
+                         (pid, cid))
+    if procedural_only:
+        # Coins earned on a procedural-only station were dungeon coins.
+        database.execute("UPDATE mud_character_wallets SET character_id=? WHERE character_id=?", (pid, cid))
+    normalize_mud_character(database, pid, "procedural", "procedural", "procedural")
+    return pid
+
+
+def _migrate_mud_multiworld(database):
+    """Turn the one-world MUD into independent worlds with one character per account per world.
+
+    The previously active authored world keeps every existing character.
+    Accounts with Dungeon Portals history get a procedural-world character
+    holding a copy of their progression and skills, their portal runs, and
+    their procedural possessions. Archived campaigns become characters in their
+    own worlds. A backup of the whole database is written first.
+    """
+    from . import mud_compat
+    _ensure_mud_multiworld_structures(database)
+    if "world_key" in {row["name"] for row in database.execute("PRAGMA table_info(mud_characters)")}:
+        _ensure_mud_multiworld_indexes(database)
+        return
+    if database.execute("SELECT 1 FROM mud_characters WHERE creation_state<>'pending' "
+                        "UNION ALL SELECT 1 FROM mud_campaign_characters LIMIT 1").fetchone():
+        _backup_before_mud_multiworld(database)
+    station = database.execute(
+        "SELECT mud_enabled,mud_traditional_enabled,mud_procedural_enabled FROM station WHERE id=1").fetchone()
+    if station is None:
+        traditional, procedural = True, False
+    else:
+        procedural = bool(station["mud_procedural_enabled"])
+        traditional = bool(station["mud_traditional_enabled"]) or (bool(station["mud_enabled"]) and not procedural)
+    policy = {"progression_shared": True, "inventory_shared": True}
+    if database.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='mud_crossover_settings'").fetchone():
+        row = database.execute("SELECT progression_shared,inventory_shared FROM mud_crossover_settings "
+                               "WHERE id=1").fetchone()
+        if row is not None:
+            policy = {key: bool(row[key]) for key in policy}
+    active = database.execute("SELECT id FROM mud_world_packages WHERE active=1").fetchone()
+    home = active["id"] if active else "stationnet"
+    availability = _legacy_mud_availability(database)
+    database.commit()
+    database.execute("PRAGMA foreign_keys=OFF")
+    try:
+        database.execute("BEGIN")
+        # Worlds: the formerly active one stays playable; the others stay as they were, off.
+        start = database.execute("SELECT id,world_id FROM mud_world_rooms WHERE is_start=1").fetchone()
+        if start is not None:
+            database.execute("UPDATE mud_world_packages SET start_room_id=? WHERE id=?",
+                             (start["id"], start["world_id"]))
+        database.execute("UPDATE mud_world_rooms SET is_start=(id IN (SELECT start_room_id FROM mud_world_packages "
+                         "AS p WHERE p.id=mud_world_rooms.world_id))")
+        database.execute("UPDATE mud_world_packages SET enabled=(id=? AND ?)", (home, int(traditional)))
+
+        # Characters gain a world; one account may now hold one per world.
+        database.execute("""
+        CREATE TABLE mud_characters_new (
+         id TEXT PRIMARY KEY,
+         user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+         world_key TEXT NOT NULL,
+         display_name TEXT NOT NULL COLLATE NOCASE,
+         description TEXT NOT NULL DEFAULT '',
+         creation_state TEXT NOT NULL DEFAULT 'pending' CHECK(creation_state IN ('pending','legacy','complete')),
+         race_key TEXT,
+         class_key TEXT,
+         base_attributes_json TEXT,
+         created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+         updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+         UNIQUE(user_id,world_key))""")
+        columns = ("id,user_id,display_name,description,creation_state,race_key,class_key,"
+                   "base_attributes_json,created_at,updated_at")
+        database.execute(f"INSERT INTO mud_characters_new({columns},world_key) SELECT {columns},? FROM mud_characters",
+                         (home,))
+        database.execute("DROP TABLE mud_characters")
+        database.execute("ALTER TABLE mud_characters_new RENAME TO mud_characters")
+
+        # Per-account state is now per account and world. Stealth reads the old locations, so it goes first.
+        world_of = {
+            "mud_player_stealth": (
+                "COALESCE((SELECT CASE WHEN l.mode='procedural' THEN ? ELSE ? END FROM mud_player_locations AS l "
+                "WHERE l.user_id=mud_player_stealth.user_id),?)", (MUD_PROCEDURAL_WORLD, home, home)),
+            "mud_player_locations": ("CASE WHEN mode='procedural' THEN ? ELSE ? END", (MUD_PROCEDURAL_WORLD, home)),
+            "mud_world_locations": (
+                "COALESCE((SELECT world_id FROM mud_world_rooms AS r WHERE r.id=room_id),?)", (home,)),
+            "mud_death_summaries": (
+                "COALESCE((SELECT world_id FROM mud_procedural_instances AS i WHERE i.id=instance_id),?)",
+                (MUD_PROCEDURAL_WORLD,)),
+            "mud_wayfinding": (
+                "COALESCE((SELECT world_id FROM mud_world_destinations AS d WHERE d.id=destination_id),?)", (home,)),
+            "mud_travel": ("COALESCE((SELECT world_id FROM mud_world_rooms AS r WHERE r.id=room_id),?)", (home,)),
+            "mud_event_views": ("?", (home,)),
+            "mud_tell_history": ("?", (home,)),
+        }
+        definitions = _mud_world_keyed_tables()
+        for table, (expression, values) in world_of.items():
+            body, indexes = definitions[table]
+            old_columns = [row["name"] for row in database.execute(f"PRAGMA table_info({table})")]
+            database.execute(f"CREATE TABLE {table}_new (user_id INTEGER NOT NULL REFERENCES users(id) "
+                             f"ON DELETE CASCADE,world_key TEXT NOT NULL,{body},PRIMARY KEY(user_id,world_key))")
+            names = ",".join(old_columns)
+            database.execute(f"INSERT OR IGNORE INTO {table}_new({names},world_key) "
+                             f"SELECT {names},{expression} FROM {table}", values)
+            if table == "mud_event_views":
+                database.execute("INSERT OR IGNORE INTO mud_event_views_new(user_id,world_key,cleared_through_id) "
+                                 "SELECT user_id,?,cleared_through_id FROM mud_event_views",
+                                 (MUD_PROCEDURAL_WORLD,))
+            database.execute(f"DROP TABLE {table}")
+            database.execute(f"ALTER TABLE {table}_new RENAME TO {table}")
+            for index in indexes:
+                database.execute(index)
+        # Presence is reconnect state; clients re-register on their next poll.
+        database.execute("DROP TABLE mud_presence")
+        database.execute("""
+        CREATE TABLE mud_presence (
+         user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+         world_key TEXT NOT NULL,
+         connection_id TEXT NOT NULL,
+         client_id TEXT NOT NULL,
+         room_id TEXT REFERENCES mud_world_rooms(id) ON DELETE CASCADE,
+         location_type TEXT NOT NULL DEFAULT 'world_room',
+         location_key TEXT,
+         instance_id TEXT REFERENCES mud_procedural_instances(id) ON DELETE SET NULL,
+         last_seen TEXT NOT NULL,
+         disconnected_at TEXT,
+         PRIMARY KEY(user_id,world_key,connection_id,client_id))""")
+        database.execute("CREATE INDEX IF NOT EXISTS idx_mud_presence_room ON mud_presence(room_id,user_id)")
+        database.execute("CREATE INDEX IF NOT EXISTS idx_mud_presence_seen ON mud_presence(last_seen,disconnected_at)")
+        database.execute(
+            "UPDATE mud_events SET world_key=CASE "
+            "WHEN audience_type='instance' THEN COALESCE((SELECT world_id FROM mud_procedural_instances AS i "
+            "WHERE i.id=audience_key),?) "
+            "WHEN audience_type='room' AND audience_key=? THEN ? "
+            "WHEN audience_type='room' THEN COALESCE((SELECT world_id FROM mud_world_rooms AS r "
+            "WHERE r.id=audience_key),?) ELSE ? END WHERE world_key IS NULL",
+            (MUD_PROCEDURAL_WORLD, MUD_PORTAL_ROOM, MUD_PROCEDURAL_WORLD, home, home))
+
+        # Split Dungeon Portals history into procedural-world characters, then normalize everyone.
+        for character in database.execute("SELECT * FROM mud_characters ORDER BY user_id").fetchall():
+            if character["creation_state"] != "pending":
+                _split_procedural_character(database, character, policy, procedural and not traditional)
+            normalize_mud_character(database, character["id"], "traditional",
+                                    "shared" if policy["progression_shared"] else "traditional",
+                                    "shared" if policy["inventory_shared"] else "traditional")
+        mud_compat.convert_archives(database, policy)
+
+        # Every world starts with the selection the station offered before.
+        if availability["races"] and availability["classes"]:
+            worlds = [row["id"] for row in database.execute("SELECT id FROM mud_world_packages")]
+            database.executemany(
+                "INSERT OR IGNORE INTO mud_world_availability(world_key,kind,definition_key) VALUES(?,?,?)",
+                ((world, kind, key) for world in [*worlds, MUD_PROCEDURAL_WORLD]
+                 for kind, keys in availability.items() for key in keys))
+        database.execute("DROP TABLE IF EXISTS mud_crossover_settings")
+        _ensure_mud_multiworld_indexes(database)
+        database.commit()
+    except Exception:
+        database.rollback()
+        raise
+    finally:
+        database.execute("PRAGMA foreign_keys=ON")

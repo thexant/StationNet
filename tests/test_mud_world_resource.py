@@ -8,6 +8,7 @@ import zipfile
 
 import pytest
 
+from stationnet import mud_scope
 from stationnet import create_app, mud, mud_worlds
 from stationnet.db import get_db
 
@@ -40,13 +41,13 @@ def _scholar(db, username="mage", **user_fields):
 
 
 def _set_resource(db, enabled, name):
-    db.execute("UPDATE mud_world_packages SET resource_enabled=?,resource_name=? WHERE active=1",
+    db.execute("UPDATE mud_world_packages SET resource_enabled=?,resource_name=? WHERE id=mud_world()",
                (int(enabled), name))
 
 
 def _mana(db, character_id):
     return db.execute("SELECT current_mana FROM mud_character_progression WHERE character_id=? "
-                      "AND track_key='shared'",
+                      "AND track_key='traditional'",
                       (character_id,)).fetchone()[0]
 
 
@@ -109,11 +110,11 @@ def test_disabled_resource_hides_it_and_blocks_spells(app):
         db.execute("UPDATE mud_character_progression SET current_health=50 WHERE character_id=?", (character_id,))
         assert "mana" not in mud._rest_action(db, user, {})[0].body.casefold()
         assert _mana(db, character_id) == 5
-        # Procedural dungeons keep their usual Mana, and the stored value returns with it.
-        mud._set_player_location(db, user["id"], "procedural", "portal", mud.PORTAL_ROOM_ID)
-        state = mud.character_state(db, user["id"])
-        assert state["resource"]["enabled"] and state["resource"]["name"] == "Mana"
-        assert state["mana"] == 5
+        # The procedural dungeon world keeps its usual Mana for its own characters.
+        with mud_scope.use(mud_scope.PROCEDURAL):
+            state = mud.character_state(db, user["id"])
+            assert state["resource"]["enabled"] and state["resource"]["name"] == "Mana"
+        assert _mana(db, character_id) == 5
 
 
 def test_resource_survives_export_and_import(app):
@@ -164,18 +165,18 @@ def test_builder_sets_resource(app):
             session["user_id"] = user["id"]
             session["csrf_token"] = "test-token"
     data = {"csrf_token": "test-token", "enabled": "1", "name": "  Soul   Power "}
-    assert clients["outsider"].post("/mud/builder/resource", data=data).status_code == 403
-    page = clients["builder"].post("/mud/builder/resource", data=data, follow_redirects=True)
+    assert clients["outsider"].post("/mud/w/stationnet/builder/resource", data=data).status_code == 403
+    page = clients["builder"].post("/mud/w/stationnet/builder/resource", data=data, follow_redirects=True)
     assert page.status_code == 200 and b"Soul Power is now" in page.data
-    page = clients["builder"].post("/mud/builder/resource", data={**data, "name": "Bad1"},
+    page = clients["builder"].post("/mud/w/stationnet/builder/resource", data={**data, "name": "Bad1"},
                                    follow_redirects=True)
     assert b"Resource name must be" in page.data
     with app.app_context():
         assert mud.resource_settings(get_db()) == {"enabled": True, "name": "Soul Power", "noun": "soul power"}
-    clients["builder"].post("/mud/builder/resource", data={"csrf_token": "test-token", "name": "Soul Power"})
+    clients["builder"].post("/mud/w/stationnet/builder/resource", data={"csrf_token": "test-token", "name": "Soul Power"})
     with app.app_context():
         assert not mud.resource_settings(get_db())["enabled"]
-    page = clients["builder"].get("/mud")
+    page = clients["builder"].get("/mud/w/stationnet")
     assert page.status_code == 200
     assert b"data-character-mana-meter hidden" in page.data and b'"cast"' not in page.data
     with app.app_context():
@@ -187,6 +188,6 @@ def test_builder_sets_resource(app):
     with client.session_transaction() as session:
         session["user_id"] = newcomer
         session["csrf_token"] = "test-token"
-    create = client.get("/mud/create").data.decode()
+    create = client.get("/mud/w/stationnet/create").data.decode()
     assert "(unavailable in this world)" in create
     assert "Raises healing and experience earned." in create and "mana/level" not in create

@@ -35,30 +35,137 @@ def _built_in_options():
     return data
 
 
-def catalog(database=None, *, include_removed=False):
-    """Return server-side metadata and definitions for every managed origin."""
+AVAILABILITY_KINDS = (*KINDS, "skills")
+
+
+def default_availability():
+    """What a world offers before a SYSOP chooses: every built-in race, class, and skill."""
+    built_in = _built_in_options()
+    return {kind: {item["key"] for item in built_in[kind]} for kind in AVAILABILITY_KINDS}
+
+
+def world_availability(database, world):
+    """The race, class, and skill keys one world offers; unconfigured worlds offer the built-ins."""
+    chosen = {kind: set() for kind in AVAILABILITY_KINDS}
+    for row in database.execute(
+            "SELECT kind,definition_key FROM mud_world_availability WHERE world_key=?", (world,)):
+        chosen[row["kind"]].add(row["definition_key"])
+    return chosen if any(chosen.values()) else default_availability()
+
+
+def availability_configured(database, world):
+    return database.execute("SELECT 1 FROM mud_world_availability WHERE world_key=? LIMIT 1",
+                            (world,)).fetchone() is not None
+
+
+def set_world_availability(database, world, chosen):
+    """Offer exactly the chosen installed definitions in one world; other worlds are untouched."""
+    from . import mud_skills
+    chosen = {kind: set(chosen.get(kind) or ()) for kind in AVAILABILITY_KINDS}
+    origins = catalog(database, world="")
+    for kind in KINDS:
+        if chosen[kind] - {entry["key"] for entry in origins[kind]}:
+            raise ValueError("Choose only installed races and classes.")
+        if not chosen[kind]:
+            raise ValueError("Offer at least one race and one class in every world.")
+    skills = mud_skills.catalog(database, world="")
+    if chosen["skills"] - {entry["key"] for entry in skills}:
+        raise ValueError("Choose only installed skills.")
+    mud_skills.require_available(database, chosen["skills"])
+    database.execute("DELETE FROM mud_world_availability WHERE world_key=?", (world,))
+    database.executemany(
+        "INSERT INTO mud_world_availability(world_key,kind,definition_key) VALUES(?,?,?)",
+        ((world, kind, key) for kind in AVAILABILITY_KINDS for key in sorted(chosen[kind])))
+    return chosen
+
+
+def playable_world_keys(database):
+    """Worlds players can enter now: enabled authored worlds, plus the dungeon world when it is on."""
+    from . import mud_scope
+    keys = [row["id"] for row in database.execute("SELECT id FROM mud_world_packages WHERE enabled=1 ORDER BY id")]
+    station = database.execute("SELECT mud_procedural_enabled FROM station WHERE id=1").fetchone()
+    if station is not None and station["mud_procedural_enabled"]:
+        keys.append(mud_scope.PROCEDURAL)
+    return keys
+
+
+def offer(database, kind, keys, worlds=None):
+    """Add newly installed definitions to some worlds' selections (by default, every playable world)."""
+    worlds = playable_world_keys(database) if worlds is None else worlds
+    for world in worlds:
+        if not availability_configured(database, world):
+            # Make the built-in default explicit before adding to it.
+            database.executemany(
+                "INSERT OR IGNORE INTO mud_world_availability(world_key,kind,definition_key) VALUES(?,?,?)",
+                ((world, group, key) for group, defaults in default_availability().items() for key in defaults))
+        database.executemany(
+            "INSERT OR IGNORE INTO mud_world_availability(world_key,kind,definition_key) VALUES(?,?,?)",
+            ((world, kind, key) for key in keys))
+
+
+def forget_definition(database, kind, key):
+    """A deleted definition leaves every world's selection; emptied worlds fall back to defaults."""
+    database.execute("DELETE FROM mud_world_availability WHERE kind=? AND definition_key=?", (kind, key))
+
+
+def restore_world_defaults(database):
+    """Refill any configured world whose race, class, or starting skill choices ran out."""
+    from . import mud_skills
+    built_in = default_availability()
+    restored = []
+    for row in database.execute("SELECT DISTINCT world_key FROM mud_world_availability").fetchall():
+        world = row["world_key"]
+        chosen = world_availability(database, world)
+        installed = {kind: {entry["key"] for entry in catalog(database, world="")[kind]} for kind in KINDS}
+        installed["skills"] = {entry["key"] for entry in mud_skills.catalog(database, world="")}
+        chosen = {kind: chosen[kind] & installed[kind] for kind in AVAILABILITY_KINDS}
+        changed = False
+        for kind in KINDS:
+            if not chosen[kind]:
+                chosen[kind] = set(built_in[kind])
+                changed = True
+        try:
+            mud_skills.require_available(database, chosen["skills"])
+        except ValueError:
+            chosen["skills"] |= built_in["skills"]
+            changed = True
+        if changed:
+            set_world_availability(database, world, chosen)
+            restored.append(world)
+    return restored
+
+
+def catalog(database=None, *, include_removed=False, world=None):
+    """Return server-side metadata and definitions for every managed origin.
+
+    ``enabled`` says whether a definition is offered in ``world`` (the current
+    MUD world when omitted). Outside any world it means only "installed".
+    """
+    from . import mud_scope
     if database is None:
         from .db import get_db
         database = get_db()
+    world = mud_scope.get() if world is None else world
+    available = world_availability(database, world) if world else None
     built_in = _built_in_options()
     rows = {(row["kind"], row["key"]): row for row in database.execute(
-        "SELECT kind,key,definition_json,imported,installed,enabled FROM mud_origin_definitions"
+        "SELECT kind,key,definition_json,imported,installed FROM mud_origin_definitions"
     )}
     entries = {kind: [] for kind in KINDS}
     for kind in KINDS:
         for definition in built_in[kind]:
-            row = rows.pop((kind, definition["key"]), None)
+            rows.pop((kind, definition["key"]), None)
             entries[kind].append({"kind": kind, "key": definition["key"],
                                   "definition": definition, "imported": False,
                                   "installed": True,
-                                  "enabled": bool(row["enabled"]) if row else True})
+                                  "enabled": available is None or definition["key"] in available[kind]})
     for (kind, key), row in rows.items():
         if not row["imported"] or (not row["installed"] and not include_removed):
             continue
         entries[kind].append({"kind": kind, "key": key,
                               "definition": json.loads(row["definition_json"]),
                               "imported": True, "installed": bool(row["installed"]),
-                              "enabled": bool(row["enabled"]) and bool(row["installed"])})
+                              "enabled": bool(row["installed"]) and (available is None or key in available[kind])})
     for kind in KINDS:
         entries[kind].sort(key=lambda entry: entry["definition"]["name"].casefold())
     return entries
@@ -292,7 +399,7 @@ def starting_skill_count(config, race, archetype):
     return config["starting_skill_choices"] + bonus
 
 
-def import_origin(database, kind, payload):
+def import_origin(database, kind, payload, worlds=None):
     if not payload or len(payload) > MAX_ORIGIN_BYTES:
         raise ValueError("Choose a JSON file no larger than 32 KB.")
     try:
@@ -309,10 +416,11 @@ def import_origin(database, kind, payload):
         "VALUES(?,?,?,1,1,1)",
         (kind, definition["key"], json.dumps(definition, separators=(",", ":"))),
     )
+    offer(database, kind, [definition["key"]], worlds)
     return definition
 
 
-def import_pack(database, payload):
+def import_pack(database, payload, worlds=None):
     """Validate and install a races/classes document as one atomic unit."""
     if not payload or len(payload) > MAX_ORIGIN_PACK_BYTES:
         raise ValueError("Choose a JSON pack no larger than 1 MB.")
@@ -369,12 +477,17 @@ def import_pack(database, payload):
                 "VALUES(?,?,?,1,1,1)",
                 (kind, definition["key"], json.dumps(definition, separators=(",", ":"))),
             )
+        offer(database, kind, [definition["key"] for definition in definitions[kind]], worlds)
     return definitions
 
 
-def remove_origins(database, selected, *, require_active=False):
-    """Remove installed custom origins, retaining definitions used by characters."""
-    entries = catalog(database)
+def remove_origins(database, selected):
+    """Remove installed custom origins from the station and every world's selection.
+
+    Definitions a character (live or archived) still uses are retained as
+    removed rather than deleted, so saved characters keep working.
+    """
+    entries = catalog(database, world="")
     removable = {
         (kind, entry["key"]): entry
         for kind in KINDS for entry in entries[kind] if entry["imported"]
@@ -413,61 +526,15 @@ def remove_origins(database, selected, *, require_active=False):
             database.execute(
                 "DELETE FROM mud_dungeon_origins WHERE kind=? AND origin_key=?", (kind, key)
             )
+            forget_definition(database, kind, key)
             removed.append(entry)
-    if require_active:
-        # A world can make its bundled origins the only enabled choices. When
-        # those imports are removed, keep character creation usable by enabling
-        # a built-in choice for each emptied kind in the same transaction.
-        built_in = _built_in_options()
-        for kind, count in active_counts(database).items():
-            if count:
-                continue
-            defaults = built_in[kind]
-            if defaults:
-                database.execute(
-                    "INSERT INTO mud_origin_definitions(kind,key,enabled) VALUES(?,?,1) "
-                    "ON CONFLICT(kind,key) DO UPDATE SET enabled=1",
-                    (kind, defaults[0]["key"]),
-                )
-        require_available(database)
+    # Callers then run restore_world_defaults: a world may have offered only these choices.
     return removed
-
-
-def active_counts(database):
-    entries = catalog(database)
-    return {kind: sum(entry["enabled"] for entry in entries[kind]) for kind in KINDS}
-
-
-def require_available(database):
-    counts = active_counts(database)
-    if not counts["races"] or not counts["classes"]:
-        raise ValueError("Enable at least one race and one class while a MUD mode is enabled.")
-
-
-def restore_missing_defaults(database):
-    """Re-enable existing built-in choices only for empty categories."""
-    counts = active_counts(database)
-    defaults = _built_in_options()
-    restored = []
-    for kind in KINDS:
-        if counts[kind]:
-            continue
-        if not defaults[kind]:
-            raise ValueError(f"No built-in {kind} are configured for character creation.")
-        for definition in defaults[kind]:
-            database.execute(
-                "INSERT INTO mud_origin_definitions(kind,key,enabled) VALUES(?,?,1) "
-                "ON CONFLICT(kind,key) DO UPDATE SET enabled=1",
-                (kind, definition["key"]),
-            )
-        restored.append(kind)
-    require_available(database)
-    return restored
 
 
 def removable_associations(database, linked):
     """Find installed origins linked only to the content being removed."""
-    entries = catalog(database)
+    entries = catalog(database, world="")
     result = {kind: [] for kind in KINDS}
     for kind in KINDS:
         lookup = {entry["key"]: entry for entry in entries[kind] if entry["imported"]}
@@ -536,26 +603,61 @@ def eligible_skills(config, race, archetype, attributes):
                                                 ranks=grants)]
 
 
-def complete(database, user_id, payload, possession_mode="traditional"):
-    """Apply a pending build atomically; legacy progression and possessions remain."""
+def ensure_character(database, user_id, world=None):
+    """The account's character in a world, created pending on first visit.
+
+    Each world has its own character. An account's first character keeps the
+    original ID format; later ones append the world key.
+    """
+    from . import mud_scope
+    world = mud_scope.current() if world is None else world
+    row = database.execute("SELECT id FROM mud_characters WHERE user_id=? AND world_key=?",
+                           (user_id, world)).fetchone()
+    if row is not None:
+        return row["id"]
+    user = database.execute("SELECT callsign FROM users WHERE id=?", (user_id,)).fetchone()
+    if user is None:
+        raise ValueError("Unknown StationNet account.")
+    character_id = f"stationnet:character:{user_id}"
+    if database.execute("SELECT 1 FROM mud_characters WHERE id=?", (character_id,)).fetchone():
+        character_id = f"stationnet:character:{user_id}:{world}"
+    database.execute(
+        "INSERT INTO mud_characters(id,user_id,world_key,display_name) VALUES(?,?,?,?)",
+        (character_id, user_id, world, user["callsign"]),
+    )
+    database.execute("INSERT OR IGNORE INTO mud_character_progression(character_id,track_key) VALUES(?,?)",
+                     (character_id, mud_scope.mode(world)))
+    return character_id
+
+
+def find_character(database, user_id, world=None):
+    """The account's character row in a world, or None before its first visit."""
+    from . import mud_scope
+    return database.execute("SELECT * FROM mud_characters WHERE user_id=? AND world_key=?",
+                            (user_id, mud_scope.current() if world is None else world)).fetchone()
+
+
+def complete(database, user_id, payload):
+    """Apply a pending build atomically for the account's character in the current world."""
+    from . import mud_scope
+    world = mud_scope.current()
+    possession_mode = mud_scope.mode(world)
     config = options(database)
-    if possession_mode not in ("traditional", "procedural"):
-        raise ValueError("Invalid starting mode.")
     name, race, archetype, allocated, attributes, skills = validate(payload, config)
-    row = database.execute(
-        "SELECT id,creation_state FROM mud_characters WHERE user_id=?", (user_id,)
-    ).fetchone()
-    if row is None or row["creation_state"] not in ("pending", "legacy"):
+    ensure_character(database, user_id, world)
+    row = find_character(database, user_id, world)
+    if row["creation_state"] not in ("pending", "legacy"):
         raise ValueError("This character has already been created.")
+    # Names only need to be distinct within a world.
     collision = database.execute(
-        "SELECT 1 FROM mud_characters WHERE display_name=? COLLATE NOCASE AND user_id<>?",
-        (name, user_id),
+        "SELECT 1 FROM mud_characters WHERE display_name=? COLLATE NOCASE AND world_key=? AND user_id<>?",
+        (name, world, user_id),
     ).fetchone()
     if collision:
         raise ValueError("That character name is already in use.")
     health_bonus = (attributes["vitality"] - 10) * 5
     mana_bonus = (attributes["intellect"] - 10) * 3
-    for track in ("shared", "traditional", "procedural"):
+    for track in (possession_mode,):
         progression = database.execute(
             "SELECT current_health,maximum_health,current_mana,maximum_mana,attribute_points,"
             "trained_attributes_json FROM mud_character_progression "

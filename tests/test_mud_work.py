@@ -7,6 +7,7 @@ import uuid
 
 import pytest
 
+from mud_world_helpers import activate_world, enter_world, set_offered, url
 from stationnet import character_creation, create_app, mud, mud_worlds
 from stationnet.db import get_db
 
@@ -71,7 +72,7 @@ def _setup(app, uid):
     with app.app_context():
         db = get_db()
         mud_worlds.install(db, mud_worlds.package_bytes(_document()))
-        mud_worlds.activate(db, "workland")
+        activate_world(db, "workland")
         db.commit()
         user = db.execute("SELECT * FROM users WHERE id=?", (uid,)).fetchone()
         return user
@@ -182,7 +183,8 @@ def test_package_roundtrip_and_invalid_refs(game):
         assert len(exported["mud_professions"]) == 1
         assert len(exported["mud_work_activities"]) == 6
         assert len(exported["mud_work_rewards"]) == 6
-        mud_worlds.activate(db, "stationnet")
+        mud_worlds.set_enabled(db, "workland", False)
+        db.commit()
         mud_worlds.remove(db, "workland")
         mud_worlds.install(db, payload)
         assert db.execute("SELECT COUNT(*) FROM mud_work_activities a JOIN mud_professions p "
@@ -196,7 +198,7 @@ def test_builder_and_action_request_deduplication(game):
     with client.session_transaction() as session:
         session["user_id"] = uid
         session["csrf_token"] = "test-token"
-    page = client.get("/mud/builder")
+    page = client.get(url("/builder"))
     assert page.status_code == 200 and b"Professions and work" in page.data
     with app.app_context():
         db = get_db()
@@ -206,11 +208,11 @@ def test_builder_and_action_request_deduplication(game):
         cid = f"stationnet:character:{uid}"
         before = mud._wallet(db, cid)
     data = {"csrf_token": "test-token", "command": "/work do Sweep floor", "request_id": "work-payment-one"}
-    first = client.post("/mud/actions", data=data)
+    first = client.post(url("/actions"), data=data)
     assert first.status_code == 200
-    repeat = client.post("/mud/actions", data=data)
+    repeat = client.post(url("/actions"), data=data)
     assert repeat.status_code == 200
-    blocked = client.post("/mud/actions", data={**data, "request_id": "work-payment-two"})
+    blocked = client.post(url("/actions"), data={**data, "request_id": "work-payment-two"})
     assert blocked.status_code == 400 or blocked.status_code == 409
     with app.app_context():
         db = get_db()
@@ -219,7 +221,7 @@ def test_builder_and_action_request_deduplication(game):
                           (_activity(db, "Sweep floor")["id"], cid)).fetchone()[0] == 1
 
 
-def test_builder_creates_work_and_campaign_restores_progress(game):
+def test_builder_creates_work_and_other_worlds_keep_their_own_progress(game):
     app, uid = game
     _setup(app, uid)
     client = app.test_client()
@@ -230,14 +232,14 @@ def test_builder_creates_work_and_campaign_restores_progress(game):
         db = get_db()
         keeper = db.execute("SELECT id FROM mud_npc_definitions WHERE name='Keeper'").fetchone()[0]
         square = db.execute("SELECT id FROM mud_world_rooms WHERE name='Town Square'").fetchone()[0]
-    result = client.post("/mud/builder/professions", data={"csrf_token": "test-token", "name": "Courier",
+    result = client.post(url("/builder/professions"), data={"csrf_token": "test-token", "name": "Courier",
         "description": "Carry local messages.", "recruiter_npc_definition_id": keeper,
         "conditions_json": "[]"})
     assert result.status_code == 302
     with app.app_context():
         db = get_db()
         profession = db.execute("SELECT id FROM mud_professions WHERE name='Courier'").fetchone()[0]
-    result = client.post(f"/mud/builder/professions/{profession}/activities", data={
+    result = client.post(url(f"/builder/professions/{profession}/activities"), data={
         "csrf_token": "test-token", "name": "Sort letters", "description": "Sort the post.",
         "kind": "immediate", "room_id": square, "provider_npc_definition_id": "",
         "conditions_json": "[]", "tool_definition_id": "", "practice_skill_key": "",
@@ -254,17 +256,19 @@ def test_builder_creates_work_and_campaign_restores_progress(game):
         other = _document()
         other["id"] = "otherwork"
         mud_worlds.install(db, mud_worlds.package_bytes(other))
-        mud_worlds.activate(db, "otherwork", campaign="new")
-        archive = db.execute("SELECT id FROM mud_campaign_archives WHERE world_id='workland' "
-                             "ORDER BY id DESC LIMIT 1").fetchone()[0]
-        mud_worlds.activate(db, "workland", campaign="restore", archive_id=archive)
+        # Another world is a separate game: its character has no professions or jobs of its own yet.
+        enter_world(db, "otherwork")
+        assert db.execute("SELECT 1 FROM mud_character_professions WHERE character_id=?",
+                          (mud._character_id(db, uid),)).fetchone() is None
+        enter_world(db, "workland")
         cid = f"stationnet:character:{uid}"
         assert db.execute("SELECT 1 FROM mud_character_professions WHERE character_id=? AND profession_id IN "
                           "(SELECT id FROM mud_professions WHERE name='Porter' AND world_id='workland')",
                           (cid,)).fetchone()
         assert db.execute("SELECT status FROM mud_character_work WHERE character_id=? AND activity_id=?",
                           (cid, _activity(db, "Visit Room")["id"])).fetchone()[0] == "active"
-        mud_worlds.activate(db, "otherwork")
+        mud_worlds.set_enabled(db, "workland", False)
+        db.commit()
         mud_worlds.remove(db, "workland")
 
 
@@ -279,12 +283,14 @@ def test_simultaneous_payment_requests_only_pay_once(game):
         cid = f"stationnet:character:{uid}"
         before = mud._wallet(db, cid)
 
+    actions_url = url("/actions")
+
     def submit(number):
         client = app.test_client()
         with client.session_transaction() as session:
             session["user_id"] = uid
             session["csrf_token"] = "test-token"
-        return client.post("/mud/actions", data={"csrf_token": "test-token",
+        return client.post(actions_url, data={"csrf_token": "test-token",
             "command": "/work do Sweep floor", "request_id": f"simultaneous-work-{number}"}).status_code
 
     with ThreadPoolExecutor(max_workers=2) as pool:
@@ -308,7 +314,7 @@ def test_work_only_skill_exports_and_unlearned_skill_skips_practice(game):
         exported = mud_worlds.read_package(mud_worlds.export(db, "workland"))
         assert exported["skills"][0]["key"] == "portering"
         assert exported["content"]["mud_work_activities"][0]["practice_skill_key"] == "portering"
-        mud_worlds.activate(db, "workland")
+        activate_world(db, "workland")
         user = db.execute("SELECT * FROM users WHERE id=?", (uid,)).fetchone()
         mud._profession_action(db, user, {"arguments": ["join", "Porter"]})
         assert "10 coins" in _call(db, user, "do", "Sweep floor")[0].body
@@ -377,8 +383,7 @@ def test_npc_provided_immediate_work_and_disabled_skill(game):
         keeper = db.execute("SELECT id FROM mud_npc_definitions WHERE name='Keeper'").fetchone()[0]
         db.execute("UPDATE mud_work_activities SET room_id=NULL,provider_npc_definition_id=? WHERE id=?",
                    (keeper, activity["id"]))
-        db.execute("INSERT INTO mud_skill_definitions(key,enabled) VALUES('lore',0) "
-                   "ON CONFLICT(key) DO UPDATE SET enabled=0")
+        set_offered(db, "skills", "lore", False)
         before = db.execute("SELECT experience FROM mud_character_skills WHERE character_id=? AND skill_key='lore'",
                             (cid,)).fetchone()[0]
         mud._profession_action(db, user, {"arguments": ["join", "Porter"]})
@@ -403,7 +408,7 @@ def test_builder_keeps_room_used_by_job_goal(game):
     with client.session_transaction() as session:
         session["user_id"] = uid
         session["csrf_token"] = "test-token"
-    response = client.post(f"/mud/builder/rooms/{room_id}/delete",
+    response = client.post(url(f"/builder/rooms/{room_id}/delete"),
                            data={"csrf_token": "test-token", "confirmation": name},
                            follow_redirects=True)
     assert response.status_code == 200

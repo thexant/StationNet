@@ -1,12 +1,12 @@
-"""World origin changes and campaign archives preserve character data."""
+"""Disabled origins are grandfathered, deleted ones are replaced, and each world keeps its own character."""
 import json
-import re
 import shutil
 import uuid
 from pathlib import Path
 
 import pytest
 
+from mud_world_helpers import retire_origin, set_offered
 from stationnet import create_app, character_creation, mud, mud_worlds
 from stationnet.db import get_db
 
@@ -29,17 +29,6 @@ def _client(app, user_id):
     return client
 
 
-def _switch(client, world_id, campaign="migrate", mode="preserve", **choices):
-    form = {"csrf_token": "test-token", "world_id": world_id, "origin_mode": mode, **choices}
-    preview = client.post("/sysop/settings/mud-worlds/activation-preview", data=form)
-    assert preview.status_code == 200
-    fingerprint = re.search(rb'name="fingerprint" value="([0-9a-f]+)"', preview.data).group(1).decode()
-    archive = re.search(rb'name="archive_id" value="([0-9]+)"', preview.data)
-    return client.post("/sysop/settings/mud-worlds/activate", data={
-        **form, "fingerprint": fingerprint, "confirm": "yes", "campaign": campaign,
-        "archive_id": archive.group(1).decode() if archive else ""}, follow_redirects=True)
-
-
 def test_replacement_preserves_progress_and_unequips_unusable_gear(data_path):
     app = create_app({"TESTING": True, "DATA_DIR": str(data_path)})
     try:
@@ -60,18 +49,25 @@ def test_replacement_preserves_progress_and_unequips_unusable_gear(data_path):
             db.execute("INSERT INTO mud_item_instances(id,definition_id,owner_character_id) "
                        "VALUES('test:item','test:gear',?)", (cid,))
             db.execute("INSERT INTO mud_character_equipment(character_id,loadout_key,slot,item_instance_id) "
-                       "VALUES(?,'shared','main_hand','test:item')", (cid,))
+                       "VALUES(?,'traditional','main_hand','test:item')", (cid,))
             db.execute("INSERT INTO mud_character_wallets(character_id,coins) VALUES(?,77)", (cid,))
-            db.execute("INSERT INTO mud_origin_definitions(kind,key,enabled) VALUES('classes','mystic',0)")
+            # Disabling a class in this world only stops new characters from choosing it.
+            set_offered(db, "classes", "mystic", False)
             db.commit()
         client = _client(app, player)
-        assert client.get("/mud").location.endswith("/mud/character/compatibility")
-        assert client.get("/mud/updates").status_code == 409
-        assert client.post("/mud/actions", data={"csrf_token": "test-token", "command": "/look"}).status_code == 409
-        invalid = client.post("/mud/character/compatibility", data={
+        assert client.get("/mud/w/stationnet").status_code == 200
+        with app.app_context():
+            db = get_db()
+            # Deleting the class from the station asks its characters for a replacement.
+            retire_origin(db, cid, "classes")
+            db.commit()
+        assert client.get("/mud/w/stationnet").location.endswith("/mud/w/stationnet/character/compatibility")
+        assert client.get("/mud/w/stationnet/updates").status_code == 409
+        assert client.post("/mud/w/stationnet/actions", data={"csrf_token": "test-token", "command": "/look"}).status_code == 409
+        invalid = client.post("/mud/w/stationnet/character/compatibility", data={
             "csrf_token": "test-token", "race": "halfling", "class": "mystic"})
         assert b"available class" in invalid.data
-        updated = client.post("/mud/character/compatibility", data={
+        updated = client.post("/mud/w/stationnet/character/compatibility", data={
             "csrf_token": "test-token", "race": "halfling", "class": "warrior"})
         assert updated.status_code == 302
         with app.app_context():
@@ -91,7 +87,7 @@ def test_replacement_preserves_progress_and_unequips_unusable_gear(data_path):
         coordinator._timer.cancel()
 
 
-def test_new_campaign_archives_and_restores_character(data_path):
+def test_each_world_has_its_own_character(data_path):
     app = create_app({"TESTING": True, "DATA_DIR": str(data_path)})
     try:
         with app.app_context():
@@ -108,16 +104,6 @@ def test_new_campaign_archives_and_restores_character(data_path):
                 "skills": ["lore", "guard"]})
             db.execute("UPDATE mud_character_progression SET level=5,experience=5000 WHERE character_id=?", (cid,))
             db.execute("INSERT INTO mud_character_wallets(character_id,coins) VALUES(?,91)", (cid,))
-            db.execute("INSERT INTO mud_item_definitions(id,name,description,item_type) "
-                       "VALUES('test:bag','Bag','A bag','container')")
-            db.execute("INSERT INTO mud_item_definitions(id,name,description,item_type) "
-                       "VALUES('test:gem','Gem','A gem','misc')")
-            db.execute("INSERT INTO mud_item_instances(id,definition_id,owner_character_id) "
-                       "VALUES('test:bag-item','test:bag',?)", (cid,))
-            db.execute("INSERT INTO mud_item_instances(id,definition_id,container_id) "
-                       "VALUES('test:gem-item','test:gem','test:bag-item')")
-            db.execute("INSERT INTO mud_character_storage(item_instance_id,character_id) "
-                       "VALUES('test:bag-item',?)", (cid,))
             mud._set_player_location(db, player, "traditional", "world_room", "stationnet:start")
             db.commit()
             mud_worlds.install(db, mud_worlds.package_bytes({
@@ -125,33 +111,39 @@ def test_new_campaign_archives_and_restores_character(data_path):
                 "rooms": [{"id": "start", "name": "Start", "description": "A second world."}], "exits": []}))
             db.commit()
         admin = _client(app, sysop)
-        denied = admin.post("/sysop/settings/mud-worlds/activate", data={
-            "csrf_token": "test-token", "world_id": "second"}, follow_redirects=True)
-        assert b"Preview the world impact" in denied.data
-        activated = _switch(admin, "second", "new")
-        assert b"Active MUD world changed" in activated.data
+        player_client = _client(app, player)
+        assert player_client.get("/mud/w/second").status_code == 404
+        enabled = admin.post("/sysop/settings/mud-worlds/enabled", data={
+            "csrf_token": "test-token", "world_id": "second", "enabled": "1"}, follow_redirects=True)
+        assert b"Second World is now open to players" in enabled.data
+        # Both worlds stay open at once; the player's first character is untouched.
+        assert player_client.get("/mud/w/stationnet").status_code == 200
+        assert player_client.get("/mud/w/second").location.endswith("/mud/w/second/create")
+        created = player_client.post("/mud/w/second/create", data={"csrf_token": "test-token", "build": json.dumps({
+            "name": "Second Hero", "race": "human", "class": "warrior",
+            "attributes": {"strength": 11, "agility": 11, "intellect": 11, "vitality": 11},
+            "skills": ["lore", "guard"]})})
+        assert created.location.endswith("/mud/w/second")
+        listing = player_client.get("/mud").data
+        assert b"First Hero" in listing and b"Second Hero" in listing
         with app.app_context():
             db = get_db()
-            assert db.execute("SELECT creation_state FROM mud_characters WHERE id=?", (cid,)).fetchone()[0] == "pending"
-            assert db.execute("SELECT username,callsign FROM users WHERE id=?", (player,)).fetchone()[:] == ("player", "PLY")
-            assert db.execute("SELECT COUNT(*) FROM mud_campaign_characters WHERE user_id=?", (player,)).fetchone()[0] == 1
-            assert db.execute("SELECT 1 FROM mud_item_instances WHERE id='test:bag-item'").fetchone() is None
-        assert _client(app, player).get("/mud").location.endswith("/mud/create")
-        restored = _switch(admin, "stationnet", "restore")
-        assert b"Active MUD world changed" in restored.data
+            rows = {row["world_key"]: row for row in db.execute(
+                "SELECT c.id,c.world_key,c.display_name,p.level,COALESCE(w.coins,-1) AS coins "
+                "FROM mud_characters c JOIN mud_character_progression p ON p.character_id=c.id "
+                "LEFT JOIN mud_character_wallets w ON w.character_id=c.id WHERE c.user_id=?", (player,))}
+            assert rows["stationnet"]["id"] == cid
+            assert (rows["stationnet"]["level"], rows["stationnet"]["coins"]) == (5, 91)
+            assert rows["second"]["id"] != cid and rows["second"]["level"] == 1 and rows["second"]["coins"] != 91
+        disabled = admin.post("/sysop/settings/mud-worlds/enabled", data={
+            "csrf_token": "test-token", "world_id": "second", "enabled": "0"})
+        assert disabled.status_code == 302
+        assert player_client.get("/mud/w/second").status_code == 404
+        assert b"Second Hero" not in player_client.get("/mud").data
         with app.app_context():
-            db = get_db()
-            assert db.execute("SELECT display_name,creation_state FROM mud_characters WHERE id=?",
-                              (cid,)).fetchone()[:] == ("First Hero", "complete")
-            assert {tuple(row) for row in db.execute(
-                "SELECT level,experience FROM mud_character_progression WHERE character_id=?", (cid,))} == {(5, 5000)}
-            assert db.execute("SELECT coins FROM mud_character_wallets WHERE character_id=?", (cid,)).fetchone()[0] == 91
-            assert db.execute("SELECT container_id FROM mud_item_instances WHERE id='test:gem-item'").fetchone()[0] == "test:bag-item"
-            assert db.execute("SELECT item_instance_id FROM mud_character_storage WHERE character_id=?",
-                              (cid,)).fetchone()[0] == "test:bag-item"
-            assert db.execute("SELECT location_key FROM mud_player_locations WHERE user_id=?",
-                              (player,)).fetchone()[0] == "stationnet:start"
-            assert db.execute("SELECT COUNT(*) FROM mud_campaign_archives").fetchone()[0] == 2
+            # Disabling hides the world but keeps its characters for when it returns.
+            assert get_db().execute("SELECT display_name FROM mud_characters WHERE user_id=? AND world_key='second'",
+                                    (player,)).fetchone()[0] == "Second Hero"
     finally:
         coordinator = app.extensions["broadcast_coordinator"]
         coordinator._closed = True

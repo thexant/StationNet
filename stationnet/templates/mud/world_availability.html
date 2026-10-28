@@ -1,0 +1,34 @@
+{% extends 'base.html' %}
+{% block title %}{{ world_name }} Races, Classes &amp; Skills · StationNet{% endblock %}
+{% block content %}
+<section class="narrow terminal-card settings-section" id="world-availability">
+  <p class="eyebrow">SYSOP CONTROL / NATIVE MUD / {{ world_name|upper }}</p>
+  <h1>Races, classes, and skills in {{ world_name }}</h1>
+  <p class="muted">Choose what new characters in {{ world_name }} may pick and which skills work there. Every installed definition is listed; this selection affects only this world. Existing characters keep a race or class even after it is disabled here, and a skill this world does not offer stays on its characters but is inactive. Deleting a definition from SYSOP Settings removes it from every world.</p>
+  {% if not configured %}<p class="mud-legacy-notice" role="note">This world has no saved selection yet, so it offers the built-in choices.</p>{% endif %}
+  <form method="post" class="form-grid" id="mud-world-availability">
+    <input type="hidden" name="csrf_token" value="{{ session.csrf_token }}">
+    {% for kind in ('races', 'classes', 'skills') %}
+    <div class="origin-group" data-origin-group="{{ kind }}">
+      <div class="divider">{{ kind|upper }}</div>
+      <div class="button-row origin-shortcuts" aria-label="{{ kind|title }} selection shortcuts">
+        <button type="button" class="secondary" data-origin-selection="all">SELECT ALL INSTALLED</button>
+        <button type="button" class="secondary" data-origin-selection="none">SELECT NONE</button>
+        <button type="button" class="secondary" data-origin-selection="default">SELECT BUILT-IN</button>
+        <button type="button" class="secondary" data-origin-selection="bundled">SELECT THIS WORLD'S BUNDLED</button>
+      </div>
+      {% for entry in entries[kind] %}
+      {% set origin = entry.definition %}
+      <label class="switch origin-choice" title="{{ origin.get('traits') or origin.get('description', '') }}"><input type="checkbox" name="{{ kind }}" value="{{ entry.key }}" data-origin-source="{{ 'imported' if entry.imported else 'default' }}" data-bundled="{{ 'true' if entry.bundled else 'false' }}" {% if entry.offered %}checked{% endif %}> <span>{{ origin.name }}</span><span class="origin-badge {{ 'imported' if entry.imported else 'default' }}">{{ entry.source|upper }}</span>{% if kind == 'skills' and not origin.starting %}<small>not offered at creation</small>{% endif %}{% if entry.holders %}<small>{{ entry.holders }} character{{ 's' if entry.holders != 1 }} here</small>{% endif %}</label>
+      {% endfor %}
+    </div>
+    {% endfor %}
+    <small>Every world needs at least one race, one class, and {{ starting_choices }} skills offered at creation.</small>
+    <div class="button-row">
+      <button>SAVE {{ world_name|upper }} CHOICES</button>
+      <a class="button secondary" href="{{ url_for('station.settings') }}#mud-worlds">BACK TO WORLDS</a>
+    </div>
+  </form>
+</section>
+<script src="{{ url_for('static', filename='settings-mud.js', v='2') }}" defer></script>
+{% endblock %}

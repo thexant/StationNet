@@ -1,0 +1,35 @@
+{% extends 'base.html' %}
+{% block title %}Choose a World · Station MUD{% endblock %}
+{% block content %}
+<section class="mud-creator mud-worlds">
+  <header>
+    <p class="eyebrow">STATION MUD / WORLDS</p>
+    <h1>Choose a world</h1>
+    <p>Each world is its own game. You create a separate character in every world you play, and progress, skills, possessions, and coins stay in the world where you earned them.</p>
+  </header>
+  <div class="file-list mud-world-list">
+    {% for world in worlds %}
+    <article class="file-row mud-world-row">
+      <div>
+        <h2>{{ world.name }}</h2>
+        <p>{% if world.kind == 'procedural' %}Procedural dungeons: random expeditions and the Dungeon of the Day{% elif world.imported %}A world by {{ world.author }}{% else %}This station's own world{% endif %}</p>
+        {% if world.character %}
+        <p><strong>{{ world.character.name }}</strong>{% if world.character.race or world.character.class %} · {{ world.character.race or 'Unchosen' }} {{ world.character.class or '' }}{% endif %} · Level {{ world.character.level }}</p>
+        {% else %}
+        <p>No character yet.</p>
+        {% endif %}
+      </div>
+      <div class="button-row">
+        {% if world.character %}
+        <a class="button" href="{{ url_for('mud.play', world_key=world.key) }}">{{ 'CONTINUE' if world.character.state == 'complete' else 'CUSTOMIZE AND PLAY' }}</a>
+        {% else %}
+        <a class="button" href="{{ url_for('mud.create_character', world_key=world.key) }}">CREATE CHARACTER</a>
+        {% endif %}
+      </div>
+    </article>
+    {% else %}
+    <p class="muted">No MUD worlds are open right now. A sysop can enable worlds in SYSOP Settings.</p>
+    {% endfor %}
+  </div>
+</section>
+{% endblock %}

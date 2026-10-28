@@ -9,7 +9,10 @@ from flask import session
 
 from stationnet import create_app
 from stationnet.db import get_db
-from stationnet import mud
+from stationnet import mud, mud_scope
+
+# Expeditions and the portal economy belong to the procedural dungeon world.
+pytestmark = pytest.mark.mud_world(mud_scope.PROCEDURAL)
 
 
 def test_expeditions_alias_uses_expedition_handler():
@@ -33,8 +36,8 @@ def game():
             user_id = db.execute(
                 "INSERT INTO users(username,callsign,password_hash) VALUES('delver','DLV','unused')"
             ).lastrowid
-            db.execute("UPDATE mud_characters SET creation_state='complete' WHERE user_id=?",
-                       (user_id,))
+            db.execute("UPDATE mud_characters SET creation_state=\'complete\' WHERE id=?",
+                       (mud._character_id(db, user_id),))
             mud._set_player_location(db, user_id, "procedural", "portal", mud.PORTAL_ROOM_ID)
             db.commit()
         yield app, user_id
@@ -204,10 +207,10 @@ def test_death_summary_persists_and_continue_is_scoped(game):
     with client.session_transaction() as session:
         session["user_id"] = user_id
         session["csrf_token"] = "test-token"
-    assert client.get("/mud").status_code == 200
+    assert client.get("/mud/w/stationnet:procedural").status_code == 200
 
     def command(value):
-        return client.post("/mud/actions", data={
+        return client.post("/mud/w/stationnet:procedural/actions", data={
             "csrf_token": "test-token", "command": value,
         })
 
@@ -230,10 +233,10 @@ def test_death_summary_persists_and_continue_is_scoped(game):
         mud._entry_attack(db, user)
         db.commit()
 
-    page = client.get("/mud")
+    page = client.get("/mud/w/stationnet:procedural")
     assert b"DEATH SUMMARY" in page.data
     assert b"/continue" in page.data
-    blocked = command("/portal")
+    blocked = command("/shop")
     assert blocked.status_code == 400
     assert "death summary" in blocked.json["error"]
     assert blocked.json["room"]["id"] == "stationnet:death-summary"
@@ -288,11 +291,12 @@ def test_room_entry_aggression_and_risky_flee(game, monkeypatch):
                           (loot,)).fetchone()[0] == run_id
 
 
-def test_world_and_portal_entry_persist_look_in_events_log(game):
+@pytest.mark.mud_world(mud_scope.HOME)
+def test_world_entry_persists_look_in_events_log(game):
     app, user_id = game
     with app.app_context():
         db = get_db()
-        db.execute("UPDATE station SET mud_traditional_enabled=1")
+        db.execute("UPDATE mud_characters SET creation_state='complete' WHERE id=?", (mud._character_id(db, user_id),))
         db.execute("INSERT INTO mud_world_rooms(id,name,description) VALUES(?,?,?)",
                    ("test:library", "Library", "Rows of old books line the walls."))
         db.execute("INSERT INTO mud_world_exits(id,from_room_id,to_room_id,name,direction) "
@@ -311,14 +315,11 @@ def test_world_and_portal_entry_persist_look_in_events_log(game):
         assert "Rows of old books line the walls." in room_event["body"]
         assert "Exits:" in room_event["body"]
         assert any(event["id"] == room_event["id"] for event in mud._events_for_user(db, user_id))
-
-        mud._set_player_location(db, user_id, "traditional", "world_room", mud.START_ROOM_ID)
-        portal_events = mud._portal_action(db, user, {})
-        assert next(event.body for event in portal_events if event.event_type == "room") == \
-            mud._look_action(db, user, {})[0].body
-        world_events = mud._world_action(db, user, {})
-        assert next(event.body for event in world_events if event.event_type == "room") == \
-            mud._look_action(db, user, {})[0].body
+        # Worlds are separate games: there is no way from an authored world into the dungeons.
+        assert not any(exit_row["destination_id"] == mud.PORTAL_ROOM_ID
+                       for exit_row in mud._room_state(db, user_id)["exits"])
+        with pytest.raises(mud.ActionError):
+            mud.actions.from_command("/portal")
 
 
 def test_hiding_detection_and_surprise_attack(game, monkeypatch):
@@ -402,7 +403,7 @@ def test_hub_console_commands_and_idempotent_purchase(game):
     with client.session_transaction() as session:
         session["user_id"] = user_id
         session["csrf_token"] = "test-token"
-    page = client.get("/mud")
+    page = client.get("/mud/w/stationnet:procedural")
     assert page.status_code == 200
     assert b'data-mud-suggestions' in page.data
     assert b'data-mud-initial-state' in page.data
@@ -413,23 +414,23 @@ def test_hub_console_commands_and_idempotent_purchase(game):
         "csrf_token": "test-token", "request_id": "buy-once-1234",
         "command": "/shop buy Healing Tonic",
     }
-    first = client.post("/mud/actions", data=payload)
-    second = client.post("/mud/actions", data=payload)
+    first = client.post("/mud/w/stationnet:procedural/actions", data=payload)
+    second = client.post("/mud/w/stationnet:procedural/actions", data=payload)
     assert first.status_code == second.status_code == 200
     assert first.json["hub"]["coins"] == second.json["hub"]["coins"] == 6
     assert len(first.json["inventory"]["inventory"]) == 1
     assert len(second.json["inventory"]["inventory"]) == 1
-    listed = client.post("/mud/actions", data={
+    listed = client.post("/mud/w/stationnet:procedural/actions", data={
         "csrf_token": "test-token", "command": "/inventory",
     })
     assert listed.status_code == 200
     assert "Healing Tonic" in listed.json["events"][0]["body"]
-    denied = client.post("/mud/actions", data={
+    denied = client.post("/mud/w/stationnet:procedural/actions", data={
         **payload, "request_id": "buy-twice-1234",
     })
     assert denied.status_code == 400
     assert denied.json["hub"]["coins"] == 6
-    assert client.post("/mud/actions", data={
+    assert client.post("/mud/w/stationnet:procedural/actions", data={
         "csrf_token": "test-token", "action": "shop",
         "parameters": json.dumps({"operation": "buy", "item_id": "stationnet:shop:tonic"}),
     }).status_code == 400
@@ -494,32 +495,32 @@ def test_clear_events_keeps_new_activity_and_survives_reload(game):
     with app.app_context():
         db = get_db()
         old_id = db.execute(
-            "INSERT INTO mud_events(audience_type,audience_key,event_type,body) "
-            "VALUES('private',?,'system','old activity marker')",
+            "INSERT INTO mud_events(audience_type,audience_key,event_type,body,world_key) "
+            "VALUES('private',?,'system','old activity marker',mud_world())",
             (str(user_id),),
         ).lastrowid
         db.commit()
-    assert b"old activity marker" in client.get("/mud").data
+    assert b"old activity marker" in client.get("/mud/w/stationnet:procedural").data
 
-    cleared = client.post("/mud/clear-events", data={"csrf_token": "test-token"})
+    cleared = client.post("/mud/w/stationnet:procedural/clear-events", data={"csrf_token": "test-token"})
     assert cleared.status_code == 200
     assert cleared.json["cleared_through_id"] >= old_id
-    page = client.get("/mud")
+    page = client.get("/mud/w/stationnet:procedural")
     assert b"old activity marker" not in page.data
     assert b"Activity cleared. New events will appear here." in page.data
 
     with app.app_context():
         db = get_db()
         db.execute(
-            "INSERT INTO mud_events(audience_type,audience_key,event_type,body) "
-            "VALUES('private',?,'system','new activity marker')",
+            "INSERT INTO mud_events(audience_type,audience_key,event_type,body,world_key) "
+            "VALUES('private',?,'system','new activity marker',mud_world())",
             (str(user_id),),
         )
         db.commit()
         assert [row["body"] for row in mud._events_for_user(db, user_id, after=0)] == [
             "new activity marker"
         ]
-    page = client.get("/mud")
+    page = client.get("/mud/w/stationnet:procedural")
     assert b"old activity marker" not in page.data
     assert b"new activity marker" in page.data
 

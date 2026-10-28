@@ -203,9 +203,8 @@ def test_package_round_trip_and_rejections():
             db.commit()
             mud_worlds.install(db, stream.getvalue())
             assert db.execute("SELECT COUNT(*) FROM mud_world_factions WHERE world_id='lifeworld-copy'").fetchone()[0] == 3
-            # Removing a world retires its factions, so standing survives.
-            db.execute("UPDATE mud_world_packages SET active=0 WHERE id=?", (WORLD,))
-            db.execute("UPDATE mud_world_packages SET active=1 WHERE id='lifeworld-copy'")
+            # Removing a world retires its factions, so standing survives. Only disabled worlds can go.
+            mud_worlds.set_enabled(db, WORLD, False)
             db.commit()
             mud_worlds.remove(db, WORLD)
             assert db.execute("SELECT COUNT(*) FROM mud_character_reputation").fetchone()[0] >= 1
@@ -227,23 +226,23 @@ def test_package_round_trip_and_rejections():
 def test_builder_faction_routes_and_npc_membership():
     with running() as (app, (one, two)):
         web = client(app, one)
-        assert web.post("/mud/builder/factions", data={"csrf_token": "test-token", "name": "Fishers", "public": "1",
+        assert web.post(f"/mud/w/{WORLD}/builder/factions", data={"csrf_token": "test-token", "name": "Fishers", "public": "1",
                                                        "default_reputation": "10"}).status_code == 302
-        web.post("/mud/builder/factions", data={"csrf_token": "test-token", "name": "Pirates"})
+        web.post(f"/mud/w/{WORLD}/builder/factions", data={"csrf_token": "test-token", "name": "Pirates"})
         with app.app_context():
             db = get_db()
             fishers, pirates = [row["id"] for row in db.execute(
                 "SELECT id FROM mud_world_factions ORDER BY name")]
-        response = web.post("/mud/builder/factions", data={"csrf_token": "test-token", "name": "Bad",
+        response = web.post(f"/mud/w/{WORLD}/builder/factions", data={"csrf_token": "test-token", "name": "Bad",
                                                            "ranks_json": "[{}]"}, follow_redirects=True)
         assert b"ranks" in response.data.lower()
-        web.post(f"/mud/builder/factions/{fishers}/relations",
+        web.post(f"/mud/w/{WORLD}/builder/factions/{fishers}/relations",
                  data={"csrf_token": "test-token", "other_faction_id": pirates, "share_percent": "-40"})
         with app.app_context():
             db = get_db()
             smith = installed(db, "mud_npc_definitions", "smith")
             row = db.execute("SELECT * FROM mud_npc_definitions WHERE id=?", (smith,)).fetchone()
-        web.post(f"/mud/builder/npcs/{smith}", data={
+        web.post(f"/mud/w/{WORLD}/builder/npcs/{smith}", data={
             "csrf_token": "test-token", "name": row["name"], "description": row["description"],
             "properties_json": "{}", "behaviors_json": row["behaviors_json"], "faction_id": fishers,
             "is_merchant": "1", "buys_items": "1", "sell_percent": "50"})
@@ -251,12 +250,12 @@ def test_builder_faction_routes_and_npc_membership():
             db = get_db()
             assert db.execute("SELECT faction_id FROM mud_npc_definitions WHERE id=?", (smith,)).fetchone()[0] == fishers
             assert db.execute("SELECT share_percent FROM mud_faction_relations").fetchone()[0] == -40
-        page = web.get("/mud/builder").data
+        page = web.get(f"/mud/w/{WORLD}/builder").data
         assert b"Fishers" in page
         assert b"-40% of changes pass to Pirates" in page
-        assert client(app, two).post("/mud/builder/factions", data={"csrf_token": "test-token",
+        assert client(app, two).post(f"/mud/w/{WORLD}/builder/factions", data={"csrf_token": "test-token",
                                                                     "name": "Nope"}).status_code == 403
-        web.post(f"/mud/builder/factions/{fishers}/delete", data={"csrf_token": "test-token", "confirmation": "delete"})
+        web.post(f"/mud/w/{WORLD}/builder/factions/{fishers}/delete", data={"csrf_token": "test-token", "confirmation": "delete"})
         with app.app_context():
             db = get_db()
             assert db.execute("SELECT faction_id FROM mud_npc_definitions WHERE id=?", (smith,)).fetchone()[0] is None
@@ -264,6 +263,6 @@ def test_builder_faction_routes_and_npc_membership():
 
 def test_page_shows_standing_panel():
     with running(_world()) as (app, (one, _two)):
-        page = client(app, one).get("/mud").data
+        page = client(app, one).get(f"/mud/w/{WORLD}").data
         assert b"data-mud-standing-panel" in page and b"Smiths&#39; Guild: Neutral (+0)" in page
-        assert "standing" in client(app, one).get("/mud/updates?client_id=browser-standing-1234").get_json()
+        assert "standing" in client(app, one).get(f"/mud/w/{WORLD}/updates?client_id=browser-standing-1234").get_json()

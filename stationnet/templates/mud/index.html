@@ -1,15 +1,16 @@
 {% extends 'base.html' %}
-{% block title %}Station MUD{% endblock %}
+{% block title %}{{ world.name }} · Station MUD{% endblock %}
 {% block content %}
 <section class="mud-shell" data-mud data-death-summary="{{ 'true' if room.id == 'stationnet:death-summary' else 'false' }}" data-action-url="{{ url_for('mud.perform_action') }}" data-updates-url="{{ url_for('mud.updates') }}" data-clear-url="{{ url_for('mud.clear_events') }}" data-cleared-through="{{ cleared_through_id }}" data-disconnect-url="{{ url_for('mud.disconnect') }}" data-csrf="{{ session.csrf_token }}">
   {% if character.creation_state == 'legacy' %}<div class="mud-legacy-notice" role="note">Your existing character can be customized once while keeping levels, inventory, quests, and achievements. <a class="button secondary" href="{{ url_for('mud.create_character') }}">CUSTOMIZE CHARACTER</a></div>{% endif %}
   <header class="mud-header">
     <div>
-      <p class="eyebrow">STATION MUD</p>
-      <h1>Station MUD</h1>
+      <p class="eyebrow">STATION MUD / WORLD</p>
+      <h1>{{ world.name }}</h1>
     </div>
     <div class="mud-header-actions">
-      {% if g.mud_can_build %}<a class="button secondary" href="{{ url_for('mud.builder') }}">WORLD BUILDER</a>{% endif %}
+      <a class="button secondary" href="{{ url_for('mud.index') }}">CHANGE WORLD</a>
+      {% if g.mud_can_build and world.key != 'stationnet:procedural' %}<a class="button secondary" href="{{ url_for('mud.builder') }}">WORLD BUILDER</a>{% endif %}
       <a class="button secondary" href="{{ url_for('mud.delete_character') }}">DELETE CHARACTER</a>
       <span class="mud-link-state">FOUNDATION ONLINE</span>
     </div>
@@ -156,7 +157,6 @@
         </button>
         <div id="mud-inventory-panel" data-panel-content hidden>
           <div class="mud-inventory-list" data-mud-inventory>
-            <small data-mud-inventory-scope>{{ 'Shared across modes' if inventory.sharing == 'shared' else (inventory.mode|title ~ ' only') }}</small>
             <strong>CARRIED</strong>
             <div data-mud-carried>{% for item in inventory.inventory %}<span>{{ item.display_name }}{% if item.rounds_remaining is defined %} · {{ item.rounds_remaining }} rounds{% endif %}{% if item.acquired_run_id %} · RUN LOOT{% endif %}</span>{% else %}<span class="muted">nothing carried</span>{% endfor %}</div>
             <strong>EQUIPPED</strong>

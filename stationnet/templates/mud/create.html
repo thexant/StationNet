@@ -13,10 +13,9 @@
   {% if origin.get('equipment') %}<li><b>Gear</b> {% for item in origin.equipment %}{{ item.name }} (attack +{{ item.attack }}, defense +{{ item.defense }}{% if item.category %}, {{ item.category }}{% endif %}){% if not loop.last %}, {% endif %}{% endfor %}</li>{% endif %}
 </ul>{% endmacro %}
 <section class="mud-creator" data-character-creator data-config='{{ config|tojson }}' data-selected='{{ selected|tojson }}'>
-  <header><p class="eyebrow">STATION MUD / CHARACTER CREATION</p><h1>{{ 'Customize your character' if character.creation_state == 'legacy' else 'Create your character' }}</h1>
-    {% if character.creation_state == 'pending' and archive_notice %}<p class="mud-legacy-notice" role="status">A new MUD campaign has begun. Your previous character and progress from {{ archive_notice.world_name }} are archived and can be restored if a sysop returns to that campaign.</p>{% endif %}
-    <p>Your adventurer's name is separate from your StationNet callsign. Changing your choices later requires deleting the character and starting over.</p>
-    {% if character.creation_state == 'legacy' %}<p class="mud-legacy-notice">Your levels, experience, quests, inventory, and achievements are preserved. This one-time customization adjusts health for your new Vitality.</p><a href="{{ url_for('mud.index') }}">Return to the MUD</a>{% endif %}
+  <header><p class="eyebrow">STATION MUD / {{ world.name|upper }} / CHARACTER CREATION</p><h1>{{ 'Customize your character' if character.creation_state == 'legacy' else 'Create your character' }}</h1>
+    <p>This character lives only in {{ world.name }}; each world you play has its own character, progress, and possessions. Your adventurer's name is separate from your StationNet callsign. Changing your choices later requires deleting the character and starting over. <a href="{{ url_for('mud.index') }}">Choose another world</a></p>
+    {% if character.creation_state == 'legacy' %}<p class="mud-legacy-notice">Your levels, experience, quests, inventory, and achievements are preserved. This one-time customization adjusts health for your new Vitality.</p><a href="{{ url_for('mud.play') }}">Return to {{ world.name }}</a>{% endif %}
   </header>
   {% if error %}<p class="mud-error" role="alert">{{ error }}</p>{% endif %}
   <ol class="mud-creator-steps" aria-label="Creation steps"><li><button type="button" data-step-jump="0">Identity</button></li><li><button type="button" data-step-jump="1">Race</button></li><li><button type="button" data-step-jump="2">Archetype</button></li><li><button type="button" data-step-jump="3">Attributes</button></li><li><button type="button" data-step-jump="4">Skills</button></li><li><button type="button" data-step-jump="5">Review</button></li></ol>

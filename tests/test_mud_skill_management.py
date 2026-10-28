@@ -8,6 +8,7 @@ import uuid
 
 import pytest
 
+from stationnet import mud_scope
 from stationnet import create_app, character_creation, dungeons, mud, mud_skills, mud_worlds
 from stationnet.db import get_db
 
@@ -68,7 +69,9 @@ def test_import_availability_and_minimum_skills(station):
     assert "spear-fighting" not in _installed(app)
     client = _client(app, admin)
     settings = client.get("/sysop/settings").data
-    assert b'id="mud-skills"' in settings and b"SELECT IMPORTED" in settings and b"Lockpicking" in settings
+    assert b'id="mud-skills"' in settings and b"RACES, CLASSES &amp; SKILLS" in settings
+    selection = client.get("/sysop/settings/mud-worlds/stationnet/availability").data
+    assert b"SELECT BUILT-IN" in selection and b"Lockpicking" in selection
     for route in ("/sysop/settings/mud-skills/template", "/sysop/settings/mud-skills/pack/template"):
         response = client.get(route)
         assert response.status_code == 200
@@ -86,26 +89,23 @@ def test_import_availability_and_minimum_skills(station):
     assert _installed(app)["spear-fighting"]["enabled"]
     duplicate = _upload(client, "/sysop/settings/mud-skills/import", "skill_file", {**SKILL, "key": "spears"})
     assert b"already installed" in duplicate.data
-    refused = client.post("/sysop/settings/mud-skills/availability",
-                          data={"csrf_token": "test-token", "skills": ["arms"]}, follow_redirects=True)
-    assert b"Enable at least 2 starting skills" in refused.data
+    origins = {"races": ["human"], "classes": ["warrior"]}
+    refused = client.post("/sysop/settings/mud-worlds/stationnet/availability",
+                          data={"csrf_token": "test-token", "skills": ["arms"], **origins})
+    assert b"Offer at least 2 starting skills" in refused.data
     assert _installed(app)["lore"]["enabled"]
-    saved = client.post("/sysop/settings/mud-skills/availability",
-                        data={"csrf_token": "test-token", "skills": ["arms", "guard", "spear-fighting"]},
+    saved = client.post("/sysop/settings/mud-worlds/stationnet/availability",
+                        data={"csrf_token": "test-token", "skills": ["arms", "guard", "spear-fighting"], **origins},
                         follow_redirects=True)
-    assert b"Skill availability updated" in saved.data
+    assert b"Updated races, classes, and skills for Station World" in saved.data
     with app.app_context():
         db = get_db()
         assert set(mud_skills.definitions(db)) == {"arms", "guard", "spear-fighting"}
         assert {item["key"] for item in character_creation.options(db)["skills"]} == {
             "arms", "guard", "spear-fighting"}
-        # Turning the MUD back on cannot leave character creation without enough skills.
-        mud_skills.set_enabled(db, {"arms"})
-        db.commit()
-    mode = client.post("/sysop/settings/mud", data={
-        "csrf_token": "test-token", "mud_mode_form": "1", "mud_traditional_enabled": "on",
-        "mud_portal_name": "Portals", "mud_portal_description": "Gateways."}, follow_redirects=True)
-    assert b"Enable at least 2 starting skills" in mode.data
+        # Another world's selection is its own.
+        with mud_scope.use(mud_scope.PROCEDURAL):
+            assert "lore" in mud_skills.definitions(db)
 
 
 def test_pack_import_is_atomic_and_supports_internal_requirements(station):
@@ -224,10 +224,13 @@ def test_world_packages_bundle_remap_export_and_remove_skills(station):
         "csrf_token": "test-token", "world_file": (BytesIO(payload), "dojo.zip"), "origin_mode": "combine"},
         follow_redirects=True)
     assert b"Imported world Dojo World" in imported.data
-    with app.app_context():
+    with app.app_context(), mud_scope.use("dojo"):
         db = get_db()
         definitions = mud_skills.definitions(db)
         assert {spears, drill, "arms"} <= set(definitions)  # combine keeps defaults and adds bundled skills
+        with mud_scope.use(mud_scope.HOME):
+            # Other worlds keep their own selection.
+            assert spears not in mud_skills.definitions(db)
         assert definitions[drill]["requirements"] == {**definitions[drill]["requirements"],
                                                       "skills": {spears: 2}, "classes": [lancer]}
         lancer_class = next(entry["definition"] for entry in character_creation.catalog(db)["classes"]
@@ -294,9 +297,9 @@ def test_world_builder_saves_optional_npc_accuracy_and_evasion(station):
     combat = {"csrf_token": "test-token", "description": "Fights.", "properties_json": "{}",
               "behaviors_json": "{}", "is_hostile": "1", "maximum_health": "30", "combat_attack": "6",
               "combat_defense": "2", "experience_reward": "10", "respawn_seconds": "60"}
-    client.post("/mud/builder/npcs", data={**combat, "name": "Duelist", "combat_accuracy": "15",
+    client.post("/mud/w/stationnet/builder/npcs", data={**combat, "name": "Duelist", "combat_accuracy": "15",
                                           "combat_evasion": ""})
-    rejected = client.post("/mud/builder/npcs", data={**combat, "name": "Ghost", "combat_evasion": "150"},
+    rejected = client.post("/mud/w/stationnet/builder/npcs", data={**combat, "name": "Ghost", "combat_evasion": "150"},
                            follow_redirects=True)
     assert b"Accuracy and evasion must be whole numbers" in rejected.data
     with app.app_context():
@@ -306,8 +309,8 @@ def test_world_builder_saves_optional_npc_accuracy_and_evasion(station):
                                            "WHERE npc_definition_id=?", (npc_id,)).fetchone())
         assert profile() == (15, None)
         assert db.execute("SELECT 1 FROM mud_npc_definitions WHERE name='Ghost'").fetchone() is None
-    assert b'name="combat_accuracy" min="0" max="100" value="15"' in client.get("/mud/builder").data
-    client.post(f"/mud/builder/npcs/{npc_id}", data={**combat, "name": "Duelist", "combat_accuracy": "",
+    assert b'name="combat_accuracy" min="0" max="100" value="15"' in client.get("/mud/w/stationnet/builder").data
+    client.post(f"/mud/w/stationnet/builder/npcs/{npc_id}", data={**combat, "name": "Duelist", "combat_accuracy": "",
                                                     "combat_evasion": "9"})
     with app.app_context():
         assert tuple(get_db().execute("SELECT accuracy,evasion FROM mud_npc_combat_profiles "
@@ -317,19 +320,19 @@ def test_world_builder_saves_optional_npc_accuracy_and_evasion(station):
 def test_world_builder_edits_categories_trainers_locks_and_discoveries(station):
     app, _path, admin, _player = station
     client = _client(app, admin)
-    page = client.get("/mud/builder").data
+    page = client.get("/mud/w/stationnet/builder").data
     assert b"Trainer lessons" not in page and b"skills-reference-heading" in page
     assert b"Lockpicking" in page and b'list="builder-item-categories"' in page
-    created = client.post("/mud/builder/items", data={
+    created = client.post("/mud/w/stationnet/builder/items", data={
         "csrf_token": "test-token", "name": "Ash Spear", "description": "A long spear.",
         "item_type": "equipment", "equipment_slot": "main_hand", "attack_bonus": "4", "category": "Spear"},
         follow_redirects=True)
     assert created.status_code == 200
-    bad = client.post("/mud/builder/items", data={
+    bad = client.post("/mud/w/stationnet/builder/items", data={
         "csrf_token": "test-token", "name": "Odd Rock", "description": "A rock.", "item_type": "misc",
         "category": "rock"}, follow_redirects=True)
     assert b"Categories apply to equipment" in bad.data
-    client.post("/mud/builder/npcs", data={"csrf_token": "test-token", "name": "Old Thief",
+    client.post("/mud/w/stationnet/builder/npcs", data={"csrf_token": "test-token", "name": "Old Thief",
                                           "description": "Knows locks.", "properties_json": "{}",
                                           "behaviors_json": "{}"})
     with app.app_context():
@@ -340,26 +343,26 @@ def test_world_builder_edits_categories_trainers_locks_and_discoveries(station):
         start = mud._start_room(db)["id"]
         db.execute("INSERT INTO mud_world_rooms(id,name,description) VALUES('test:den','Den','A den')")
         db.commit()
-    rejected = client.post(f"/mud/builder/npcs/{npc_id}/trainers", data={
+    rejected = client.post(f"/mud/w/stationnet/builder/npcs/{npc_id}/trainers", data={
         "csrf_token": "test-token", "skill_key": "no-such-skill", "price": "5", "max_rank": "3"},
         follow_redirects=True)
     assert b"Choose an enabled skill" in rejected.data
-    saved = client.post(f"/mud/builder/npcs/{npc_id}/trainers", data={
+    saved = client.post(f"/mud/w/stationnet/builder/npcs/{npc_id}/trainers", data={
         "csrf_token": "test-token", "skill_key": "lockpicking", "price": "15", "max_rank": "6"},
         follow_redirects=True)
     assert b"Trainer lesson saved" in saved.data and b"Lockpicking - 15 coins - up to rank 6" in saved.data
-    client.post("/mud/builder/exits", data={"csrf_token": "test-token", "from_room_id": start,
+    client.post("/mud/w/stationnet/builder/exits", data={"csrf_token": "test-token", "from_room_id": start,
                                             "to_room_id": "test:den", "name": "den door",
                                             "direction": "down", "pick_difficulty": "45"})
-    client.post(f"/mud/builder/rooms/{start}/discoveries", data={
+    client.post(f"/mud/w/stationnet/builder/rooms/{start}/discoveries", data={
         "csrf_token": "test-token", "clue": "Scratches on the wall.", "difficulty": "30"})
     with app.app_context():
         db = get_db()
         assert db.execute("SELECT pick_difficulty FROM mud_world_exits WHERE name='den door'").fetchone()[0] == 45
         assert db.execute("SELECT difficulty FROM mud_room_discoveries").fetchone()[0] == 30
         lesson = db.execute("SELECT id FROM mud_npc_trainers").fetchone()[0]
-    page = client.get("/mud/builder").data
+    page = client.get("/mud/w/stationnet/builder").data
     assert b"difficulty 30" in page and b'value="45"' in page
-    removed = client.post(f"/mud/builder/trainers/{lesson}/delete",
+    removed = client.post(f"/mud/w/stationnet/builder/trainers/{lesson}/delete",
                           data={"csrf_token": "test-token", "confirmation": "delete"}, follow_redirects=True)
     assert b"Trainer lesson removed" in removed.data

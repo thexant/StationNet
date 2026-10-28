@@ -189,18 +189,18 @@ def test_package_round_trip_and_reference_checks():
 def test_builder_saves_clock_and_checks_schedule_rooms():
     with running() as (app, (one, two)):
         web = client(app, one)
-        response = web.post("/mud/builder/society/clock", data={
+        response = web.post(f"/mud/w/{WORLD}/builder/society/clock", data={
             "csrf_token": "test-token", "enabled": "1", "day_minutes": "60", "start_hour": "5"})
         assert response.status_code == 302
         with app.app_context():
             assert mud.society_settings(get_db())["clock"] == {"enabled": True, "day_minutes": 60, "start_hour": 5}
-        assert web.post("/mud/builder/society/weather", data={"csrf_token": "test-token"}).status_code == 404
-        assert client(app, two).post("/mud/builder/society/clock",
+        assert web.post(f"/mud/w/{WORLD}/builder/society/weather", data={"csrf_token": "test-token"}).status_code == 404
+        assert client(app, two).post(f"/mud/w/{WORLD}/builder/society/clock",
                                      data={"csrf_token": "test-token"}).status_code == 403
-        response = web.post("/mud/builder/npcs", data={
+        response = web.post(f"/mud/w/{WORLD}/builder/npcs", data={
             "csrf_token": "test-token", "name": "Ghost", "description": "Boo.", "properties_json": "{}",
             "behaviors_json": json.dumps({"schedule": {"entries": [{"from": 1, "to": 2, "room": "nowhere"}]}})},
             follow_redirects=True)
         assert b"unknown room" in response.data
-        page = web.get("/mud/builder").data
+        page = web.get(f"/mud/w/{WORLD}/builder").data
         assert b"World life" in page and b"Daily schedules" in page

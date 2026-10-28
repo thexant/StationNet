@@ -1,7 +1,7 @@
 """Account deletion removes authored content and enforces both confirmation flows."""
 from pathlib import Path
 
-from stationnet import create_app
+from stationnet import mud, create_app
 from stationnet.account_deletion import delete_account, purge_pending_files
 from stationnet.db import get_db
 
@@ -199,8 +199,9 @@ def test_mud_creations_and_nested_inventory_are_removed(tmp_path):
     app, owner, member, other = station_with_users(tmp_path)
     with app.app_context():
         db = get_db()
-        member_character = db.execute("SELECT id FROM mud_characters WHERE user_id=?", (member,)).fetchone()[0]
-        other_character = db.execute("SELECT id FROM mud_characters WHERE user_id=?", (other,)).fetchone()[0]
+        # Characters are created per world on first visit.
+        member_character = mud._character_id(db, member)
+        other_character = mud._character_id(db, other)
         db.execute("INSERT INTO mud_item_definitions(id,name,description,created_by) "
                    "VALUES('made','Made by member','item',?)", (member,))
         db.execute("INSERT INTO mud_item_definitions(id,name,description) "

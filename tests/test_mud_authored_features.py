@@ -2,7 +2,6 @@
 from datetime import datetime, timedelta, timezone
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
-import json
 import re
 import shutil
 import sqlite3
@@ -11,6 +10,8 @@ import uuid
 import pytest
 from flask import session
 
+from mud_world_helpers import activate_world, enter_world, in_current_world, url
+from stationnet import mud_scope
 from stationnet import create_app, character_creation, mud, mud_worlds
 from stationnet.db import get_db
 from stationnet import db as db_module
@@ -111,8 +112,7 @@ def test_search_reveals_objects_and_exits_per_character_after_conditions(game):
     with app.app_context():
         db = get_db()
         mud_worlds.install(db, mud_worlds.package_bytes(document))
-        db.execute("UPDATE mud_world_packages SET active=0")
-        db.execute("UPDATE mud_world_packages SET active=1 WHERE id='authored'")
+        activate_world(db, 'authored')
         room_id = db.execute("SELECT start_room_id FROM mud_world_packages WHERE id='authored'").fetchone()[0]
         for uid in users:
             mud._set_player_location(db, uid, "traditional", "world_room", room_id)
@@ -199,8 +199,7 @@ def test_builder_edits_discovery_without_erasing_history_and_rejects_foreign_tar
     with app.app_context():
         db = get_db()
         mud_worlds.install(db, mud_worlds.package_bytes(document))
-        db.execute("UPDATE mud_world_packages SET active=0")
-        db.execute("UPDATE mud_world_packages SET active=1 WHERE id='authored'")
+        activate_world(db, 'authored')
         db.execute("INSERT INTO mud_builder_permissions(user_id) VALUES(?)", (users[0],))
         room = db.execute("SELECT start_room_id FROM mud_world_packages WHERE id='authored'").fetchone()[0]
         vault = db.execute("SELECT id FROM mud_world_rooms WHERE world_id='authored' AND id<>?",
@@ -218,9 +217,9 @@ def test_builder_edits_discovery_without_erasing_history_and_rejects_foreign_tar
     with player.session_transaction() as session:
         session["user_id"] = users[1]
         session["csrf_token"] = "test-token"
-    path = f"/mud/builder/rooms/{room}/discoveries"
+    path = url(f"/builder/rooms/{room}/discoveries")
     assert player.post(path, data={"csrf_token": "test-token", "clue": "No."}).status_code == 403
-    invalid = builder.post(f"/mud/builder/rooms/{vault}/discoveries", data={
+    invalid = builder.post(url(f"/builder/rooms/{vault}/discoveries"), data={
         "csrf_token": "test-token", "clue": "Wrong room.", "result": f"exit|{exit_id}"},
         follow_redirects=True)
     assert b"Choose a result in this world and room" in invalid.data
@@ -237,7 +236,7 @@ def test_builder_edits_discovery_without_erasing_history_and_rejects_foreign_tar
         db.execute("INSERT INTO mud_player_discoveries(character_id,discovery_id) VALUES(?,?)",
                    (character_id, discovery_id))
         db.commit()
-    update_path = f"/mud/builder/discoveries/{discovery_id}"
+    update_path = url(f"/builder/discoveries/{discovery_id}")
     assert builder.post(update_path, data={"csrf_token": "test-token", "clue": "A hidden route.",
                                            "result": f"exit|{exit_id}", "difficulty": "12"}).status_code == 302
     with app.app_context():
@@ -291,8 +290,7 @@ def test_package_quest_shop_respawn_search_and_lock(game):
         world = db.execute("SELECT start_room_id FROM mud_world_packages WHERE id='authored'").fetchone()
         for uid in users:
             mud._set_player_location(db, uid, "traditional", "world_room", world["start_room_id"])
-        db.execute("UPDATE mud_world_packages SET active=0")
-        db.execute("UPDATE mud_world_packages SET active=1 WHERE id='authored'")
+        activate_world(db, 'authored')
         db.commit()
         user = db.execute("SELECT * FROM users WHERE id=?", (users[0],)).fetchone()
         other = db.execute("SELECT * FROM users WHERE id=?", (users[1],)).fetchone()
@@ -367,7 +365,7 @@ def test_package_quest_shop_respawn_search_and_lock(game):
     with client.session_transaction() as state:
         state["user_id"] = users[0]
         state["csrf_token"] = "test-token"
-    assert client.get("/mud/builder").status_code == 200
+    assert client.get(url("/builder")).status_code == 200
 
 
 def test_legacy_quest_progress_survives_schema_upgrade():
@@ -407,8 +405,7 @@ def test_two_players_cannot_buy_one_stock_item(game):
         db = get_db()
         mud_worlds.install(db, mud_worlds.package_bytes(_document()))
         room = db.execute("SELECT start_room_id FROM mud_world_packages WHERE id='authored'").fetchone()[0]
-        db.execute("UPDATE mud_world_packages SET active=0")
-        db.execute("UPDATE mud_world_packages SET active=1 WHERE id='authored'")
+        activate_world(db, 'authored')
         for uid in users:
             mud._set_player_location(db, uid, "traditional", "world_room", room)
             character = mud._character_row(db, uid)
@@ -417,7 +414,7 @@ def test_two_players_cannot_buy_one_stock_item(game):
         db.commit()
 
     def buy(uid):
-        with app.test_request_context("/mud/actions", method="POST"):
+        with app.test_request_context(url("/actions"), method="POST"):
             session["connection_id"] = f"connection-{'one' if uid == users[0] else 'two'}"
             db = get_db()
             user = db.execute("SELECT * FROM users WHERE id=?", (uid,)).fetchone()
@@ -429,7 +426,7 @@ def test_two_players_cannot_buy_one_stock_item(game):
                 return str(error)
 
     with ThreadPoolExecutor(max_workers=2) as workers:
-        outcomes = list(workers.map(buy, users))
+        outcomes = list(workers.map(in_current_world(buy), users))
     assert sum(outcome is True for outcome in outcomes) == 1, outcomes
     assert sum(isinstance(outcome, str) for outcome in outcomes) == 1, outcomes
     with app.app_context():
@@ -493,7 +490,7 @@ def test_world_package_rejects_invalid_economy_and_respawn_settings(table, field
 
 
 def _bank_command(app, uid, command, request_id=None):
-    with app.test_request_context("/mud/actions", method="POST"):
+    with app.test_request_context(url("/actions"), method="POST"):
         db = get_db()
         session["connection_id"] = db.execute("SELECT connection_id FROM users WHERE id=?", (uid,)).fetchone()[0]
         user = db.execute("SELECT * FROM users WHERE id=?", (uid,)).fetchone()
@@ -512,8 +509,7 @@ def _install_bank_world(app, users, *, room_bank=False, npc_bank=False):
     with app.app_context():
         db = get_db()
         mud_worlds.install(db, mud_worlds.package_bytes(document))
-        db.execute("UPDATE mud_world_packages SET active=0")
-        db.execute("UPDATE mud_world_packages SET active=1 WHERE id='authored'")
+        activate_world(db, 'authored')
         square = db.execute("SELECT start_room_id FROM mud_world_packages WHERE id='authored'").fetchone()[0]
         vault = db.execute("SELECT id FROM mud_world_rooms WHERE world_id='authored' AND name='Old Vault'").fetchone()[0]
         for uid in users:
@@ -557,8 +553,13 @@ def test_optional_banking_transfers_validate_and_preserve_wallet_spending(game):
             "id": "next-bank", "name": "Next Bank", "author": "Test", "start_room": "lobby",
             "rooms": [{"id": "lobby", "name": "Bank Lobby", "description": "A new branch.", "bank": True}],
             "exits": []}))
-        mud_worlds.activate(db, "next-bank", campaign="migrate")
-    assert "10 coins and have 20" in _bank_command(app, one, "/bank")[0]
+        # Another world is a separate game: its character starts without this bank balance.
+        enter_world(db, "next-bank")
+        other = mud._character_id(db, one)
+        assert other != cid
+        assert mud._bank_balance(db, other) == 0
+        assert db.execute("SELECT coins FROM mud_character_banks WHERE character_id=?", (cid,)).fetchone()[0] == 20
+        db.commit()
 
 
 def test_banking_requires_available_service_and_is_idempotent(game, monkeypatch):
@@ -606,16 +607,19 @@ def test_banking_requires_available_service_and_is_idempotent(game, monkeypatch)
         db.commit()
     with pytest.raises(mud.ActionError, match="no available bank"):
         _bank_command(app, one, "/bank")
-    with app.app_context():
-        db = get_db()
-        db.execute("UPDATE station SET mud_procedural_enabled=1 WHERE id=1")
-        mud._set_player_location(db, one, "procedural", "portal", mud.PORTAL_ROOM_ID)
-        db.commit()
-    with pytest.raises(mud.ActionError, match="authored world room"):
-        _bank_command(app, one, "/bank")
+    # The dungeon world has no banks; its character is a separate one.
+    with mud_scope.use(mud_scope.PROCEDURAL):
+        with app.app_context():
+            db = get_db()
+            db.execute("UPDATE station SET mud_procedural_enabled=1 WHERE id=1")
+            db.execute("UPDATE mud_characters SET creation_state='complete' WHERE id=?",
+                       (mud._character_id(db, one),))
+            db.commit()
+        with pytest.raises(mud.ActionError, match="authored world room"):
+            _bank_command(app, one, "/bank")
 
 
-def test_bank_overflow_rolls_back_and_balance_survives_restart_and_archive(game):
+def test_bank_overflow_rolls_back_and_balance_survives_restart(game):
     app, (one, two) = game
     _install_bank_world(app, (one, two), npc_bank=True)
     cid = f"stationnet:character:{one}"
@@ -647,29 +651,13 @@ def test_bank_overflow_rolls_back_and_balance_survives_restart_and_archive(game)
     finally:
         reopened.extensions["broadcast_coordinator"]._closed = True
         reopened.extensions["broadcast_coordinator"]._timer.cancel()
-    with app.app_context():
-        db = get_db()
-        archive_id = mud.mud_compat.archive_campaign(db, "authored", "Authored World")
-        assert mud._bank_balance(db, cid) == 0
-        mud.mud_compat.restore_campaign(db, archive_id)
-        assert mud._bank_balance(db, cid) == 2
-        old_archive = mud.mud_compat.archive_campaign(db, "authored", "Authored World")
-        row = db.execute("SELECT snapshot_json FROM mud_campaign_characters WHERE archive_id=? AND user_id=?",
-                         (old_archive, one)).fetchone()
-        snapshot = json.loads(row[0])
-        snapshot["tables"].pop("mud_character_banks")
-        db.execute("UPDATE mud_campaign_characters SET snapshot_json=? WHERE archive_id=? AND user_id=?",
-                   (json.dumps(snapshot), old_archive, one))
-        mud.mud_compat.restore_campaign(db, old_archive)
-        assert mud._bank_balance(db, cid) == 0
-        db.commit()
 
 
 def test_bank_concurrent_deposits_and_character_deletion(game):
     app, (one, two) = game
     _install_bank_world(app, (one, two), npc_bank=True)
     with ThreadPoolExecutor(max_workers=2) as workers:
-        results = list(workers.map(lambda request_id: _try_bank_command(app, one, "/bank deposit 20", request_id),
+        results = list(workers.map(in_current_world(lambda request_id: _try_bank_command(app, one, "/bank deposit 20", request_id)),
                                    ("bank-race-1", "bank-race-2")))
     assert sum(result == "ok" for result in results) == 1
     assert sum("enough carried" in result for result in results) == 1
@@ -682,7 +670,7 @@ def test_bank_concurrent_deposits_and_character_deletion(game):
     with client.session_transaction() as login:
         login["user_id"] = one
         login["csrf_token"] = "test-token"
-    assert client.post("/mud/character/delete", data={"csrf_token": "test-token",
+    assert client.post(url("/character/delete"), data={"csrf_token": "test-token",
                                                        "confirm_name": "One"}).status_code == 302
     with app.app_context():
         db = get_db()
@@ -706,8 +694,7 @@ def test_bank_package_round_trip_builder_and_legacy_defaults(game):
     with app.app_context():
         db = get_db()
         mud_worlds.install(db, mud_worlds.package_bytes(document))
-        db.execute("UPDATE mud_world_packages SET active=0")
-        db.execute("UPDATE mud_world_packages SET active=1 WHERE id='authored'")
+        activate_world(db, 'authored')
         square = db.execute("SELECT start_room_id FROM mud_world_packages WHERE id='authored'").fetchone()[0]
         vault = db.execute("SELECT id FROM mud_world_rooms WHERE world_id='authored' AND name='Old Vault'").fetchone()[0]
         npc = db.execute("SELECT id FROM mud_npc_definitions WHERE world_id='authored' AND name='Trader'").fetchone()[0]
@@ -729,19 +716,19 @@ def test_bank_package_round_trip_builder_and_legacy_defaults(game):
     with client.session_transaction() as login:
         login["user_id"] = one
         login["csrf_token"] = "test-token"
-    response = client.get("/mud/builder")
+    response = client.get(url("/builder"))
     assert response.status_code == 200
     assert b'name="is_banker"' in response.data and b'name="banking_enabled"' in response.data
-    assert client.post("/mud/builder/rooms", data={
+    assert client.post(url("/builder/rooms"), data={
         "csrf_token": "test-token", "name": "Bank Annex", "description": "A quiet annex.",
         "banking_enabled": "1"}).status_code == 302
-    assert client.post("/mud/builder/npcs", data={
+    assert client.post(url("/builder/npcs"), data={
         "csrf_token": "test-token", "name": "Teller", "description": "A helpful teller.",
         "properties_json": "{}", "behaviors_json": "{}", "is_banker": "1"}).status_code == 302
-    assert client.post(f"/mud/builder/rooms/{square}", data={
+    assert client.post(url(f"/builder/rooms/{square}"), data={
         "csrf_token": "test-token", "name": "Town Square", "description": "A busy square.",
         "banking_enabled": "1"}).status_code == 302
-    assert client.post(f"/mud/builder/npcs/{npc}", data={
+    assert client.post(url(f"/builder/npcs/{npc}"), data={
         "csrf_token": "test-token", "name": "Trader", "description": "A shopkeeper.",
         "properties_json": "{}", "behaviors_json": "{}"}).status_code == 302
     with app.app_context():

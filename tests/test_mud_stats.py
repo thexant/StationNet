@@ -23,8 +23,6 @@ def test_attributes_drive_resources_and_equipment():
             user_id = db.execute("INSERT INTO users(username,callsign,password_hash) "
                                  "VALUES('player','PLY','unused')").lastrowid
             user = db.execute("SELECT * FROM users WHERE id=?", (user_id,)).fetchone()
-            for track in ("shared", "traditional", "procedural"):
-                mud._character_row(db, user_id, track)
             character_creation.complete(db, user_id, {
                 "name": "Stat Explorer", "race": "human", "class": "scholar",
                 "attributes": {"strength": 8, "agility": 8, "intellect": 14, "vitality": 14},

@@ -5,6 +5,7 @@ from pathlib import Path
 import shutil
 import uuid
 
+from mud_world_helpers import enter_world
 from stationnet import create_app, character_creation, mud, mud_wayfinding, mud_worlds
 from stationnet.db import get_db
 
@@ -59,6 +60,11 @@ def running(doc=None, users=("one", "two")):
             db = get_db()
             db.execute("INSERT INTO station(name,description,callsign,mud_enabled,mud_traditional_enabled) "
                        "VALUES('Test','Test','TST',1,1)")
+            db.commit()
+            installed = doc or document()
+            mud_worlds.install(db, mud_worlds.package_bytes(installed))
+            # Characters belong to one world, so they are created inside the world under test.
+            enter_world(db, installed["id"])
             ids = []
             for index, name in enumerate(users):
                 uid = db.execute("INSERT INTO users(username,callsign,password_hash,connection_id,is_admin) "
@@ -69,11 +75,6 @@ def running(doc=None, users=("one", "two")):
                     "attributes": {"strength": 11, "agility": 11, "intellect": 11, "vitality": 11},
                     "skills": ["lore", "guard"]})
                 ids.append(uid)
-            db.commit()
-            installed = doc or document()
-            mud_worlds.install(db, mud_worlds.package_bytes(installed))
-            db.execute("UPDATE mud_world_packages SET active=0")
-            db.execute("UPDATE mud_world_packages SET active=1 WHERE id=?", (installed["id"],))
             for uid in ids:
                 place(db, uid, room(db, "square", installed["id"]))
             db.commit()
@@ -98,8 +99,8 @@ def installed(db, table, local, world=WORLD):
 def place(db, uid, room_id):
     mud._set_player_location(db, uid, "traditional", "world_room", room_id)
     db.execute("DELETE FROM mud_presence WHERE user_id=?", (uid,))
-    db.execute("INSERT INTO mud_presence(user_id,connection_id,client_id,room_id,location_type,location_key,last_seen) "
-               "VALUES(?,?,?,?,?,?,?)", (uid, f"connection-{uid}", f"client-{uid}-1", room_id, "world_room", room_id,
+    db.execute("INSERT INTO mud_presence(world_key,user_id,connection_id,client_id,room_id,location_type,location_key,last_seen) "
+               "VALUES(mud_world(),?,?,?,?,?,?,?)", (uid, f"connection-{uid}", f"client-{uid}-1", room_id, "world_room", room_id,
                                          mud._scheduled_now()))
 
 
@@ -118,7 +119,7 @@ def set_society(db, **sections):
         settings[key] = {**settings[key], **value}
     from stationnet import mud_society
     import json
-    db.execute("UPDATE mud_world_packages SET society_json=? WHERE active=1",
+    db.execute("UPDATE mud_world_packages SET society_json=? WHERE id=mud_world()",
                (json.dumps(mud_society.changed_settings(mud_society.validate_settings(settings))),))
 
 

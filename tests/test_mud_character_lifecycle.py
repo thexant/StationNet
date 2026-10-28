@@ -34,13 +34,13 @@ def test_expanded_choices_and_confirmed_character_deletion(data_path):
         with client.session_transaction() as session:
             session["user_id"] = user_id
             session["csrf_token"] = "test-token"
-        creation = client.get("/mud/create")
+        creation = client.get("/mud/w/stationnet/create")
         assert b"Halfling" in creation.data and b"Mystic" in creation.data
         assert b"data-adjust" in creation.data and b"data-step-jump" in creation.data
         build = {"name": "New Adventurer", "race": "halfling", "class": "mystic",
                  "attributes": {"strength": 11, "agility": 11, "intellect": 11, "vitality": 11},
                  "skills": ["lore", "guard"]}
-        created = client.post("/mud/create", data={"csrf_token": "test-token",
+        created = client.post("/mud/w/stationnet/create", data={"csrf_token": "test-token",
                                                    "build": json.dumps(build)})
         assert created.status_code == 302
         with app.app_context():
@@ -59,23 +59,23 @@ def test_expanded_choices_and_confirmed_character_deletion(data_path):
             db.execute("UPDATE mud_character_progression SET level=7 WHERE character_id=?",
                        (character_id,))
             db.commit()
-        assert b"New Adventurer" in client.get("/mud/character/delete").data
-        rejected = client.post("/mud/character/delete", data={
+        assert b"New Adventurer" in client.get("/mud/w/stationnet/character/delete").data
+        rejected = client.post("/mud/w/stationnet/character/delete", data={
             "csrf_token": "test-token", "confirm_name": "wrong"})
         assert rejected.status_code == 200
         with app.app_context():
             assert get_db().execute("SELECT creation_state FROM mud_characters WHERE user_id=?",
                                     (user_id,)).fetchone()[0] == "complete"
-        deleted = client.post("/mud/character/delete", data={
+        deleted = client.post("/mud/w/stationnet/character/delete", data={
             "csrf_token": "test-token", "confirm_name": "New Adventurer"})
-        assert deleted.status_code == 302 and deleted.location.endswith("/mud/create")
+        assert deleted.status_code == 302 and deleted.location.endswith("/mud/w/stationnet/create")
         with app.app_context():
             db = get_db()
             assert db.execute("SELECT creation_state,race_key FROM mud_characters WHERE user_id=?",
                               (user_id,)).fetchone()[:] == ("pending", None)
             assert [row[0] for row in db.execute(
                 "SELECT level FROM mud_character_progression WHERE character_id=?",
-                (character_id,))] == [1, 1, 1]
+                (character_id,))] == [1]
             assert db.execute("SELECT 1 FROM mud_item_instances WHERE id LIKE 'test:%'").fetchone() is None
             assert db.execute("SELECT 1 FROM mud_character_skills WHERE character_id=?",
                               (character_id,)).fetchone() is None

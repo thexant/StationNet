@@ -8,6 +8,7 @@ import zipfile
 
 import pytest
 
+from stationnet import mud_scope
 from stationnet import create_app, dungeons, mud, mud_world_dungeons, mud_worlds
 from stationnet.db import get_db
 
@@ -32,14 +33,12 @@ def world():
             db = get_db()
             db.execute("INSERT INTO station(name,description,callsign,mud_enabled,mud_traditional_enabled,"
                        "mud_procedural_enabled) VALUES('Test','Test','TST',1,1,1)")
-            # Independent tracks prove world runs pay the world's progression and possessions.
-            db.execute("UPDATE mud_crossover_settings SET progression_shared=0,inventory_shared=0")
             users = []
             for name, callsign, admin in (("sysop", "SYS", 1), ("ana", "ANA", 0),
                                           ("bo", "BOO", 0), ("cy", "CYY", 0)):
                 user_id = db.execute("INSERT INTO users(username,callsign,password_hash,is_admin) "
                                      "VALUES(?,?,'unused',?)", (name, callsign, admin)).lastrowid
-                db.execute("UPDATE mud_characters SET creation_state='complete' WHERE user_id=?", (user_id,))
+                db.execute("UPDATE mud_characters SET creation_state=\'complete\' WHERE id=?", (mud._character_id(db, user_id),))
                 users.append(user_id)
             db.execute("INSERT INTO mud_world_rooms(id,name,description,world_id) "
                        "VALUES(?,'Cave Mouth','Cold air rises.','stationnet')", (CAVE,))
@@ -148,7 +147,7 @@ def test_completion_returns_to_configured_room_on_the_world_track(world):
                                 (loot,)).fetchone()
         assert tuple(possession) == ("traditional", run["id"])
         with pytest.raises(mud.ActionError):
-            mud._world_action(db, _user(db, ana), {})
+            mud.actions.from_command("/world")
         exit_room = _clear_exit(db, run["id"])
         mud._set_player_location(db, ana, "traditional", "dungeon_instance", exit_room, run["id"])
         mud._record_expedition_visit(db, run["id"], ana, exit_room)
@@ -218,10 +217,11 @@ def test_party_shares_one_instance_and_respects_the_limit(world):
         assert mud._active_expedition(db, bo)["id"] == run["id"]
         with pytest.raises(mud.ActionError, match="full"):
             mud._join_expedition_action(db, _user(db, cy), {"arguments": [run["join_code"]]})
-        # Portal and world runs keep their own doors.
-        mud._set_player_location(db, cy, "procedural", "portal", mud.PORTAL_ROOM_ID)
-        with pytest.raises(mud.ActionError, match="entrance"):
-            mud._join_expedition_action(db, _user(db, cy), {"arguments": [run["join_code"]]})
+        # Portal and world runs keep their own doors: the dungeon world cannot join a world run.
+        with mud_scope.use(mud_scope.PROCEDURAL):
+            _dungeon_character(db, cy)
+            with pytest.raises(mud.ActionError):
+                mud._join_expedition_action(db, _user(db, cy), {"arguments": [run["join_code"]]})
         assert {row[0] for row in db.execute(
             "SELECT instance_id FROM mud_player_locations WHERE user_id IN (?,?)", (ana, bo))} == {run["id"]}
         # A shared floor item can be claimed only once.
@@ -246,13 +246,17 @@ def test_portal_codes_cannot_be_joined_from_world_entrances(world):
     app, (_sysop, ana, bo, _cy), _template_id = world
     with app.app_context():
         db = get_db()
-        mud._set_player_location(db, ana, "procedural", "portal", mud.PORTAL_ROOM_ID)
-        mud._expedition_action(db, _user(db, ana), {"theme_id": "generic-fantasy-dungeon",
-                                                    "difficulty": 1, "size": 8})
-        code = mud._active_expedition(db, ana)["join_code"]
+        with mud_scope.use(mud_scope.PROCEDURAL):
+            _dungeon_character(db, ana)
+            mud._expedition_action(db, _user(db, ana), {"theme_id": "generic-fantasy-dungeon",
+                                                        "difficulty": 1, "size": 8})
+            code = mud._active_expedition(db, ana)["join_code"]
+            run_id = mud._active_expedition(db, ana)["id"]
         with pytest.raises(mud.ActionError, match="Dungeon Portals"):
             mud._join_expedition_action(db, _user(db, bo), {"arguments": [code]})
-        assert mud._world_run(db, mud._active_expedition(db, ana)["id"]) is None
+        assert mud._world_run(db, run_id) is None
+        # The authored-world character has no part in the dungeon world's run.
+        assert mud._active_expedition(db, ana) is None
 
 
 # Persistence ---------------------------------------------------------------
@@ -263,8 +267,8 @@ def test_runs_survive_disconnect_restart_and_displacement(world):
         db = get_db()
         run, _ = _enter(db, ana)
         room_key = mud._current_room(db, ana)["id"]
-        db.execute("INSERT INTO mud_presence(user_id,connection_id,client_id,location_type,location_key,"
-                   "instance_id,last_seen,disconnected_at) VALUES(?,'c','client','dungeon_instance',?,?,"
+        db.execute("INSERT INTO mud_presence(world_key,user_id,connection_id,client_id,location_type,location_key,"
+                   "instance_id,last_seen,disconnected_at) VALUES(mud_world(),?,'c','client','dungeon_instance',?,?,"
                    "'2000-01-01T00:00:00+00:00','2000-01-01T00:00:00+00:00')", (ana, room_key, run["id"]))
         mud._prune_presence(db)
         db.commit()
@@ -272,19 +276,17 @@ def test_runs_survive_disconnect_restart_and_displacement(world):
         db = get_db()
         assert db.execute("SELECT 1 FROM mud_presence WHERE user_id=?", (ana,)).fetchone() is None
         assert mud._current_room(db, ana)["instance_id"] == run["id"]
-        # Toggling the traditional world off displaces the explorer; the run waits for /resume.
-        db.execute("UPDATE station SET mud_traditional_enabled=0")
-        mud.reconcile_mode_locations(db)
-        assert mud._current_room(db, ana)["id"] == mud.PORTAL_ROOM_ID
+        # Disabling the world leaves the run waiting; a displaced explorer can /resume it.
+        mud_worlds.set_enabled(db, "stationnet", False)
         assert mud._active_expedition(db, ana)["id"] == run["id"]
-        db.execute("UPDATE station SET mud_traditional_enabled=1")
+        mud_worlds.set_enabled(db, "stationnet", True)
         mud._set_player_location(db, ana, "traditional", "world_room", START)
         mud._resume_expedition_action(db, _user(db, ana), {})
         assert mud._current_room(db, ana)["id"] == room_key
         assert mud._current_room(db, ana)["instance_id"] == run["id"]
 
 
-def test_world_activation_ends_world_runs(world):
+def test_other_worlds_leave_runs_alone_and_removal_ends_them(world):
     app, (sysop, ana, _bo, _cy), _template_id = world
     with app.app_context():
         db = get_db()
@@ -296,12 +298,21 @@ def test_world_activation_ends_world_runs(world):
         "rooms": [{"id": "dock", "name": "Dock", "description": "Water."}], "exits": []})
     with app.app_context():
         db = get_db()
-        mud_worlds.install(db, package)
-        mud_worlds.activate(db, "harbor")
+        # Another world opening beside this one changes nothing here.
+        mud_worlds.install(db, package, enable=True)
+        assert db.execute("SELECT status FROM mud_procedural_instances WHERE id=?", (run["id"],)).fetchone()[0] == "active"
+        # Only removing the run's own world ends it, losing the run loot.
+        mud.end_world_runs(db, "stationnet", "This world was removed from the station.")
         assert db.execute("SELECT status,terminal_reason FROM mud_procedural_instances WHERE id=?",
-                          (run["id"],)).fetchone()[:] == ("abandoned", "world_changed")
+                          (run["id"],)).fetchone()[:] == ("abandoned", "world_removed")
         assert db.execute("SELECT 1 FROM mud_item_instances WHERE id=?", (loot,)).fetchone() is None
-        assert mud._current_room(db, ana)["name"] == "Dock"
+        assert mud._current_room(db, ana)["id"] == START
+
+
+def _dungeon_character(db, user_id):
+    """The account's finished character in the procedural dungeon world, standing in the portals."""
+    db.execute("UPDATE mud_characters SET creation_state='complete' WHERE id=?", (mud._character_id(db, user_id),))
+    mud._set_player_location(db, user_id, "procedural", "portal", mud.PORTAL_ROOM_ID)
 
 
 # Builder and packages ----------------------------------------------------
@@ -309,13 +320,13 @@ def test_world_activation_ends_world_runs(world):
 def test_builder_routes_create_preview_and_guard_templates(world):
     app, (sysop, ana, _bo, _cy), template_id = world
     client = _client(app, sysop)
-    created = client.post("/mud/builder/dungeons", data={
+    created = client.post("/mud/w/stationnet/builder/dungeons", data={
         "csrf_token": "test-token", "local_key": "ice-caves", "name": "Ice Caves",
         "base": "theme:frozen-frontier", "size_minimum": "6", "size_default": "8", "size_maximum": "12",
         "difficulty_minimum": "1", "difficulty_default": "2", "difficulty_maximum": "5",
         "layout_linear": "1", "layout_maze": "3"}, follow_redirects=True)
     assert created.status_code == 200 and b"Dungeon template created" in created.data
-    invalid = client.post("/mud/builder/dungeons", data={
+    invalid = client.post("/mud/w/stationnet/builder/dungeons", data={
         "csrf_token": "test-token", "local_key": "broken", "template_json": '{"name": "Broken"}'},
         follow_redirects=True)
     assert b"Dungeon template is invalid" in invalid.data
@@ -325,18 +336,18 @@ def test_builder_routes_create_preview_and_guard_templates(world):
         stored = json.loads(row["template_json"])
         assert stored["generation"]["size"] == {"minimum": 6, "default": 8, "maximum": 12}
         assert [entry["type"] for entry in stored["generation"]["layouts"]] == ["linear", "maze"]
-    entrance = client.post("/mud/builder/entrances", data={
+    entrance = client.post("/mud/w/stationnet/builder/entrances", data={
         "csrf_token": "test-token", "room_id": START, "return_room_id": CAVE, "template_id": row["id"],
         "name": "ice crack", "size": "10", "layout": "maze", "max_party": "3", "enabled": "1"},
         follow_redirects=True)
     assert b"Dungeon entrance ice crack created" in entrance.data
-    out_of_range = client.post("/mud/builder/entrances", data={
+    out_of_range = client.post("/mud/w/stationnet/builder/entrances", data={
         "csrf_token": "test-token", "room_id": START, "template_id": row["id"], "name": "deep crack",
         "size": "99", "enabled": "1"}, follow_redirects=True)
     assert b"Room count must be blank" in out_of_range.data
-    page = client.get(f"/mud/builder?preview={row['id']}&seed=fixed")
+    page = client.get(f"/mud/w/stationnet/builder?preview={row['id']}&seed=fixed")
     assert page.status_code == 200 and b"seed=fixed" in page.data and b"ice crack" in page.data
-    blocked = client.post(f"/mud/builder/dungeons/{row['id']}/delete",
+    blocked = client.post(f"/mud/w/stationnet/builder/dungeons/{row['id']}/delete",
                           data={"csrf_token": "test-token", "confirmation": "delete"}, follow_redirects=True)
     assert b"Remove or reassign the entrances" in blocked.data
     # Editing bumps the revision; a running instance keeps the version it was built from.
@@ -345,7 +356,7 @@ def test_builder_routes_create_preview_and_guard_templates(world):
         run, _ = _enter(db, ana)
         db.commit()
     template_json = json.dumps({**stored, "description": "Now colder."})
-    client.post(f"/mud/builder/dungeons/{row['id']}", data={
+    client.post(f"/mud/w/stationnet/builder/dungeons/{row['id']}", data={
         "csrf_token": "test-token", "local_key": "ice-caves", "name": "Ice Caves",
         "template_json": template_json}, follow_redirects=True)
     with app.app_context():
@@ -353,7 +364,7 @@ def test_builder_routes_create_preview_and_guard_templates(world):
         assert db.execute("SELECT revision FROM mud_world_dungeon_templates WHERE id=?",
                           (row["id"],)).fetchone()[0] == 2
         assert mud._active_expedition(db, ana)["theme_version"] == "1"
-    assert _client(app, ana).post("/mud/builder/dungeons", data={"csrf_token": "test-token"}).status_code == 403
+    assert _client(app, ana).post("/mud/w/stationnet/builder/dungeons", data={"csrf_token": "test-token"}).status_code == 403
 
 
 def test_world_export_and_import_round_trip_dungeons(world):
@@ -456,6 +467,7 @@ def test_packages_reject_bad_dungeon_references(world):
         assert db.execute("SELECT COUNT(*) FROM mud_world_dungeon_templates WHERE world_id='vault'").fetchone()[0] == 0
 
 
+@pytest.mark.mud_world(mud_scope.PROCEDURAL)
 def test_migration_preserves_existing_portal_instances(world):
     app, (_sysop, ana, _bo, _cy), _template_id = world
     with app.app_context():

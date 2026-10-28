@@ -749,7 +749,8 @@ def map_window(database, world_id, x, y, z, width, height, *, hide_users=()):
     players = [[row["x"], row["y"]] for row in database.execute(
         "SELECT DISTINCT r.x,r.y,p.user_id FROM mud_presence p JOIN mud_world_rooms r ON r.id=p.location_key "
         "WHERE p.location_type='world_room' AND r.world_id=? AND r.z=? AND r.x BETWEEN ? AND ? "
-        "AND r.y BETWEEN ? AND ? AND p.user_id NOT IN (SELECT user_id FROM mud_player_stealth)", bounds,
+        "AND r.y BETWEEN ? AND ? AND p.world_key=r.world_id AND p.user_id NOT IN (SELECT s.user_id FROM mud_player_stealth AS s "
+        "WHERE s.world_key=r.world_id)", bounds,
     ) if row["user_id"] not in hidden]
     npcs = [[row["x"], row["y"]] for row in database.execute(
         "SELECT DISTINCT r.x,r.y FROM mud_npc_instances n JOIN mud_world_rooms r ON r.id=n.room_id "

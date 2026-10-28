@@ -7,6 +7,8 @@ from pathlib import Path
 
 import pytest
 
+from mud_world_helpers import retire_origin
+from stationnet import mud_scope
 from stationnet import character_creation, create_app, dungeons, mud, mud_compat, mud_effects
 from stationnet.db import get_db
 
@@ -45,7 +47,8 @@ def game(data_path):
             user_id = db.execute("INSERT INTO users(username,callsign,password_hash) "
                                  "VALUES('player','PLY','unused')").lastrowid
             character_creation.complete(db, user_id, BUILD)
-            mud._set_player_location(db, user_id, "traditional", "world_room", mud._start_room(db)["id"])
+            # The start room in an authored world, or the Dungeon Portals in the dungeon world.
+            mud._reconcile_player_location(db, user_id)
             db.commit()
         yield app, user_id
     finally:
@@ -56,14 +59,14 @@ def _user(db, user_id):
     return db.execute("SELECT * FROM users WHERE id=?", (user_id,)).fetchone()
 
 
-def _track(db, user_id, track="shared"):
+def _track(db, user_id, track="traditional"):
     return db.execute("SELECT * FROM mud_character_progression WHERE character_id=? AND track_key=?",
                       (f"stationnet:character:{user_id}", track)).fetchone()
 
 
 def _set_level(db, user_id, level):
     db.execute("UPDATE mud_character_progression SET level=? WHERE character_id=?",
-               (level, f"stationnet:character:{user_id}"))
+               (level, mud._character_id(db, user_id)))
 
 
 def test_attribute_points_per_level():
@@ -160,17 +163,21 @@ def test_train_requires_completed_character(game):
             mud._train_action(db, _user(db, newcomer), {"arguments": []})
 
 
-def test_split_tracks_train_independently(game):
+def test_each_world_trains_its_own_character(game):
     app, user_id = game
     with app.app_context():
         db = get_db()
-        db.execute("UPDATE mud_crossover_settings SET progression_shared=0")
         assert mud._progression_track(db, user_id) == "traditional"
         mud.award_experience(db, user_id, 100)
         mud._train_action(db, _user(db, user_id), {"arguments": ["str"]})
-        assert _track(db, user_id, "traditional")["strength"] == 13
-        assert _track(db, user_id, "shared")["strength"] == 12
-        assert _track(db, user_id, "shared")["attribute_points"] == 0
+        assert _track(db, user_id)["strength"] == 13
+        with mud_scope.use(mud_scope.PROCEDURAL):
+            # The dungeon world's character is separate and starts over.
+            character_creation.complete(db, user_id, BUILD)
+            dungeon = mud._character_row(db, user_id)
+            assert dungeon["track_key"] == "procedural"
+            assert (dungeon["level"], dungeon["strength"], dungeon["attribute_points"]) == (1, 12, 0)
+        assert _track(db, user_id)["strength"] == 13
 
 
 def test_migration_starts_existing_characters_fresh(data_path):
@@ -292,7 +299,7 @@ def _reward_body(db, user_id, scope_type, scope_key, room_id):
                "current_health,maximum_health,ended_at) VALUES(?,?,?,?,'test:rat','defeated',0,1,CURRENT_TIMESTAMP)",
                (encounter_id, scope_type, scope_key, instance_id))
     db.execute("INSERT INTO mud_combat_participants(encounter_id,character_id,damage_dealt) VALUES(?,?,1)",
-               (encounter_id, f"stationnet:character:{user_id}"))
+               (encounter_id, mud._character_id(db, user_id)))
     encounter = db.execute("SELECT * FROM mud_combat_encounters WHERE id=?", (encounter_id,)).fetchone()
     npc = {"definition_id": "test:rat", "name": "Rat", "experience_reward": 100, "room_id": room_id}
     return mud._encounter_reward_drafts(db, encounter, npc)[0].body
@@ -315,20 +322,24 @@ def test_dungeon_kills_taper_for_overleveled_characters(game):
         expected = boosted(100)
         assert expected in _reward_body(db, user_id, "room", room_id, room_id)
 
-        mud._set_player_location(db, user_id, "procedural", "portal", mud.PORTAL_ROOM_ID)
-        launched = mud._expedition_action(db, user, {"theme_id": "generic-fantasy-dungeon",
-                                                     "difficulty": 1, "size": 8})
-        assert "beneath you" in launched[0].body and "25%" in launched[0].body
-        run = mud._active_expedition(db, user_id)
-        entrance = db.execute("SELECT current_room_key FROM mud_expedition_participants WHERE instance_id=?",
-                              (run["id"],)).fetchone()[0]
-        expected = boosted(25)
-        assert expected in _reward_body(db, user_id, "instance", run["id"], entrance)
-        _set_level(db, user_id, 1)
-        expected = boosted(100)
-        assert expected in _reward_body(db, user_id, "instance", run["id"], entrance)
+        with mud_scope.use(mud_scope.PROCEDURAL):
+            character_creation.complete(db, user_id, BUILD)
+            _set_level(db, user_id, 20)
+            mud._set_player_location(db, user_id, "procedural", "portal", mud.PORTAL_ROOM_ID)
+            launched = mud._expedition_action(db, user, {"theme_id": "generic-fantasy-dungeon",
+                                                         "difficulty": 1, "size": 8})
+            assert "beneath you" in launched[0].body and "25%" in launched[0].body
+            run = mud._active_expedition(db, user_id)
+            entrance = db.execute("SELECT current_room_key FROM mud_expedition_participants WHERE instance_id=?",
+                                  (run["id"],)).fetchone()[0]
+            expected = boosted(25)
+            assert expected in _reward_body(db, user_id, "instance", run["id"], entrance)
+            _set_level(db, user_id, 1)
+            expected = boosted(100)
+            assert expected in _reward_body(db, user_id, "instance", run["id"], entrance)
 
 
+@pytest.mark.mud_world(mud_scope.PROCEDURAL)
 def test_expedition_listing_shows_recommended_levels(game):
     app, user_id = game
     with app.app_context():
@@ -345,7 +356,7 @@ def test_origin_replacement_keeps_training(game):
         mud.award_experience(db, user_id, 400)
         mud._train_action(db, _user(db, user_id), {"arguments": ["str", "2"]})
         assert _track(db, user_id)["strength"] == 14
-        db.execute("INSERT INTO mud_origin_definitions(kind,key,enabled) VALUES('classes','scholar',0)")
+        retire_origin(db, f"stationnet:character:{user_id}", "classes")
         mud_compat.replace_origins(db, user_id, "human", "warrior")
         row = _track(db, user_id)
         assert row["strength"] == 14
@@ -358,7 +369,7 @@ def test_legacy_customization_refunds_training(game):
         db = get_db()
         legacy = db.execute("INSERT INTO users(username,callsign,password_hash) "
                             "VALUES('oldtimer','OLD','unused')").lastrowid
-        cid = f"stationnet:character:{legacy}"
+        cid = mud._character_id(db, legacy)
         db.execute("UPDATE mud_characters SET creation_state='legacy' WHERE id=?", (cid,))
         db.execute("UPDATE mud_character_progression SET attribute_points=1,"
                    "trained_attributes_json='{\"strength\": 2}' WHERE character_id=?", (cid,))
@@ -379,18 +390,3 @@ def test_character_sheet_shows_progression(game):
         assert re.search(r"Experience: \[#*\.*\] \d+/300", body)
         definition, _parameters = mud.actions.from_command("/train str")
         assert definition.key == "train"
-
-
-def test_campaign_archive_round_trip_keeps_points(game):
-    app, user_id = game
-    with app.app_context():
-        db = get_db()
-        mud.award_experience(db, user_id, 400)
-        mud._train_action(db, _user(db, user_id), {"arguments": ["agi"]})
-        before = dict(_track(db, user_id))
-        archive_id = mud_compat.archive_campaign(db, "test-world", "Test World")
-        assert _track(db, user_id)["attribute_points"] == 0
-        mud_compat.restore_campaign(db, archive_id)
-        after = dict(_track(db, user_id))
-        assert (after["attribute_points"], after["trained_attributes_json"], after["agility"]) == \
-            (before["attribute_points"], before["trained_attributes_json"], before["agility"])

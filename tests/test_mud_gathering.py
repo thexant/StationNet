@@ -43,6 +43,7 @@ def _skill(db):
         "group": "exploration", "effects": [{"type": "gathering", "per_rank": 5}],
         "practice": {"triggers": ["gather"]}})
     mud_skills._store(db, definition)
+    character_creation.offer(db, "skills", ["orecraft"])
 
 
 def _node(db, room_id, *, chance=100):
@@ -129,19 +130,19 @@ def test_builder_and_package_round_trip(game):
     client = app.test_client()
     with client.session_transaction() as session:
         session["user_id"] = first; session["csrf_token"] = "test-token"
-    result = client.post("/mud/builder/gathering-nodes", data={
+    result = client.post("/mud/w/stationnet/builder/gathering-nodes", data={
         "csrf_token": "test-token", "room_id": room["id"], "name": "Herb patch",
         "activity": "harvest", "item_id": "herb", "amount": "2", "success_percent": "75",
         "respawn_seconds": "180", "min_rank": "0"})
     assert result.status_code == 302
-    builder = client.get("/mud/builder")
+    builder = client.get("/mud/w/stationnet/builder")
     assert builder.status_code == 200 and b"Herb patch" in builder.data
     with app.app_context():
         db = get_db()
         node = db.execute("SELECT * FROM mud_gathering_nodes WHERE name='Herb patch'").fetchone()
         assert node and mud_gathering.rewards(node["rewards_json"])[0]["amount"] == 2
         node_id = node["id"]
-    changed = client.post(f"/mud/builder/gathering-nodes/{node_id}/rewards/update", data={
+    changed = client.post(f"/mud/w/stationnet/builder/gathering-nodes/{node_id}/rewards/update", data={
         "csrf_token": "test-token", "item_id": "herb", "amount": "3"})
     assert changed.status_code == 302
     with app.app_context():

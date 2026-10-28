@@ -8,6 +8,7 @@ import uuid
 
 import pytest
 
+from mud_world_helpers import activate_world, url
 from stationnet import create_app, character_creation, dungeons, mud, mud_conditions, mud_worlds
 from stationnet import db as db_module
 from stationnet.db import get_db
@@ -115,8 +116,7 @@ def _document(world_id="questing"):
 def _install(db, users, document=None):
     document = document or _document()
     mud_worlds.install(db, mud_worlds.package_bytes(document))
-    db.execute("UPDATE mud_world_packages SET active=0")
-    db.execute("UPDATE mud_world_packages SET active=1 WHERE id=?", (document["id"],))
+    activate_world(db, document["id"])
     rooms = {row["name"]: row["id"] for row in db.execute(
         "SELECT id,name FROM mud_world_rooms WHERE world_id=?", (document["id"],))}
     for uid in users:
@@ -499,11 +499,11 @@ def test_builder_validates_quest_and_dialogue_rules(game):
     quest = {"csrf_token": "test-token", "name": "Trophy", "description": "Bring a trophy.",
              "completion_mode": "turn_in", "turn_in_npc_definition_id": hunter, "sequential": "1",
              "abandonable": "1", "conditions_json": '[{"type":"weather"}]'}
-    client.post("/mud/builder/quests", data=quest)
+    client.post(url("/builder/quests"), data=quest)
     quest["conditions_json"] = '[{"type":"has_item","item":"nowhere"}]'
-    client.post("/mud/builder/quests", data=quest)
+    client.post(url("/builder/quests"), data=quest)
     quest["conditions_json"] = '[{"type":"level","min":2}]'
-    client.post("/mud/builder/quests", data=quest)
+    client.post(url("/builder/quests"), data=quest)
     with app.app_context():
         db = get_db()
         rows = db.execute("SELECT * FROM mud_quests WHERE name='Trophy'").fetchall()
@@ -514,12 +514,12 @@ def test_builder_validates_quest_and_dialogue_rules(game):
         assert json.loads(trophy["conditions_json"]) == [{"type": "level", "min": 2}]
     objective = {"csrf_token": "test-token", "objective_type": "talk_npc", "target_id": hunter,
                  "description": "Talk", "required_count": "1", "sort_order": "3", "consume_on_turn_in": "1"}
-    client.post(f"/mud/builder/quests/{trophy['id']}/objectives", data=objective)
+    client.post(url(f"/builder/quests/{trophy['id']}/objectives"), data=objective)
     objective.update(objective_type="possess_item", target_id=pelt, optional="1")
-    client.post(f"/mud/builder/quests/{trophy['id']}/objectives", data=objective)
+    client.post(url(f"/builder/quests/{trophy['id']}/objectives"), data=objective)
     response = {"csrf_token": "test-token", "response_text": "Trophy please", "turn_in_quest_id": trophy["id"],
                 "conditions_json": "[]", "outcomes_json": '[{"type":"coins","amount":4}]', "sort_order": "0"}
-    client.post(f"/mud/builder/dialogue-nodes/{node}/responses", data=response)
+    client.post(url(f"/builder/dialogue-nodes/{node}/responses"), data=response)
     with app.app_context():
         db = get_db()
         objectives = db.execute("SELECT * FROM mud_quest_objectives WHERE quest_id=?", (trophy["id"],)).fetchall()
@@ -529,18 +529,18 @@ def test_builder_validates_quest_and_dialogue_rules(game):
         assert saved["turn_in_quest_id"] == trophy["id"]
         assert json.loads(saved["outcomes_json"]) == [{"type": "coins", "amount": 4}]
     response.update(response_text="Trophy now", outcomes_json='[{"type":"coins","amount":0}]')
-    client.post(f"/mud/builder/dialogue-responses/{saved['id']}", data=response)
+    client.post(url(f"/builder/dialogue-responses/{saved['id']}"), data=response)
     response["outcomes_json"] = "[]"
-    client.post(f"/mud/builder/dialogue-responses/{saved['id']}", data=response)
+    client.post(url(f"/builder/dialogue-responses/{saved['id']}"), data=response)
     objective.update(sort_order="1", optional="")
-    client.post(f"/mud/builder/quest-objectives/{objectives[0]['id']}", data=objective)
+    client.post(url(f"/builder/quest-objectives/{objectives[0]['id']}"), data=objective)
     with app.app_context():
         db = get_db()
         saved = db.execute("SELECT * FROM mud_dialogue_responses WHERE id=?", (saved["id"],)).fetchone()
         assert (saved["response_text"], saved["outcomes_json"]) == ("Trophy now", "[]")
         updated = db.execute("SELECT * FROM mud_quest_objectives WHERE id=?", (objectives[0]["id"],)).fetchone()
         assert (updated["sort_order"], updated["optional"]) == (1, 0)
-    assert client.get("/mud/builder").status_code == 200
+    assert client.get(url("/builder")).status_code == 200
 
 
 def test_migration_adds_quest_and_dialogue_columns_to_old_tables():

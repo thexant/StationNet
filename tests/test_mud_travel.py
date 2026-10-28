@@ -30,7 +30,7 @@ def _bodies(db, uid):
 
 
 def _command(app, uid, text):
-    with app.test_request_context("/mud/actions", method="POST"):
+    with app.test_request_context("/mud/w/stationnet/actions", method="POST"):
         db = get_db()
         session["connection_id"] = db.execute("SELECT connection_id FROM users WHERE id=?", (uid,)).fetchone()[0]
         definition, parameters = mud.actions.from_command(text)

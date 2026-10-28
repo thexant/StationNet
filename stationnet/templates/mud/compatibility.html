@@ -3,7 +3,7 @@
 {% block content %}
 <section class="panel">
   <h1>Update {{ character.display_name }}</h1>
-  <p>The available MUD races or classes changed. Choose a replacement for {{ missing|join(' and ') }} before continuing.</p>
+  <p>The {{ missing|join(' and ') }} this character uses in {{ world.name }} was removed from the station. Choose a replacement before continuing.</p>
   <p>Your name, level, experience, earned skills, inventory, and quest progress will stay with your character. Stats and health{{ ' or ' ~ resource.noun if resource.enabled }} limits will adjust to your new origin. Class spells follow the new class; gear you no longer qualify for will be unequipped and kept.</p>
   {% if error %}<p role="alert" class="mud-error">{{ error }}</p>{% endif %}
   <form method="post" class="form-grid">

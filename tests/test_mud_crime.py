@@ -235,7 +235,7 @@ def test_package_round_trip():
 def test_builder_crime_settings_and_item_owner():
     with running(_world()) as (app, (one, _two)):
         web = client(app, one)
-        response = web.post("/mud/builder/society/crime", data={
+        response = web.post(f"/mud/w/{WORLD}/builder/society/crime", data={
             "csrf_token": "test-token", "enabled": "1", "detection": "40", "fine_expiry_hours": "0",
             "fines.theft": "9", "fines.pickpocket": "8", "fines.assault": "7",
             "reputation.theft": "-1", "reputation.pickpocket": "-2", "reputation.assault": "-3"})
@@ -246,8 +246,8 @@ def test_builder_crime_settings_and_item_owner():
             assert crime["detection"] == 40 and crime["fines"]["theft"] == 9 and crime["reputation"]["assault"] == -3
             nail = installed(db, "mud_item_instances", "free-nail")
             watch = installed(db, "mud_world_factions", "watch")
-        web.post(f"/mud/builder/item-instances/{nail}/owner", data={"csrf_token": "test-token",
+        web.post(f"/mud/w/{WORLD}/builder/item-instances/{nail}/owner", data={"csrf_token": "test-token",
                                                                     "owner": f"faction|{watch}"})
         with app.app_context():
             assert mud._item_owner(get_db(), nail) == (watch, None)
-        assert b"Owner of Iron Nail" in web.get("/mud/builder").data
+        assert b"Owner of Iron Nail" in web.get(f"/mud/w/{WORLD}/builder").data

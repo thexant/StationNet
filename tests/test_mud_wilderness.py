@@ -11,6 +11,7 @@ import zipfile
 
 import pytest
 
+from mud_world_helpers import activate_world, url
 from stationnet import create_app, character_creation, mud, mud_wilderness, mud_worlds
 from stationnet.db import get_db
 
@@ -81,8 +82,7 @@ def game(monkeypatch):
             users.append(uid)
         db.commit()
         mud_worlds.install(db, _package(_document()))
-        db.execute("UPDATE mud_world_packages SET active=0")
-        db.execute("UPDATE mud_world_packages SET active=1 WHERE id='wildworld'")
+        activate_world(db, 'wildworld')
         for uid in users:
             _place(db, uid, _town(db))
         db.commit()
@@ -103,8 +103,8 @@ def _cell(x, y, z=0, world="wildworld"):
 def _place(db, uid, room_id):
     mud._set_player_location(db, uid, "traditional", "world_room", room_id)
     db.execute("DELETE FROM mud_presence WHERE user_id=?", (uid,))
-    db.execute("INSERT INTO mud_presence(user_id,connection_id,client_id,room_id,location_type,location_key,last_seen) "
-               "VALUES(?,?,?,?,?,?,?)", (uid, f"connection-{uid}", f"client-{uid}-1", room_id, "world_room", room_id,
+    db.execute("INSERT INTO mud_presence(world_key,user_id,connection_id,client_id,room_id,location_type,location_key,last_seen) "
+               "VALUES(mud_world(),?,?,?,?,?,?,?)", (uid, f"connection-{uid}", f"client-{uid}-1", room_id, "world_room", room_id,
                                          mud._scheduled_now()))
 
 
@@ -402,48 +402,48 @@ def test_export_round_trip_keeps_cells_references_and_presets(game):
 def test_builder_preset_region_fill_and_map_routes(game):
     app, (admin, player) = game
     client = _client(app, admin)
-    page = client.get("/mud/builder/wilderness")
+    page = client.get(url("/builder/wilderness"))
     assert page.status_code == 200 and b"Room presets" in page.data
-    response = client.post("/mud/builder/room-presets", data={"csrf_token": "test-token", "base": "bundled:swamp",
+    response = client.post(url("/builder/room-presets"), data={"csrf_token": "test-token", "base": "bundled:swamp",
                                                               "key": "bog", "name": "Peat Bog"}, follow_redirects=True)
     assert b"Room preset Peat Bog created" in response.data
     with app.app_context():
         db = get_db()
         bog = db.execute("SELECT id FROM mud_world_room_presets WHERE local_key='bog'").fetchone()["id"]
-    response = client.post(f"/mud/builder/room-presets/{bog}", data={
+    response = client.post(url(f"/builder/room-presets/{bog}"), data={
         "csrf_token": "test-token", "key": "bog", "name": "Peat Bog", "glyph": "%", "terrain": "swamp", "links": "4",
         "light": "dim", "exposure": "open", "descriptions": "Peat.\n\n3| Bog water.", "encounter_chance": "5",
         "max_live": "1", "despawn_seconds": "60", "creatures": "Grey Wolf, 2, 1, 10", "respawn_seconds": "600",
         "max_per_room": "1", "resources": "Wild Herb, 50, 1, 2"}, follow_redirects=True)
     assert b"Room preset saved" in response.data
-    response = client.post("/mud/builder/regions", data={"csrf_token": "test-token", "key": "fen", "name": "The Fen",
+    response = client.post(url("/builder/regions"), data={"csrf_token": "test-token", "key": "fen", "name": "The Fen",
                                                          "danger": "4", "creatures": "Grey Wolf"}, follow_redirects=True)
     assert b"Region saved" in response.data
-    response = client.post("/mud/builder/wilderness/fill", data={
+    response = client.post(url("/builder/wilderness/fill"), data={
         "csrf_token": "test-token", "shape": "rect", "x1": "-10", "y1": "5", "x2": "-6", "y2": "6", "z": "0",
         "preset_id": bog, "mode": "empty"}, follow_redirects=True)
     assert b"10 rooms created" in response.data
-    data = client.get("/mud/builder/wilderness/map?x=-8&y=5&z=0&w=5&h=3").get_json()
+    data = client.get(url("/builder/wilderness/map?x=-8&y=5&z=0&w=5&h=3")).get_json()
     assert data["origin"] == [-10, 4] and data["palette"][data["grid"][1][0]]["key"] == "bog"
-    inspector = client.get("/mud/builder/wilderness?cell=-8,5,0")
+    inspector = client.get(url("/builder/wilderness?cell=-8,5,0"))
     assert b"Peat" in inspector.data and b"CONVERT TO AUTHORED ROOM" in inspector.data
-    response = client.post(f"/mud/builder/room-presets/{bog}/delete", data={"csrf_token": "test-token",
+    response = client.post(url(f"/builder/room-presets/{bog}/delete"), data={"csrf_token": "test-token",
                                                                              "confirmation": "delete"},
                            follow_redirects=True)
     assert b"Reassign them to another preset first" in response.data
-    exported = client.get("/mud/builder/room-presets/export")
+    exported = client.get(url("/builder/room-presets/export"))
     assert {preset["key"] for preset in exported.get_json()["presets"]} >= {"forest", "bog"}
     upload = json.dumps({"key": "tundra", "name": "Tundra", "descriptions": ["Ice."],
                          "encounters": {"creatures": [{"npc": "missing:npc"}]}}).encode()
-    response = client.post("/mud/builder/room-presets/import", data={
+    response = client.post(url("/builder/room-presets/import"), data={
         "csrf_token": "test-token", "drop_unknown": "1", "preset_file": (BytesIO(upload), "tundra.json")},
         content_type="multipart/form-data", follow_redirects=True)
     assert b"1 created" in response.data
-    response = client.post("/mud/builder/wilderness/clear", data={
+    response = client.post(url("/builder/wilderness/clear"), data={
         "csrf_token": "test-token", "shape": "rect", "x1": "-10", "y1": "5", "x2": "-6", "y2": "6", "z": "0",
         "confirm_clear": "1"}, follow_redirects=True)
     assert b"Removed 10 wilderness rooms" in response.data
-    assert _client(app, player).get("/mud/builder/wilderness").status_code == 403
+    assert _client(app, player).get(url("/builder/wilderness")).status_code == 403
 
 
 def test_builder_inspector_forms_return_to_the_inspector(game):
@@ -451,15 +451,15 @@ def test_builder_inspector_forms_return_to_the_inspector(game):
     client = _client(app, admin)
     with app.app_context():
         npc = get_db().execute("SELECT id FROM mud_npc_definitions WHERE name='Grey Wolf'").fetchone()["id"]
-    response = client.post("/mud/builder/npcs/place", data={
+    response = client.post(url("/builder/npcs/place"), data={
         "csrf_token": "test-token", "definition_id": npc, "room_id": _cell(1, 0), "return_to": "wilderness",
         "return_cell": "1,0,0"})
     assert response.status_code == 302 and "cell=1,0,0" in response.headers["Location"]
-    response = client.post(f"/mud/builder/wilderness/rooms/{_cell(1, 0)}/convert", data={"csrf_token": "test-token"})
+    response = client.post(url(f"/builder/wilderness/rooms/{_cell(1, 0)}/convert"), data={"csrf_token": "test-token"})
     assert response.status_code == 302
     with app.app_context():
         assert get_db().execute("SELECT kind FROM mud_world_rooms WHERE id=?", (_cell(1, 0),)).fetchone()[0] == "authored"
-    page = client.get("/mud/builder")
+    page = client.get(url("/builder"))
     assert page.status_code == 200 and b"grid 1, 0, 0" in page.data
 
 
@@ -468,7 +468,7 @@ def test_builder_room_form_places_rooms_on_the_grid(game):
     client = _client(app, admin)
     with app.app_context():
         cave = get_db().execute("SELECT id FROM mud_world_rooms WHERE name='Dark Cave'").fetchone()["id"]
-    response = client.post(f"/mud/builder/rooms/{cave}", data={
+    response = client.post(url(f"/builder/rooms/{cave}"), data={
         "csrf_token": "test-token", "name": "Dark Cave", "description": "A damp cave.", "grid_form": "1",
         "x": "2", "y": "-2", "z": "0", "grid_link": "1", "blocked_dirs": ["north"]}, follow_redirects=True)
     assert b"Room Dark Cave updated" in response.data

@@ -199,21 +199,28 @@ def starting_choices():
     return character_creation._built_in_options().get("starting_skill_choices", 2)
 
 
-def catalog(database, *, include_removed=False):
-    """Every managed skill with its source and availability, sorted by name."""
+def catalog(database, *, include_removed=False, world=None):
+    """Every managed skill with its source, sorted by name.
+
+    ``enabled`` says whether the skill is offered in ``world`` (the current MUD
+    world when omitted); outside any world it means only "installed".
+    """
+    from . import mud_scope
+    world = mud_scope.get() if world is None else world
+    available = character_creation.world_availability(database, world)["skills"] if world else None
     rows = {row["key"]: row for row in database.execute(
-        "SELECT key,definition_json,imported,installed,enabled FROM mud_skill_definitions")}
+        "SELECT key,definition_json,imported,installed FROM mud_skill_definitions")}
     entries = []
     for definition in _built_in():
-        row = rows.pop(definition["key"], None)
+        rows.pop(definition["key"], None)
         entries.append({"key": definition["key"], "definition": definition, "imported": False,
-                        "installed": True, "enabled": bool(row["enabled"]) if row else True})
+                        "installed": True, "enabled": available is None or definition["key"] in available})
     for key, row in rows.items():
         if not row["imported"] or (not row["installed"] and not include_removed):
             continue
         entries.append({"key": key, "definition": json.loads(row["definition_json"]),
                         "imported": True, "installed": bool(row["installed"]),
-                        "enabled": bool(row["enabled"]) and bool(row["installed"])})
+                        "enabled": bool(row["installed"]) and (available is None or key in available)})
     entries.sort(key=lambda entry: entry["definition"]["name"].casefold())
     return entries
 
@@ -261,15 +268,16 @@ def _installed_names(database):
             if entry["installed"]}
 
 
-def import_skill(database, payload):
+def import_skill(database, payload, worlds=None):
     definition = validate_skill(_decode(payload, MAX_SKILL_BYTES, "skill file"), database)
     if definition["name"].casefold() in _installed_names(database):
         raise ValueError("A skill with that name is already installed.")
     _store(database, definition)
+    character_creation.offer(database, "skills", [definition["key"]], worlds)
     return definition
 
 
-def import_pack(database, payload):
+def import_pack(database, payload, worlds=None):
     """Validate and install a skills document as one atomic unit."""
     document = _decode(payload, MAX_PACK_BYTES, "skill pack")
     if not isinstance(document, dict) or set(document) != {"skills"}:
@@ -297,23 +305,8 @@ def import_pack(database, payload):
         parsed.append(definition)
     for definition in parsed:
         _store(database, definition)
+    character_creation.offer(database, "skills", [definition["key"] for definition in parsed], worlds)
     return parsed
-
-
-def set_enabled(database, keys):
-    """Enable exactly the chosen installed skills."""
-    entries = catalog(database)
-    unknown = set(keys) - {entry["key"] for entry in entries}
-    if unknown:
-        raise ValueError("Choose only installed skills.")
-    for entry in entries:
-        enabled = int(entry["key"] in keys)
-        if entry["imported"]:
-            database.execute("UPDATE mud_skill_definitions SET enabled=? WHERE key=?", (enabled, entry["key"]))
-        else:
-            database.execute(
-                "INSERT INTO mud_skill_definitions(key,enabled) VALUES(?,?) "
-                "ON CONFLICT(key) DO UPDATE SET enabled=excluded.enabled", (entry["key"], enabled))
 
 
 def starting_count(entries, chosen=None):
@@ -321,34 +314,24 @@ def starting_count(entries, chosen=None):
                and (entry["enabled"] if chosen is None else entry["key"] in chosen))
 
 
-def require_available(database, chosen=None):
-    """Character creation needs enough enabled starting skills while the MUD runs."""
+def require_available(database, chosen):
+    """Character creation in a world needs enough starting skills among its chosen ones."""
     needed = starting_choices()
-    if starting_count(catalog(database), chosen) < needed:
-        raise ValueError(f"Enable at least {needed} starting skills while a MUD mode is enabled.")
-
-
-def restore_missing_defaults(database):
-    if starting_count(catalog(database)) >= starting_choices():
-        return False
-    for definition in _built_in():
-        if definition["starting"]:
-            database.execute("INSERT INTO mud_skill_definitions(key,enabled) VALUES(?,1) "
-                             "ON CONFLICT(key) DO UPDATE SET enabled=1", (definition["key"],))
-    return True
+    if starting_count(catalog(database, world=""), chosen) < needed:
+        raise ValueError(f"Offer at least {needed} starting skills in every world.")
 
 
 def dependents(database, key, ignored=()):
     """Installed races, classes, and skills that reference a skill."""
     names = []
-    entries = character_creation.catalog(database)
+    entries = character_creation.catalog(database, world="")
     for kind in character_creation.KINDS:
         for entry in entries[kind]:
             definition = entry["definition"]
             if (definition.get("skill") == key or key in definition.get("skills", {})
                     or key in definition.get("skill_affinities", {})):
                 names.append(f"{character_creation.KIND_NAMES[kind]} {definition['name']}")
-    for entry in catalog(database):
+    for entry in catalog(database, world=""):
         if entry["key"] not in ignored and key in entry["definition"]["requirements"]["skills"]:
             names.append(f"skill {entry['definition']['name']}")
     return names
@@ -356,7 +339,7 @@ def dependents(database, key, ignored=()):
 
 def remove_skills(database, keys):
     """Remove imported skills, keeping definitions that characters still hold."""
-    entries = {entry["key"]: entry for entry in catalog(database) if entry["imported"]}
+    entries = {entry["key"]: entry for entry in catalog(database, world="") if entry["imported"]}
     keys = set(keys)
     if not keys:
         raise ValueError("Select at least one imported skill to remove.")
@@ -380,13 +363,14 @@ def remove_skills(database, keys):
             database.execute("DELETE FROM mud_skill_definitions WHERE key=?", (key,))
         for table in ("mud_npc_trainers", "mud_world_skills", "mud_dungeon_skills"):
             database.execute(f"DELETE FROM {table} WHERE skill_key=?", (key,))
+        character_creation.forget_definition(database, "skills", key)
         removed.append(entries[key])
     return removed
 
 
 def removable_associations(database, linked, *, world_id="", theme_id=""):
     """Installed skills linked only to the world or theme being removed."""
-    lookup = {entry["key"]: entry for entry in catalog(database) if entry["imported"]}
+    lookup = {entry["key"]: entry for entry in catalog(database, world="") if entry["imported"]}
     result = []
     for key in sorted(linked):
         if key not in lookup:

@@ -53,15 +53,16 @@
 <section class="builder-shell wilderness-builder">
   <header class="board-head builder-head">
     <div>
-      <p class="eyebrow">TRADITIONAL WORLD / {{ world.name|upper }} / WILDERNESS</p>
+      <p class="eyebrow">WORLD BUILDER / {{ world.name|upper }} / WILDERNESS</p>
       <h1>Wilderness Builder</h1>
       <p class="muted">Paint large areas with reusable room presets. Each painted square is a real room that players walk through with ordinary directions; neighbouring rooms link automatically. {{ '{:,}'.format(cell_count) }} wilderness rooms of {{ '{:,}'.format(limits.world) }} allowed.</p>
     </div>
     <div class="button-row">
       <a class="button secondary" href="{{ url_for('mud.builder') }}">WORLD BUILDER</a>
-      {% if g.station.mud_enabled %}<a class="button secondary" href="{{ url_for('mud.index') }}">OPEN MUD</a>{% endif %}
+      {% if g.station.mud_enabled and builder_world.enabled %}<a class="button secondary" href="{{ url_for('mud.play') }}">PLAY THIS WORLD</a>{% endif %}
     </div>
   </header>
+  {% include 'mud/_builder_world_switch.html' %}
 
   <nav class="subnav settings-jump-nav" aria-label="Wilderness sections"><a href="#map-heading">MAP</a><a href="#fill-heading">FILL AREA</a>{% if cell %}<a href="#cell-inspector">ROOM</a>{% endif %}<a href="#presets-heading">PRESETS</a><a href="#regions-heading">REGIONS</a></nav>
 

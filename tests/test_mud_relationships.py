@@ -180,13 +180,13 @@ def test_trigger_action_and_package_round_trip():
 
 def test_builder_saves_relationship_settings():
     with running() as (app, (one, _two)):
-        response = client(app, one).post("/mud/builder/society/relationships", data={
+        response = client(app, one).post(f"/mud/w/{WORLD}/builder/society/relationships", data={
             "csrf_token": "test-token", "enabled": "1", "quest_complete": "8", "attack": "-30",
             "crime": "-20", "hostile_at": "-50"})
         assert response.status_code == 302
         with app.app_context():
             assert mud.society_settings(get_db())["relationships"] == {
                 "enabled": True, "quest_complete": 8, "attack": -30, "crime": -20, "hostile_at": -50}
-        response = client(app, one).post("/mud/builder/society/relationships", data={
+        response = client(app, one).post(f"/mud/w/{WORLD}/builder/society/relationships", data={
             "csrf_token": "test-token", "hostile_at": "5"}, follow_redirects=True)
         assert b"hostile_at must be" in response.data

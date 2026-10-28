@@ -23,8 +23,6 @@ function available(command, state) {
     case "abandon_expedition": case "complete_expedition":
     case "expedition_status": return dungeon;
     case "continue": return room.id === DEATH;
-    case "world": return portal && (room.exits || []).some(exit => exit.direction === "out");
-    case "portal": return (room.exits || []).some(exit => exit.direction === "portals");
     case "go": case "exits": return (room.exits || []).length > 0;
     case "travel": return Boolean(room.wilderness || room.travel);
     case "stop": return Boolean(room.travel);

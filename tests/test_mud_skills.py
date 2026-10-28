@@ -7,6 +7,7 @@ from pathlib import Path
 
 import pytest
 
+from mud_world_helpers import retire_origin, set_offered
 from stationnet import character_creation, create_app, mud, mud_compat, mud_skills
 from stationnet.db import get_db
 
@@ -312,10 +313,8 @@ def test_skill_points_learning_practice_and_refunds(game):
     user = _user(db, user_id)
     cid = _cid(user_id)
     assert [mud_skills.earned_points(level) for level in (1, 2, 4, 5, 10)] == [0, 1, 2, 3, 7]
-    db.execute("UPDATE mud_character_progression SET level=4 WHERE character_id=? AND track_key='shared'", (cid,))
-    db.execute("UPDATE mud_character_progression SET level=3 WHERE character_id=? AND track_key='traditional'",
-               (cid,))
-    # Highest track only, never summed, plus the human origin's bonus point.
+    db.execute("UPDATE mud_character_progression SET level=4 WHERE character_id=? AND track_key='traditional'", (cid,))
+    # Level 4 earns two points, plus the human origin's bonus point.
     assert mud.character_state(db, user_id)["skill_points"] == 3
     learned = mud._learn_action(db, user, {"arguments": ["stealth"]})
     assert "You learn Stealth at rank 1 (1 skill point)" in learned[0].body
@@ -330,7 +329,7 @@ def test_skill_points_learning_practice_and_refunds(game):
     with pytest.raises(mud.ActionError, match="already know"):
         mud._learn_action(db, user, {"arguments": ["stealth"]})
     # Disabling a skill makes it dormant and returns the points spent on it.
-    mud_skills.set_enabled(db, set(mud_skills.definitions(db)) - {"stealth"})
+    set_offered(db, "skills", "stealth", False)
     state = mud.character_state(db, user_id)
     assert state["skill_points"] == 3
     assert next(skill for skill in state["skills"] if skill["skill_key"] == "stealth")["active"] is False
@@ -389,7 +388,7 @@ def test_origin_replacement_adds_new_grants_without_lowering_ranks(game):
     character_creation.import_origin(db, "classes", json.dumps({
         "key": "seer", "name": "Seer", "description": "Watches closely.", "traits": "Keen eyes",
         "skill": "lore", "skills": {"perception": 2, "evasion": 2}}).encode())
-    db.execute("INSERT INTO mud_origin_definitions(kind,key,enabled) VALUES('classes','scholar',0)")
+    retire_origin(db, mud._character_id(db, user_id), "classes")
     assert mud_compat.incompatible(db, user_id) == ("classes",)
     mud_compat.replace_origins(db, user_id, "human", "seer")
     assert _skill(db, user_id, "perception")["rank"] == 4

@@ -12,7 +12,8 @@ from io import BytesIO
 import pytest
 from flask import session
 
-from stationnet import create_app, character_creation, mud, mud_compat, mud_conditions, mud_triggers, \
+from mud_world_helpers import activate_world, url
+from stationnet import create_app, character_creation, mud, mud_conditions, mud_triggers, \
     mud_wayfinding, mud_wilderness, mud_worlds
 from stationnet.db import get_db
 
@@ -85,8 +86,7 @@ def game():
             users.append(uid)
         db.commit()
         mud_worlds.install(db, mud_worlds.package_bytes(_document()))
-        db.execute("UPDATE mud_world_packages SET active=0")
-        db.execute("UPDATE mud_world_packages SET active=1 WHERE id=?", (WORLD,))
+        activate_world(db, WORLD)
         for uid in users:
             _place(db, uid, _room(db, "camp"))
         db.commit()
@@ -119,8 +119,8 @@ def _item(db, local):
 def _place(db, uid, room_id):
     mud._set_player_location(db, uid, "traditional", "world_room", room_id)
     db.execute("DELETE FROM mud_presence WHERE user_id=?", (uid,))
-    db.execute("INSERT INTO mud_presence(user_id,connection_id,client_id,room_id,location_type,location_key,last_seen) "
-               "VALUES(?,?,?,?,?,?,?)", (uid, f"connection-{uid}", f"client-{uid}-1", room_id, "world_room", room_id,
+    db.execute("INSERT INTO mud_presence(world_key,user_id,connection_id,client_id,room_id,location_type,location_key,last_seen) "
+               "VALUES(mud_world(),?,?,?,?,?,?,?)", (uid, f"connection-{uid}", f"client-{uid}-1", room_id, "world_room", room_id,
                                          mud._scheduled_now()))
 
 
@@ -236,18 +236,6 @@ def test_dungeon_rules_refuse_destinations():
     with pytest.raises(ValueError):
         mud_triggers.validate_trigger({"id": "tick", "event": "timer", "source": {"room": "r"}, "interval_seconds": 60,
                                        "actions": [{"type": "learn_destination", "destination": "x"}]})
-
-
-def test_archive_and_restore_keep_learned_destinations(game):
-    app, (one, _two) = game
-    with app.app_context():
-        db = get_db()
-        mud_wayfinding.learn(db, _character(db, one), _destination(db, "vault-dest"), "test")
-        archive = mud_compat.archive_campaign(db, WORLD, "Way World")
-        assert "Hidden Vault" not in {row["name"] for row in mud_wayfinding.world_destinations(db, WORLD)
-                                      if mud_wayfinding.knows(db, _character(db, one), row["id"])}
-        mud_compat.restore_campaign(db, archive)
-        assert mud_wayfinding.knows(db, _character(db, one), _destination(db, "vault-dest"))
 
 
 # Directions ------------------------------------------------------------------
@@ -474,22 +462,22 @@ def test_builder_creates_edits_and_removes_destinations(game):
         db = get_db()
         camp, cell = _room(db, "camp"), _cell(3, 3)
         old_map = _item(db, "old-map")
-    response = client.post("/mud/builder/destinations", data={
+    response = client.post(url("/builder/destinations"), data={
         "csrf_token": "test-token", "room_id": cell, "name": "Reed Pool", "aliases": "pool, reeds",
         "category": "landmark", "discover_on_visit": "1", "map_items": [old_map],
         "return_to": "wilderness", "return_cell": "3,3,0"})
     assert response.status_code == 302 and "cell=3" in response.headers["Location"]
-    duplicate = client.post("/mud/builder/destinations", data={
+    duplicate = client.post(url("/builder/destinations"), data={
         "csrf_token": "test-token", "room_id": camp, "name": "reed pool"}, follow_redirects=True)
     assert b"already has that name" in duplicate.data
     with app.app_context():
         db = get_db()
         row = db.execute("SELECT * FROM mud_world_destinations WHERE name='Reed Pool'").fetchone()
         assert row["room_id"] == cell and row["discover_on_visit"] == 1 and json.loads(row["map_items_json"]) == [old_map]
-    page = client.get("/mud/builder")
+    page = client.get(url("/builder"))
     assert b"Reed Pool" in page.data and b"Wayfinding destination" in page.data
-    assert b"Wayfinding destination" in client.get("/mud/builder/wilderness?cell=3,3,0").data
-    client.post(f"/mud/builder/destinations/{row['id']}", data={
+    assert b"Wayfinding destination" in client.get(url("/builder/wilderness?cell=3,3,0")).data
+    client.post(url(f"/builder/destinations/{row['id']}"), data={
         "csrf_token": "test-token", "name": "Reed Pool", "public": "1",
         "conditions_json": '[{"type":"level","min":2}]'})
     with app.app_context():
@@ -497,7 +485,7 @@ def test_builder_creates_edits_and_removes_destinations(game):
         row = db.execute("SELECT * FROM mud_world_destinations WHERE id=?", (row["id"],)).fetchone()
         assert row["public"] == 1 and row["discover_on_visit"] == 0 and row["conditions_json"] != "[]"
         guide = _item(db, "guide")
-    response = client.post(f"/mud/builder/items/{guide}", data={
+    response = client.post(url(f"/builder/items/{guide}"), data={
         "csrf_token": "test-token", "name": "Kessa Guide", "description": "A book.", "item_type": "misc",
         "teaches_destinations": [row["id"]]})
     assert response.status_code == 302
@@ -505,7 +493,7 @@ def test_builder_creates_edits_and_removes_destinations(game):
         properties = json.loads(get_db().execute("SELECT properties_json FROM mud_item_definitions WHERE id=?",
                                                  (guide,)).fetchone()[0])
         assert properties["teaches_destinations"] == [row["id"]]
-    client.post(f"/mud/builder/destinations/{row['id']}/delete", data={"csrf_token": "test-token",
+    client.post(url(f"/builder/destinations/{row['id']}/delete"), data={"csrf_token": "test-token",
                                                                        "confirmation": "delete"})
     with app.app_context():
         assert get_db().execute("SELECT 1 FROM mud_world_destinations WHERE id=?", (row["id"],)).fetchone() is None

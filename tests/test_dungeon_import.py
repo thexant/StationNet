@@ -7,8 +7,11 @@ from pathlib import Path
 
 import pytest
 
-from stationnet import create_app, character_creation, dungeons, mud
+from stationnet import create_app, character_creation, dungeons, mud, mud_scope
 from stationnet.db import get_db
+
+# Dungeon themes are played in the procedural dungeon world.
+pytestmark = pytest.mark.mud_world(mud_scope.PROCEDURAL)
 
 
 def _theme():
@@ -70,23 +73,20 @@ def test_dungeon_bundled_origins_optional_cleanup_and_fallback(data_dir):
     assert b"Imported dungeon theme" in _upload(client, theme).data
     with app.app_context():
         db = get_db()
-        for kind in character_creation.KINDS:
-            db.execute("UPDATE mud_origin_definitions SET enabled=0 WHERE kind=?", (kind,))
-            for entry in character_creation.catalog(db)[kind]:
-                if not entry["imported"]:
-                    db.execute("INSERT INTO mud_origin_definitions(kind,key,enabled) VALUES(?,?,0) "
-                               "ON CONFLICT(kind,key) DO UPDATE SET enabled=0",
-                               (kind, entry["key"]))
-        db.execute("UPDATE mud_origin_definitions SET enabled=1 WHERE key IN (?,?)", (race_key, class_key))
+        # The procedural world offers only this theme's race and class.
+        character_creation.set_world_availability(db, mud_scope.PROCEDURAL, {
+            "races": {race_key}, "classes": {class_key},
+            "skills": character_creation.default_availability()["skills"]})
         db.commit()
     response = client.post("/sysop/settings/dungeons/remove", data={
         "csrf_token": "test-token", "theme_id": theme["id"],
         "confirm_remove": "on", "remove_origins": "on"}, follow_redirects=True)
-    assert b"Built-in races and classes restored" in response.data
+    assert b"Built-in choices were restored for character creation in Dungeon Portals" in response.data
     with app.app_context():
         db = get_db()
-        assert character_creation.active_counts(db)["races"] > 0
-        assert character_creation.active_counts(db)["classes"] > 0
+        chosen = character_creation.world_availability(db, mud_scope.PROCEDURAL)
+        assert chosen["races"] == character_creation.default_availability()["races"]
+        assert chosen["classes"] == character_creation.default_availability()["classes"]
         assert db.execute("SELECT 1 FROM mud_origin_definitions WHERE key IN (?,?)",
                           (race_key, class_key)).fetchone() is None
 
@@ -122,7 +122,7 @@ def test_sysop_import_is_immediately_playable(data_dir):
             "INSERT INTO users(username,callsign,password_hash) "
             "VALUES('player','PLY','unused')"
         ).lastrowid
-        db.execute("UPDATE mud_characters SET creation_state='complete' WHERE user_id=?", (player,))
+        db.execute("UPDATE mud_characters SET creation_state=\'complete\' WHERE id=?", (mud._character_id(db, player),))
         mud._set_player_location(db, player, "procedural", "portal", mud.PORTAL_ROOM_ID)
         db.commit()
         assert "custom-cavern" not in dungeons.discover_templates()
@@ -313,7 +313,7 @@ def test_no_enabled_dungeon_themes_is_handled_and_existing_run_survives(data_dir
         player = db.execute(
             "INSERT INTO users(username,callsign,password_hash) VALUES('player','PLY','unused')"
         ).lastrowid
-        db.execute("UPDATE mud_characters SET creation_state='complete' WHERE user_id=?", (player,))
+        db.execute("UPDATE mud_characters SET creation_state=\'complete\' WHERE id=?", (mud._character_id(db, player),))
         mud._set_player_location(db, player, "procedural", "portal", mud.PORTAL_ROOM_ID)
         user = db.execute("SELECT * FROM users WHERE id=?", (player,)).fetchone()
         mud._expedition_action(db, user, {"theme_id": "desert", "difficulty": 1, "size": 8})
@@ -334,7 +334,7 @@ def test_no_enabled_dungeon_themes_is_handled_and_existing_run_survives(data_dir
         second = db.execute(
             "INSERT INTO users(username,callsign,password_hash) VALUES('second','SEC','unused')"
         ).lastrowid
-        db.execute("UPDATE mud_characters SET creation_state='complete' WHERE user_id=?", (second,))
+        db.execute("UPDATE mud_characters SET creation_state=\'complete\' WHERE id=?", (mud._character_id(db, second),))
         mud._set_player_location(db, second, "procedural", "portal", mud.PORTAL_ROOM_ID)
         second_user = db.execute("SELECT * FROM users WHERE id=?", (second,)).fetchone()
         with pytest.raises(mud.ActionError, match="No playable dungeon themes"):

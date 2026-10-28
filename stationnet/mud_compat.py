@@ -1,8 +1,8 @@
-"""Character compatibility and reversible MUD campaign snapshots."""
+"""Character compatibility with deleted definitions, and conversion of legacy campaign archives."""
 import json
-import sqlite3
+import uuid
 
-from . import character_creation
+from . import character_creation, mud_scope
 
 
 PERSISTENT_TABLES = (
@@ -10,29 +10,32 @@ PERSISTENT_TABLES = (
     "mud_player_quests", "mud_player_objectives", "mud_npc_player_states",
     "mud_dungeon_npc_player_states", "mud_player_dialogue_claims",
 )
-USER_TABLES = ("mud_player_locations", "mud_world_locations", "mud_player_stealth")
-OPTIONAL_TABLES = (
-    "mud_expedition_participants", "mud_combat_participants", "mud_conversation_sessions",
-    "mud_dungeon_conversation_sessions", "mud_character_destinations", "mud_npc_relationships",
-    "mud_character_reputation", "mud_character_crimes", "mud_pickpocket_marks",
-    "mud_character_professions", "mud_character_work",
+# World-scoped character state an archive carries into its world's new character.
+# Live sessions (combat, conversations, expedition membership) are not revived.
+RESTORED_OPTIONAL_TABLES = (
+    "mud_character_destinations", "mud_npc_relationships", "mud_character_reputation",
+    "mud_character_crimes", "mud_pickpocket_marks", "mud_character_professions", "mud_character_work",
 )
 
 
 def incompatible(database, user_id):
-    row = database.execute("SELECT race_key,class_key,creation_state FROM mud_characters WHERE user_id=?",
-                           (user_id,)).fetchone()
+    """Origins of the current world's character that were deleted from the station.
+
+    Disabling a race or class for a world only affects new characters; existing
+    ones keep playing. Only a deleted definition asks for a replacement.
+    """
+    row = character_creation.find_character(database, user_id)
     if row is None or row["creation_state"] != "complete":
         return ()
-    enabled = character_creation.catalog(database)
+    installed = character_creation.catalog(database, world="")
     return tuple(kind for kind, column in (("races", "race_key"), ("classes", "class_key"))
                  if row[column] is not None and
-                 row[column] not in {entry["key"] for entry in enabled[kind] if entry["enabled"]})
+                 row[column] not in {entry["key"] for entry in installed[kind]})
 
 
 def replace_origins(database, user_id, race_key, class_key):
     """Change unavailable origins while retaining earned skills and progression."""
-    row = database.execute("SELECT * FROM mud_characters WHERE user_id=?", (user_id,)).fetchone()
+    row = character_creation.find_character(database, user_id)
     if row is None or row["creation_state"] != "complete":
         raise ValueError("Create your character first.")
     missing = incompatible(database, user_id)
@@ -115,111 +118,121 @@ def replace_origins(database, user_id, race_key, class_key):
     mud_skills.grant(database, row["id"], mud_skills.origin_grants(new["races"], new["classes"]))
 
 
-def _rows(database, table, field, value):
-    return [dict(row) for row in database.execute(f"SELECT * FROM {table} WHERE {field}=?", (value,))]
+def _columns(database, table):
+    return {row["name"] for row in database.execute(f"PRAGMA table_info({table})")}
 
 
-def _owned_items(database, character_id):
-    return [dict(row) for row in database.execute(
-        "WITH RECURSIVE owned(id,depth) AS ("
-        "SELECT id,0 FROM mud_item_instances WHERE owner_character_id=? UNION ALL "
-        "SELECT i.id,owned.depth+1 FROM mud_item_instances i JOIN owned ON i.container_id=owned.id) "
-        "SELECT i.*,owned.depth FROM owned JOIN mud_item_instances i ON i.id=owned.id ORDER BY owned.depth",
-        (character_id,))]
+def _references_exist(database, table, row):
+    """Archived rows may name rooms, quests, or runs that are gone; keep only rows that still fit."""
+    for key in database.execute(f"PRAGMA foreign_key_list({table})").fetchall():
+        value = row.get(key["from"])
+        target = key["to"] or "rowid"
+        if value is not None and database.execute(
+                f"SELECT 1 FROM {key['table']} WHERE {target}=?", (value,)).fetchone() is None:
+            return False
+    return True
 
 
 def _insert(database, table, row):
-    columns = list(row)
+    known = _columns(database, table)
+    columns = [column for column in row if column in known]
     database.execute(f"INSERT INTO {table} ({','.join(columns)}) VALUES ({','.join('?' for _ in columns)})",
                      [row[column] for column in columns])
 
 
 def _insert_if_references_exist(database, table, row):
-    # A removed world or expired dungeon may have retired the referenced scene.
-    # The original row remains in the immutable archive for a later restoration.
-    try:
+    if _references_exist(database, table, row):
         _insert(database, table, row)
-    except sqlite3.IntegrityError as error:
-        if "FOREIGN KEY constraint failed" not in str(error):
-            raise
+        return True
+    return False
 
 
-def _clear_character(database, user_id, character_id):
-    for table in ("mud_presence", "mud_player_locations", "mud_world_locations", "mud_player_stealth",
-                  "mud_death_summaries"):
-        database.execute(f"DELETE FROM {table} WHERE user_id=?", (user_id,))
-    database.execute("DELETE FROM mud_active_effects WHERE target_type='character' AND target_id=?", (character_id,))
-    for item in reversed(_owned_items(database, character_id)):
-        database.execute("DELETE FROM mud_item_instances WHERE id=?", (item["id"],))
-    database.execute("DELETE FROM mud_characters WHERE id=?", (character_id,))
+def _restore_snapshot(database, user_id, world, snapshot, policy):
+    """Recreate one archived character as the account's character in its world, with fresh item IDs."""
+    from .db import normalize_mud_character
+    character_id = f"stationnet:character:{user_id}"
+    if world != mud_scope.HOME or database.execute(
+            "SELECT 1 FROM mud_characters WHERE id=?", (character_id,)).fetchone():
+        character_id = f"stationnet:character:{user_id}:{world}"
+    _insert(database, "mud_characters", {**snapshot["character"], "id": character_id, "world_key": world,
+                                         "user_id": user_id})
+    item_ids = {}
+    for item in snapshot.get("items", []):
+        item = dict(item)
+        item.pop("depth", None)
+        old = item["id"]
+        if item.get("container_id") is not None:
+            if item["container_id"] not in item_ids:
+                continue
+            item["container_id"] = item_ids[item["container_id"]]
+        else:
+            item["owner_character_id"] = character_id
+        if item.get("acquired_run_id") and database.execute(
+                "SELECT 1 FROM mud_procedural_instances WHERE id=?", (item["acquired_run_id"],)).fetchone() is None:
+            item["acquired_run_id"] = None
+        item.update(id=f"item:archive:{uuid.uuid4().hex}", room_id=None, equipped_slot=None,
+                    possession_mode="traditional")
+        if _insert_if_references_exist(database, "mud_item_instances", item):
+            item_ids[old] = item["id"]
+    for table in PERSISTENT_TABLES:
+        for row in snapshot.get("tables", {}).get(table, []):
+            _insert_if_references_exist(database, table, {**row, "character_id": character_id})
+    for table, rows in (("mud_character_equipment", snapshot.get("equipment", [])),
+                        ("mud_character_storage", snapshot.get("storage", []))):
+        for row in rows:
+            if row.get("item_instance_id") in item_ids:
+                _insert_if_references_exist(database, table, {**row, "character_id": character_id,
+                                                              "item_instance_id": item_ids[row["item_instance_id"]]})
+    for table in RESTORED_OPTIONAL_TABLES:
+        for row in snapshot.get("optional", {}).get(table, []):
+            if "world_id" in row and row["world_id"] != world:
+                continue
+            if table == "mud_character_crimes":
+                row = {key: value for key, value in row.items() if key != "id"}
+            _insert_if_references_exist(database, table, {**row, "character_id": character_id})
+    users = snapshot.get("users", {})
+    for row in users.get("mud_world_locations", []):
+        _insert_if_references_exist(database, "mud_world_locations", {**row, "world_key": world})
+    for row in users.get("mud_player_locations", []):
+        if row.get("location_type") == "world_room" and database.execute(
+                "SELECT 1 FROM mud_world_rooms WHERE id=? AND world_id=?",
+                (row.get("location_key"), world)).fetchone():
+            _insert_if_references_exist(database, "mud_player_locations",
+                                        {**row, "world_key": world, "mode": "traditional", "instance_id": None})
+    normalize_mud_character(database, character_id, "traditional",
+                            "shared" if policy["progression_shared"] else "traditional",
+                            "shared" if policy["inventory_shared"] else "traditional")
+    return character_id
 
 
-def archive_campaign(database, world_id, world_name):
-    archive_id = database.execute("INSERT INTO mud_campaign_archives(world_id,world_name) VALUES(?,?)",
-                                  (world_id, world_name)).lastrowid
-    for character in database.execute("SELECT * FROM mud_characters WHERE creation_state!='pending'").fetchall():
-        cid, user_id = character["id"], character["user_id"]
-        snapshot = {"character": dict(character),
-                    "items": _owned_items(database, cid),
-                    "equipment": _rows(database, "mud_character_equipment", "character_id", cid),
-                    "storage": _rows(database, "mud_character_storage", "character_id", cid),
-                    "effects": [dict(row) for row in database.execute(
-                        "SELECT * FROM mud_active_effects WHERE target_type='character' AND target_id=?", (cid,))],
-                    "tables": {table: _rows(database, table, "character_id", cid)
-                               for table in PERSISTENT_TABLES},
-                    "users": {table: _rows(database, table, "user_id", user_id)
-                              for table in USER_TABLES},
-                    "optional": {table: _rows(database, table, "character_id", cid)
-                                 for table in OPTIONAL_TABLES},
-                    "expedition_visits": [dict(visit) for visit in database.execute(
-                        "SELECT v.* FROM mud_expedition_room_visits v "
-                        "JOIN mud_expedition_participants p ON p.instance_id=v.instance_id "
-                        "AND p.user_id=v.user_id WHERE p.character_id=?", (cid,))],
-                    "death_summary": _rows(database, "mud_death_summaries", "user_id", user_id)}
-        database.execute("INSERT INTO mud_campaign_characters(archive_id,user_id,snapshot_json) VALUES(?,?,?)",
-                         (archive_id, user_id, json.dumps(snapshot, separators=(",", ":"))))
-        _clear_character(database, user_id, cid)
-        database.execute(
-            "INSERT INTO mud_event_views(user_id,cleared_through_id) "
-            "VALUES(?,(SELECT COALESCE(MAX(id),0) FROM mud_events)) "
-            "ON CONFLICT(user_id) DO UPDATE SET cleared_through_id=excluded.cleared_through_id",
-            (user_id,))
-        database.execute("INSERT INTO mud_characters(id,user_id,display_name,creation_state) VALUES(?,?,?,'pending')",
-                         (cid, user_id, character["display_name"]))
-        for track in ("shared", "traditional", "procedural"):
-            database.execute("INSERT INTO mud_character_progression(character_id,track_key) VALUES(?,?)", (cid, track))
-    return archive_id
+def convert_archives(database, policy):
+    """Make the latest archived character per account and installed world that account's character there.
 
-
-def restore_campaign(database, archive_id):
-    rows = database.execute("SELECT user_id,snapshot_json FROM mud_campaign_characters WHERE archive_id=?",
-                            (archive_id,)).fetchall()
-    for record in rows:
-        snapshot = json.loads(record["snapshot_json"])
-        cid = snapshot["character"]["id"]
-        _clear_character(database, record["user_id"], cid)
-        _insert(database, "mud_characters", snapshot["character"])
-        for table in PERSISTENT_TABLES:
-            # Archives taken before a table existed simply have nothing to restore.
-            for row in snapshot["tables"].get(table, []):
-                _insert(database, table, row)
-        for item in snapshot["items"]:
-            item.pop("depth", None)
-            _insert(database, "mud_item_instances", item)
-        for row in snapshot["equipment"]:
-            _insert(database, "mud_character_equipment", row)
-        for row in snapshot["storage"]:
-            _insert(database, "mud_character_storage", row)
-        for row in snapshot["effects"]:
-            _insert(database, "mud_active_effects", row)
-        for table in OPTIONAL_TABLES:
-            for row in snapshot.get("optional", {}).get(table, []):
-                _insert_if_references_exist(database, table, row)
-        for row in snapshot.get("expedition_visits", []):
-            _insert_if_references_exist(database, "mud_expedition_room_visits", row)
-        for row in snapshot.get("death_summary", []):
-            _insert_if_references_exist(database, "mud_death_summaries", row)
-        for table in USER_TABLES:
-            for row in snapshot["users"][table]:
-                _insert_if_references_exist(database, table, row)
-    return len(rows)
+    Archives were snapshots taken when a station switched its one active world.
+    Accounts that already have a character in that world keep it. The archive
+    rows stay as they are; ``converted_at`` records that they were applied.
+    """
+    worlds = {row["id"] for row in database.execute("SELECT id FROM mud_world_packages")}
+    handled = set()
+    restored = []
+    for archive in database.execute("SELECT id,world_id FROM mud_campaign_archives WHERE converted_at IS NULL "
+                                     "ORDER BY id DESC").fetchall():
+        world = archive["world_id"]
+        for record in database.execute("SELECT user_id,snapshot_json FROM mud_campaign_characters "
+                                       "WHERE archive_id=? ORDER BY user_id", (archive["id"],)).fetchall():
+            key = (record["user_id"], world)
+            if key in handled or world not in worlds:
+                continue
+            handled.add(key)
+            if database.execute("SELECT 1 FROM mud_characters WHERE user_id=? AND world_key=?", key).fetchone():
+                continue
+            database.execute("SAVEPOINT mud_archive_character")
+            try:
+                snapshot = json.loads(record["snapshot_json"])
+                restored.append(_restore_snapshot(database, record["user_id"], world, snapshot, policy))
+            except Exception:  # noqa: BLE001 - one unreadable snapshot must not block the others
+                database.execute("ROLLBACK TO mud_archive_character")
+            database.execute("RELEASE mud_archive_character")
+        database.execute("UPDATE mud_campaign_archives SET converted_at=CURRENT_TIMESTAMP WHERE id=?",
+                         (archive["id"],))
+    return restored

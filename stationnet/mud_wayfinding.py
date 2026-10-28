@@ -22,6 +22,7 @@ import json
 import math
 import threading
 
+from . import mud_scope
 from .mud_wilderness import DELTAS, DIAGONALS, grid_linked, preset_for
 
 CATEGORIES = ("town", "city", "settlement", "landmark", "dungeon", "road", "other")
@@ -422,10 +423,15 @@ class _Tracked:
         return found
 
 
+def _route_key(user_id):
+    # A player can follow a route in each world they have a character in.
+    return user_id, mud_scope.get()
+
+
 def remember(user_id, destination_id, route):
     with _LOCK:
-        _ROUTES[user_id] = _Tracked(destination_id, route)
-        return _ROUTES[user_id]
+        _ROUTES[_route_key(user_id)] = _Tracked(destination_id, route)
+        return _ROUTES[_route_key(user_id)]
 
 
 def recall(database, user_id, destination_id, world_id, *, stale=False):
@@ -434,7 +440,7 @@ def recall(database, user_id, destination_id, world_id, *, stale=False):
     stale also accepts a route from before the last world edit, to compare against.
     """
     with _LOCK:
-        tracked = _ROUTES.get(user_id)
+        tracked = _ROUTES.get(_route_key(user_id))
         if (tracked is None or tracked.destination_id != destination_id
                 or tracked.graph.key != (_database_key(database), world_id)
                 or not stale and tracked.graph.revision != revision(database)):
@@ -444,7 +450,7 @@ def recall(database, user_id, destination_id, world_id, *, stale=False):
 
 def drop_route(user_id):
     with _LOCK:
-        _ROUTES.pop(user_id, None)
+        _ROUTES.pop(_route_key(user_id), None)
 
 
 # --- Telling the way --------------------------------------------------------

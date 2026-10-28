@@ -49,7 +49,6 @@ for(const mud of document.querySelectorAll("[data-mud]")){
   const characterPoints=mud.querySelector("[data-character-points]");
   const carried=mud.querySelector("[data-mud-carried]");
   const equipped=mud.querySelector("[data-mud-equipped]");
-  const inventoryScope=mud.querySelector("[data-mud-inventory-scope]");
   const hubPanel=mud.querySelector("[data-mud-hub-panel]");
   const hubCoins=mud.querySelector("[data-mud-coins]");
   const hubShop=mud.querySelector("[data-mud-shop-items]");
@@ -270,7 +269,6 @@ for(const mud of document.querySelectorAll("[data-mud]")){
   };
   const renderInventory=inventory=>{
     if(!inventory||!carried||!equipped)return;
-    if(inventoryScope)inventoryScope.textContent=inventory.sharing==="shared"?"Shared across modes":`${inventory.mode?.replace(/^./,letter=>letter.toUpperCase())||"Current mode"} only`;
     const fill=(node,items,slot)=>{
       node.replaceChildren();
       if(!items?.length){const empty=document.createElement("span");empty.className="muted";empty.textContent=slot?"nothing equipped":"nothing carried";node.append(empty);return}

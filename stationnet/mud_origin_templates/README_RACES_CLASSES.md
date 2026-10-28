@@ -191,13 +191,17 @@ the resource back on.
 2. Import it in the matching individual control or the Origin Pack control.
    Correct any validation error, then
    create a test character to check its combinations, gear, and spells.
-3. Imported choices start enabled. Disabling one hides it from new character
-   creation. At least one race and class must stay enabled while either MUD
-   mode is enabled.
-4. Removing an imported choice takes it out of character creation. Its
-   definition is kept while any character or archived campaign still uses
-   it, so those characters retain their origin abilities, and the key stays
-   reserved. Built-in choices can be disabled but cannot be removed.
+3. Installed choices are shared by the station, and each world picks the ones
+   it offers on its **RACES, CLASSES & SKILLS** page. An import is offered in
+   the worlds ticked on its form (by default, every enabled world). Disabling
+   a choice in one world hides it from new characters there only; existing
+   characters keep it. Every world offers at least one race and one class.
+4. Removing an imported choice takes it out of every world. Its definition is
+   kept while any character or archived campaign still uses it, and the key
+   stays reserved. Characters that used it keep their progress and choose a
+   replacement on their next visit. A world left without any race or class
+   offers the built-in ones again. Built-in choices can be disabled in a world
+   but cannot be removed.
 
 The character-options file is a separate, station-wide configuration source
 for the point budget, skill list, and built-in races/classes. If you provide
@@ -205,6 +209,6 @@ one through `MUD_CHARACTER_OPTIONS`, it must include `id`, `point_buy`,
 `attribute_descriptions`, `races`, `classes`, `skills`, and
 `starting_skill_choices`; see `stationnet/character_options.json` for that
 advanced format. Imports add choices without replacing existing definitions.
-Selection shortcuts in SYSOP Settings can enable all, none, default, or
-imported choices. Imported choices can also be selected and removed together;
+Selection shortcuts on each world's page select all installed choices, none,
+the built-ins, or that world's bundled choices. Imported choices can also be selected and removed together;
 the confirmation summary lists every affected race and class before submission.

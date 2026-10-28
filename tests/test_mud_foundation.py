@@ -30,8 +30,8 @@ def game():
                 "attributes": {"strength": 11, "agility": 11, "intellect": 11, "vitality": 11},
                 "skills": ["lore", "guard"]})
             mud._set_player_location(db, uid, "traditional", "world_room", room["id"])
-            db.execute("INSERT INTO mud_presence(user_id,connection_id,client_id,room_id,location_type,location_key,last_seen) "
-                       "VALUES(?,?,?,?,?,?,?)", (uid, f"connection-{username}", f"client-{username}-123", room["id"],
+            db.execute("INSERT INTO mud_presence(world_key,user_id,connection_id,client_id,room_id,location_type,location_key,last_seen) "
+                       "VALUES(mud_world(),?,?,?,?,?,?,?)", (uid, f"connection-{username}", f"client-{username}-123", room["id"],
                                                "world_room", room["id"], mud._scheduled_now()))
             users.append(uid)
         db.commit()
@@ -74,8 +74,8 @@ def test_private_social_presence_and_examination(game):
         user = db.execute("SELECT * FROM users WHERE id=?", (uid,)).fetchone()
         second = db.execute("SELECT * FROM users WHERE id=?", (other,)).fetchone()
         room = mud._current_room(db, uid)
-        db.execute("INSERT INTO mud_presence(user_id,connection_id,client_id,room_id,location_type,location_key,last_seen) "
-                   "VALUES(?,?,?,?,?,?,?)", (uid, "connection-one", "client-one-extra", room["id"],
+        db.execute("INSERT INTO mud_presence(world_key,user_id,connection_id,client_id,room_id,location_type,location_key,last_seen) "
+                   "VALUES(mud_world(),?,?,?,?,?,?,?)", (uid, "connection-one", "client-one-extra", room["id"],
                                            "world_room", room["id"], mud._scheduled_now()))
         assert mud._occupant_ids(db, room["id"]).count(uid) == 1
         assert "Bea Two" in mud._who_action(db, user, {})[0].body
@@ -105,15 +105,15 @@ def test_private_message_reaches_another_browser_session(game):
             state["csrf_token"] = "test-token"
     sender_id = "browser-sender-1234"
     recipient_id = "browser-recipient-1234"
-    assert sender.get(f"/mud/updates?client_id={sender_id}").status_code == 200
-    assert recipient.get(f"/mud/updates?client_id={recipient_id}").status_code == 200
-    result = sender.post("/mud/actions", data={
+    assert sender.get(f"/mud/w/stationnet/updates?client_id={sender_id}").status_code == 200
+    assert recipient.get(f"/mud/w/stationnet/updates?client_id={recipient_id}").status_code == 200
+    result = sender.post("/mud/w/stationnet/actions", data={
         "csrf_token": "test-token", "client_id": sender_id,
         "request_id": uuid.uuid4().hex, "command": '/tell "Bea Two" hello from another browser',
     })
     assert result.status_code == 200
     assert "You tell Bea Two" in result.json["events"][-1]["body"]
-    received = recipient.get(f"/mud/updates?client_id={recipient_id}&after=0")
+    received = recipient.get(f"/mud/w/stationnet/updates?client_id={recipient_id}&after=0")
     assert received.status_code == 200
     assert any("Ada One tells you: hello from another browser" in event["body"]
                for event in received.json["events"])

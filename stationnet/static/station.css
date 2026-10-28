@@ -928,6 +928,10 @@ button:disabled { opacity: .5; cursor: not-allowed; }
 
 .builder-shell { display: grid; gap: 1rem; }
 .builder-head { margin-bottom: .25rem; }
+.builder-world-switch { display: flex; flex-wrap: wrap; align-items: end; gap: .65rem; margin: .5rem 0 1rem; }
+.builder-world-switch label { flex: 1 1 14rem; min-width: 0; }
+.mud-world-row .origin-badge { display: inline-block; margin-top: .35rem; }
+.mud-worlds .mud-world-row h2 { font-size: 1.05rem; }
 .builder-settings, .builder-create, .builder-room { width: 100%; }
 .builder-inline-form { display: grid; grid-template-columns: minmax(12rem,1fr) minmax(12rem,1fr) auto; align-items: end; gap: .65rem; }
 .builder-inline-form > label { grid-column: 1 / -1; }

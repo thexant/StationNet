@@ -12,7 +12,7 @@ from PIL import Image, ImageOps, UnidentifiedImageError
 from .auth import admin_required, invitation_digest
 from .ansi import available_header_fonts, is_available_header_font, station_banner
 from .db import get_db
-from . import arcade, character_creation, dungeons, header_taglines, mud_skills, mud_worlds
+from . import arcade, character_creation, dungeons, header_taglines, mud_scope, mud_skills, mud_worlds
 from . import themes
 from .markdown import render_markdown
 from .midi import InvalidMidi, MAX_MIDI_BYTES, inspect_midi
@@ -487,40 +487,18 @@ def revoke_invitation(invitation_id):
 @bp.post("/sysop/settings/mud")
 @admin_required
 def mud_settings():
-    """Save independent mode access and protected portal presentation."""
+    """Save station-wide MUD settings: wilderness travel and the protected portal presentation.
+
+    Which worlds players can enter is managed per world in the Worlds list.
+    """
     validate_csrf()
     database = get_db()
     current_portal = database.execute(
         "SELECT name,description FROM mud_portal_settings WHERE id=1"
     ).fetchone()
-    current_crossover = database.execute(
-        "SELECT progression_shared,inventory_shared FROM mud_crossover_settings WHERE id=1"
-    ).fetchone()
     current_travel = database.execute(
         "SELECT interval_seconds,max_steps FROM mud_travel_settings WHERE id=1"
     ).fetchone()
-    legacy = ("mud_traditional_enabled" not in request.form and
-              "mud_procedural_enabled" not in request.form and
-              "mud_enabled" in request.form)
-    traditional = (request.form.get("mud_enabled") == "on" if legacy else
-                   request.form.get("mud_traditional_enabled") == "on")
-    procedural = request.form.get("mud_procedural_enabled") == "on"
-    progression_policy = request.form.get("mud_progression_policy")
-    inventory_policy = request.form.get("mud_inventory_policy")
-    if progression_policy is None:
-        progression_shared = bool(current_crossover["progression_shared"])
-    elif progression_policy in {"shared", "independent"}:
-        progression_shared = progression_policy == "shared"
-    else:
-        flash("Select a valid progression crossover policy.", "error")
-        return redirect(url_for("station.settings") + "#mud-service")
-    if inventory_policy is None:
-        inventory_shared = bool(current_crossover["inventory_shared"])
-    elif inventory_policy in {"shared", "independent"}:
-        inventory_shared = inventory_policy == "shared"
-    else:
-        flash("Select a valid inventory crossover policy.", "error")
-        return redirect(url_for("station.settings") + "#mud-service")
     portal_name = request.form.get(
         "mud_portal_name", current_portal["name"]
     ).strip()
@@ -546,35 +524,10 @@ def mud_settings():
     if not 1 <= travel_steps <= 1000:
         flash("Wilderness travel step limit must be between 1 and 1000 rooms.", "error")
         return redirect(url_for("station.settings") + "#mud-service")
-    if traditional or procedural:
-        try:
-            character_creation.require_available(database)
-        except ValueError as error:
-            flash(str(error), "error")
-            return redirect(url_for("station.settings") + "#mud-origins")
-        try:
-            mud_skills.require_available(database)
-        except ValueError as error:
-            flash(str(error), "error")
-            return redirect(url_for("station.settings") + "#mud-skills")
-    master_enabled = (bool(g.station["mud_enabled"] and (traditional or procedural))
-                      if "mud_mode_form" in request.form else traditional or procedural)
-    database.execute(
-        "UPDATE station SET mud_enabled=?,mud_traditional_enabled=?,"
-        "mud_procedural_enabled=? WHERE id=1",
-        (master_enabled, traditional, procedural),
-    )
     database.execute(
         "INSERT INTO mud_portal_settings(id,name,description) VALUES(1,?,?) "
         "ON CONFLICT(id) DO UPDATE SET name=excluded.name,description=excluded.description,"
         "updated_at=CURRENT_TIMESTAMP", (portal_name, portal_description),
-    )
-    database.execute(
-        "INSERT INTO mud_crossover_settings(id,progression_shared,inventory_shared) "
-        "VALUES(1,?,?) ON CONFLICT(id) DO UPDATE SET "
-        "progression_shared=excluded.progression_shared,"
-        "inventory_shared=excluded.inventory_shared,updated_at=CURRENT_TIMESTAMP",
-        (progression_shared, inventory_shared),
     )
     database.execute(
         "INSERT INTO mud_travel_settings(id,interval_seconds,max_steps) VALUES(1,?,?) "
@@ -582,13 +535,14 @@ def mud_settings():
         "max_steps=excluded.max_steps,updated_at=CURRENT_TIMESTAMP",
         (travel_interval, travel_steps),
     )
-    from .mud import reconcile_mode_locations
-    reconcile_mode_locations(database)
     database.commit()
-    labels = [name for name, state in (("traditional", traditional),
-              ("procedural", procedural)) if state]
-    flash(f"MUD modes updated: {', '.join(labels) if labels else 'fully disabled'}.", "success")
+    flash("MUD settings saved.", "success")
     return redirect(url_for("station.settings") + "#mud-service")
+
+
+def _offer_worlds():
+    """Worlds chosen on an import form to offer the new definitions in; None means every playable world."""
+    return request.form.getlist("offer_worlds") if request.form.get("offer_form") else None
 
 
 @bp.post("/sysop/settings/mud-origins/<kind>/import")
@@ -605,7 +559,7 @@ def import_mud_origin(kind):
     database = get_db()
     try:
         definition = character_creation.import_origin(
-            database, kind, uploaded.read(character_creation.MAX_ORIGIN_BYTES + 1))
+            database, kind, uploaded.read(character_creation.MAX_ORIGIN_BYTES + 1), _offer_worlds())
         database.commit()
     except (ValueError, sqlite3.Error) as error:
         database.rollback()
@@ -627,7 +581,7 @@ def import_mud_origin_pack():
     database = get_db()
     try:
         definitions = character_creation.import_pack(
-            database, uploaded.read(character_creation.MAX_ORIGIN_PACK_BYTES + 1))
+            database, uploaded.read(character_creation.MAX_ORIGIN_PACK_BYTES + 1), _offer_worlds())
         database.commit()
     except (ValueError, sqlite3.Error) as error:
         database.rollback()
@@ -661,47 +615,6 @@ def download_mud_origin_pack_template():
     )
 
 
-@bp.post("/sysop/settings/mud-origins/availability")
-@admin_required
-def mud_origin_availability():
-    validate_csrf()
-    database = get_db()
-    destination = url_for("station.settings") + "#mud-origins"
-    entries = character_creation.catalog(database)
-    selected = {kind: set(request.form.getlist(kind)) for kind in character_creation.KINDS}
-    if any(selected[kind] - {entry["key"] for entry in entries[kind]}
-           for kind in character_creation.KINDS):
-        flash("Choose only listed races and classes.", "error")
-        return redirect(destination)
-    if (g.station["mud_enabled"] or g.station["mud_traditional_enabled"] or
-            g.station["mud_procedural_enabled"]) and any(
-                not selected[kind] for kind in character_creation.KINDS):
-        flash("Enable at least one race and one class while a MUD mode is enabled.", "error")
-        return redirect(destination)
-    try:
-        for kind in character_creation.KINDS:
-            for entry in entries[kind]:
-                enabled = int(entry["key"] in selected[kind])
-                if entry["imported"]:
-                    database.execute(
-                        "UPDATE mud_origin_definitions SET enabled=? WHERE kind=? AND key=?",
-                        (enabled, kind, entry["key"]),
-                    )
-                else:
-                    database.execute(
-                        "INSERT INTO mud_origin_definitions(kind,key,enabled) VALUES(?,?,?) "
-                        "ON CONFLICT(kind,key) DO UPDATE SET enabled=excluded.enabled",
-                        (kind, entry["key"], enabled),
-                    )
-        database.commit()
-    except sqlite3.Error:
-        database.rollback()
-        flash("Could not save race and class availability.", "error")
-    else:
-        flash("Race and class availability updated.", "success")
-    return redirect(destination)
-
-
 @bp.post("/sysop/settings/mud-origins/<kind>/remove")
 @admin_required
 def remove_mud_origin(kind):
@@ -720,18 +633,15 @@ def remove_mud_origin(kind):
         flash("Select an imported race or class to remove.", "error")
         return redirect(destination)
     try:
-        character_creation.remove_origins(
-            database, {kind: {key}},
-            require_active=bool(g.station["mud_enabled"] or
-                                g.station["mud_traditional_enabled"] or
-                                g.station["mud_procedural_enabled"]),
-        )
+        character_creation.remove_origins(database, {kind: {key}})
+        restored = character_creation.restore_world_defaults(database)
         database.commit()
     except (ValueError, sqlite3.Error) as error:
         database.rollback()
         flash(str(error), "error")
     else:
-        flash(f"Removed {character_creation.KIND_NAMES[kind]} {entry['definition']['name']}.", "success")
+        flash(f"Removed {character_creation.KIND_NAMES[kind]} {entry['definition']['name']}." + _restored_note(restored),
+              "success")
     return redirect(destination)
 
 
@@ -746,25 +656,16 @@ def remove_mud_origins():
     selected = {kind: set(request.form.getlist(kind)) for kind in character_creation.KINDS}
     database = get_db()
     try:
-        removed = character_creation.remove_origins(
-            database, selected,
-            require_active=bool(g.station["mud_enabled"] or
-                                g.station["mud_traditional_enabled"] or
-                                g.station["mud_procedural_enabled"]),
-        )
+        removed = character_creation.remove_origins(database, selected)
+        restored = character_creation.restore_world_defaults(database)
         database.commit()
     except (ValueError, sqlite3.Error) as error:
         database.rollback()
         flash(f"Bulk removal failed: {error}", "error")
     else:
         names = ", ".join(entry["definition"]["name"] for entry in removed)
-        flash(f"Removed {len(removed)} imported choices: {names}.", "success")
+        flash(f"Removed {len(removed)} imported choices: {names}." + _restored_note(restored), "success")
     return redirect(destination)
-
-
-def _mud_running():
-    return bool(g.station["mud_enabled"] or g.station["mud_traditional_enabled"] or
-                g.station["mud_procedural_enabled"])
 
 
 def _world_selection():
@@ -783,7 +684,8 @@ def import_mud_skill():
         return redirect(destination)
     database = get_db()
     try:
-        definition = mud_skills.import_skill(database, uploaded.read(mud_skills.MAX_SKILL_BYTES + 1))
+        definition = mud_skills.import_skill(database, uploaded.read(mud_skills.MAX_SKILL_BYTES + 1),
+                                             _offer_worlds())
         database.commit()
     except (ValueError, sqlite3.Error) as error:
         database.rollback()
@@ -804,7 +706,8 @@ def import_mud_skill_pack():
         return redirect(destination)
     database = get_db()
     try:
-        definitions = mud_skills.import_pack(database, uploaded.read(mud_skills.MAX_PACK_BYTES + 1))
+        definitions = mud_skills.import_pack(database, uploaded.read(mud_skills.MAX_PACK_BYTES + 1),
+                                             _offer_worlds())
         database.commit()
     except (ValueError, sqlite3.Error) as error:
         database.rollback()
@@ -829,26 +732,6 @@ def download_mud_skill_pack_template():
                      download_name="mud-skill-pack-template.json", mimetype="application/json")
 
 
-@bp.post("/sysop/settings/mud-skills/availability")
-@admin_required
-def mud_skill_availability():
-    validate_csrf()
-    database = get_db()
-    destination = url_for("station.settings") + "#mud-skills"
-    selected = set(request.form.getlist("skills"))
-    try:
-        if _mud_running():
-            mud_skills.require_available(database, selected)
-        mud_skills.set_enabled(database, selected)
-        database.commit()
-    except (ValueError, sqlite3.Error) as error:
-        database.rollback()
-        flash(f"Skill availability was not saved: {error}", "error")
-    else:
-        flash("Skill availability updated. Disabled skills keep their ranks but have no effect.", "success")
-    return redirect(destination)
-
-
 @bp.post("/sysop/settings/mud-skills/remove")
 @admin_required
 def remove_mud_skills():
@@ -860,8 +743,7 @@ def remove_mud_skills():
     database = get_db()
     try:
         removed = mud_skills.remove_skills(database, set(request.form.getlist("skills")))
-        if _mud_running():
-            mud_skills.require_available(database)
+        restored = character_creation.restore_world_defaults(database)
         database.commit()
     except (ValueError, sqlite3.Error) as error:
         database.rollback()
@@ -869,7 +751,8 @@ def remove_mud_skills():
     else:
         flash(f"Removed {len(removed)} imported skills: "
               f"{', '.join(entry['definition']['name'] for entry in removed)}. "
-              "Characters keep inactive ranks in skills they had learned.", "success")
+              "They were removed from every world; characters keep inactive ranks in skills they had "
+              "learned." + _restored_note(restored), "success")
     return redirect(destination)
 
 
@@ -885,12 +768,14 @@ def import_mud_world():
     try:
         world = mud_worlds.install(
             get_db(), uploaded.read(mud_worlds.MAX_ZIP_BYTES + 1),
-            origin_mode=request.form.get("origin_mode", "preserve"),
-            selected=_world_selection())
+            origin_mode=request.form.get("origin_mode") or None,
+            selected=_world_selection(), enable=request.form.get("enable") == "on")
     except (mud_worlds.WorldError, sqlite3.Error, OSError) as error:
         flash(f"World import failed: {error}", "error")
     else:
-        flash(f"Imported world {world['name']} by {world['author']}.", "success")
+        state = "and enabled it" if request.form.get("enable") == "on" else "(disabled until you enable it)"
+        flash(f"Imported world {world['name']} by {world['author']} {state}. Other worlds are unchanged.",
+              "success")
     return redirect(destination)
 
 
@@ -935,47 +820,95 @@ def download_mud_world_template():
                      as_attachment=True, download_name="mud-world-template.zip")
 
 
-@bp.post("/sysop/settings/mud-worlds/activation-preview")
+@bp.post("/sysop/settings/mud-worlds/enabled")
 @admin_required
-def preview_mud_world_activation():
+def set_mud_world_enabled():
+    """Show or hide one world on the player world list; content and characters stay."""
     validate_csrf()
-    selected = _world_selection()
     world_id = request.form.get("world_id", "")
-    origin_mode = request.form.get("origin_mode", "combine")
+    enabled = request.form.get("enabled") == "1"
+    database = get_db()
     try:
-        impact = mud_worlds.activation_impact(get_db(), world_id, origin_mode=origin_mode,
-                                              selected=selected)
-    except mud_worlds.WorldError as error:
-        flash(str(error), "error")
-        return redirect(url_for("station.settings") + "#mud-worlds")
-    return render_template("mud/activation_preview.html", impact=impact,
-                           origin_mode=origin_mode, selected=selected)
-
-
-@bp.post("/sysop/settings/mud-worlds/activate")
-@admin_required
-def activate_mud_world():
-    validate_csrf()
-    destination = url_for("station.settings") + "#mud-worlds"
-    if not request.form.get("fingerprint") or request.form.get("confirm") != "yes":
-        flash("Preview the world impact before confirming activation.", "error")
-        return redirect(destination)
-    try:
-        changed = mud_worlds.activate(
-            get_db(), request.form.get("world_id", ""),
-            origin_mode=request.form.get("origin_mode", "preserve"),
-            selected=_world_selection(),
-            campaign=request.form.get("campaign", "migrate"),
-            archive_id=request.form.get("archive_id"),
-            fingerprint=request.form.get("fingerprint"))
-    except mud_worlds.WorldError as error:
+        mud_worlds.set_enabled(database, world_id, enabled)
+        database.commit()
+    except (mud_worlds.WorldError, sqlite3.Error) as error:
+        database.rollback()
         flash(str(error), "error")
     else:
-        message = ("Active MUD world changed." if changed else
-                   "World race and class availability updated." if request.form.get("origin_mode", "preserve") != "preserve"
-                   else "That world is already active.")
-        flash(message, "success")
-    return redirect(destination)
+        name = mud_worlds.world_name(database, world_id)
+        flash(f"{name} is now {'open to players' if enabled else 'hidden from players; its characters are kept'}.",
+              "success")
+    return redirect(url_for("station.settings") + "#mud-worlds")
+
+
+def _availability_entries(database):
+    """Installed definitions grouped by kind, each labelled with where it came from."""
+    sources = {}
+    for row in database.execute("SELECT w.kind,w.origin_key AS key,p.name FROM mud_world_origins AS w "
+                                "JOIN mud_world_packages AS p ON p.id=w.world_id"):
+        sources.setdefault((row["kind"], row["key"]), []).append(row["name"])
+    for row in database.execute("SELECT w.skill_key AS key,p.name FROM mud_world_skills AS w "
+                                "JOIN mud_world_packages AS p ON p.id=w.world_id"):
+        sources.setdefault(("skills", row["key"]), []).append(row["name"])
+    themed = {(row["kind"], row["origin_key"]) for row in database.execute(
+        "SELECT kind,origin_key FROM mud_dungeon_origins")}
+    themed |= {("skills", row["skill_key"]) for row in database.execute("SELECT skill_key FROM mud_dungeon_skills")}
+    origins = character_creation.catalog(database, world="")
+    entries = {kind: origins[kind] for kind in character_creation.KINDS}
+    entries["skills"] = mud_skills.catalog(database, world="")
+    for kind, items in entries.items():
+        for entry in items:
+            worlds = sources.get((kind, entry["key"]), [])
+            entry["source"] = ("Built-in" if not entry["imported"] else
+                               "Bundled with " + ", ".join(worlds) if worlds else
+                               "Dungeon theme" if (kind, entry["key"]) in themed else "Standalone import")
+    return entries
+
+
+@bp.route("/sysop/settings/mud-worlds/<world_id>/availability", methods=["GET", "POST"])
+@admin_required
+def mud_world_availability(world_id):
+    """Choose the races, classes, and skills one world offers; other worlds keep their own choices."""
+    database = get_db()
+    if world_id != mud_scope.PROCEDURAL and database.execute(
+            "SELECT 1 FROM mud_world_packages WHERE id=?", (world_id,)).fetchone() is None:
+        abort(404)
+    if request.method == "POST":
+        validate_csrf()
+        try:
+            character_creation.set_world_availability(database, world_id, _world_selection())
+            database.commit()
+        except (ValueError, sqlite3.Error) as error:
+            database.rollback()
+            flash(f"Availability was not saved: {error}", "error")
+        else:
+            flash(f"Updated races, classes, and skills for {mud_worlds.world_name(database, world_id)}. "
+                  "Existing characters keep the choices they already made.", "success")
+            return redirect(url_for("station.mud_world_availability", world_id=world_id))
+    chosen = character_creation.world_availability(database, world_id)
+    bundled = mud_worlds.world_origin_keys(database, world_id) if world_id != mud_scope.PROCEDURAL else \
+        {kind: set() for kind in character_creation.AVAILABILITY_KINDS}
+    entries = _availability_entries(database)
+    for kind, items in entries.items():
+        for entry in items:
+            entry["offered"] = entry["key"] in chosen[kind]
+            entry["bundled"] = entry["key"] in bundled[kind]
+            entry["holders"] = database.execute(
+                f"SELECT COUNT(*) FROM mud_characters WHERE world_key=? AND {'race_key' if kind == 'races' else 'class_key'}=?",
+                (world_id, entry["key"])).fetchone()[0] if kind != "skills" else database.execute(
+                "SELECT COUNT(*) FROM mud_character_skills AS s JOIN mud_characters AS c ON c.id=s.character_id "
+                "WHERE c.world_key=? AND s.skill_key=?", (world_id, entry["key"])).fetchone()[0]
+    return render_template("mud/world_availability.html", world_id=world_id,
+                           world_name=mud_worlds.world_name(database, world_id), entries=entries,
+                           configured=character_creation.availability_configured(database, world_id),
+                           skill_groups=mud_skills.GROUPS, starting_choices=mud_skills.starting_choices())
+
+
+def _restored_note(worlds):
+    if not worlds:
+        return ""
+    return (" Built-in choices were restored for character creation in "
+            + ", ".join(mud_worlds.world_name(get_db(), world) for world in worlds) + ".")
 
 
 def _removal_message(label, result):
@@ -983,8 +916,7 @@ def _removal_message(label, result):
     removed = ", ".join(f"{len(result['removed'].get(kind, ()))} {kind}" for kind in kinds)
     preserved = ", ".join(f"{result['preserved'].get(kind, 0)} {kind}" for kind in kinds)
     message = f"{label} removed. Associated definitions removed: {removed}; preserved: {preserved}."
-    if result["restored"]:
-        message += " Built-in " + " and ".join(result["restored"]) + " restored for character creation."
+    message += _restored_note(result["restored"])
     if result["file_warning"]:
         message += " Package file cleanup failed; remove the leftover file manually."
     return message
@@ -1004,7 +936,8 @@ def remove_mud_world():
     except (mud_worlds.WorldError, ValueError, sqlite3.Error) as error:
         flash(str(error), "error")
     else:
-        flash(_removal_message("Custom world", result), "success")
+        flash(_removal_message("Custom world", result) + " Its characters are kept and return if it is reinstalled.",
+              "success")
     return redirect(destination)
 
 
@@ -1573,17 +1506,15 @@ def settings():
     mud_portal = database.execute(
         "SELECT name,description FROM mud_portal_settings WHERE id=1"
     ).fetchone()
-    mud_crossover = database.execute(
-        "SELECT progression_shared,inventory_shared FROM mud_crossover_settings WHERE id=1"
-    ).fetchone()
     mud_travel = database.execute(
         "SELECT interval_seconds,max_steps FROM mud_travel_settings WHERE id=1"
     ).fetchone()
-    mud_world_list = database.execute(
-        "SELECT id,name,author,imported,active FROM mud_world_packages ORDER BY active DESC,name COLLATE NOCASE"
-    ).fetchall()
-    mud_origins = character_creation.catalog(database)
-    mud_skill_entries = mud_skills.catalog(database)
+    mud_worlds_all = mud_worlds.worlds(database, include_disabled=True)
+    mud_world_list = [world for world in mud_worlds_all if world["kind"] == "authored"]
+    for world in mud_world_list:
+        world["id"] = world["key"]
+    mud_origins = character_creation.catalog(database, world="")
+    mud_skill_entries = mud_skills.catalog(database, world="")
     skill_holders = {row["skill_key"]: row["holders"] for row in database.execute(
         "SELECT skill_key,COUNT(*) AS holders FROM mud_character_skills GROUP BY skill_key")}
     for entry in mud_skill_entries:
@@ -1659,7 +1590,7 @@ def settings():
                            assignments=assignments, broadcast_sessions=broadcast_sessions,
                            rules_by_group=rules_by_group, invitations=invitations,
                            mud_portal=mud_portal,
-                           mud_crossover=mud_crossover, mud_travel=mud_travel,
+                           mud_worlds_all=mud_worlds_all, mud_travel=mud_travel,
                            mud_world_list=mud_world_list,
                            mud_origins=mud_origins,
                            mud_skill_entries=mud_skill_entries,

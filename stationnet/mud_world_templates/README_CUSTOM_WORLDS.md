@@ -1,7 +1,9 @@
 # File-authored MUD worlds
 
 StationNet stores imported world ZIPs in `data/mud_worlds/` (or
-`<STATIONNET_DATA>/mud_worlds/`). You can build a traditional world with a text
+`<STATIONNET_DATA>/mud_worlds/`). A station can run several worlds at once;
+each enabled world appears on the MUD page as its own game, and players create
+a separate character in every world they play. You can build a world with a text
 editor. Put three UTF-8 JSON files at the root of a ZIP archive:
 `manifest.json`, `rooms.json`, and `exits.json`. Add `content.json` for items,
 NPCs, dialogue, quests, professions, trainers, and placements. Add `origins.json` for custom
@@ -559,9 +561,9 @@ In a banking room or beside an available banker, players use `/bank` or
 `/bank balance` to see carried and stored coins, `/bank deposit <amount>` to
 store coins, and `/bank withdraw <amount>` to carry them again. Amounts must be
 positive whole numbers. A banker who is hidden, defeated, or closed by a daily
-schedule is unavailable. Bank balances belong to characters and are shared
-across authored worlds under the current shared-character system; campaign
-archives preserve them. Shops and other coin costs use carried coins only.
+schedule is unavailable. Bank balances belong to the character, and every world
+has its own characters, so each world keeps its own balances. Shops and other
+coin costs use carried coins only.
 Banking is unavailable in the portal and procedural dungeons.
 
 For renewable room-floor resources, add `mud_item_spawns` with a 5–86,400 second
@@ -723,8 +725,13 @@ from the world ID, kind, and local key, so another world or standalone import
 may use the same local key. Conditions, exit conditions, and item requirements
 that name a bundled race or class by its local key are mapped to the global key
 on import and back to the local key on export. At most 100 definitions of each kind may be bundled.
-Imported definitions stay installed even when disabled or when the world is
-removed. Importing a world does not activate it or change existing characters.
+Imported definitions join the station-wide registry and stay installed even
+when the world is removed. By default a world that bundles at least one race and
+one class offers only its bundled ones; otherwise it offers its bundled
+definitions alongside the built-ins. You can choose differently on import, and
+change any world's selection later from its **RACES, CLASSES & SKILLS** page.
+A world's selection never affects other worlds. Importing a world does not
+enable it or change any existing world or character.
 
 ### Optional skills
 
@@ -736,9 +743,9 @@ format described in the [skills guide](../mud_skill_templates/README_SKILLS.md).
   and StationNet rewrites those references to the installed global keys.
 - **Requirements.** A skill's `requirements.races` and `requirements.classes`
   may name races and classes from the same package.
-- **Availability.** Bundled skills follow the same import or activation mode
-  as races and classes. When a world bundles no skills, the station's current
-  skills are kept.
+- **Availability.** Bundled skills follow the same import choice as races and
+  classes. A world always offers enough starting skills: when it bundles too
+  few, the built-in skills are offered too.
 - **Export.** Exports include the world's skills plus any imported skills that
   its exported races, classes, skills, or trainers depend on.
 
@@ -808,10 +815,10 @@ interferes with other players' runs or with the Dungeon Portals.
 - **Disconnects.** A run survives disconnects and restarts. Reconnecting
   returns you to your saved dungeon room. If you were moved out, use `/resume`
   to go back, or `/abandon` to give the run up.
-- **Changing the active world** ends that world's live runs; their loot is
-  lost and their explorers are moved with everyone else. Deleting an entrance,
-  room or template never interrupts a run in progress. A missing return room
-  falls back to the start room.
+- **Disabling the world** leaves its runs waiting; they resume when it is
+  enabled again. **Removing the world** ends its live runs and loses their
+  loot. Deleting an entrance, room or template never interrupts a run in
+  progress. A missing return room falls back to the start room.
 
 World builders can do all of this from the **Dungeons** section of the World
 Builder and the **Dungeon entrances** panel on each room. Templates can start
@@ -967,7 +974,7 @@ flag that the trigger sets:
 
 World builders can create, edit, disable, and remove triggers in the
 **Events** section of the World Builder. Each room also lists the triggers
-that start there. **Reset script state** clears the active world's flags, fire
+that start there. **Reset script state** clears the edited world's flags, fire
 counts, object and exit states, and spawned NPCs, which is useful while
 testing. Builder forms use installed IDs; the **IDs to use** list shows them.
 The builder's export writes `events.json` with simple local IDs.
@@ -1453,25 +1460,26 @@ zip lantern-isles.zip manifest.json rooms.json exits.json content.json
 
 If you omit `content.json`, `origins.json`, `skills.json`, `dungeons.json`, `events.json`, or `wilderness.json`, omit them from the command too. Confirm the ZIP
 lists the JSON files directly, without a containing folder. In **SYSOP Settings → MUD service →
-Traditional Worlds**, import the ZIP and select it as the active world. Choose
-whether its bundled races, classes, and skills replace, combine with, or are
-selected alongside currently available choices. The same controls are available on
-activation; manual selection can include any installed origin. The
-world builder can then edit its rooms and exits. The **Export World ZIP** button
-downloads the current map, including builder changes. For a station-built
-world, the exported manifest uses `my-world` as a starter ID; change it before
-importing on the same station. The exporter assigns simple room IDs so the
-files remain easy to edit. In sysop settings, choose any installed custom races,
-classes, and skills to bundle in an export. The builder export includes the world's
-linked definitions automatically.
+Worlds**, import the ZIP. Choose whether the world offers only its bundled races,
+classes, and skills, offers them alongside the built-ins, or offers a manual
+selection, and tick **Enable it for players right away** if it is ready; other
+worlds keep running unchanged. Use **ENABLE** or **DISABLE** in the world list at
+any time: a disabled world disappears from the player world list but keeps its
+content and characters. The **WORLD BUILDER** link (or the world switcher at the
+top of the builder) edits that world, enabled or not. The **Export World ZIP**
+button downloads the current map, including builder changes. For a
+station-built world, the exported manifest uses `my-world` as a starter ID;
+change it before importing on the same station. The exporter assigns simple room
+IDs so the files remain easy to edit. In sysop settings, choose any installed
+custom races, classes, and skills to bundle in an export; by default the world's
+own definitions and the custom ones it offers are included.
 
-Changing the active world moves traditional-world players to the new starting
-room and informs them. Dungeon Portals players remain where they are; runs
-in the outgoing world's own dungeons end, and their loot is lost. To
-uninstall a custom world, select another active world first, then use **Remove
-World**. The original station world cannot be uninstalled.
+To uninstall a custom world, disable it first, then use **Remove World**.
+Removal deletes the world's rooms and content and ends its dungeon runs. Its
+characters are kept, hidden, and return if a world with the same ID is
+installed again. The original Station World cannot be uninstalled.
 
-The installed ZIP is kept for sharing. The active world is read from the
-database so builder changes are included the next time you export. Removing a
+The installed ZIP is kept for sharing. Exports are read from the database so
+builder changes are included the next time you export. Removing a
 world deletes its rooms and placed content while keeping player possessions
 and quest records intact.
