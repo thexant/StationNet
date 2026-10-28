@@ -59,7 +59,8 @@ CONTENT_TABLES = {
     "mud_item_spawns": ("id", "definition_id", "room_id", "respawn_seconds"),
     "mud_gathering_nodes": ("id", "room_id", "name", "activity", "rewards_json", "skill_key",
                             "min_rank", "tool_definition_id", "success_percent", "respawn_seconds"),
-    "mud_room_discoveries": ("id", "room_id", "clue", "item_definition_id", "difficulty"),
+    "mud_room_discoveries": ("id", "room_id", "clue", "item_definition_id", "difficulty",
+                             "conditions_json", "item_instance_id", "exit_id"),
     "mud_npc_instances": ("id", "definition_id", "room_id", "state_json"),
     "mud_world_destinations": ("id", "room_id", "name", "aliases", "category", "description", "public",
                                "discover_on_visit", "map_items_json", "conditions_json", "sort_order"),
@@ -80,9 +81,11 @@ REFERENCE_TABLE = {
     "recruiter_npc_definition_id": "mud_npc_definitions",
     "provider_npc_definition_id": "mud_npc_definitions",
     "profession_id": "mud_professions", "activity_id": "mud_work_activities",
+    "item_instance_id": "mud_item_instances", "exit_id": "exits",
 }
 # Quests and dialogue responses carry condition/outcome lists that name content.
 CONDITION_COLUMNS = {"mud_quests": ("conditions_json",),
+                     "mud_room_discoveries": ("conditions_json",),
                      "mud_professions": ("conditions_json",),
                      "mud_work_activities": ("conditions_json",),
                      "mud_dialogue_responses": ("conditions_json", "outcomes_json"),
@@ -458,6 +461,16 @@ def read_package(payload):
                     raise WorldError("Room discovery clue must be 1 to 500 characters.")
                 if not _whole(row.get("difficulty", 0), 0, 200):
                     raise WorldError("Room discovery difficulty must be 0 to 200.")
+                if sum(bool(row.get(key)) for key in ("item_definition_id", "item_instance_id", "exit_id")) > 1:
+                    raise WorldError("A room discovery may have only one result.")
+                room_id = row.get("room_id")
+                object_id, exit_id = row.get("item_instance_id"), row.get("exit_id")
+                if object_id and not any(item.get("id") == object_id and item.get("room_id") == room_id
+                                         for item in content.get("mud_item_instances", [])):
+                    raise WorldError("Discovery object must be placed in its room.")
+                if exit_id and not any(item.get("id") == exit_id and item["from"] == room_id
+                                       for item in clean_exits):
+                    raise WorldError("Discovery exit must leave its room and have an ID.")
             for column in CONDITION_COLUMNS.get(table, ()):
                 try:
                     _condition_validator(column)(row.get(column))
@@ -470,6 +483,10 @@ def read_package(payload):
         if reward_counts[activity_id] > 10:
             raise WorldError("A work activity may have at most ten rewards.")
     key_ids = {row.get("id") for row in content.get("mud_item_definitions", []) if row.get("item_type") == "key"}
+    for column in ("item_instance_id", "exit_id"):
+        targets = [row[column] for row in content.get("mud_room_discoveries", []) if row.get(column)]
+        if len(targets) != len(set(targets)):
+            raise WorldError("An object or exit may belong to only one discovery.")
     if any(item["key_item_id"] and item["key_item_id"] not in key_ids for item in clean_exits):
         raise WorldError("Locked exits must reference a key item definition in content.json.")
     origins = docs.get(ORIGINS_FILE, {})
@@ -620,6 +637,8 @@ def _room_references(document, installation_key):
 
 def _content_maps(document, installation_key):
     maps = {"rooms": _room_references(document, installation_key)}
+    maps["exits"] = {item["id"]: f"world:{document['id']}:{installation_key}:exit:{ordinal}"
+                     for ordinal, item in enumerate(document["exits"]) if item.get("id")}
     for table in ID_TABLES:
         mapping = {}
         for row in document["content"].get(table, []):
@@ -1117,7 +1136,7 @@ def _stored_conditions(value, column):
         return []
 
 
-def _export_content(database, world_id, room_map):
+def _export_content(database, world_id, room_map, exit_map=None):
     roots = {"mud_item_definitions", "mud_conversations", "mud_npc_definitions", "mud_quests", "mud_world_factions", "mud_professions"}
     all_placed_items = [dict(row) for row in database.execute(
         "SELECT id,definition_id,room_id,container_id FROM mud_item_instances "
@@ -1202,8 +1221,10 @@ def _export_content(database, world_id, room_map):
         "JOIN mud_world_rooms r ON r.id=e.from_room_id WHERE r.world_id=? "
         "UNION ALL SELECT conditions_json,'[]' FROM mud_professions WHERE world_id=? "
         "UNION ALL SELECT a.conditions_json,'[]' FROM mud_work_activities a "
-        "JOIN mud_professions p ON p.id=a.profession_id WHERE p.world_id=?",
-        (world_id, world_id, world_id, world_id, world_id),
+        "JOIN mud_professions p ON p.id=a.profession_id WHERE p.world_id=? "
+        "UNION ALL SELECT d.conditions_json,'[]' FROM mud_room_discoveries d "
+        "JOIN mud_world_rooms r ON r.id=d.room_id WHERE r.world_id=?",
+        (world_id, world_id, world_id, world_id, world_id, world_id),
     ):
         named = list(mud_conditions.references(_stored_conditions(row["conditions_json"], "conditions_json"),
                                                _stored_conditions(row["outcomes_json"], "outcomes_json")))
@@ -1261,7 +1282,7 @@ def _export_content(database, world_id, room_map):
                 "mud_faction_relations": "faction-relation"}
     prefixes.update({"mud_professions": "profession", "mud_work_activities": "work",
                      "mud_work_rewards": "work-reward"})
-    maps = {"rooms": room_map}
+    maps = {"rooms": room_map, "exits": exit_map or {}}
     for table in ID_TABLES:
         maps[table] = {key: f"{prefixes[table]}-{index}"
                        for index, key in enumerate(selected[table], 1)}
@@ -1275,6 +1296,8 @@ def _export_content(database, world_id, room_map):
                 value = row[column]
                 if column == "id":
                     value = maps[table][value]
+                elif table == "mud_room_discoveries" and column == "item_instance_id" and value not in maps["mud_item_instances"]:
+                    value = None
                 elif column in REFERENCE_TABLE:
                     ref_table = REFERENCE_TABLE[column]
                     if ref_table is None:
@@ -1375,16 +1398,18 @@ def export(database, world_id, *, origin_keys=None, skill_keys=None):
         "e.conditions_json,e.conditions_message,e.local_id,e.hidden FROM mud_world_exits e "
         "JOIN mud_world_rooms r ON r.id=e.from_room_id WHERE r.world_id=? ORDER BY e.id", (world_id,)
     ).fetchall()
-    content, maps = _export_content(database, world_id, ids)
     triggers = world_triggers(database, world_id)
     referenced_exits = {ref for trigger in triggers for kind, ref in mud_triggers.references(trigger) if kind == "exit"}
+    referenced_exits.update(row["exit_id"] for row in database.execute(
+        "SELECT d.exit_id FROM mud_room_discoveries d JOIN mud_world_rooms r ON r.id=d.room_id "
+        "WHERE r.world_id=? AND d.exit_id IS NOT NULL", (world_id,)))
     exit_ids, taken = {}, set()
     for index, row in enumerate(exits, 1):
         if row["to_room_id"] in ids and (row["local_id"] or row["id"] in referenced_exits):
             local = row["local_id"] if row["local_id"] and row["local_id"] not in taken else f"exit-{index}"
             exit_ids[row["id"]] = local
             taken.add(local)
-    maps["exits"] = exit_ids
+    content, maps = _export_content(database, world_id, ids, exit_ids)
     document = {"id": world_id if world_id != "stationnet" else "my-world",
                 "name": world["name"], "author": world["author"],
                 "start_room": ids[world["start_room_id"]],

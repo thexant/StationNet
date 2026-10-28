@@ -88,6 +88,200 @@ def _document():
     }
 
 
+def test_search_reveals_objects_and_exits_per_character_after_conditions(game):
+    app, users = game
+    document = _document()
+    document["exits"][0].update(id="secret-vault", hidden=True)
+    document["content"]["mud_item_definitions"].append({
+        "id": "marker", "name": "Hidden Marker", "description": "A small marker.",
+        "item_type": "misc", "properties_json": {"fixed": True}})
+    document["content"]["mud_item_instances"] = [
+        {"id": "marker-here", "definition_id": "marker", "room_id": "square"}]
+    document["content"]["mud_room_discoveries"] = [
+        {"id": "a-object", "room_id": "square", "clue": "A marker lies in a niche.",
+         "item_instance_id": "marker-here", "conditions_json": [
+             {"type": "attribute", "attribute": "intellect", "min": 11},
+             {"type": "skill", "skill": "lore", "min_rank": 1},
+             {"type": "has_item", "item": "brass-key"}]},
+        {"id": "b-exit", "room_id": "square", "clue": "A concealed vault door opens north.",
+         "exit_id": "secret-vault", "conditions_json": [
+             {"type": "flag", "key": "explore.ready", "value": "yes"}]},
+    ]
+    with app.app_context():
+        db = get_db()
+        mud_worlds.install(db, mud_worlds.package_bytes(document))
+        db.execute("UPDATE mud_world_packages SET active=0")
+        db.execute("UPDATE mud_world_packages SET active=1 WHERE id='authored'")
+        room_id = db.execute("SELECT start_room_id FROM mud_world_packages WHERE id='authored'").fetchone()[0]
+        for uid in users:
+            mud._set_player_location(db, uid, "traditional", "world_room", room_id)
+        first, second = [db.execute("SELECT * FROM users WHERE id=?", (uid,)).fetchone() for uid in users]
+        hidden_object_id = db.execute("SELECT id FROM mud_item_instances WHERE room_id=? AND definition_id IN "
+                                      "(SELECT id FROM mud_item_definitions WHERE name='Hidden Marker')",
+                                      (room_id,)).fetchone()[0]
+        assert "Hidden Marker" not in mud._look_action(db, first, {})[0].body
+        assert "vault door" not in mud._look_action(db, first, {})[0].body.lower()
+        assert "nothing new" in mud._search_action(db, first, {})[0].body
+        with pytest.raises(mud.ActionError):
+            mud._interact_action(db, first, {"arguments": ["Hidden Marker"]})
+        with pytest.raises(mud.ActionError):
+            mud._look_action(db, first, {"arguments": [hidden_object_id]})
+        with pytest.raises(mud.ActionError):
+            mud._get_action(db, first, {"item_id": hidden_object_id})
+        with pytest.raises(mud.ActionError):
+            mud._go_action(db, first, {"arguments": ["north"]})
+        key_id = db.execute("SELECT id FROM mud_item_definitions WHERE name='Brass Key'").fetchone()[0]
+        mud._grant_item(db, users[0], key_id)
+        assert "marker lies" in mud._search_action(db, first, {})[0].body
+        assert "Hidden Marker" in mud._look_action(db, first, {})[0].body
+        assert "Hidden Marker" not in mud._look_action(db, second, {})[0].body
+        character_id = mud._character_row(db, users[0])["id"]
+        mud._store_script_flag(db, "authored", character_id, "explore.ready", "yes")
+        assert "vault door opens" in mud._search_action(db, first, {})[0].body
+        assert "north" in mud._look_action(db, first, {})[0].body.lower()
+        assert "north" not in mud._look_action(db, second, {})[0].body.lower()
+        with pytest.raises(mud.ActionError, match="locked"):
+            mud._go_action(db, first, {"arguments": ["north"]})
+        marker_id = db.execute("SELECT id FROM mud_item_instances WHERE room_id=? AND definition_id IN "
+                               "(SELECT id FROM mud_item_definitions WHERE name='Hidden Marker')",
+                               (room_id,)).fetchone()[0]
+        exit_id = db.execute("SELECT id FROM mud_world_exits WHERE from_room_id=?",
+                             (room_id,)).fetchone()[0]
+        mud._store_entity_state(db, "authored", "item", marker_id, "shown")
+        assert "Hidden Marker" in mud._look_action(db, second, {})[0].body
+        mud._store_entity_state(db, "authored", "item", marker_id, "hidden")
+        assert "Hidden Marker" not in mud._look_action(db, first, {})[0].body
+        mud._store_entity_state(db, "authored", "item", marker_id, "")
+        mud._store_entity_state(db, "authored", "exit", exit_id, "hidden")
+        assert "north" not in mud._look_action(db, first, {})[0].body.lower()
+        mud._store_entity_state(db, "authored", "exit", exit_id, "open")
+        assert "north" in mud._look_action(db, second, {})[0].body.lower()
+        mud._store_entity_state(db, "authored", "exit", exit_id, "")
+        exported = mud_worlds.export(db, "authored")
+        restored = mud_worlds.read_package(exported)
+        results = restored["content"]["mud_room_discoveries"]
+        assert {row.get("item_instance_id") for row in results if row.get("item_instance_id")}
+        assert {row.get("exit_id") for row in results if row.get("exit_id")}
+        db.commit()
+    with app.app_context():
+        db = get_db()
+        first = db.execute("SELECT * FROM users WHERE id=?", (users[0],)).fetchone()
+        second = db.execute("SELECT * FROM users WHERE id=?", (users[1],)).fetchone()
+        assert "Hidden Marker" in mud._look_action(db, first, {})[0].body
+        assert "Hidden Marker" not in mud._look_action(db, second, {})[0].body
+        assert "nothing new" in mud._search_action(db, first, {})[0].body
+    imported_data = Path(__file__).parent / f"_discovery_roundtrip_{uuid.uuid4().hex}"
+    imported_data.mkdir()
+    imported_app = create_app({"TESTING": True, "DATA_DIR": str(imported_data)})
+    try:
+        with imported_app.app_context():
+            imported_db = get_db()
+            mud_worlds.install(imported_db, exported)
+            rows = imported_db.execute("SELECT clue,item_instance_id,exit_id,conditions_json "
+                                       "FROM mud_room_discoveries ORDER BY clue").fetchall()
+            assert len(rows) == 2
+            assert any(row["item_instance_id"] for row in rows)
+            assert any(row["exit_id"] for row in rows)
+            assert any('"attribute"' in row["conditions_json"] for row in rows)
+    finally:
+        imported_app.extensions["broadcast_coordinator"]._closed = True
+        imported_app.extensions["broadcast_coordinator"]._timer.cancel()
+        shutil.rmtree(imported_data)
+
+
+def test_builder_edits_discovery_without_erasing_history_and_rejects_foreign_targets(game):
+    app, users = game
+    document = _document()
+    document["exits"][0]["id"] = "vault-route"
+    document["content"]["mud_item_instances"] = [
+        {"id": "placed-key", "definition_id": "brass-key", "room_id": "square"}]
+    with app.app_context():
+        db = get_db()
+        mud_worlds.install(db, mud_worlds.package_bytes(document))
+        db.execute("UPDATE mud_world_packages SET active=0")
+        db.execute("UPDATE mud_world_packages SET active=1 WHERE id='authored'")
+        db.execute("INSERT INTO mud_builder_permissions(user_id) VALUES(?)", (users[0],))
+        room = db.execute("SELECT start_room_id FROM mud_world_packages WHERE id='authored'").fetchone()[0]
+        vault = db.execute("SELECT id FROM mud_world_rooms WHERE world_id='authored' AND id<>?",
+                           (room,)).fetchone()[0]
+        object_id = db.execute("SELECT id FROM mud_item_instances WHERE room_id=? AND definition_id IN "
+                               "(SELECT id FROM mud_item_definitions WHERE name='Brass Key')",
+                               (room,)).fetchone()[0]
+        exit_id = db.execute("SELECT id FROM mud_world_exits WHERE from_room_id=?", (room,)).fetchone()[0]
+        db.commit()
+    builder = app.test_client()
+    with builder.session_transaction() as session:
+        session["user_id"] = users[0]
+        session["csrf_token"] = "test-token"
+    player = app.test_client()
+    with player.session_transaction() as session:
+        session["user_id"] = users[1]
+        session["csrf_token"] = "test-token"
+    path = f"/mud/builder/rooms/{room}/discoveries"
+    assert player.post(path, data={"csrf_token": "test-token", "clue": "No."}).status_code == 403
+    invalid = builder.post(f"/mud/builder/rooms/{vault}/discoveries", data={
+        "csrf_token": "test-token", "clue": "Wrong room.", "result": f"exit|{exit_id}"},
+        follow_redirects=True)
+    assert b"Choose a result in this world and room" in invalid.data
+    assert builder.post(path, data={"csrf_token": "test-token", "clue": "A hidden key.",
+                                    "result": f"object|{object_id}", "difficulty": "0",
+                                    "conditions_json": '[{"type":"attribute","attribute":"intellect","min":11}]'}).status_code == 302
+    with app.app_context():
+        db = get_db()
+        found = db.execute("SELECT * FROM mud_room_discoveries WHERE clue='A hidden key.'").fetchone()
+        discovery_id = found["id"]
+        assert found["item_instance_id"] == object_id
+        assert '"attribute"' in found["conditions_json"]
+        character_id = mud._character_row(db, users[0])["id"]
+        db.execute("INSERT INTO mud_player_discoveries(character_id,discovery_id) VALUES(?,?)",
+                   (character_id, discovery_id))
+        db.commit()
+    update_path = f"/mud/builder/discoveries/{discovery_id}"
+    assert builder.post(update_path, data={"csrf_token": "test-token", "clue": "A hidden route.",
+                                           "result": f"exit|{exit_id}", "difficulty": "12"}).status_code == 302
+    with app.app_context():
+        db = get_db()
+        found = db.execute("SELECT * FROM mud_room_discoveries WHERE id=?", (discovery_id,)).fetchone()
+        assert found["exit_id"] == exit_id and found["item_instance_id"] is None
+        assert db.execute("SELECT 1 FROM mud_player_discoveries WHERE discovery_id=?",
+                          (discovery_id,)).fetchone()
+        # Deleting the target keeps the clue and the character's history.
+        db.execute("DELETE FROM mud_world_exits WHERE id=?", (exit_id,))
+        db.commit()
+        assert db.execute("SELECT exit_id FROM mud_room_discoveries WHERE id=?",
+                          (discovery_id,)).fetchone()[0] is None
+        assert db.execute("SELECT 1 FROM mud_player_discoveries WHERE discovery_id=?",
+                          (discovery_id,)).fetchone()
+
+
+def test_discovery_migration_keeps_legacy_rows():
+    database = sqlite3.connect(":memory:")
+    database.row_factory = sqlite3.Row
+    database.execute("CREATE TABLE mud_room_discoveries (id TEXT PRIMARY KEY,room_id TEXT,clue TEXT,"
+                     "item_definition_id TEXT,difficulty INTEGER NOT NULL DEFAULT 0)")
+    database.execute("INSERT INTO mud_room_discoveries(id,room_id,clue) VALUES('old','hall','Old clue')")
+    db_module._migrate_mud_discoveries(database)
+    db_module._migrate_mud_discoveries(database)
+    row = database.execute("SELECT * FROM mud_room_discoveries WHERE id='old'").fetchone()
+    assert row["clue"] == "Old clue" and row["conditions_json"] == "[]"
+    assert row["item_instance_id"] is None and row["exit_id"] is None
+    database.close()
+
+
+@pytest.mark.parametrize("changes", [
+    {"item_instance_id": "missing"},
+    {"exit_id": "missing"},
+    {"item_definition_id": "brass-key", "exit_id": "missing"},
+    {"conditions_json": [{"type": "attribute", "attribute": "unknown", "min": 1}]},
+])
+def test_world_package_rejects_invalid_discovery_references_and_conditions(changes):
+    document = _document()
+    document["content"]["mud_room_discoveries"] = [
+        {"id": "bad", "room_id": "square", "clue": "A clue.", **changes}]
+    with pytest.raises(mud_worlds.WorldError):
+        mud_worlds.read_package(mud_worlds.package_bytes(document))
+
+
 def test_package_quest_shop_respawn_search_and_lock(game):
     app, users = game
     with app.app_context():

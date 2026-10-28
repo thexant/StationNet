@@ -1478,6 +1478,7 @@ def init_db():
     _migrate_mud_wayfinding(database)
     _migrate_mud_society(database)
     _migrate_mud_work(database)
+    _migrate_mud_discoveries(database)
     database.execute("INSERT OR IGNORE INTO mud_portal_settings(id) VALUES(1)")
     database.execute("INSERT OR IGNORE INTO mud_crossover_settings(id) VALUES(1)")
     database.execute("INSERT OR IGNORE INTO mud_travel_settings(id) VALUES(1)")
@@ -2826,6 +2827,23 @@ def _migrate_mud_work(database):
       completions INTEGER NOT NULL DEFAULT 0 CHECK(completions>=0),
       PRIMARY KEY(character_id,activity_id));
     """)
+
+
+def _migrate_mud_discoveries(database):
+    """Extend authored discoveries without replacing their IDs or player history."""
+    columns = {row["name"] for row in database.execute("PRAGMA table_info(mud_room_discoveries)")}
+    additions = {
+        "conditions_json": "TEXT NOT NULL DEFAULT '[]'",
+        "item_instance_id": "TEXT REFERENCES mud_item_instances(id) ON DELETE SET NULL",
+        "exit_id": "TEXT REFERENCES mud_world_exits(id) ON DELETE SET NULL",
+    }
+    for name, definition in additions.items():
+        if name not in columns:
+            database.execute(f"ALTER TABLE mud_room_discoveries ADD COLUMN {name} {definition}")
+    database.execute("CREATE INDEX IF NOT EXISTS idx_mud_discoveries_object "
+                     "ON mud_room_discoveries(item_instance_id)")
+    database.execute("CREATE INDEX IF NOT EXISTS idx_mud_discoveries_exit "
+                     "ON mud_room_discoveries(exit_id)")
 
 
 def _migrate_legacy_callsigns(database):

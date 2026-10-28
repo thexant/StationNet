@@ -125,7 +125,7 @@ reports the lock state.
 Give an exit an `"id"` (a lowercase ID, unique among exits) when a
 [trigger](#5c-events-and-triggers-eventsjson) needs to open, seal, or hide it.
 Add `"hidden": true` to keep it out of sight, and impassable, until a trigger
-reveals it.
+or room discovery reveals it.
 
 An exit can also admit only some characters. Add `"conditions"` (the same
 array format as [conditions](#conditions) below) and an optional
@@ -629,6 +629,19 @@ work. Use `/work do <name>` for immediate work, or `/work accept <name>`,
 `/search`. Set `difficulty` (0–200, default 0 = always found) to hide it
 better; the Perception skill and Intellect improve the odds, and only rooms
 with such hidden discoveries let searching practice Perception.
+
+Each discovery may instead name one `item_instance_id` (a placed object in the
+same room) or `exit_id` (an exit leaving that room). The exit must have a
+package-local `id`. These targets remain invisible and unusable to a character
+until found, then use the ordinary look, interaction, pickup, and movement
+rules. A revealed exit still needs its key and still checks its entry conditions.
+An optional `conditions_json` array uses the same conditions as exits, including
+skills, attributes, held items, quests, and flags. Conditions must pass before
+the search roll; they neither consume items nor reveal a clue on failure.
+Only one of `item_definition_id`, `item_instance_id`, and `exit_id` may be set.
+The World Builder offers these results and can edit a discovery without erasing
+characters' existing discovery records. Deleting a referenced object or exit
+leaves the clue and those records in place.
 
 `mud_npc_trainers` makes an NPC teach a skill. `skill_key` names a skill from
 this package's `skills.json` (by local key) or any skill installed on the

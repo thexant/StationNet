@@ -1319,6 +1319,9 @@ def _room_exits(database, room_id, instance_id=None, viewer_id=None):
     ).fetchall()
     exits = []
     for row in rows:
+        discovery = _discovery_target_state(database, "exit_id", row["id"], room_id, viewer_id)
+        if discovery is not None and not _explicit_entity_state(database, "exit", row["id"], viewer_id):
+            row = {**dict(row), "script_state": "revealed" if discovery else "hidden"}
         if row["script_state"] == "hidden":
             continue
         if not row["destination_name"]:
@@ -1326,6 +1329,25 @@ def _room_exits(database, room_id, instance_id=None, viewer_id=None):
         exits.append(row)
     # Stored exits win; hidden or sealed ones still claim their direction.
     return exits + mud_wilderness.grid_exits(database, room_id, {row["direction"] for row in rows})
+
+
+def _explicit_entity_state(database, kind, entity_id, viewer_id=None):
+    character_id = _character_row(database, viewer_id)["id"] if viewer_id else ""
+    return database.execute(
+        "SELECT 1 FROM mud_script_entity_states WHERE entity_type=? AND entity_id=? "
+        "AND scope_key IN ('',?) LIMIT 1", (kind, entity_id, character_id),
+    ).fetchone() is not None
+
+
+def _discovery_target_state(database, column, target_id, room_id, viewer_id=None):
+    """None for ordinary content; otherwise whether this character found its linked discovery."""
+    character_id = _character_row(database, viewer_id)["id"] if viewer_id else ""
+    row = database.execute(
+        f"SELECT COUNT(*) AS total,COUNT(p.discovery_id) AS found FROM mud_room_discoveries d "
+        f"LEFT JOIN mud_player_discoveries p ON p.discovery_id=d.id AND p.character_id=? "
+        f"WHERE d.{column}=? AND d.room_id=?", (character_id, target_id, room_id),
+    ).fetchone()
+    return None if not row["total"] else bool(row["found"])
 
 
 def _room_entrances(database, room_id):
@@ -1810,7 +1832,7 @@ def _room_state(database, user_id):
                                 for child, child_label in _numbered_items(_container_rows(database, item["id"], user_id))]
                    if item["item_type"] == "container" and item["is_open"] and not instance_id else []}
                   for item, label in _numbered_items(
-                       _room_item_rows(database, room["id"], instance_id))],
+                       _room_item_rows(database, room["id"], instance_id, user_id))],
         "npcs": npcs,
         "gathering": ([{"id": node["id"], "name": node["name"], "display_name": label,
                         "activity": node["activity"],
@@ -1834,7 +1856,7 @@ def _describe_room(database, room, viewer_id=None):
     occupants = _room_occupants(database, room["id"], viewer_id, instance_id) if viewer_id else []
     people = ", ".join(item["display_name"] for item in occupants) if occupants else "none"
     items = ", ".join(label for _, label in _numbered_items(
-        _room_item_rows(database, room["id"], instance_id))) or "none"
+        _room_item_rows(database, room["id"], instance_id, viewer_id))) or "none"
     npcs = ", ".join(label for _, label in _numbered_npcs(
         _room_npc_rows(database, room["id"], instance_id))) or "none"
     gathering = ", ".join(f"{label} ({row['activity']})" for row, label in _numbered_items(database.execute(
@@ -1856,7 +1878,7 @@ def _describe_room(database, room, viewer_id=None):
         if delves:
             routes = (routes + ", " if routes != "none" else "") + ", ".join(delves)
     states = " ".join(text for text in (_object_state_text(database, item) for item in
-                                        _room_item_rows(database, room["id"], instance_id)) if text)
+                                        _room_item_rows(database, room["id"], instance_id, viewer_id)) if text)
     return (
         f"{room['name']}\n{room['description']}" + (f"\n\n{states}" if states else "") + f"{instructions}\n\n"
         f"Exits: {routes}\nOther players: {people}\nNPCs: {npcs}\nItems: {items}"
@@ -2003,7 +2025,7 @@ def _inventory_rows(database, user_id, equipped=False):
     ).fetchall()
 
 
-def _room_item_rows(database, room_id, instance_id=None):
+def _room_item_rows(database, room_id, instance_id=None, viewer_id=None):
     if instance_id:
         rows = []
         for content in database.execute(
@@ -2030,7 +2052,7 @@ def _room_item_rows(database, room_id, instance_id=None):
         "SELECT i.*,d.name,d.description,d.item_type,d.equipment_slot AS definition_slot,d.properties_json "
         "FROM mud_item_instances i JOIN mud_item_definitions d ON d.id=i.definition_id "
         "WHERE i.room_id=? ORDER BY d.name COLLATE NOCASE,i.id", (room_id,)
-    ).fetchall())
+    ).fetchall(), viewer_id=viewer_id, room_id=room_id)
 
 
 def _container_rows(database, container_id, user_id=None):
@@ -2066,12 +2088,16 @@ def _visible_container(database, user_id, room, item_id):
     )
     if row["room_id"] != room["id"] and not owned_visible:
         raise ActionError("That container is not available to you.")
+    if row["room_id"] == room["id"] and not owned_visible and not any(
+        item["id"] == row["id"] for item in _room_item_rows(database, room["id"], room.get("instance_id"), user_id)
+    ):
+        raise ActionError("That container is not available to you.")
     return row
 
 
 def _accessible_containers(database, user_id, room):
     return [item for item in (
-        list(_room_item_rows(database, room["id"], room.get("instance_id")))
+        list(_room_item_rows(database, room["id"], room.get("instance_id"), user_id))
         + list(_inventory_rows(database, user_id))
         + list(_inventory_rows(database, user_id, True))
     ) if _is_container(item) and not isinstance(item, dict)]
@@ -2966,7 +2992,7 @@ def _describe_item(database, row, user_id=None):
 
 def _examine_item(database, user, room, target):
     instance_id = room.get("instance_id") if isinstance(room, dict) else None
-    candidates = list(_room_item_rows(database, room["id"], instance_id)) + list(_inventory_rows(database, user["id"])) + list(_inventory_rows(database, user["id"], True))
+    candidates = list(_room_item_rows(database, room["id"], instance_id, user["id"])) + list(_inventory_rows(database, user["id"])) + list(_inventory_rows(database, user["id"], True))
     for container in _accessible_containers(database, user["id"], room):
         if _is_container(container) and container["is_open"]:
             candidates.extend(_container_rows(database, container["id"], user["id"]))
@@ -4328,10 +4354,12 @@ def _search_action(database, user, parameters):
     if room.get("instance_id"):
         raise ActionError("There is nothing to search here.")
     character = _character_row(database, user["id"])
-    hidden = database.execute(
+    pending = database.execute(
         "SELECT d.* FROM mud_room_discoveries d WHERE d.room_id=? AND NOT EXISTS "
         "(SELECT 1 FROM mud_player_discoveries p WHERE p.character_id=? AND p.discovery_id=d.id) "
         "ORDER BY d.id", (room["id"], character["id"])).fetchall()
+    context = _ConditionContext(database, user["id"])
+    hidden = [row for row in pending if mud_conditions.evaluate(row["conditions_json"], context)]
     # Only well-hidden discoveries are a real challenge, so only they teach Perception.
     practiced = (_practice(database, character["id"], "search")
                  if any(row["difficulty"] for row in hidden) else [])
@@ -4344,6 +4372,10 @@ def _search_action(database, user, parameters):
     database.execute("INSERT INTO mud_player_discoveries(character_id,discovery_id) VALUES(?,?)",
                      (character["id"], found["id"]))
     drafts = [EventDraft(found["clue"], event_type="room")] + practiced
+    if found["exit_id"]:
+        drafts.append(EventDraft("You uncover a passage. Use /look or /exits to inspect it.", event_type="room"))
+    if found["item_instance_id"]:
+        drafts.append(EventDraft("You uncover an object. Use /look to inspect it.", event_type="room"))
     if found["item_definition_id"]:
         item = database.execute("SELECT name FROM mud_item_definitions WHERE id=?",
                                 (found["item_definition_id"],)).fetchone()
@@ -4379,7 +4411,7 @@ def _get_action(database, user, parameters):
         target, container_name = re.split(r"\s+from\s+", target, maxsplit=1, flags=re.I)
     container = _container_target(database, user["id"], room, container_name) if container_name else None
     source = (_container_rows(database, container["id"], user["id"]) if container else
-              _room_item_rows(database, room["id"], room.get("instance_id")))
+              _room_item_rows(database, room["id"], room.get("instance_id"), user["id"]))
     if container and not container["is_open"]:
         raise ActionError("Open that container first.")
     item = _item_matches(source, target)
@@ -4413,8 +4445,11 @@ def _get_action(database, user, parameters):
                              "ON CONFLICT(event_kind,entity_id) DO UPDATE SET due_at=excluded.due_at",
                              (spawn["id"], due))
     theft = _take_owned_item(database, user, room, item, theft_owner) if not room.get("instance_id") and theft_owner else []
+    private_discovery = not room.get("instance_id") and _discovery_target_state(
+        database, "item_instance_id", item["id"], room["id"], user["id"]) is not None
+    public_name = "something" if private_discovery else item["name"]
     return [EventDraft(f"You pick up {item['name']}.", event_type="item"),
-            _room_item_event(database, user, room, f"{_character_row(database, user['id'])['display_name']} picks up {item['name']}.")] + \
+            _room_item_event(database, user, room, f"{_character_row(database, user['id'])['display_name']} picks up {public_name}.")] + \
         theft + _set_objective_progress(database, user, "possess_item", item["definition_id"]) + \
         fire_triggers(database, user, "take_item", [item["id"], item["definition_id"]],
                       instance_id=room.get("instance_id"))
@@ -4550,7 +4585,7 @@ def _use_action(database, user, parameters):
         room = _current_room(database, user["id"])
         if target and (room.get("instance_id") or not room.get("system_managed")):
             try:
-                _item_matches(_room_item_rows(database, room["id"], room.get("instance_id")), target)
+                _item_matches(_room_item_rows(database, room["id"], room.get("instance_id"), user["id"]), target)
             except ActionError:
                 pass
             else:
@@ -7022,7 +7057,7 @@ def _store_entity_state(database, realm, entity_type, entity_id, state, scope_ke
         (realm, entity_type, entity_id, scope_key, state))
 
 
-def _script_visible(database, entity_type, rows):
+def _script_visible(database, entity_type, rows, *, viewer_id=None, room_id=None):
     """Drop placed NPCs or items that are hidden, by authored state_json or by a trigger."""
     rows = list(rows)
     if not rows:
@@ -7030,8 +7065,19 @@ def _script_visible(database, entity_type, rows):
     states = {row["entity_id"]: row["state"] for row in database.execute(
         f"SELECT entity_id,state FROM mud_script_entity_states WHERE entity_type=? AND scope_key='' "
         f"AND entity_id IN ({','.join('?' for _ in rows)})", (entity_type, *(row["id"] for row in rows)))}
-    return [row for row in rows if states.get(
-        row["id"], "hidden" if _json_properties(row["state_json"]).get("hidden") is True else "shown") != "hidden"]
+    visible = []
+    for row in rows:
+        scripted = states.get(row["id"])
+        if entity_type == "item" and room_id:
+            discovery = _discovery_target_state(database, "item_instance_id", row["id"], room_id, viewer_id)
+            if discovery is not None and scripted is None:
+                if discovery:
+                    visible.append(row)
+                continue
+        if (scripted or ("hidden" if _json_properties(row["state_json"]).get("hidden") is True
+                         else "shown")) != "hidden":
+            visible.append(row)
+    return visible
 
 
 def _object_state(database, object_id):
@@ -7497,9 +7543,12 @@ def _interact_action(database, user, parameters):
     if room.get("system_managed") and not room.get("instance_id"):
         raise ActionError("There is nothing here to interact with.")
     instance_id = room.get("instance_id")
-    item = _item_matches(_room_item_rows(database, room["id"], instance_id), target)
+    item = _item_matches(_room_item_rows(database, room["id"], instance_id, user["id"]), target)
     name = _character_row(database, user["id"])["display_name"]
-    drafts = [_room_item_event(database, user, room, f"{name} {INTERACT_VERBS[verb]} {item['name']}.")]
+    private_discovery = not instance_id and _discovery_target_state(
+        database, "item_instance_id", item["id"], room["id"], user["id"]) is not None
+    public_name = "something" if private_discovery else item["name"]
+    drafts = [_room_item_event(database, user, room, f"{name} {INTERACT_VERBS[verb]} {public_name}.")]
     script = fire_triggers(database, user, "use_object", [item["id"], item["definition_id"]],
                            instance_id=instance_id)
     if not script:
@@ -10224,16 +10273,69 @@ def builder_delete_quest_reward(reward_id):
 def builder_add_discovery(room_id):
     validate_csrf(); database = get_db()
     if database.execute("SELECT 1 FROM mud_world_rooms WHERE id=? AND world_id=(SELECT id FROM mud_world_packages WHERE active=1)", (room_id,)).fetchone() is None: abort(404)
-    clue = request.form.get("clue", "").strip()
-    item_id = request.form.get("item_definition_id", "").strip() or None
-    difficulty = request.form.get("difficulty", 0, type=int)
-    if not 1 <= len(clue) <= 500 or (item_id and database.execute("SELECT 1 FROM mud_item_definitions WHERE id=?", (item_id,)).fetchone() is None):
-        flash("Write a short clue and choose a valid optional item.", "error"); return _builder_redirect(room_id)
-    if difficulty is None or not 0 <= difficulty <= 200:
-        flash("Search difficulty must be 0 (always found) to 200.", "error"); return _builder_redirect(room_id)
-    database.execute("INSERT INTO mud_room_discoveries(id,room_id,clue,item_definition_id,difficulty) VALUES(?,?,?,?,?)",
-                     (f"world:discovery:{uuid.uuid4().hex}", room_id, clue, item_id, difficulty))
+    fields, error = _builder_discovery_fields(database, room_id)
+    if error:
+        flash(error, "error"); return _builder_redirect(room_id)
+    database.execute("INSERT INTO mud_room_discoveries(id,room_id,clue,item_definition_id,difficulty,"
+                     "conditions_json,item_instance_id,exit_id) VALUES(?,?,?,?,?,?,?,?)",
+                     (f"world:discovery:{uuid.uuid4().hex}", room_id, *fields))
     database.commit(); flash("Room discovery added.", "success"); return _builder_redirect(room_id)
+
+
+def _builder_discovery_fields(database, room_id, discovery_id=None):
+    clue = request.form.get("clue", "").strip()
+    if not 1 <= len(clue) <= 500:
+        return None, "Write a clue of 1 to 500 characters."
+    try:
+        difficulty = int(request.form.get("difficulty", "0"))
+    except ValueError:
+        return None, "Search difficulty must be 0 to 200."
+    if not 0 <= difficulty <= 200:
+        return None, "Search difficulty must be 0 to 200."
+    conditions, error = _builder_rules(database, "conditions_json", mud_conditions.validate_conditions)
+    if error:
+        return None, f"Discovery conditions: {error}"
+    result = request.form.get("result", "").strip()
+    legacy_item = request.form.get("item_definition_id", "").strip()
+    if legacy_item and not result:
+        result = f"item|{legacy_item}"
+    kind, separator, target = result.partition("|")
+    if not result:
+        kind, target = "", ""
+    if result and (not separator or kind not in {"item", "object", "exit"} or not target):
+        return None, "Choose a valid discovery result."
+    tables = {"item": ("mud_item_definitions", "id", "world_id"),
+              "object": ("mud_item_instances", "id", "room_id"),
+              "exit": ("mud_world_exits", "id", "from_room_id")}
+    if kind:
+        table, key, parent = tables[kind]
+        expected = _active_world(database) if kind == "item" else room_id
+        if database.execute(f"SELECT 1 FROM {table} WHERE {key}=? AND {parent}=?",
+                            (target, expected)).fetchone() is None:
+            return None, "Choose a result in this world and room."
+        if kind in {"object", "exit"} and database.execute(
+            f"SELECT 1 FROM mud_room_discoveries WHERE {'item_instance_id' if kind == 'object' else 'exit_id'}=? "
+            "AND id<>COALESCE(?, '')", (target, discovery_id),
+        ).fetchone():
+            return None, "That target already belongs to another discovery."
+    return (clue, target if kind == "item" else None, difficulty, conditions,
+            target if kind == "object" else None, target if kind == "exit" else None), None
+
+
+@bp.post("/builder/discoveries/<path:discovery_id>")
+@builder_required
+def builder_update_discovery(discovery_id):
+    validate_csrf(); database = get_db()
+    row = database.execute("SELECT d.room_id FROM mud_room_discoveries d JOIN mud_world_rooms r "
+                           "ON r.id=d.room_id WHERE d.id=? AND r.world_id=?",
+                           (discovery_id, _active_world(database))).fetchone()
+    if row is None: abort(404)
+    fields, error = _builder_discovery_fields(database, row["room_id"], discovery_id)
+    if error:
+        flash(error, "error"); return _builder_redirect(row["room_id"])
+    database.execute("UPDATE mud_room_discoveries SET clue=?,item_definition_id=?,difficulty=?,"
+                     "conditions_json=?,item_instance_id=?,exit_id=? WHERE id=?", (*fields, discovery_id))
+    database.commit(); flash("Room discovery updated.", "success"); return _builder_redirect(row["room_id"])
 
 
 @bp.post("/builder/discoveries/<path:discovery_id>/delete")
@@ -10241,7 +10343,9 @@ def builder_add_discovery(room_id):
 def builder_delete_discovery(discovery_id):
     validate_csrf(); database = get_db()
     if request.form.get("confirmation") != "delete": abort(400)
-    row = database.execute("SELECT room_id FROM mud_room_discoveries WHERE id=?", (discovery_id,)).fetchone()
+    row = database.execute("SELECT d.room_id FROM mud_room_discoveries d JOIN mud_world_rooms r "
+                           "ON r.id=d.room_id WHERE d.id=? AND r.world_id=?",
+                           (discovery_id, _active_world(database))).fetchone()
     if row is None: abort(404)
     database.execute("DELETE FROM mud_room_discoveries WHERE id=?", (discovery_id,))
     database.commit(); flash("Room discovery removed.", "success"); return _builder_redirect(row["room_id"])
