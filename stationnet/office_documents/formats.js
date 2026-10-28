@@ -7,16 +7,28 @@ import { convertHtmlToDocx } from 'dom-docx/browser';
 import { jsPDF } from 'jspdf';
 import { convertRtfToHtml } from 'rtf-to-html-converter';
 import { importOdt, exportOdt } from './odt.js';
+import { BLOCK_STYLES, BLOCK_CLASSES, sanitizeStyle } from './styles.js';
 
 const allowedTags = ['p','div','br','h1','h2','h3','h4','strong','b','em','i','u','s','strike','ul','ol','li','blockquote','pre','code','hr','a','img','table','thead','tbody','tr','th','td','span'];
-const allowedAttributes = ['href','src','alt','title','colspan','rowspan','style'];
+const allowedAttributes = ['href','src','alt','title','colspan','rowspan','style','class'];
 DOMPurify.addHook('uponSanitizeAttribute', (_node, data) => {
   if (data.attrName === 'style') {
-    const match = /^\s*text-align:\s*(left|right|center|justify)\s*;?\s*$/i.exec(data.attrValue || '');
-    if (match) data.attrValue = `text-align: ${match[1].toLowerCase()}`;
+    const style = sanitizeStyle(data.attrValue);
+    if (style) data.attrValue = style;
+    else data.keepAttr = false;
+  } else if (data.attrName === 'class') {
+    const classes = (data.attrValue || '').split(/\s+/).filter(name => BLOCK_CLASSES.has(name));
+    if (classes.length) data.attrValue = classes.join(' ');
     else data.keepAttr = false;
   }
 });
+const docxStyleMap = [
+  "p[style-name='Title'] => p.doc-title:fresh",
+  "p[style-name='Subtitle'] => p.doc-subtitle:fresh",
+  "p[style-name='Quote'] => blockquote > p:fresh",
+  "p[style-name='Intense Quote'] => blockquote > p:fresh",
+];
+const exportCss = 'body{font-family:Arial,sans-serif;line-height:1.5}.doc-title{font-size:26pt;font-weight:bold;line-height:1.15;margin:.2em 0 .1em}.doc-subtitle{font-size:15pt;color:#555;margin:0 0 .6em}blockquote{border-left:3px solid #777;margin-left:0;padding-left:1em;color:#555;font-style:italic}table{border-collapse:collapse}th,td{border:1px solid #777;padding:.35rem}';
 
 export function cleanHtml(input) {
   const safe = DOMPurify.sanitize(input, {
@@ -40,6 +52,7 @@ export async function importFile(file) {
   let html;
   if (ext === 'docx') {
     const result = await mammoth.convertToHtml({ arrayBuffer: await file.arrayBuffer() }, {
+      styleMap: docxStyleMap,
       convertImage: mammoth.images.imgElement(image => image.read('base64').then(data => ({ src: `data:${image.contentType};base64,${data}` }))),
     });
     html = result.value;
@@ -73,15 +86,25 @@ function download(blob, name) {
   setTimeout(() => URL.revokeObjectURL(url), 60000);
 }
 
+// DOCX conversion reads inline styles only, so Title/Subtitle classes are spelled out.
+function inlineBlockStyles(html) {
+  const wrapper = document.createElement('div');
+  wrapper.innerHTML = html;
+  for (const { className, css } of Object.values(BLOCK_STYLES)) {
+    wrapper.querySelectorAll(`.${className}`).forEach(node => node.setAttribute('style', [css, node.getAttribute('style')].filter(Boolean).join('; ')));
+  }
+  return wrapper.innerHTML;
+}
+
 export async function exportFile(format, title, html, text) {
   const clean = cleanHtml(html);
   if (format === 'docx') {
-    const blob = await convertHtmlToDocx(`<!doctype html><html><head><meta charset="utf-8"></head><body>${clean}</body></html>`, { styleSource: 'inline' });
+    const blob = await convertHtmlToDocx(`<!doctype html><html><head><meta charset="utf-8"></head><body>${inlineBlockStyles(clean)}</body></html>`, { styleSource: 'inline' });
     download(blob, filename(title, 'docx'));
   } else if (format === 'odt') {
     download(await exportOdt(clean), filename(title, 'odt'));
   } else if (format === 'html') {
-    download(new Blob([`<!doctype html><html lang="en"><head><meta charset="utf-8"><title>${title.replaceAll('&','&amp;').replaceAll('<','&lt;')}</title></head><body>${clean}</body></html>`], { type: 'text/html;charset=utf-8' }), filename(title, 'html'));
+    download(new Blob([`<!doctype html><html lang="en"><head><meta charset="utf-8"><title>${title.replaceAll('&','&amp;').replaceAll('<','&lt;')}</title><style>${exportCss}</style></head><body>${clean}</body></html>`], { type: 'text/html;charset=utf-8' }), filename(title, 'html'));
   } else if (format === 'md') {
     const turndown = new TurndownService({ headingStyle: 'atx', codeBlockStyle: 'fenced' });
     turndown.use(gfm);

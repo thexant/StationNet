@@ -41,3 +41,16 @@
   .documents-list{display:flex;gap:.3rem;max-height:7rem}
   .documents-list li{min-width:140px}
 }
+
+/* Document text styles. Headings keep the case the author typed (station.css uppercases h1 globally). */
+.documents-paper h1,.documents-paper h2,.documents-paper h3,.documents-pdf-source h1,.documents-pdf-source h2,.documents-pdf-source h3{text-transform:none;letter-spacing:normal;font-weight:bold;line-height:1.2;margin:.9em 0 .35em}
+.documents-paper h1,.documents-pdf-source h1{font-size:2em}.documents-paper h2,.documents-pdf-source h2{font-size:1.5em}.documents-paper h3,.documents-pdf-source h3{font-size:1.2em}
+.documents-paper .doc-title,.documents-pdf-source .doc-title{font-size:2.4em;font-weight:bold;line-height:1.15;margin:.2em 0 .1em}
+.documents-paper .doc-subtitle,.documents-pdf-source .doc-subtitle{font-size:1.35em;margin:0 0 .6em}
+.documents-paper .doc-title{color:var(--cyan)}.documents-paper .doc-subtitle{color:var(--grey)}
+.documents-paper blockquote,.documents-pdf-source blockquote{margin-left:0;font-style:italic}
+.documents-pdf-source .doc-subtitle,.documents-pdf-source blockquote{color:#555}
+.documents-pdf-source blockquote{border-left:3px solid #777;padding-left:1em}
+.documents-paper .tiptap > :first-child{margin-top:0}
+.documents-app.print-theme .documents-paper .doc-title{color:#1c1c1c}.documents-app.print-theme .documents-paper .doc-subtitle{color:#555}
+@media print{.documents-app .documents-paper .doc-title{color:#000!important}.documents-app .documents-paper .doc-subtitle{color:#555!important}}

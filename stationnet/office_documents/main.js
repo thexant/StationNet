@@ -2,12 +2,13 @@ import { Editor } from '@tiptap/core';
 import StarterKit from '@tiptap/starter-kit';
 import Image from '@tiptap/extension-image';
 import { TableKit } from '@tiptap/extension-table';
-import TextAlign from '@tiptap/extension-text-align';
+import { TextStyle, FontFamily, FontSize } from '@tiptap/extension-text-style';
 import { pbkdf2Async } from '@noble/hashes/pbkdf2.js';
 import { sha256 } from '@noble/hashes/sha2.js';
 import { gcm } from '@noble/ciphers/aes.js';
 import { rememberOfficeKey, readOfficeKey, forgetOfficeKey } from '../office_vault.js';
 import { cleanHtml, importFile, exportFile } from './formats.js';
+import { FONTS, FONT_SIZES, LINE_HEIGHTS, DocumentTextAlign, ParagraphFormat, fontValue } from './styles.js';
 
 const app = document.querySelector('.documents-app');
 if (app) initialize();
@@ -239,8 +240,11 @@ function initialize() {
       bold: () => chain.toggleBold().run(), italic: () => chain.toggleItalic().run(),
       underline: () => chain.toggleUnderline().run(), strike: () => chain.toggleStrike().run(),
       bulletList: () => chain.toggleBulletList().run(), orderedList: () => chain.toggleOrderedList().run(),
-      alignLeft: () => chain.setTextAlign('left').run(), alignCenter: () => chain.setTextAlign('center').run(), alignRight: () => chain.setTextAlign('right').run(),
-      blockquote: () => chain.toggleBlockquote().run(), codeBlock: () => chain.toggleCodeBlock().run(),
+      alignLeft: () => chain.setTextAlign('left').run(), alignCenter: () => chain.setTextAlign('center').run(),
+      alignRight: () => chain.setTextAlign('right').run(), alignJustify: () => chain.setTextAlign('justify').run(),
+      indent: () => chain.indent().run(), outdent: () => chain.outdent().run(),
+      clearFormat: () => chain.unsetAllMarks().clearNodes().unsetTextAlign()
+        .updateAttributes('paragraph', { blockStyle: null, indent: 0, lineHeight: null }).updateAttributes('heading', { indent: 0, lineHeight: null }).run(),
       horizontalRule: () => chain.setHorizontalRule().run(), table: () => chain.insertTable({ rows: 3, cols: 3, withHeaderRow: true }).run(),
       addRow: () => chain.addRowAfter().run(), addColumn: () => chain.addColumnAfter().run(), deleteTable: () => chain.deleteTable().run(),
       undo: () => chain.undo().run(), redo: () => chain.redo().run(),
@@ -254,6 +258,58 @@ function initialize() {
       image: () => $('#document-image').click(),
     };
     commands[name]?.();
+  }
+
+  function setBlockStyle(value) {
+    if (value === 'normal') while (editor.isActive('blockquote') && editor.commands.lift('blockquote'));
+    let chain = editor.chain().focus();
+    if (value === 'normal' || value === 'title' || value === 'subtitle') {
+      chain.setParagraph().updateAttributes('paragraph', { blockStyle: value === 'normal' ? null : value }).run();
+    } else if (/^h[1-3]$/.test(value)) chain.setHeading({ level: Number(value[1]) }).run();
+    else if (value === 'quote') {
+      chain = chain.setParagraph().updateAttributes('paragraph', { blockStyle: null });
+      (editor.isActive('blockquote') ? chain : chain.setBlockquote()).run();
+    } else if (value === 'code') chain.setCodeBlock().run();
+  }
+
+  function currentBlockStyle() {
+    if (editor.isActive('codeBlock')) return 'code';
+    for (const level of [1, 2, 3]) if (editor.isActive('heading', { level })) return `h${level}`;
+    const blockStyle = editor.getAttributes('paragraph').blockStyle;
+    if (blockStyle === 'title' || blockStyle === 'subtitle') return blockStyle;
+    return editor.isActive('blockquote') ? 'quote' : 'normal';
+  }
+
+  const pressed = {
+    alignLeft: () => editor.isActive({ textAlign: 'left' }), alignCenter: () => editor.isActive({ textAlign: 'center' }),
+    alignRight: () => editor.isActive({ textAlign: 'right' }), alignJustify: () => editor.isActive({ textAlign: 'justify' }),
+  };
+  const toggles = new Set(['bold', 'italic', 'underline', 'strike', 'bulletList', 'orderedList', 'link']);
+
+  function syncToolbar() {
+    if (!editor) return;
+    $('#document-block').value = currentBlockStyle();
+    const { fontFamily, fontSize } = editor.getAttributes('textStyle');
+    const font = fontValue(fontFamily);
+    $('#document-font').value = font ?? '';
+    $('#document-font').title = font === null ? `Font: ${fontFamily}` : 'Font';
+    $('#document-size').value = FONT_SIZES.includes(fontSize || '') ? fontSize || '' : '';
+    const block = editor.isActive('heading') ? 'heading' : 'paragraph';
+    const lineHeight = editor.getAttributes(block).lineHeight || '';
+    $('#document-line-height').value = LINE_HEIGHTS.some(option => option.value === lineHeight) ? lineHeight : '';
+    app.querySelectorAll('[data-command]').forEach(button => {
+      const name = button.dataset.command;
+      if (pressed[name] || toggles.has(name)) button.setAttribute('aria-pressed', String(pressed[name] ? pressed[name]() : editor.isActive(name)));
+    });
+  }
+
+  function fillSelect(select, options) {
+    let group = null;
+    for (const option of options) {
+      const element = new Option(option.label, option.value);
+      if (option.group && option.group !== group?.label) { group = document.createElement('optgroup'); group.label = option.group; select.append(group); }
+      (option.group ? group : select).append(element);
+    }
   }
 
   async function unlock(event) {
@@ -319,15 +375,19 @@ function initialize() {
 
   editor = new Editor({
     element: $('#document-editor'),
-    extensions: [StarterKit.configure({ link: { openOnClick: false } }), Image.configure({ allowBase64: true }), TableKit, TextAlign.configure({ types: ['heading', 'paragraph'] })],
+    extensions: [
+      StarterKit.configure({ link: { openOnClick: false } }), Image.configure({ allowBase64: true }), TableKit,
+      DocumentTextAlign.configure({ types: ['heading', 'paragraph'] }), TextStyle, FontFamily, FontSize, ParagraphFormat,
+    ],
     content: '<p></p>',
     onUpdate: () => { updateWords(); scheduleSave(); matches(); },
-    onSelectionUpdate: () => {
-      $('#document-block').value = editor.isActive('heading', { level: 1 }) ? 'h1' : editor.isActive('heading', { level: 2 }) ? 'h2' : editor.isActive('heading', { level: 3 }) ? 'h3' : 'paragraph';
-      app.querySelectorAll('[data-command]').forEach(button => { button.setAttribute('aria-pressed', editor.isActive(button.dataset.command) ? 'true' : 'false'); });
-    },
+    onTransaction: syncToolbar,
   });
+  fillSelect($('#document-font'), FONTS);
+  fillSelect($('#document-size'), FONT_SIZES.map(size => ({ label: size ? size.replace('pt', ' pt') : 'Size', value: size })));
+  fillSelect($('#document-line-height'), LINE_HEIGHTS);
   updateWords();
+  syncToolbar();
 
   $('#document-unlock-form').addEventListener('submit', unlock);
   $('#document-lock').onclick = lock;
@@ -365,11 +425,16 @@ function initialize() {
     editor.chain().focus().setImage({ src: `data:${file.type};base64,${b64(bytes)}`, alt: file.name }).run();
   };
   app.querySelectorAll('[data-command]').forEach(button => button.addEventListener('click', () => command(button.dataset.command)));
-  $('#document-block').onchange = event => {
-    const value = event.target.value;
-    if (value === 'paragraph') editor.chain().focus().setParagraph().run();
-    else editor.chain().focus().setHeading({ level: Number(value[1]) }).run();
+  $('#document-block').onchange = event => setBlockStyle(event.target.value);
+  $('#document-font').onchange = event => {
+    const chain = editor.chain().focus();
+    (event.target.value ? chain.setFontFamily(event.target.value) : chain.unsetFontFamily()).run();
   };
+  $('#document-size').onchange = event => {
+    const chain = editor.chain().focus();
+    (event.target.value ? chain.setFontSize(event.target.value) : chain.unsetFontSize()).run();
+  };
+  $('#document-line-height').onchange = event => editor.chain().focus().setLineHeight(event.target.value).run();
   $('#document-find-toggle').onclick = () => { $('#document-find').hidden = !$('#document-find').hidden; if (!$('#document-find').hidden) $('#document-find-text').focus(); };
   $('#document-find-text').oninput = () => { findIndex = -1; matches(); };
   $('#document-find-next').onclick = nextMatch;
