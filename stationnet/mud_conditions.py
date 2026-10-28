@@ -11,6 +11,8 @@ A context must provide these methods:
     state(key) claimed() flag(scope, key) object_state(object_id) room_id()
     knows_destination(destination_id)
 
+Contexts may also provide game_hour(), the active world's hour or None.
+
 It also validates and checks equipment requirements, which gate items on
 attributes, level, and the wearer's race, class, or origin tags.
 """
@@ -25,11 +27,11 @@ MAX_ID_LENGTH = 200
 QUEST_STATUSES = ("not_started", "active", "ready", "completed")
 CONDITION_TYPES = ("level", "race", "class", "tag", "has_item", "coins", "attribute", "skill",
                    "quest", "objective", "state", "claimed", "flag", "object_state", "in_room",
-                   "knows_destination")
+                   "knows_destination", "time")
 OUTCOME_TYPES = ("give_item", "take_item", "experience", "coins", "take_coins", "learn_destination")
 # Condition types that only make sense in traditional worlds, where quests and
 # placed objects, rooms and wayfinding destinations exist.
-QUEST_CONDITION_TYPES = ("quest", "objective", "object_state", "in_room", "knows_destination")
+QUEST_CONDITION_TYPES = ("quest", "objective", "object_state", "in_room", "knows_destination", "time")
 # Outcomes that teach world knowledge; procedural dungeons have no destinations.
 WORLD_OUTCOME_TYPES = ("learn_destination",)
 FLAG_SCOPES = ("player", "world")
@@ -199,6 +201,11 @@ def _condition(raw, allowed, nested):
     elif kind == "knows_destination":
         fields |= {"destination"}
         result["destination"] = _identifier(raw.get("destination"), "knows_destination destination")
+    elif kind == "time":
+        fields |= {"from", "to"}
+        if not _whole(raw.get("from"), 0, 23) or not _whole(raw.get("to"), 0, 23) or raw["from"] == raw["to"]:
+            raise ValueError("Time conditions need different from and to hours from 0 to 23.")
+        result.update({"from": raw["from"], "to": raw["to"]})
     unknown = set(raw) - fields
     if unknown:
         raise ValueError(f"{kind} conditions do not accept: {', '.join(sorted(unknown))}.")
@@ -331,6 +338,12 @@ def _holds(condition, context):
     if kind == "knows_destination":
         knows = getattr(context, "knows_destination", None)
         return bool(knows and knows(condition["destination"]))
+    if kind == "time":
+        hour = getattr(context, "game_hour", lambda: None)()
+        if hour is None:
+            return False
+        start, end = condition["from"], condition["to"]
+        return start <= hour < end if start < end else hour >= start or hour < end
     return False
 
 

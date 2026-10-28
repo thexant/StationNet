@@ -14,7 +14,8 @@ code or scripts run from a world package.
 Archives are limited to 16 MB, each JSON file to 8 MB, 1000 authored rooms, and 5000
 exits. Wilderness rooms do not count toward the room limit; a world may hold up
 to 1,000,000 of them. `content.json` may have up to 5,000 records in each supported array.
-The ZIP must contain only those three required files and optional
+The manifest may also turn on the optional [world life](#5f-world-life-clock-and-schedules)
+systems. The ZIP must contain only those three required files and optional
 `content.json`, `origins.json`, `skills.json`, `dungeons.json`,
 `events.json`, and `wilderness.json`, all at its root. Imports validate references
 and reject duplicate world IDs. Standalone race and class imports remain
@@ -437,10 +438,11 @@ its entries holds; groups cannot be nested. A list holds up to 20 entries.
 | `object_state` | `object` (a placed item), `state` | The object's current state equals `state` (`""` until changed). |
 | `in_room` | `room` | The character is in that room. |
 | `knows_destination` | `destination` | The character has learned that [destination](#5e-wayfinding-destinations) (by visiting, dialogue, a trigger, or reading). Carrying a map does not count. |
+| `time` | `from`, `to` (hours 0–23) | The [world clock](#5f-world-life-clock-and-schedules) reads an hour from `from` up to, but not including, `to`. `{"from": 20, "to": 4}` wraps past midnight. Never holds while the clock is off. |
 
 Flag keys are 1 to 80 lowercase letters, digits, and `. _ : -`, such as
 `gate.open` or `rats_slain`. Inside a procedural dungeon, `world` flags belong
-to that run. `object_state`, `in_room`, and `knows_destination` are not
+to that run. `object_state`, `in_room`, `knows_destination`, and `time` are not
 available in dungeon templates.
 
 ### Outcomes
@@ -550,7 +552,8 @@ For example:
 `wander` chooses a room exit. To follow specific exits, use `patrol` instead:
 `{"patrol":{"interval_seconds":90,"directions":["north","south"]}}`.
 The directions are attempted in order; a missing exit leaves the NPC in place
-for that turn. Use either `wander` or `patrol`, never both. Intervals must be
+for that turn. Use either `wander` or `patrol`, never both. With the world clock
+on, a [`schedule`](#npc-schedules) moves an NPC by the hour instead. Intervals must be
 5–86400 seconds. `ambient.lines` accepts 1–20 lines of up to 300 characters;
 `reactions` accepts `enter`, `say`, `emote`, `get`, `drop`, `open`, `close`, and `put` with text up to 300
 characters each. Invalid or unknown behaviour keys are rejected on import.
@@ -731,7 +734,7 @@ expressions, or loops, and nothing in a package can run code.
 | `cooldown_seconds` | `0` | Minimum time between firings, per scope (up to a week). |
 | `max_fires` | none | Stop after this many firings, per scope. |
 | `enabled` | `true` | Disabled triggers do nothing. |
-| `conditions` | `[]` | All must hold; see [Conditions](#conditions). Timers may only check `world` flags and `object_state`. |
+| `conditions` | `[]` | All must hold; see [Conditions](#conditions). Timers may only check `world` flags, `object_state`, and `time`. |
 | `fail_message` | none | Shown to the player when the conditions fail or they cannot pay a cost. |
 | `actions` | required | 1 to 10 actions, run in order. |
 
@@ -1045,6 +1048,62 @@ the same answer as asking for a place that does not exist. If no route exists
 or nothing if the place is off the grid. In the World Builder, each room card
 and the wilderness room inspector has a **Wayfinding destination** form. The
 item form chooses which destinations an item teaches.
+
+## 5f. World life: clock and schedules
+
+These optional systems make a world feel inhabited. Each is **off** until the
+world turns it on, so existing worlds play exactly as before. Turn them on in
+`manifest.json` or under **World Builder → World life**; exports keep the
+settings.
+
+### World clock
+
+```json
+{"id": "lantern-isles", "name": "Lantern Isles", "author": "You", "start_room": "harbor",
+ "clock": {"enabled": true, "day_minutes": 120, "start_hour": 6}}
+```
+
+| Field | Default | Meaning |
+| --- | --- | --- |
+| `enabled` | `false` | The world keeps time. |
+| `day_minutes` | `120` | Real minutes in one game day, 5 to 1440. `1440` follows real UTC time. |
+| `start_hour` | `6` | Hours added to the clock, 0 to 23. With `1440` this is a time-zone offset from UTC. |
+
+The hour is worked out from real time, so it is never stored and is the same
+after a restart. Players type `/time`. The `time` [condition](#conditions)
+gates dialogue, quests, exits, destinations, and triggers by the hour. Timer
+triggers may check it too, for example to ring a bell at dawn. The day runs
+night (21–5), dawn (5–7), morning (7–12), afternoon (12–17) and evening (17–21).
+
+### NPC schedules
+
+A `schedule` in an NPC's `behaviors_json` gives it a daily routine:
+
+```json
+{"schedule": {"interval_seconds": 30, "travel": "walk", "home": "cottage",
+  "entries": [
+    {"from": 8, "to": 18, "room": "forge", "open": true, "label": "working",
+     "lines": ["The smith hammers a glowing blade.", "Sparks fly from the anvil."]},
+    {"from": 18, "to": 22, "room": "tavern"}]}}
+```
+
+- Each entry covers `from` up to, but not including, `to` and may wrap past
+  midnight. The first entry that covers the hour wins.
+- When no entry applies the NPC goes `home`, which defaults to the room it was
+  placed in.
+- Every `interval_seconds` (5–86,400, default 60) the NPC moves toward where it
+  should be. With `travel: "walk"`, the default, it takes one room along the
+  shortest open route, so players can meet it on the way. With `"teleport"`, or
+  when no route exists, it leaves and arrives directly.
+- Once it is there, one of the entry's `lines` (up to 20, of up to 300
+  characters) is shown to the room each interval.
+- **Working hours.** A merchant or trainer with a schedule trades and teaches
+  only during entries with `"open": true`. At other times `/shop` says it isn't
+  trading. NPCs without a schedule are unaffected.
+- A schedule cannot be combined with `wander` or `patrol`, and it rests while
+  the clock is off.
+- Rooms are local room IDs or `@x,y,z` wilderness squares, and must exist in
+  the package.
 
 ## 6. Import, edit, export, and remove
 

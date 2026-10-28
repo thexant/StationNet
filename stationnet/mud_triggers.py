@@ -299,9 +299,9 @@ def validate_trigger(raw, *, dungeon=False):
         if any(actor_required(action) for action in result["actions"]):
             raise ValueError(f"{label}: timers have no player, so they cannot give, take, heal, damage, "
                              "teleport, teach destinations, message the actor, or change player flags.")
-        if any(condition.get("type") not in ("flag", "object_state") or condition.get("scope") == "player"
+        if any(condition.get("type") not in ("flag", "object_state", "time") or condition.get("scope") == "player"
                for condition in _flatten(result["conditions"])):
-            raise ValueError(f"{label}: timer conditions may only check world flags and object states.")
+            raise ValueError(f"{label}: timer conditions may only check world flags, object states, and the time.")
         if result["fail_message"]:
             raise ValueError(f"{label}: timers have no player to show a fail_message to.")
     return result

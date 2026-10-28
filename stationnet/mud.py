@@ -19,7 +19,7 @@ from flask import Blueprint, abort, flash, g, jsonify, redirect, render_template
 
 from .auth import admin_required, login_required
 from .db import get_db
-from . import dungeons, character_creation, mud_combat, mud_conditions, mud_effects, mud_firearms, mud_compat, mud_skills, mud_triggers, mud_wayfinding, mud_wilderness, moderation
+from . import dungeons, character_creation, mud_combat, mud_conditions, mud_effects, mud_firearms, mud_compat, mud_skills, mud_society, mud_triggers, mud_wayfinding, mud_wilderness, moderation
 from .security import validate_csrf
 
 bp = Blueprint("mud", __name__, url_prefix="/mud")
@@ -243,6 +243,8 @@ def _current_mode(database, user_id):
     return "traditional" if modes["traditional"] else "procedural"
 
 
+# Commands that belong to an optional world-life system, hidden from help while it is off.
+SOCIETY_ACTIONS = {"time": "clock"}
 # Commands that only exist to spend the resource; worlds without it hide them.
 RESOURCE_ACTIONS = frozenset({"spells", "cast"})
 RESOURCE_DISABLED_DESCRIPTIONS = {
@@ -265,6 +267,24 @@ def resource_settings(database, user_id=None):
     # Words with inner capitals (PSI, Ki-Force) read better unchanged mid-sentence.
     noun = " ".join(word if word[1:] != word[1:].lower() else word.lower() for word in name.split())
     return {"enabled": enabled, "name": name, "noun": noun}
+
+
+def society_settings(database):
+    """The active world's optional life settings (clock, and so on); all off by default."""
+    row = database.execute("SELECT society_json FROM mud_world_packages WHERE active=1").fetchone()
+    return mud_society.stored_settings(row["society_json"] if row else None)
+
+
+def _hidden_actions(database, user_id):
+    """World-life commands to leave out of help and suggestions for this player right now."""
+    settings = society_settings(database) if _current_mode(database, user_id) == "traditional" else None
+    return {key for key, system in SOCIETY_ACTIONS.items()
+            if settings is None or not settings[system]["enabled"]}
+
+
+def _game_time(database, now=None):
+    """The active world's time of day, or None when it keeps no clock."""
+    return mud_society.game_time(society_settings(database)["clock"], now)
 
 
 def resource_text(text, resource):
@@ -764,6 +784,8 @@ def _room_trainers(database, user_id, skill_key=None, trainer_name=""):
             continue
         if npc["combat_maximum_health"] is not None and _encounter_row(database, npc)["status"] == "defeated":
             continue
+        if _npc_closed(database, npc):
+            continue  # Scheduled trainers teach only during their open hours.
         for row in database.execute("SELECT * FROM mud_npc_trainers WHERE npc_definition_id=? ORDER BY skill_key",
                                     (npc["definition_id"],)):
             if skill_key is None or row["skill_key"] == skill_key:
@@ -962,8 +984,9 @@ def _help_action(_database, _user, parameters):
             body += "\nQuote multiword targets. For duplicates use a number: Apple 2 or Apple (2)."
         return [EventDraft(body)]
     lines = ["Available commands:"]
+    hidden = _hidden_actions(_database, _user["id"])
     for definition in actions._actions.values():
-        if (definition.commands and _authorized(definition, _user)
+        if (definition.commands and _authorized(definition, _user) and definition.key not in hidden
                 and (resource["enabled"] or definition.key not in RESOURCE_ACTIONS)):
             lines.append(f"/{definition.commands[0]} — {_action_description(definition, resource)}")
     lines.append('Use /help <command> for details. Quote multiword names; use "Name 2" or "Name (2)" for duplicates.')
@@ -2247,14 +2270,19 @@ def _world_shop_action(database, user, parameters):
         target, merchant_name = re.split(r"\s+from\s+", target, maxsplit=1, flags=re.I)
     elif operation == "list" and target:
         merchant_name = target
-    merchants = []
+    merchants, closed = [], []
     for npc in _room_npc_rows(database, room["id"]):
         if npc["combat_maximum_health"] is not None and _encounter_row(database, npc)["status"] == "defeated":
             continue
         shop = database.execute("SELECT * FROM mud_npc_shops WHERE npc_definition_id=?",
                                 (npc["definition_id"],)).fetchone()
         if shop and (not merchant_name or npc["name"].casefold() == merchant_name.casefold()):
+            if _npc_closed(database, npc):
+                closed.append(npc)
+                continue
             merchants.append((npc, shop))
+    if not merchants and closed:
+        raise ActionError(f"{closed[0]['name']} isn't trading right now.")
     if not merchants:
         raise ActionError("There is no merchant here" + (f" named {merchant_name}" if merchant_name else "") + ".")
     if len(merchants) != 1:
@@ -2831,6 +2859,10 @@ class _ConditionContext:
     def knows_destination(self, destination_id):
         return mud_wayfinding.knows(self.database, self._character()["id"], destination_id)
 
+    def game_hour(self):
+        moment = None if self.dungeon else _game_time(self.database)
+        return moment["hour"] if moment else None
+
 
 def _describe_item(database, row, user_id=None):
     body = f"{row['name']}\n{row['description']}\nType: {row['item_type']}"
@@ -3094,7 +3126,8 @@ def _encounter_reward_drafts(database, encounter, npc):
 
 def validate_npc_behaviors(value):
     """Validate the small, supported authored behavior schema."""
-    if not isinstance(value, dict) or set(value) - {"aggressive", "friendly", "neutral", "passive", "ambient", "wander", "patrol", "reactions"}:
+    if not isinstance(value, dict) or set(value) - {"aggressive", "friendly", "neutral", "passive", "ambient", "wander", "patrol", "reactions",
+                                                    "schedule"}:
         raise ValueError("NPC behaviors contain an unsupported key.")
     if any(type(value[key]) is not bool for key in ("aggressive", "friendly", "neutral", "passive") if key in value):
         raise ValueError("aggressive, friendly, neutral, and passive must be true or false.")
@@ -3116,6 +3149,10 @@ def validate_npc_behaviors(value):
             raise ValueError("patrol directions must be supported exit directions.")
     if "wander" in value and "patrol" in value:
         raise ValueError("Choose either wander or patrol.")
+    if "schedule" in value:
+        mud_society.validate_schedule(value["schedule"])
+        if "wander" in value or "patrol" in value:
+            raise ValueError("A scheduled NPC cannot also wander or patrol.")
     if "reactions" in value:
         reactions = value["reactions"]
         if not isinstance(reactions, dict) or not reactions or set(reactions) - {"enter", "say", "emote", "get", "drop", "open", "close", "put"} or any(
@@ -5796,7 +5833,7 @@ DIRECTION_ALIASES = {
 TRAVEL_SAFE_ACTIONS = frozenset({
     "travel", "stop", "look", "exits", "map", "say", "emote", "tell", "reply_player", "who",
     "help", "status", "character", "inventory", "quests", "skills", "spells", "description",
-    "block", "unblock", "directions", "destinations",
+    "block", "unblock", "directions", "destinations", "time",
 })
 
 
@@ -6214,6 +6251,14 @@ def _directions_action(database, user, parameters):
     if selected is None or selected["destination_id"] != destination["id"]:
         lines.append("You keep this destination in mind; /directions checks again and /directions clear forgets it.")
     return [EventDraft("\n".join(lines), "travel")]
+
+
+def _time_action(database, user, _parameters):
+    room = _current_room(database, user["id"])
+    moment = None if room.get("instance_id") else _game_time(database)
+    if moment is None:
+        raise ActionError("This world keeps no time.")
+    return [EventDraft(mud_society.describe_time(moment))]
 
 
 def _destinations_action(database, user, _parameters):
@@ -7042,6 +7087,10 @@ actions.register(ActionDefinition(
     commands=("destinations", "places"), handler=_destinations_action,
     group="NAVIGATION",
 ))
+actions.register(ActionDefinition(
+    key="time", label="TIME OF DAY", description="See the time of day in this world.",
+    commands=("time", "clock"), handler=_time_action, group="NAVIGATION",
+))
 actions.register(ActionDefinition(key="unlock", label="UNLOCK EXIT", description="Unlock a nearby keyed exit with a carried key.", commands=("unlock",), handler=_unlock_action, group="NAVIGATION", show_context=False))
 actions.register(ActionDefinition(key="pick", label="PICK LOCK", description="Pick a nearby lock using Lockpicking and Agility.", commands=("pick", "picklock"), handler=_pick_action, group="NAVIGATION", show_context=False))
 actions.register(ActionDefinition(key="search", label="SEARCH ROOM", description="Search this room for authored discoveries.", commands=("search",), handler=_search_action, group="NAVIGATION", show_context=False))
@@ -7285,6 +7334,7 @@ def schedule_room_message(database, room_id, message, due_at, interval_seconds=N
 def sync_npc_schedule(database, now=None):
     """Reconcile persistent timers with currently active authored NPCs."""
     active = set()
+    clock_enabled = society_settings(database)["clock"]["enabled"]
     rows = database.execute(
         "SELECT i.id,d.behaviors_json FROM mud_npc_instances i "
         "JOIN mud_npc_definitions d ON d.id=i.definition_id "
@@ -7296,11 +7346,11 @@ def sync_npc_schedule(database, now=None):
             behavior = validate_npc_behaviors(_json_properties(row["behaviors_json"]))
         except ValueError:
             continue  # Legacy malformed data remains inert, without preventing startup.
-        for kind in ("ambient", "wander", "patrol"):
-            if kind not in behavior:
-                continue
+        for kind in ("ambient", "wander", "patrol", "schedule"):
+            if kind not in behavior or kind == "schedule" and not clock_enabled:
+                continue  # Schedules rest while the world keeps no time.
             active.add((kind, row["id"]))
-            interval = behavior[kind]["interval_seconds"]
+            interval = behavior[kind].get("interval_seconds", SCHEDULE_INTERVAL)
             due = _scheduled_now((now or datetime.now(timezone.utc)) + timedelta(seconds=interval))
             database.execute(
                 "INSERT INTO mud_scheduled_events(event_kind,entity_id,due_at,interval_seconds) VALUES(?,?,?,?) "
@@ -7310,7 +7360,7 @@ def sync_npc_schedule(database, now=None):
                 (kind, row["id"], due, interval),
             )
     for row in database.execute(
-        "SELECT event_kind,entity_id FROM mud_scheduled_events WHERE event_kind IN ('ambient','wander','patrol')"
+        "SELECT event_kind,entity_id FROM mud_scheduled_events WHERE event_kind IN ('ambient','wander','patrol','schedule')"
     ).fetchall():
         if (row["event_kind"], row["entity_id"]) not in active:
             database.execute("DELETE FROM mud_scheduled_events WHERE event_kind=? AND entity_id=?", row)
@@ -7321,7 +7371,7 @@ def process_scheduled_events(database, now=None, limit=50):
     stamp = _scheduled_now(now)
     rows = database.execute(
         "SELECT * FROM mud_scheduled_events WHERE due_at<=? "
-        "AND event_kind IN ('ambient','wander','patrol','room_message','item_respawn',"
+        "AND event_kind IN ('ambient','wander','patrol','schedule','room_message','item_respawn',"
         "'trigger_action','trigger_timer','npc_despawn') ORDER BY due_at,id LIMIT ?",
         (stamp, min(50, max(1, limit))),
     ).fetchall()
@@ -7398,6 +7448,9 @@ def process_scheduled_events(database, now=None, limit=50):
             database.execute("DELETE FROM mud_scheduled_events WHERE id=?", (event["id"],))
             continue
         room_id = npc["room_id"]
+        if event["event_kind"] == "schedule":
+            _schedule_step(database, npc, spec, now)
+            continue
         if event["event_kind"] == "ambient":
             line = random.choice(spec["lines"])
             recipients = _occupant_ids(database, room_id)
@@ -7420,18 +7473,80 @@ def process_scheduled_events(database, now=None, limit=50):
             database.execute("UPDATE mud_npc_instances SET state_json=? WHERE id=?", (json.dumps(state), npc["id"]))
             continue
         route = random.choice(choices)
-        old_recipients = _occupant_ids(database, room_id)
-        new_recipients = _occupant_ids(database, route["to_room_id"])
-        database.execute("UPDATE mud_npc_instances SET room_id=?,state_json=?,updated_at=CURRENT_TIMESTAMP WHERE id=?",
-                         (route["to_room_id"], json.dumps(state), npc["id"]))
-        database.execute("UPDATE mud_combat_encounters SET scope_key=?,updated_at=CURRENT_TIMESTAMP "
-                         "WHERE npc_instance_id=? AND scope_type='room' AND status='ready'",
-                         (route["to_room_id"], npc["id"]))
-        if old_recipients:
-            _insert_event(database, EventDraft(f"{npc['name']} leaves via {_exit_label(route)}.", "npc", "room", room_id, old_recipients))
-        if new_recipients:
-            _insert_event(database, EventDraft(f"{npc['name']} arrives.", "npc", "room", route["to_room_id"], new_recipients))
+        _move_npc(database, npc, state, route["to_room_id"], f"{npc['name']} leaves via {_exit_label(route)}.")
     return len(rows)
+
+
+SCHEDULE_INTERVAL = 60
+# Route searches for walking NPCs stay small; a longer trip falls back to a direct move.
+SCHEDULE_ROUTE_BUDGET = 4000
+
+
+def _move_npc(database, npc, state, to_room_id, leave_text):
+    """Move a placed NPC (and its waiting encounter) to another room, telling both rooms."""
+    room_id = npc["room_id"]
+    old_recipients = _occupant_ids(database, room_id)
+    new_recipients = _occupant_ids(database, to_room_id)
+    database.execute("UPDATE mud_npc_instances SET room_id=?,state_json=?,updated_at=CURRENT_TIMESTAMP WHERE id=?",
+                     (to_room_id, json.dumps(state), npc["id"]))
+    database.execute("UPDATE mud_combat_encounters SET scope_key=?,updated_at=CURRENT_TIMESTAMP "
+                     "WHERE npc_instance_id=? AND scope_type='room' AND status='ready'",
+                     (to_room_id, npc["id"]))
+    if old_recipients:
+        _insert_event(database, EventDraft(leave_text, "npc", "room", room_id, old_recipients))
+    if new_recipients:
+        _insert_event(database, EventDraft(f"{npc['name']} arrives.", "npc", "room", to_room_id, new_recipients))
+
+
+def _schedule_target(database, npc, spec, now=None):
+    """(room ID, entry) where an NPC's routine puts it now; entry is None at home."""
+    moment = _game_time(database, now)
+    entry = mud_society.active_entry(spec, moment["hour"]) if moment else None
+    home = spec.get("home") or _json_properties(npc["state_json"]).get("home_room") or npc["room_id"]
+    return (entry["room"] if entry else home), entry
+
+
+def _schedule_step(database, npc, spec, now=None):
+    """Walk (or step directly) a scheduled NPC toward where its routine puts it now."""
+    world_id = _active_world(database)
+    state = _json_properties(npc["state_json"])
+    if not state.get("home_room"):
+        # The placed room is home unless the schedule names one.
+        state["home_room"] = npc["room_id"]
+        database.execute("UPDATE mud_npc_instances SET state_json=? WHERE id=?", (json.dumps(state), npc["id"]))
+    target, entry = _schedule_target(database, {**dict(npc), "state_json": json.dumps(state)}, spec, now)
+    room_id = npc["room_id"]
+    if target == room_id:
+        lines = entry.get("lines") if entry else None
+        recipients = _occupant_ids(database, room_id)
+        if lines and recipients:
+            _insert_event(database, EventDraft(random.choice(lines), "npc", "room", room_id, recipients))
+        return
+    if database.execute("SELECT 1 FROM mud_world_rooms WHERE id=? AND world_id=?", (target, world_id)).fetchone() is None:
+        return  # A deleted room leaves the NPC where it is.
+    if spec.get("travel", "walk") == "walk":
+        route = mud_wayfinding.find_route(database, world_id, room_id, target, lambda item: not item.hidden,
+                                          SCHEDULE_ROUTE_BUDGET)
+        if route.status == "ok" and route.steps:
+            step = route.steps[0]
+            _move_npc(database, npc, state, step.node.id,
+                      f"{npc['name']} leaves via {(step.direction or step.name).upper()} — {step.node.name}.")
+            return
+    _move_npc(database, npc, state, target, f"{npc['name']} leaves.")
+
+
+def _npc_closed(database, npc, now=None):
+    """A scheduled NPC trades and teaches only during entries marked open."""
+    if not society_settings(database)["clock"]["enabled"]:
+        return False
+    try:
+        spec = validate_npc_behaviors(_json_properties(npc["behaviors_json"])).get("schedule")
+    except ValueError:
+        return False
+    if not spec:
+        return False
+    _, entry = _schedule_target(database, npc, spec, now)
+    return not (entry and entry.get("open"))
 
 
 def run_scheduled_tick(app, now=None):
@@ -7636,6 +7751,7 @@ def index():
         (g.user["id"],),
     ).fetchone()
     cleared_through_id = cleared_view["cleared_through_id"] if cleared_view else 0
+    hidden_actions = _hidden_actions(database, g.user["id"])
     database.commit()
     return render_template(
         "mud/index.html", events=events, cleared_through_id=cleared_through_id,
@@ -7646,7 +7762,7 @@ def index():
             {"name": name, "key": definition.key,
              "description": _action_description(definition, character["resource"])}
             for name, (definition, prefix) in actions._commands.items()
-            if not prefix and _authorized(definition, g.user)
+            if not prefix and _authorized(definition, g.user) and definition.key not in hidden_actions
             and (character["resource"]["enabled"] or definition.key not in RESOURCE_ACTIONS)
         ],
     )
@@ -8142,7 +8258,8 @@ def builder():
         skill_entries=[{**entry, "summary": mud_skills.describe_effects(entry["definition"])}
                        for entry in skill_entries],
         npc_trainers=npc_trainers, item_categories=item_categories,
-        resource=resource_settings(database), **dungeon_context, **trigger_context,
+        resource=resource_settings(database), society=society_settings(database),
+        game_time=_game_time(database), **dungeon_context, **trigger_context,
     )
 
 
@@ -8456,6 +8573,17 @@ def builder_delete_dialogue_response(response_id):
     database.commit(); flash("Dialogue response removed.", "success"); return _builder_redirect()
 
 
+def _missing_behavior_references(database, behaviors):
+    """The first (kind, id) NPC behaviors name that the active world lacks, or None."""
+    world_id = _active_world(database)
+    tables = {"room": "mud_world_rooms", "item": "mud_item_definitions"}
+    for kind, ref in mud_society.behavior_references(behaviors):
+        query = f"SELECT 1 FROM {tables[kind]} WHERE id=?" + (" AND world_id=?" if kind == "room" else "")
+        if database.execute(query, (ref, world_id) if kind == "room" else (ref,)).fetchone() is None:
+            return kind, ref
+    return None
+
+
 def _npc_definition_fields():
     name = " ".join(request.form.get("name", "").split()); description = request.form.get("description", "").strip(); conversation_id = request.form.get("conversation_id", "").strip() or None
     properties, error = _json_object_field("properties_json")
@@ -8463,9 +8591,12 @@ def _npc_definition_fields():
     behaviors, error = _json_object_field("behaviors_json")
     if error: return None, error
     try:
-        validate_npc_behaviors(json.loads(behaviors))
+        parsed_behaviors = validate_npc_behaviors(json.loads(behaviors))
     except ValueError as problem:
         return None, str(problem)
+    missing = _missing_behavior_references(get_db(), parsed_behaviors)
+    if missing:
+        return None, f"NPC behaviors name an unknown {missing[0]}: {missing[1]}."
     if not 2 <= len(name) <= 80 or not 1 <= len(description) <= 4000: return None, "NPC names must be 2–80 characters and descriptions 1–4000 characters."
     return (name, description, conversation_id, properties, behaviors), None
 
@@ -9693,6 +9824,35 @@ def builder_update_trigger(trigger_id):
     database.commit()
     flash(f"Trigger {trigger['name']} saved.", "success")
     return _events_redirect(trigger_id)
+
+
+@bp.post("/builder/society/<section>")
+@builder_required
+def builder_set_society(section):
+    """Save one world-life section (clock, ...) from its builder form."""
+    validate_csrf()
+    if section not in mud_society.SOCIETY_KEYS:
+        abort(404)
+    database = get_db()
+    settings = society_settings(database)
+    values = {}
+    for key, default in mud_society.DEFAULT_SOCIETY[section].items():
+        if type(default) is bool:
+            values[key] = request.form.get(key) == "1"
+        elif isinstance(default, dict):
+            values[key] = {part: request.form.get(f"{key}.{part}", value, type=int) for part, value in default.items()}
+        else:
+            values[key] = request.form.get(key, default, type=int)
+    try:
+        settings[section] = mud_society.VALIDATORS[section](values)
+    except mud_society.SocietyError as error:
+        flash(str(error), "error")
+        return _builder_redirect()
+    database.execute("UPDATE mud_world_packages SET society_json=? WHERE active=1",
+                     (json.dumps(mud_society.changed_settings(settings), separators=(",", ":")),))
+    database.commit()
+    flash(f"World {mud_society.SECTION_LABELS[section]} settings saved.", "success")
+    return _builder_redirect()
 
 
 @bp.post("/builder/resource")

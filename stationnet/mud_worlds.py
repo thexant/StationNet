@@ -10,7 +10,7 @@ import zipfile
 
 from flask import current_app
 
-from . import mud_conditions, mud_triggers, mud_wayfinding, mud_wilderness, mud_world_dungeons
+from . import mud_conditions, mud_society, mud_triggers, mud_wayfinding, mud_wilderness, mud_world_dungeons
 
 
 MAX_ZIP_BYTES = 16 * 1024 * 1024
@@ -80,6 +80,8 @@ OBJECTIVE_TARGETS = {"talk_npc": "mud_npc_definitions", "defeat_npc": "mud_npc_d
                      "visit_room": "rooms", "possess_item": "mud_item_definitions",
                      "deliver_item": "mud_item_definitions"}
 ORIGIN_KINDS = {"race": "races", "class": "classes"}
+# Content that NPC behaviors (schedules and the like) may name, besides rooms.
+BEHAVIOR_TABLES = {"item": "mud_item_definitions"}
 DEFAULT_RESOURCE = {"enabled": True, "name": "Mana"}
 RESOURCE_NAME_RE = re.compile(r"^[^\W\d_][^\W\d_ '-]*(?:[ '-][^\W\d_]+)*$")
 
@@ -161,6 +163,11 @@ def read_package(payload):
     name = _label(manifest.get("name"), "World name", 2, 80)
     author = _label(manifest.get("author"), "World author", 1, 80)
     resource = validate_resource(manifest.get("resource"))
+    try:
+        society = mud_society.validate_settings({key: manifest[key] for key in mud_society.SOCIETY_KEYS
+                                                 if key in manifest})
+    except mud_society.SocietyError as problem:
+        raise WorldError(str(problem)) from problem
     start = manifest.get("start_room")
     if not isinstance(start, str) or not ID_RE.fullmatch(start):
         raise WorldError("start_room must name a room ID in rooms.json.")
@@ -265,6 +272,10 @@ def read_package(payload):
                     validate_npc_behaviors(value)
                 except (ValueError, json.JSONDecodeError) as problem:
                     raise WorldError(f"Invalid NPC behaviors: {problem}") from problem
+                for kind, ref in mud_society.behavior_references(value):
+                    known_refs = room_ids if kind == "room" else raw_ids(BEHAVIOR_TABLES[kind])
+                    if ref not in known_refs:
+                        raise WorldError(f"NPC {row.get('id')} behaviors name an unknown {kind}: {ref}.")
         for row in rows:
             if table == "mud_item_definitions":
                 properties = row.get("properties_json", {})
@@ -387,6 +398,7 @@ def read_package(payload):
             if kind in known and ref not in known[kind]:
                 raise WorldError(f"Trigger {trigger['id']} names an unknown {kind}: {ref}.")
     return {"id": world_id, "name": name, "author": author, "start_room": start, "resource": resource,
+            "society": society,
             "rooms": clean_rooms, "exits": clean_exits, "content": content, "origins": origins,
             "skills": skills["skills"], "dungeons": world_dungeons, "events": triggers,
             # wilderness is the file as written, so a parsed document repackages unchanged;
@@ -436,6 +448,10 @@ def package_bytes(document):
         manifest = {key: document[key] for key in ("id", "name", "author", "start_room")}
         if document.get("resource", DEFAULT_RESOURCE) != DEFAULT_RESOURCE:
             manifest["resource"] = document["resource"]
+        try:
+            manifest.update(mud_society.changed_settings(mud_society.validate_settings(document.get("society"))))
+        except mud_society.SocietyError as problem:
+            raise WorldError(str(problem)) from problem
         for filename, data in (("manifest.json", manifest), ("rooms.json", document["rooms"]),
                                ("exits.json", document["exits"])):
             encoded = (json.dumps(data, ensure_ascii=False, indent=2) + "\n").encode("utf-8")
@@ -623,6 +639,12 @@ def _insert_content(database, document, installation_key, skill_map=None):
                                        ensure_ascii=False, separators=(",", ":"))
                 elif table == "mud_item_definitions" and column == "properties_json":
                     value = _remap_item_properties(value, condition_mapper)
+                elif table == "mud_npc_definitions" and column == "behaviors_json":
+                    behaviors = json.loads(value) if isinstance(value, str) else value
+                    value = json.dumps(mud_society.remap_behaviors(behaviors, lambda kind, ref: (
+                        maps["rooms"][ref] if kind == "room"
+                        else _mapped(maps, BEHAVIOR_TABLES[kind], ref, f"behavior {kind}"))),
+                        ensure_ascii=False, separators=(",", ":"))
                 elif table == "mud_world_destinations" and column == "map_items_json":
                     value = json.dumps([_mapped(maps, "mud_item_definitions", ref, column) for ref in value])
                 elif column.endswith("_json"):
@@ -857,9 +879,10 @@ def install(database, payload, *, origin_mode="preserve", selected=None):
     try:
         database.execute("BEGIN IMMEDIATE")
         database.execute("INSERT INTO mud_world_packages(id,name,author,start_room_id,imported,"
-                         "resource_enabled,resource_name) VALUES(?,?,?,?,1,?,?)",
+                         "resource_enabled,resource_name,society_json) VALUES(?,?,?,?,1,?,?,?)",
                          (world_id, document["name"], document["author"], prefix + document["start_room"],
-                          int(document["resource"]["enabled"]), document["resource"]["name"]))
+                          int(document["resource"]["enabled"]), document["resource"]["name"],
+                          json.dumps(mud_society.changed_settings(document["society"]), separators=(",", ":"))))
         skill_map = _install_skills(database, document)
         for room in document["rooms"]:
             x, y, z = room.get("x"), room.get("y"), room.get("z")
@@ -1118,6 +1141,11 @@ def _export_content(database, world_id, room_map):
                         value = json.loads(value)
                     except json.JSONDecodeError:
                         pass
+                    if table == "mud_npc_definitions" and column == "behaviors_json" and isinstance(value, dict):
+                        # References outside the exported world are dropped rather than left dangling.
+                        value = mud_society.remap_behaviors(value, lambda kind, ref: (
+                            room_map.get(ref) if kind == "room"
+                            else maps.get(BEHAVIOR_TABLES[kind], {}).get(ref)))
                     if (table == "mud_item_definitions" and column == "properties_json" and isinstance(value, dict)
                             and "teaches_destinations" in value):
                         # Destinations outside the exported rooms are dropped rather than left dangling.
@@ -1181,6 +1209,7 @@ def export(database, world_id, *, origin_keys=None, skill_keys=None):
                 "name": world["name"], "author": world["author"],
                 "start_room": ids[world["start_room_id"]],
                 "resource": {"enabled": bool(world["resource_enabled"]), "name": world["resource_name"]},
+                "society": mud_society.stored_settings(world["society_json"]),
                 "rooms": [{"id": ids[room["id"]], "name": room["name"], "description": room["description"],
                            **({"x": room["x"], "y": room["y"], "z": room["z"]} if room["x"] is not None else {}),
                            **({"grid_link": False} if room["x"] is not None and not room["grid_link"] else {}),

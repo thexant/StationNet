@@ -1463,6 +1463,7 @@ def init_db():
     _migrate_mud_triggers(database)
     _migrate_mud_wilderness(database)
     _migrate_mud_wayfinding(database)
+    _migrate_mud_society(database)
     database.execute("INSERT OR IGNORE INTO mud_portal_settings(id) VALUES(1)")
     database.execute("INSERT OR IGNORE INTO mud_crossover_settings(id) VALUES(1)")
     database.execute("INSERT OR IGNORE INTO mud_travel_settings(id) VALUES(1)")
@@ -2050,6 +2051,17 @@ def _migrate_mud_world_packages(database):
             "UPDATE mud_world_packages SET start_room_id=? WHERE id='stationnet' AND active=1",
             (start["id"],),
         )
+
+
+def _migrate_mud_society(database):
+    """Add optional world life: clock and schedule settings per world.
+
+    Settings live in one JSON column whose empty default keeps every system
+    off, so existing worlds play exactly as before.
+    """
+    columns = {row["name"] for row in database.execute("PRAGMA table_info(mud_world_packages)")}
+    if "society_json" not in columns:
+        database.execute("ALTER TABLE mud_world_packages ADD COLUMN society_json TEXT NOT NULL DEFAULT '{}'")
 
 
 def _migrate_mud_world_resource(database):
