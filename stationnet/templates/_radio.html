@@ -17,6 +17,7 @@
     <button type="button" class="secondary" data-radio-step="500" aria-label="Tune up 0.50 MHz">+ 0.50</button>
     <label>VOL <input data-radio-volume type="range" min="0" max="100" value="55"></label>
     <button type="button" class="secondary" data-radio-mute aria-pressed="false">MUTE: OFF</button>
+    <button type="button" class="secondary" data-radio-fx aria-pressed="true" title="Analog receiver audio effect">FX: ON</button>
     <a class="button radio-open" href="{{ url_for('radio.console') }}">OPEN RADIO</a>
   </div>
   <p class="chat-error radio-player-error" data-radio-error aria-live="polite"></p>

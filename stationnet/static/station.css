@@ -1049,7 +1049,7 @@ button:disabled { opacity: .5; cursor: not-allowed; }
 @keyframes radio-marquee { to { transform: translateX(calc(-1 * var(--radio-marquee-distance))); } }
 @media (prefers-reduced-motion: reduce) { .radio-marquee.is-overflowing > span { animation: none; } }
 .radio-player button, .radio-player .button { min-height: 2rem; padding: .3rem .48rem; font-size: var(--text-xs); white-space: nowrap; }
-.radio-player .radio-power.active { color: #000; border-color: var(--green); background: var(--green); }
+.radio-player .radio-power.active, [data-radio-fx].active { color: #000; border-color: var(--green); background: var(--green); }
 .radio-player-controls { justify-content: flex-end; }
 .radio-player-controls label { display: flex; align-items: center; gap: .35rem; min-width: 7rem; }
 .radio-player-controls .radio-frequency-entry { min-width: 6.3rem; }
@@ -1084,7 +1084,7 @@ button:disabled { opacity: .5; cursor: not-allowed; }
 .radio-monitor-label, .radio-monitor strong { position: absolute; top: .35rem; z-index: 1; padding: .2rem .35rem; background: #000c; font-size: var(--text-xs); letter-spacing: .08em; }
 .radio-monitor-label { left: .4rem; color: var(--green-dim); }
 .radio-monitor strong { right: .4rem; color: var(--amber); font-weight: 400; }
-.radio-operation { display: grid; grid-template-columns: minmax(8rem,1fr) auto minmax(12rem,auto); gap: .5rem; align-items: end; }
+.radio-operation { display: grid; grid-template-columns: minmax(8rem,1fr) auto auto minmax(12rem,auto); gap: .5rem; align-items: end; }
 .radio-operation input, .radio-operation select, .radio-mode-panel input { padding-block: .45rem; }
 .radio-occupancy { align-self: center; color: var(--cyan); font-size: var(--text-xs); text-align: right; }
 .radio-mode-selector { display: grid; grid-template-columns: minmax(12rem,20rem) minmax(0,1fr); gap: .75rem; align-items: end; margin-top: .75rem; padding: .65rem .75rem; border: 1px solid var(--cyan); background: rgba(var(--accent-rgb),.035); }
