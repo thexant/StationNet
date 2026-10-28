@@ -1,5 +1,6 @@
 """SQLite persistence."""
 import json
+import re
 import secrets
 import sqlite3
 from flask import current_app, g
@@ -1275,15 +1276,21 @@ def _rebuild_with_check(database, table, marker, old, new, adjust=None):
         return
     indexes = [row["sql"] for row in database.execute(
         "SELECT sql FROM sqlite_master WHERE type='index' AND tbl_name=? AND sql IS NOT NULL", (table,))]
-    replacement = sql.replace(f"CREATE TABLE IF NOT EXISTS {table}",
-                              f"CREATE TABLE {table}_new", 1).replace(
-                                  f"CREATE TABLE {table}", f"CREATE TABLE {table}_new", 1).replace(old, new)
+    declaration = (rf'\ACREATE TABLE(?: IF NOT EXISTS)?\s+'
+                   rf'(?:(?:"{re.escape(table)}")|(?:`{re.escape(table)}`)|'
+                   rf'(?:\[{re.escape(table)}\])|{re.escape(table)})(?=\s*\()')
+    replacement, count = re.subn(declaration, f'CREATE TABLE "{table}_new"',
+                                 sql, count=1, flags=re.IGNORECASE)
+    if count != 1:
+        raise ValueError(f"Cannot identify CREATE TABLE declaration for {table}")
+    replacement = replacement.replace(old, new)
     if adjust:
         replacement = adjust(replacement)
     columns = [row["name"] for row in database.execute(f"PRAGMA table_info({table})")]
     database.commit()
     database.execute("PRAGMA foreign_keys=OFF")
     try:
+        database.execute("BEGIN")
         database.execute(replacement)
         names = ",".join(columns)
         database.execute(f"INSERT INTO {table}_new({names}) SELECT {names} FROM {table}")
@@ -1292,6 +1299,9 @@ def _rebuild_with_check(database, table, marker, old, new, adjust=None):
         for index in indexes:
             database.execute(index)
         database.commit()
+    except Exception:
+        database.rollback()
+        raise
     finally:
         database.execute("PRAGMA foreign_keys=ON")
 
