@@ -71,6 +71,9 @@ Mana.
 
 `rooms.json`:
 
+Set optional `"bank": true` on an authored room to let characters use `/bank`
+there. The default is `false`.
+
 ```json
 [
   {
@@ -299,6 +302,7 @@ The supported arrays are:
 | `mud_quest_objectives` | Talk, visit, possess, defeat, or deliver objectives | `quest_id`, `target_id`, `recipient_npc_definition_id` |
 | `mud_quest_rewards` | Quest item, XP, or coin rewards | `quest_id`, `target_id` for items |
 | `mud_npc_shops` | NPC merchant settings | `npc_definition_id`, `buys_items`, `sell_percent` |
+| `mud_npc_banks` | NPCs offering banking | `npc_definition_id` |
 | `mud_shop_stock` | Merchant merchandise and prices | `npc_definition_id`, `item_definition_id`, `price`, optional `quantity` |
 | `mud_item_spawns` | Renewable room-floor items | `definition_id`, `room_id`, `respawn_seconds` |
 | `mud_gathering_nodes` | Harvesting, mining, scavenging, or collecting sources | `room_id`, `tool_definition_id`; reward item IDs in `rewards_json` |
@@ -332,6 +336,7 @@ must point to records in the same package, including room IDs in `rooms.json`.
 | `mud_quest_objectives` | `quest_id`, `objective_type`, `target_id`, `description`, `required_count`, `sort_order`, `optional`, `consume_on_turn_in`, `recipient_npc_definition_id` |
 | `mud_quest_rewards` | `quest_id`, `reward_type`, `target_id`, `amount` |
 | `mud_npc_shops` | `npc_definition_id`, `buys_items`, `sell_percent` (no `id`) |
+| `mud_npc_banks` | `npc_definition_id` (no `id`) |
 | `mud_shop_stock` | `npc_definition_id`, `item_definition_id`, `price`, `quantity`, `conditions_json` |
 | `mud_item_spawns` | `definition_id`, `room_id`, `respawn_seconds` |
 | `mud_gathering_nodes` | `room_id`, `name`, `activity`, `rewards_json`, `skill_key`, `min_rank`, `tool_definition_id`, `success_percent`, `respawn_seconds` |
@@ -543,6 +548,22 @@ coin `price` and optional `quantity` (omit or use `null` for unlimited stock).
 Players use `/shop`, `/shop buy <item>`, and `/shop sell <item>` beside the NPC.
 A stock row's optional `conditions_json` hides it from players who do not meet
 the [conditions](#conditions), for example a `reputation` rank.
+
+`mud_npc_banks` turns a placed NPC into a banker:
+
+```json
+"mud_npc_banks": [{"npc_definition_id": "keeper"}]
+```
+
+In a banking room or beside an available banker, players use `/bank` or
+`/bank balance` to see carried and stored coins, `/bank deposit <amount>` to
+store coins, and `/bank withdraw <amount>` to carry them again. Amounts must be
+positive whole numbers. A banker who is hidden, defeated, or closed by a daily
+schedule is unavailable. Bank balances belong to characters and are shared
+across authored worlds under the current shared-character system; campaign
+archives preserve them. Shops and other coin costs use carried coins only.
+Banking is unavailable in the portal and procedural dungeons.
+
 For renewable room-floor resources, add `mud_item_spawns` with a 5–86,400 second
 `respawn_seconds`; do not also place an ordinary item instance for that spawn.
 For an active gathering action, add a `mud_gathering_nodes` row:

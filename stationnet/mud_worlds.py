@@ -47,6 +47,7 @@ CONTENT_TABLES = {
     "mud_npc_equipment": ("npc_definition_id", "equipment_slot", "item_definition_id"),
     "mud_npc_combat_rewards": ("id", "npc_definition_id", "reward_type", "target_id", "amount", "chance_percent"),
     "mud_npc_shops": ("npc_definition_id", "buys_items", "sell_percent"),
+    "mud_npc_banks": ("npc_definition_id",),
     "mud_shop_stock": ("id", "npc_definition_id", "item_definition_id", "price", "quantity", "conditions_json"),
     "mud_npc_trainers": ("id", "npc_definition_id", "skill_key", "price", "max_rank"),
     "mud_quest_objectives": ("id", "quest_id", "objective_type", "target_id", "description", "required_count", "sort_order",
@@ -212,8 +213,11 @@ def read_package(payload):
         if not isinstance(local_id, str) or not ID_RE.fullmatch(local_id) or local_id in authored_ids:
             raise WorldError("Room IDs must be unique lowercase IDs.")
         authored_ids.add(local_id)
+        if type(room.get("bank", False)) is not bool:
+            raise WorldError(f"Room {local_id} bank must be true or false.")
         clean_rooms.append({"id": local_id, "name": _label(room.get("name"), "Room name", 2, 80),
                             "description": _label(room.get("description"), "Room description", 1, 4000),
+                            "bank": room.get("bank", False),
                             **_room_grid(room, local_id, positions)})
     if start not in authored_ids:
         raise WorldError("start_room does not match a room in rooms.json.")
@@ -439,6 +443,10 @@ def read_package(payload):
             elif table == "mud_npc_shops":
                 if not _whole(row.get("buys_items", 1), 0, 1) or not _whole(row.get("sell_percent", 40), 1, 100):
                     raise WorldError("Merchant settings are invalid.")
+            elif table == "mud_npc_banks":
+                npc_id = row.get("npc_definition_id")
+                if not isinstance(npc_id, str) or npc_id not in raw_ids("mud_npc_definitions"):
+                    raise WorldError("Banker settings must name an NPC definition in content.json.")
             elif table == "mud_shop_stock":
                 if not _whole(row.get("price"), 1, 100000) or (row.get("quantity") is not None and not _whole(row["quantity"], 0, 100000)):
                     raise WorldError("Merchant stock price or quantity is invalid.")
@@ -477,6 +485,9 @@ def read_package(payload):
                 except ValueError as problem:
                     raise WorldError(f"Invalid {table} {column}: {problem}") from problem
     reward_counts = {}
+    banker_ids = [row["npc_definition_id"] for row in content.get("mud_npc_banks", [])]
+    if len(banker_ids) != len(set(banker_ids)):
+        raise WorldError("An NPC can be marked as a banker only once.")
     for row in content.get("mud_work_rewards", []):
         activity_id = row["activity_id"]
         reward_counts[activity_id] = reward_counts.get(activity_id, 0) + 1
@@ -1023,10 +1034,10 @@ def install(database, payload, *, origin_mode="preserve", selected=None):
         skill_map = _install_skills(database, document)
         for room in document["rooms"]:
             x, y, z = room.get("x"), room.get("y"), room.get("z")
-            database.execute("INSERT INTO mud_world_rooms(id,name,description,world_id,x,y,z,grid_link,blocked_dirs) "
-                             "VALUES(?,?,?,?,?,?,?,?,?)",
+            database.execute("INSERT INTO mud_world_rooms(id,name,description,world_id,x,y,z,grid_link,blocked_dirs,banking_enabled) "
+                             "VALUES(?,?,?,?,?,?,?,?,?,?)",
                              (prefix + room["id"], room["name"], room["description"], world_id, x, y, z,
-                              int(room.get("grid_link", True)), room.get("blocked_dirs", "")))
+                              int(room.get("grid_link", True)), room.get("blocked_dirs", ""), int(room["bank"])))
         try:
             preset_ids, region_ids = mud_wilderness.install_cells(database, world_id, installation_key,
                                                                   document["wild"])
@@ -1249,7 +1260,7 @@ def _export_content(database, world_id, room_map, exit_map=None):
         elif table == "mud_faction_relations":
             rows = [row for row in rows if row["faction_id"] in selected["mud_world_factions"]
                     and row["other_faction_id"] in selected["mud_world_factions"]]
-        elif table in {"mud_npc_combat_profiles", "mud_npc_equipment", "mud_npc_combat_rewards", "mud_npc_shops",
+        elif table in {"mud_npc_combat_profiles", "mud_npc_equipment", "mud_npc_combat_rewards", "mud_npc_shops", "mud_npc_banks",
                        "mud_shop_stock", "mud_npc_trainers"}:
             rows = [row for row in rows if row["npc_definition_id"] in selected["mud_npc_definitions"]]
         elif table in {"mud_quest_objectives", "mud_quest_rewards", "mud_quest_givers"}:
@@ -1385,7 +1396,7 @@ def export(database, world_id, *, origin_keys=None, skill_keys=None):
     world = database.execute("SELECT * FROM mud_world_packages WHERE id=?", (world_id,)).fetchone()
     if world is None:
         raise WorldError("World was not found.")
-    rooms = database.execute("SELECT id,name,description,x,y,z,grid_link,blocked_dirs FROM mud_world_rooms "
+    rooms = database.execute("SELECT id,name,description,x,y,z,grid_link,blocked_dirs,banking_enabled FROM mud_world_rooms "
                              "WHERE world_id=? AND kind='authored' ORDER BY id", (world_id,)).fetchall()
     if not rooms:
         raise WorldError("World has no rooms to export.")
@@ -1416,6 +1427,7 @@ def export(database, world_id, *, origin_keys=None, skill_keys=None):
                 "resource": {"enabled": bool(world["resource_enabled"]), "name": world["resource_name"]},
                 "society": mud_society.stored_settings(world["society_json"]),
                 "rooms": [{"id": ids[room["id"]], "name": room["name"], "description": room["description"],
+                           **({"bank": True} if room["banking_enabled"] else {}),
                            **({"x": room["x"], "y": room["y"], "z": room["z"]} if room["x"] is not None else {}),
                            **({"grid_link": False} if room["x"] is not None and not room["grid_link"] else {}),
                            **({"blocked_dirs": room["blocked_dirs"]} if room["x"] is not None and room["blocked_dirs"] else {})}

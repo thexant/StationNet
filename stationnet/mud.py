@@ -2217,6 +2217,69 @@ def _wallet(database, character_id):
     ).fetchone()["coins"]
 
 
+MAX_COINS = 2**63 - 1
+
+
+def _bank_balance(database, character_id):
+    row = database.execute("SELECT coins FROM mud_character_banks WHERE character_id=?",
+                           (character_id,)).fetchone()
+    return row["coins"] if row else 0
+
+
+def _bank_action(database, user, parameters):
+    room = _current_room(database, user["id"])
+    location = database.execute(
+        "SELECT banking_enabled FROM mud_world_rooms WHERE id=? AND kind='authored' "
+        "AND world_id=(SELECT id FROM mud_world_packages WHERE active=1)", (room["id"],)
+    ).fetchone()
+    if location is None:
+        raise ActionError("Banking is only available in an authored world room.")
+    if not location["banking_enabled"]:
+        available = False
+        for npc in _room_npc_rows(database, room["id"]):
+            if not database.execute("SELECT 1 FROM mud_npc_banks WHERE npc_definition_id=?",
+                                    (npc["definition_id"],)).fetchone():
+                continue
+            if npc["combat_maximum_health"] is not None and _encounter_row(database, npc)["status"] == "defeated":
+                continue
+            if not _npc_closed(database, npc):
+                available = True
+                break
+        if not available:
+            raise ActionError("There is no available bank here.")
+    args = [str(value) for value in parameters.get("arguments", [])]
+    operation = args[0].casefold() if args else "balance"
+    if (operation not in {"balance", "deposit", "withdraw"}
+            or (operation == "balance" and len(args) != (1 if args else 0))
+            or (operation != "balance" and len(args) != 2)):
+        raise ActionError("Use /bank, /bank balance, /bank deposit <amount>, or /bank withdraw <amount>.")
+    character_id = _character_row(database, user["id"])["id"]
+    if operation == "balance":
+        return [EventDraft(f"You carry {_wallet(database, character_id)} coins and have "
+                           f"{_bank_balance(database, character_id)} coins in the bank.", event_type="bank")]
+    if not re.fullmatch(r"[0-9]+", args[1]) or not 1 <= int(args[1]) <= MAX_COINS:
+        raise ActionError("Enter a positive whole number of coins.")
+    amount = int(args[1])
+    _wallet(database, character_id)
+    database.execute("INSERT OR IGNORE INTO mud_character_banks(character_id) VALUES(?)", (character_id,))
+    if operation == "deposit":
+        if not database.execute("UPDATE mud_character_wallets SET coins=coins-? "
+                                "WHERE character_id=? AND coins>=?", (amount, character_id, amount)).rowcount:
+            raise ActionError("You do not have enough carried coins.")
+        if not database.execute("UPDATE mud_character_banks SET coins=coins+? "
+                                "WHERE character_id=? AND coins<=?", (amount, character_id, MAX_COINS - amount)).rowcount:
+            raise ActionError("The bank balance cannot hold that many coins.")
+    else:
+        if not database.execute("UPDATE mud_character_banks SET coins=coins-? "
+                                "WHERE character_id=? AND coins>=?", (amount, character_id, amount)).rowcount:
+            raise ActionError("You do not have enough banked coins.")
+        if not database.execute("UPDATE mud_character_wallets SET coins=coins+? "
+                                "WHERE character_id=? AND coins<=?", (amount, character_id, MAX_COINS - amount)).rowcount:
+            raise ActionError("You cannot carry that many coins.")
+    return [EventDraft(f"You {operation} {amount} coins. You carry {_wallet(database, character_id)} coins "
+                       f"and have {_bank_balance(database, character_id)} coins in the bank.", event_type="bank")]
+
+
 def hub_state(database, user_id):
     if _current_room(database, user_id)["id"] != PORTAL_ROOM_ID:
         return None
@@ -8030,6 +8093,7 @@ actions.register(ActionDefinition(key="professions", label="PROFESSIONS", descri
 actions.register(ActionDefinition(key="profession", label="JOIN PROFESSION", description="Join near a recruiter or leave: /profession join|leave <name>.", commands=("profession",), handler=_profession_action, group="CHARACTER", show_context=False))
 actions.register(ActionDefinition(key="work", label="WORK", description="List work or use /work do|accept|deliver|turnin|abandon <name>.", commands=("work", "jobs"), handler=_work_action, group="QUESTS", show_context=False))
 actions.register(ActionDefinition(key="shop", label="SHOP", description="Browse, buy, or sell with a nearby merchant; the portal trader also serves the hub.", commands=("shop",), handler=_shop_action, group="HUB", show_context=False))
+actions.register(ActionDefinition(key="bank", label="BANK", description="Check, deposit, or withdraw coins at a bank in an authored world.", commands=("bank",), handler=_bank_action, group="HUB", show_context=False))
 actions.register(ActionDefinition(key="storage", label="PERSONAL STORAGE", description="Deposit or withdraw personal items in the portal room.", commands=("storage", "stash"), handler=_storage_action, group="HUB", show_context=False))
 actions.register(ActionDefinition(key="talk", label="TALK", description="Talk to a nearby NPC.", commands=("talk", "speak"), handler=_talk_action, group="NPCS", show_context=False))
 actions.register(ActionDefinition(key="respond", label="RESPOND", description="Choose a response in your current NPC conversation.", commands=("respond",), handler=_respond_action, group="DIALOGUE", show_context=False))
@@ -9242,6 +9306,7 @@ def builder():
     npc_combat_rewards = {item["id"]: [] for item in npc_definitions}
     shop_stock = {item["id"]: [] for item in npc_definitions}
     npc_shops = {row["npc_definition_id"]: dict(row) for row in database.execute("SELECT * FROM mud_npc_shops")}
+    npc_banks = {row["npc_definition_id"] for row in database.execute("SELECT npc_definition_id FROM mud_npc_banks")}
     for row in database.execute("SELECT s.*,d.name AS item_name FROM mud_shop_stock s JOIN mud_item_definitions d ON d.id=s.item_definition_id ORDER BY d.name COLLATE NOCASE"):
         shop_stock.setdefault(row["npc_definition_id"], []).append(dict(row))
     for row in database.execute("SELECT * FROM mud_npc_equipment"):
@@ -9305,7 +9370,7 @@ def builder():
         rewards_by_quest=rewards_by_quest, givers_by_quest=givers_by_quest,
         professions=professions, work_by_profession=work_by_profession, rewards_by_work=rewards_by_work,
         npc_equipment=npc_equipment, npc_combat_rewards=npc_combat_rewards,
-        npc_shops=npc_shops, shop_stock=shop_stock, discoveries_by_room=discoveries_by_room,
+        npc_shops=npc_shops, npc_banks=npc_banks, shop_stock=shop_stock, discoveries_by_room=discoveries_by_room,
         world_destinations=world_destinations, destinations_by_room=destinations_by_room,
         destination_categories=mud_wayfinding.CATEGORIES,
         skill_entries=[{**entry, "summary": mud_skills.describe_effects(entry["definition"])}
@@ -9752,6 +9817,13 @@ def _save_npc_shop(database, npc_id):
     return None
 
 
+def _save_npc_bank(database, npc_id):
+    if request.form.get("is_banker") == "1":
+        database.execute("INSERT OR IGNORE INTO mud_npc_banks(npc_definition_id) VALUES(?)", (npc_id,))
+    else:
+        database.execute("DELETE FROM mud_npc_banks WHERE npc_definition_id=?", (npc_id,))
+
+
 @bp.post("/builder/npcs")
 @builder_required
 def builder_create_npc_definition():
@@ -9763,6 +9835,7 @@ def builder_create_npc_definition():
     npc_id = f"world:npc-definition:{uuid.uuid4().hex}"; database.execute("INSERT INTO mud_npc_definitions(id,name,description,conversation_id,properties_json,behaviors_json,created_by,world_id) VALUES(?,?,?,?,?,?,?,(SELECT id FROM mud_world_packages WHERE active=1))", (npc_id, *fields, g.user["id"])); _save_npc_combat(database, npc_id, profile, equipment)
     shop_error = _save_npc_faction(database, npc_id) or _save_npc_shop(database, npc_id)
     if shop_error: database.rollback(); flash(shop_error, "error"); return _builder_redirect()
+    _save_npc_bank(database, npc_id)
     database.commit()
     flash(f"NPC definition {fields[0]} created.", "success"); return _builder_redirect()
 
@@ -9780,6 +9853,7 @@ def builder_update_npc_definition(npc_id):
     database.execute("UPDATE mud_npc_definitions SET name=?,description=?,conversation_id=?,properties_json=?,behaviors_json=?,updated_at=CURRENT_TIMESTAMP WHERE id=?", (*fields, npc_id)); _save_npc_combat(database, npc_id, profile, equipment)
     shop_error = _save_npc_faction(database, npc_id) or _save_npc_shop(database, npc_id)
     if shop_error: database.rollback(); flash(shop_error, "error"); return _builder_redirect()
+    _save_npc_bank(database, npc_id)
     database.commit(); flash("NPC definition updated.", "success"); return _builder_redirect()
 
 
@@ -10692,9 +10766,9 @@ def builder_create_room():
     room_id = f"world:room:{uuid.uuid4().hex}"
     database = get_db()
     database.execute(
-        "INSERT INTO mud_world_rooms(id,name,description,world_id) "
-        "VALUES(?,?,?,(SELECT id FROM mud_world_packages WHERE active=1))",
-        (room_id, name, description),
+        "INSERT INTO mud_world_rooms(id,name,description,world_id,banking_enabled) "
+        "VALUES(?,?,?,(SELECT id FROM mud_world_packages WHERE active=1),?)",
+        (room_id, name, description, int(request.form.get("banking_enabled") == "1")),
     )
     database.commit()
     flash(f"Room {name} created.", "success")
@@ -10723,8 +10797,8 @@ def builder_update_room(room_id):
             return _builder_redirect(room_id)
     recipients = _occupant_ids(database, room_id)
     database.execute(
-        "UPDATE mud_world_rooms SET name=?,description=?,updated_at=CURRENT_TIMESTAMP WHERE id=?",
-        (name, description, room_id),
+        "UPDATE mud_world_rooms SET name=?,description=?,banking_enabled=?,updated_at=CURRENT_TIMESTAMP WHERE id=?",
+        (name, description, int(request.form.get("banking_enabled") == "1"), room_id),
     )
     if recipients:
         _insert_event(database, EventDraft(

@@ -22,6 +22,8 @@ Authored worlds can configure the following:
 
 Players interact with these using `/quests`, `/quest available`, `/quest accept`, `/quest turnin`, `/quest abandon`, `/deliver`, `/shop`, `/search`, and `/unlock`. Authored worlds also offer professions and repeatable work through `/professions`, `/profession join`, and `/work`. Builder exports include the corresponding settings.
 
+Authored worlds can optionally offer banking through designated rooms or banker NPCs. Players use `/bank` to check carried and stored coins, `/bank deposit <amount>` to store coins, and `/bank withdraw <amount>` to retrieve them. Banked coins persist with the character and must be withdrawn before spending.
+
 ## Why this stack
 
 - **Python 3.11+ and Flask** are small, readable, and cross-platform.

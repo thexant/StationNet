@@ -6,7 +6,7 @@ from . import character_creation
 
 
 PERSISTENT_TABLES = (
-    "mud_character_progression", "mud_character_skills", "mud_character_wallets",
+    "mud_character_progression", "mud_character_skills", "mud_character_wallets", "mud_character_banks",
     "mud_player_quests", "mud_player_objectives", "mud_npc_player_states",
     "mud_dungeon_npc_player_states", "mud_player_dialogue_claims",
 )

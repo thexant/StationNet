@@ -656,6 +656,7 @@ CREATE TABLE IF NOT EXISTS mud_world_rooms (
  name TEXT NOT NULL,
  description TEXT NOT NULL,
  is_start INTEGER NOT NULL DEFAULT 0 CHECK(is_start IN (0,1)),
+ banking_enabled INTEGER NOT NULL DEFAULT 0 CHECK(banking_enabled IN (0,1)),
  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);
 CREATE TABLE IF NOT EXISTS mud_world_packages (
@@ -986,6 +987,9 @@ CREATE INDEX IF NOT EXISTS idx_mud_item_instances_container ON mud_item_instance
 CREATE TABLE IF NOT EXISTS mud_character_wallets (
  character_id TEXT PRIMARY KEY REFERENCES mud_characters(id) ON DELETE CASCADE,
  coins INTEGER NOT NULL DEFAULT 30 CHECK(coins>=0));
+CREATE TABLE IF NOT EXISTS mud_character_banks (
+ character_id TEXT PRIMARY KEY REFERENCES mud_characters(id) ON DELETE CASCADE,
+ coins INTEGER NOT NULL DEFAULT 0 CHECK(coins>=0));
 CREATE TABLE IF NOT EXISTS mud_character_storage (
  item_instance_id TEXT PRIMARY KEY REFERENCES mud_item_instances(id) ON DELETE CASCADE,
  character_id TEXT NOT NULL REFERENCES mud_characters(id) ON DELETE CASCADE,
@@ -1039,6 +1043,8 @@ CREATE TABLE IF NOT EXISTS mud_npc_instances (
  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);
 CREATE INDEX IF NOT EXISTS idx_mud_npc_instances_room ON mud_npc_instances(room_id,id);
+CREATE TABLE IF NOT EXISTS mud_npc_banks (
+ npc_definition_id TEXT PRIMARY KEY REFERENCES mud_npc_definitions(id) ON DELETE CASCADE);
 CREATE TABLE IF NOT EXISTS mud_npc_combat_profiles (
  npc_definition_id TEXT PRIMARY KEY REFERENCES mud_npc_definitions(id) ON DELETE CASCADE,
  maximum_health INTEGER NOT NULL DEFAULT 30 CHECK(maximum_health BETWEEN 1 AND 1000000),
@@ -1479,6 +1485,7 @@ def init_db():
     _migrate_mud_society(database)
     _migrate_mud_work(database)
     _migrate_mud_discoveries(database)
+    _migrate_mud_banking(database)
     database.execute("INSERT OR IGNORE INTO mud_portal_settings(id) VALUES(1)")
     database.execute("INSERT OR IGNORE INTO mud_crossover_settings(id) VALUES(1)")
     database.execute("INSERT OR IGNORE INTO mud_travel_settings(id) VALUES(1)")
@@ -2844,6 +2851,18 @@ def _migrate_mud_discoveries(database):
                      "ON mud_room_discoveries(item_instance_id)")
     database.execute("CREATE INDEX IF NOT EXISTS idx_mud_discoveries_exit "
                      "ON mud_room_discoveries(exit_id)")
+
+
+def _migrate_mud_banking(database):
+    columns = {row["name"] for row in database.execute("PRAGMA table_info(mud_world_rooms)")}
+    if "banking_enabled" not in columns:
+        database.execute("ALTER TABLE mud_world_rooms ADD COLUMN banking_enabled INTEGER NOT NULL "
+                         "DEFAULT 0 CHECK(banking_enabled IN (0,1))")
+    database.execute("CREATE TABLE IF NOT EXISTS mud_character_banks ("
+                     "character_id TEXT PRIMARY KEY REFERENCES mud_characters(id) ON DELETE CASCADE,"
+                     "coins INTEGER NOT NULL DEFAULT 0 CHECK(coins>=0))")
+    database.execute("CREATE TABLE IF NOT EXISTS mud_npc_banks ("
+                     "npc_definition_id TEXT PRIMARY KEY REFERENCES mud_npc_definitions(id) ON DELETE CASCADE)")
 
 
 def _migrate_legacy_callsigns(database):
