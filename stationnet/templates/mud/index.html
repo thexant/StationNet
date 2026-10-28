@@ -175,6 +175,18 @@
           </div>
         </div>
       </section>
+      <section class="mud-panel collapsible-panel" data-collapsible-panel data-panel-key="mud-standing" data-mud-standing-panel {% if not standing %}hidden{% endif %}>
+        <button type="button" class="collapsible-panel-toggle" data-panel-toggle aria-expanded="false" aria-controls="mud-standing-panel">
+          <span class="collapsible-panel-heading"><span class="eyebrow">FACTIONS</span><span class="collapsible-panel-title">Standing</span></span>
+          <span class="collapsible-panel-chevron" aria-hidden="true"></span>
+        </button>
+        <div id="mud-standing-panel" data-panel-content hidden>
+          <div class="mud-quest-list" data-mud-standing>
+            {% for faction in standing %}<p>{{ faction.name }}: {{ faction.rank }} ({{ '%+d' % faction.reputation }})</p>{% endfor %}
+          </div>
+          <small>Use /reputation for details.</small>
+        </div>
+      </section>
     </aside>
   </div>
   <script type="application/json" data-mud-initial-state>{{ {'room': room, 'combat': combat, 'inventory': inventory, 'hub': hub, 'catalog': command_catalog}|tojson }}</script>

@@ -305,6 +305,8 @@ The supported arrays are:
 | `mud_npc_trainers` | Skills an NPC teaches for coins | `npc_definition_id`, `skill_key`, `price`, `max_rank` |
 | `mud_quest_givers` | NPCs that offer quests | `quest_id`, `npc_definition_id` |
 | `mud_world_destinations` | Places players can ask the way to with `/directions` | `room_id`, `map_items_json`; see [wayfinding](#5e-wayfinding-destinations) |
+| `mud_world_factions` | Factions players earn standing with; see [factions](#factions-and-reputation) | `id` |
+| `mud_faction_relations` | How a change with one faction passes to another | `faction_id`, `other_faction_id` |
 
 Only these fields are accepted for each array; omitted optional fields use
 database defaults. IDs and references are local to this ZIP. All references
@@ -317,7 +319,7 @@ must point to records in the same package, including room IDs in `rooms.json`.
 | `mud_conversations` | `name` |
 | `mud_dialogue_nodes` | `conversation_id`, `node_key`, `body`, `is_start` |
 | `mud_dialogue_responses` | `node_id`, `response_text`, `next_node_id`, `accept_quest_id`, `deliver_item_id`, `turn_in_quest_id`, `required_state_key`, `required_state_value`, `state_key`, `state_value`, `sort_order`, `conditions_json`, `outcomes_json` |
-| `mud_npc_definitions` | `name`, `description`, `conversation_id`, `properties_json`, `behaviors_json` |
+| `mud_npc_definitions` | `name`, `description`, `conversation_id`, `properties_json`, `behaviors_json`, `faction_id` |
 | `mud_npc_instances` | `definition_id`, `room_id`, `state_json` |
 | `mud_npc_combat_profiles` | `npc_definition_id`, `maximum_health`, `attack`, `defense`, `experience_reward`, `respawn_seconds`, optional `accuracy`, `evasion` |
 | `mud_npc_equipment` | `npc_definition_id`, `equipment_slot`, `item_definition_id` |
@@ -326,12 +328,14 @@ must point to records in the same package, including room IDs in `rooms.json`.
 | `mud_quest_objectives` | `quest_id`, `objective_type`, `target_id`, `description`, `required_count`, `sort_order`, `optional`, `consume_on_turn_in`, `recipient_npc_definition_id` |
 | `mud_quest_rewards` | `quest_id`, `reward_type`, `target_id`, `amount` |
 | `mud_npc_shops` | `npc_definition_id`, `buys_items`, `sell_percent` (no `id`) |
-| `mud_shop_stock` | `npc_definition_id`, `item_definition_id`, `price`, `quantity` |
+| `mud_shop_stock` | `npc_definition_id`, `item_definition_id`, `price`, `quantity`, `conditions_json` |
 | `mud_item_spawns` | `definition_id`, `room_id`, `respawn_seconds` |
 | `mud_room_discoveries` | `room_id`, `clue`, `item_definition_id`, `difficulty` |
 | `mud_npc_trainers` | `npc_definition_id`, `skill_key`, `price`, `max_rank` |
 | `mud_quest_givers` | `quest_id`, `npc_definition_id` (no `id` field) |
 | `mud_world_destinations` | `room_id`, `name`, `aliases`, `category`, `description`, `public`, `discover_on_visit`, `map_items_json`, `conditions_json`, `sort_order` |
+| `mud_world_factions` | `name`, `description`, `default_reputation`, `defeat_reputation`, `public`, `ranks_json`, `sort_order` |
+| `mud_faction_relations` | `faction_id`, `other_faction_id`, `share_percent` |
 
 `mud_npc_combat_profiles` and `mud_npc_equipment` also have no `id` field;
 their NPC reference is their key. An item instance must be in a room **or**
@@ -392,8 +396,9 @@ not count as talking to the giver. Deliveries use `/deliver <item>` (or a
 or beside one of the quest's givers when no recipient is set, and consume the
 item. `required_count` is 1 to 100. A quest may name another local quest in
 `prerequisite_quest_id`; prerequisite chains cannot form cycles. Quest
-rewards use `reward_type: "experience"` or `"coins"` with no `target_id`, or `"item"`
-with an item definition `target_id`; `amount` is at least 1.
+rewards use `reward_type: "experience"` or `"coins"` with no `target_id`, `"item"`
+with an item definition `target_id`, or `"reputation"` with a faction `target_id`
+and an `amount` of standing from 1 to 1000; `amount` is at least 1.
 
 | Quest field | Values | Meaning |
 | --- | --- | --- |
@@ -438,13 +443,14 @@ its entries holds; groups cannot be nested. A list holds up to 20 entries.
 | `object_state` | `object` (a placed item), `state` | The object's current state equals `state` (`""` until changed). |
 | `in_room` | `room` | The character is in that room. |
 | `knows_destination` | `destination` | The character has learned that [destination](#5e-wayfinding-destinations) (by visiting, dialogue, a trigger, or reading). Carrying a map does not count. |
+| `reputation` | `faction`, and `rank` (one or a list of rank keys) or `min`/`max` (-1000 to 1000) | The character's [standing](#factions-and-reputation) with the faction matches. |
 | `disposition` | optional `npc` (definition), and `tier` (one or a list of `hostile`, `unfriendly`, `neutral`, `friendly`, `trusted`) or `min`/`max` (-100 to 100) | That NPC's [regard](#relationships) for the character matches. Without `npc` it means the NPC being spoken to. Never holds while relationships are off. |
 | `time` | `from`, `to` (hours 0–23) | The [world clock](#world-clock) reads an hour from `from` up to, but not including, `to`. `{"from": 20, "to": 4}` wraps past midnight. Never holds while the clock is off. |
 
 Flag keys are 1 to 80 lowercase letters, digits, and `. _ : -`, such as
 `gate.open` or `rats_slain`. Inside a procedural dungeon, `world` flags belong
-to that run. `object_state`, `in_room`, `knows_destination`, `time`, and
-`disposition` are not available in dungeon templates.
+to that run. `object_state`, `in_room`, `knows_destination`, `time`,
+`disposition`, and `reputation` are not available in dungeon templates.
 
 ### Outcomes
 
@@ -462,6 +468,7 @@ nothing is granted.
 | `coins` | `amount` (1–100,000) | Gives coins. |
 | `take_coins` | `amount` (1–100,000) | Charges coins (refused if too few). |
 | `learn_destination` | `destination` | Teaches the way to a [destination](#5e-wayfinding-destinations). Not available in dungeon templates. |
+| `reputation` | `faction`, `amount` (-1000 to 1000, not 0) | Changes the player's [standing](#factions-and-reputation) with a faction, and with related factions. Not available in dungeon templates. |
 | `disposition` | `amount` (-100 to 100, not 0), optional `npc` | Changes an NPC's [regard](#relationships) for the player; the NPC being spoken to unless `npc` names another. Not available in dungeon templates. |
 
 Item, quest, and objective IDs inside conditions and outcomes are local package
@@ -525,6 +532,8 @@ and `evasion` (each −20 to 20; negative evasion suits heavy armor). A firearm'
 and `sell_percent` to 1–100 for player sales. `mud_shop_stock` sets each item's
 coin `price` and optional `quantity` (omit or use `null` for unlimited stock).
 Players use `/shop`, `/shop buy <item>`, and `/shop sell <item>` beside the NPC.
+A stock row's optional `conditions_json` hides it from players who do not meet
+the [conditions](#conditions), for example a `reputation` rank.
 For renewable room-floor resources, add `mud_item_spawns` with a 5–86,400 second
 `respawn_seconds`; do not also place an ordinary item instance for that spawn.
 `mud_room_discoveries` reveals a clue and optional item once per character with
@@ -764,6 +773,7 @@ left the world, or the dungeon run, by the time it is due.
 | `run_trigger` | `trigger` | Runs a `manual` trigger. The manual trigger's own conditions and limits still apply. |
 | `learn_destination`, `forget_destination` | `destination` | Teaches the player the way to a [destination](#5e-wayfinding-destinations), or makes them forget it. |
 | `disposition` | `npc` (definition), `amount` (-100 to 100, not 0) | Changes that NPC's [regard](#relationships) for the player. |
+| `reputation` | `faction`, `amount` (-1000 to 1000, not 0) | Changes the player's [standing](#factions-and-reputation) with a faction. |
 
 Exits must have an `"id"` in `exits.json` before a trigger can name them.
 
@@ -1164,6 +1174,69 @@ behaviour with `relationship` in `behaviors_json`:
 | `refuse_talk_below` | Talk only at or above this regard (default: refuse only at `hostile`). |
 | `quest_complete`, `attack`, `crime` | This NPC's own changes in place of the world's. |
 | `attacks_when_hostile` | `false` keeps a hostile NPC from attacking (default `true`). |
+
+### Factions and reputation
+
+Factions are groups such as guilds, towns, temples, or gangs. A world has
+factions when `content.json` defines them, so no setting is needed. Every
+character has a **standing** with each faction from -1000 to 1000, starting at
+its `default_reputation`.
+
+```json
+"mud_world_factions": [
+  {"id": "guild", "name": "Smiths' Guild", "description": "Hammer and tongs.",
+   "default_reputation": 0, "defeat_reputation": -100, "public": 1},
+  {"id": "red-hand", "name": "Red Hand", "defeat_reputation": -50,
+   "ranks_json": [{"key": "enemy", "name": "Enemy", "min": -1000, "attitude": "hostile", "talk": false},
+                  {"key": "outsider", "name": "Outsider", "min": -100},
+                  {"key": "brother", "name": "Brother", "min": 300, "attitude": "peaceful", "price_percent": 80}]}
+],
+"mud_faction_relations": [
+  {"id": "guild-watch", "faction_id": "guild", "other_faction_id": "watch", "share_percent": 50},
+  {"id": "watch-hand", "faction_id": "watch", "other_faction_id": "red-hand", "share_percent": -50}
+]
+```
+
+| Field | Meaning |
+| --- | --- |
+| `default_reputation` | Starting standing, -1000 to 1000 (default 0). |
+| `defeat_reputation` | Standing change for each player who helps defeat a member (default 0). |
+| `public` | `1` (default) shows the faction in `/reputation` and the Standing panel, and announces changes. `0` keeps it hidden. |
+| `ranks_json` | 2 to 10 ranks, lowest first. Leave it out for the default ranks. |
+| `sort_order` | Lower numbers list first. |
+
+Each rank has a `key`, a `name`, and a `min`; a character holds the highest
+rank whose `min` they reach. A rank may also set:
+
+| Field | Default | Meaning |
+| --- | --- | --- |
+| `price_percent` | `100` | Member merchants charge this percent (50–200) of their prices, and pay correspondingly. |
+| `attitude` | none | `hostile` makes combat-capable members attack the player on sight. `peaceful` keeps normally aggressive members from attacking first. |
+| `talk` | `true` | `false` makes members refuse `/talk`. |
+| `trade` | `true` | `false` makes member merchants refuse `/shop`. |
+
+The default ranks are Hated (-1000), Hostile (-600), Unfriendly (-200, prices
+115%), Neutral (-50), Friendly (100, 95%), Honored (400, 90%) and Exalted (800,
+85%). Members attack at Hated and Hostile, and won't talk or trade with them.
+
+An NPC joins a faction with `faction_id` on its definition. Standing changes
+through:
+
+- `reputation` dialogue outcomes and trigger actions;
+- quest rewards with `reward_type: "reputation"`;
+- defeating members, by `defeat_reputation`;
+- [crimes](#crime-and-consequences).
+
+A **relation** passes `share_percent` of every change on to another faction,
+rounded down. Use a negative share for rivals. Relations reach one step only:
+in the example, helping the guild helps the watch, and helping the watch hurts
+the Red Hand, but helping the guild does not change the Red Hand.
+
+The `reputation` condition gates dialogue, quests, exits, destinations,
+triggers and stock, so a guild hall can admit only members of standing. Players
+see public factions with `/reputation` (or `/standing`) and in their Standing
+panel. In the World Builder, the **Factions** section creates factions, ranks
+and relations, and each NPC form chooses a faction.
 
 ## 6. Import, edit, export, and remove
 

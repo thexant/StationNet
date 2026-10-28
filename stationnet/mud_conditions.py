@@ -13,7 +13,8 @@ A context must provide these methods:
 
 Contexts may also provide game_hour(), the active world's hour or None, and
 disposition(npc_definition_id), an NPC's (regard, tier) toward the character or
-None while relationships are off; a missing NPC means the one being spoken to.
+None while relationships are off; a missing NPC means the one being spoken to;
+and reputation(faction_id), the character's (standing, rank key) with a faction.
 
 It also validates and checks equipment requirements, which gate items on
 attributes, level, and the wearer's race, class, or origin tags.
@@ -29,14 +30,16 @@ MAX_ID_LENGTH = 200
 QUEST_STATUSES = ("not_started", "active", "ready", "completed")
 CONDITION_TYPES = ("level", "race", "class", "tag", "has_item", "coins", "attribute", "skill",
                    "quest", "objective", "state", "claimed", "flag", "object_state", "in_room",
-                   "knows_destination", "time", "disposition")
-OUTCOME_TYPES = ("give_item", "take_item", "experience", "coins", "take_coins", "learn_destination", "disposition")
+                   "knows_destination", "time", "disposition", "reputation")
+OUTCOME_TYPES = ("give_item", "take_item", "experience", "coins", "take_coins", "learn_destination", "disposition",
+                 "reputation")
 # Condition types that only make sense in traditional worlds, where quests and
 # placed objects, rooms and wayfinding destinations exist.
 QUEST_CONDITION_TYPES = ("quest", "objective", "object_state", "in_room", "knows_destination", "time",
-                         "disposition")
+                         "disposition", "reputation")
 # Outcomes that teach world knowledge; procedural dungeons have no destinations.
-WORLD_OUTCOME_TYPES = ("learn_destination", "disposition")
+WORLD_OUTCOME_TYPES = ("learn_destination", "disposition", "reputation")
+REPUTATION_LIMIT = 1000
 DISPOSITION_TIERS = ("hostile", "unfriendly", "neutral", "friendly", "trusted")
 FLAG_SCOPES = ("player", "world")
 # Flag keys are short lowercase names such as gate.open or wardens_slain.
@@ -51,6 +54,7 @@ _REFERENCE_FIELDS = {
     "knows_destination": ("destination", "destination"), "learn_destination": ("destination", "destination"),
     # Optional: without an NPC these mean the one being spoken to.
     "disposition": ("npc", "npc"),
+    "reputation": ("faction", "faction"),
 }
 
 
@@ -207,6 +211,26 @@ def _condition(raw, allowed, nested):
     elif kind == "knows_destination":
         fields |= {"destination"}
         result["destination"] = _identifier(raw.get("destination"), "knows_destination destination")
+    elif kind == "reputation":
+        fields |= {"faction", "min", "max", "rank"}
+        result["faction"] = _identifier(raw.get("faction"), "reputation faction")
+        if "rank" in raw:
+            if "min" in raw or "max" in raw:
+                raise ValueError("Reputation conditions use rank or min/max, not both.")
+            ranks = [raw["rank"]] if isinstance(raw["rank"], str) else raw["rank"]
+            if (not isinstance(ranks, list) or not 1 <= len(ranks) <= 10
+                    or any(not isinstance(rank, str) or not KEY_RE.fullmatch(rank) for rank in ranks)):
+                raise ValueError("Reputation rank must be one or more rank keys, such as friendly.")
+            result["rank"] = sorted(set(ranks))
+        elif "min" not in raw and "max" not in raw:
+            raise ValueError("Reputation conditions need rank, or min and/or max.")
+        for bound in ("min", "max"):
+            if bound in raw:
+                if not _whole(raw[bound], -REPUTATION_LIMIT, REPUTATION_LIMIT):
+                    raise ValueError(f"Reputation bounds must be whole numbers from -{REPUTATION_LIMIT} to {REPUTATION_LIMIT}.")
+                result[bound] = raw[bound]
+        if result.get("min", -REPUTATION_LIMIT) > result.get("max", REPUTATION_LIMIT):
+            raise ValueError("Reputation min cannot exceed max.")
     elif kind == "disposition":
         fields |= {"npc", "min", "max", "tier"}
         if "npc" in raw:
@@ -264,7 +288,14 @@ def validate_outcomes(value, *, allow_world=True):
         if kind not in allowed:
             raise ValueError(f"Unsupported outcome type {kind!r}; use one of {', '.join(allowed)}.")
         amount = raw.get("amount", 1)
-        if kind == "disposition":
+        if kind == "reputation":
+            if set(raw) - {"type", "faction", "amount"}:
+                raise ValueError("reputation outcomes accept only faction and amount.")
+            if not _whole(amount, -REPUTATION_LIMIT, REPUTATION_LIMIT) or amount == 0:
+                raise ValueError(f"Reputation amounts must be nonzero whole numbers from -{REPUTATION_LIMIT} to {REPUTATION_LIMIT}.")
+            result.append({"type": kind, "faction": _identifier(raw.get("faction"), "reputation faction"),
+                           "amount": amount})
+        elif kind == "disposition":
             if set(raw) - {"type", "npc", "amount"}:
                 raise ValueError("disposition outcomes accept only npc and amount.")
             if not _whole(amount, -100, 100) or amount == 0:
@@ -372,6 +403,14 @@ def _holds(condition, context):
     if kind == "knows_destination":
         knows = getattr(context, "knows_destination", None)
         return bool(knows and knows(condition["destination"]))
+    if kind == "reputation":
+        found = getattr(context, "reputation", lambda faction: None)(condition["faction"])
+        if found is None:
+            return False
+        value, rank = found
+        if "rank" in condition:
+            return rank in condition["rank"]
+        return condition.get("min", -REPUTATION_LIMIT) <= value <= condition.get("max", REPUTATION_LIMIT)
     if kind == "disposition":
         found = getattr(context, "disposition", lambda npc: None)(condition.get("npc"))
         if found is None:

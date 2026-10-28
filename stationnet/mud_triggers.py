@@ -51,14 +51,14 @@ SOURCE_LABELS = {"room": "room", "object": "placed object", "item": "item type",
 ACTION_TYPES = ("message", "set_flag", "clear_flag", "give_item", "take_item", "experience", "coins",
                 "take_coins", "heal", "damage", "set_object_state", "set_exit", "show", "hide",
                 "spawn_npc", "teleport", "start_quest", "complete_objective", "run_trigger",
-                "learn_destination", "forget_destination", "disposition")
+                "learn_destination", "forget_destination", "disposition", "reputation")
 OUTCOME_ACTIONS = ("give_item", "take_item", "experience", "coins", "take_coins")
 MESSAGE_TARGETS = ("actor", "room", "other_room")
 EXIT_STATES = ("open", "locked", "hidden", "default")
 # Actions that need a player to act on. Timer triggers have no player.
 _ACTOR_ACTIONS = {"give_item", "take_item", "experience", "coins", "take_coins", "heal", "damage",
                   "teleport", "start_quest", "complete_objective", "learn_destination", "forget_destination",
-                  "disposition"}
+                  "disposition", "reputation"}
 # Procedural dungeons are generated fresh for each run, so their triggers only
 # use actions that make sense inside one run.
 DUNGEON_EVENTS = ("enter_room", "use_object", "take_item", "say_phrase", "defeat_npc", "manual")
@@ -78,6 +78,7 @@ _ACTION_REFERENCES = {
     "learn_destination": (("destination", "destination"),),
     "forget_destination": (("destination", "destination"),),
     "disposition": (("npc", "npc"),),
+    "reputation": (("faction", "faction"),),
 }
 
 
@@ -203,6 +204,14 @@ def _action(raw, index, dungeon):
     elif kind in ("learn_destination", "forget_destination"):
         fields |= {"destination"}
         result["destination"] = _identifier(raw.get("destination"), f"{where} destination")
+    elif kind == "reputation":
+        fields |= {"faction", "amount"}
+        try:
+            outcome = mud_conditions.validate_outcomes([{"type": kind, "faction": raw.get("faction"),
+                                                         "amount": raw.get("amount")}])[0]
+        except ValueError as problem:
+            raise ValueError(f"{where}: {problem}") from problem
+        result.update(faction=outcome["faction"], amount=outcome["amount"])
     elif kind == "disposition":
         fields |= {"npc", "amount"}
         if not _whole(raw.get("amount"), -100, 100) or raw["amount"] == 0:

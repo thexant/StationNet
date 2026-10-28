@@ -55,6 +55,8 @@ for(const mud of document.querySelectorAll("[data-mud]")){
   const hubInventory=mud.querySelector("[data-mud-hub-inventory]");
   const hubStored=mud.querySelector("[data-mud-stored]");
   const quests=mud.querySelector("[data-mud-quests]");
+  const standingPanel=mud.querySelector("[data-mud-standing-panel]");
+  const standingList=mud.querySelector("[data-mud-standing]");
   const questCount=mud.querySelector("[data-mud-quest-count]");
   let busy=false, pollBusy=false;
   let showingDeath=mud.dataset.deathSummary==="true";
@@ -313,6 +315,15 @@ for(const mud of document.querySelectorAll("[data-mud]")){
       article.append(list);quests.append(article);
     }
   };
+  const renderStanding=factions=>{
+    if(!standingPanel||!standingList||!Array.isArray(factions))return;
+    standingPanel.hidden=!factions.length;
+    standingList.replaceChildren(...factions.map(faction=>{
+      const row=document.createElement("p");
+      row.textContent=`${faction.name}: ${faction.rank} (${faction.reputation>=0?"+":""}${faction.reputation})`;
+      return row;
+    }));
+  };
   const setBusy=value=>{
     busy=value;
     form.querySelector("button").disabled=value;
@@ -365,6 +376,7 @@ for(const mud of document.querySelectorAll("[data-mud]")){
       renderInventory(payload.inventory);
       renderHub(payload.hub);
       renderQuests(payload.quests);
+      renderStanding(payload.standing);
       renderCombat(payload.combat);
       if(!response.ok)throw new Error(payload.error||"Action rejected by the station.");
       for(const event of payload.events||[])appendEvent(event);
@@ -390,6 +402,7 @@ for(const mud of document.querySelectorAll("[data-mud]")){
       renderInventory(payload.inventory);
       renderHub(payload.hub);
       renderQuests(payload.quests);
+      renderStanding(payload.standing);
       renderCombat(payload.combat);
       for(const event of payload.events||[])appendEvent(event);
       if(error.textContent==="LINK RETRYING...")error.textContent="";

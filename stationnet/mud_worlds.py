@@ -27,17 +27,21 @@ OPTIONAL_FILES = {CONTENT_FILE, ORIGINS_FILE, SKILLS_FILE, DUNGEONS_FILE, EVENTS
 # Order follows foreign-key dependencies. Only these authored columns cross
 # the package boundary; player state and generated dungeon data never do.
 CONTENT_TABLES = {
+    "mud_world_factions": ("id", "name", "description", "default_reputation", "defeat_reputation", "public",
+                           "ranks_json", "sort_order"),
+    "mud_faction_relations": ("id", "faction_id", "other_faction_id", "share_percent"),
     "mud_item_definitions": ("id", "name", "description", "item_type", "properties_json", "behaviors_json", "equipment_slot"),
     "mud_conversations": ("id", "name"),
     "mud_dialogue_nodes": ("id", "conversation_id", "node_key", "body", "is_start"),
     "mud_quests": ("id", "name", "description", "prerequisite_quest_id", "completion_mode",
                    "turn_in_npc_definition_id", "sequential", "abandonable", "conditions_json"),
-    "mud_npc_definitions": ("id", "name", "description", "conversation_id", "properties_json", "behaviors_json"),
+    "mud_npc_definitions": ("id", "name", "description", "conversation_id", "properties_json", "behaviors_json",
+                            "faction_id"),
     "mud_npc_combat_profiles": ("npc_definition_id", "maximum_health", "attack", "defense", "experience_reward", "respawn_seconds", "accuracy", "evasion"),
     "mud_npc_equipment": ("npc_definition_id", "equipment_slot", "item_definition_id"),
     "mud_npc_combat_rewards": ("id", "npc_definition_id", "reward_type", "target_id", "amount", "chance_percent"),
     "mud_npc_shops": ("npc_definition_id", "buys_items", "sell_percent"),
-    "mud_shop_stock": ("id", "npc_definition_id", "item_definition_id", "price", "quantity"),
+    "mud_shop_stock": ("id", "npc_definition_id", "item_definition_id", "price", "quantity", "conditions_json"),
     "mud_npc_trainers": ("id", "npc_definition_id", "skill_key", "price", "max_rank"),
     "mud_quest_objectives": ("id", "quest_id", "objective_type", "target_id", "description", "required_count", "sort_order",
                              "optional", "consume_on_turn_in", "recipient_npc_definition_id"),
@@ -63,14 +67,17 @@ REFERENCE_TABLE = {
     "key_item_id": "mud_item_definitions",
     "turn_in_npc_definition_id": "mud_npc_definitions",
     "recipient_npc_definition_id": "mud_npc_definitions", "turn_in_quest_id": "mud_quests",
+    "faction_id": "mud_world_factions", "other_faction_id": "mud_world_factions",
 }
 # Quests and dialogue responses carry condition/outcome lists that name content.
 CONDITION_COLUMNS = {"mud_quests": ("conditions_json",),
                      "mud_dialogue_responses": ("conditions_json", "outcomes_json"),
-                     "mud_world_destinations": ("conditions_json",)}
+                     "mud_world_destinations": ("conditions_json",),
+                     "mud_shop_stock": ("conditions_json",)}
 CONDITION_TABLES = {"item": "mud_item_definitions", "quest": "mud_quests",
                     "objective": "mud_quest_objectives", "object": "mud_item_instances", "room": "rooms",
-                    "destination": "mud_world_destinations", "npc": "mud_npc_definitions"}
+                    "destination": "mud_world_destinations", "npc": "mud_npc_definitions",
+                    "faction": "mud_world_factions"}
 # What each kind of trigger reference names; exits and triggers are mapped separately.
 TRIGGER_TABLES = {**CONDITION_TABLES, "npc": "mud_npc_definitions", "npc_instance": "mud_npc_instances",
                   "response": "mud_dialogue_responses"}
@@ -337,6 +344,21 @@ def read_package(payload):
                     raise WorldError("Quest completion_mode must be auto or turn_in.")
                 if not _whole(row.get("sequential", 0), 0, 1) or not _whole(row.get("abandonable", 1), 0, 1):
                     raise WorldError("Quest sequential and abandonable must be 0 or 1.")
+            elif table == "mud_world_factions":
+                try:
+                    row.update(mud_society.validate_faction(row))
+                except ValueError as problem:
+                    raise WorldError(f"Invalid faction {row.get('id')}: {problem}") from problem
+            elif table == "mud_faction_relations":
+                try:
+                    mud_society.validate_share(row.get("share_percent"))
+                except ValueError as problem:
+                    raise WorldError(str(problem)) from problem
+                if row.get("faction_id") == row.get("other_faction_id"):
+                    raise WorldError("A faction cannot be related to itself.")
+            elif table == "mud_quest_rewards" and row.get("reward_type") == "reputation":
+                if not row.get("target_id") or not _whole(row.get("amount", 1), 1, mud_society.REPUTATION_LIMIT):
+                    raise WorldError("Reputation rewards need a target faction and an amount from 1 to 1000.")
             elif table in {"mud_quest_rewards", "mud_npc_combat_rewards"}:
                 if row.get("reward_type") not in {"experience", "item", "coins"} or not _whole(row.get("amount", 1), 1, 100000):
                     raise WorldError("Reward type or amount is invalid.")
@@ -624,6 +646,8 @@ def _insert_content(database, document, installation_key, skill_map=None):
                             fields[column] = _label(value, "Script objective target", 1, 80)
                             continue
                         ref_table = OBJECTIVE_TARGETS.get(row.get("objective_type"))
+                    elif row.get("reward_type") == "reputation":
+                        ref_table = "mud_world_factions"
                     else:
                         ref_table = "mud_item_definitions"
                     if ref_table is None:
@@ -656,7 +680,7 @@ def _insert_content(database, document, installation_key, skill_map=None):
                     raise WorldError(f"{table}.{column} must be a scalar value.")
                 fields[column] = value
             if table in {"mud_item_definitions", "mud_npc_definitions", "mud_conversations", "mud_quests",
-                         "mud_world_destinations"}:
+                         "mud_world_destinations", "mud_world_factions"}:
                 fields["world_id"] = world_id
             names = list(fields)
             database.execute(
@@ -1000,7 +1024,7 @@ def _stored_conditions(value, column):
 
 
 def _export_content(database, world_id, room_map):
-    roots = {"mud_item_definitions", "mud_conversations", "mud_npc_definitions", "mud_quests"}
+    roots = {"mud_item_definitions", "mud_conversations", "mud_npc_definitions", "mud_quests", "mud_world_factions"}
     all_placed_items = [dict(row) for row in database.execute(
         "SELECT id,definition_id,room_id,container_id FROM mud_item_instances "
         "WHERE spawn_source_id IS NULL AND id NOT LIKE 'world:wild-item:%'"
@@ -1076,6 +1100,9 @@ def _export_content(database, world_id, room_map):
                 table == "mud_conversations" and row["id"] in needed_conversations]
         elif table == "mud_dialogue_nodes":
             rows = [row for row in rows if row["conversation_id"] in selected["mud_conversations"]]
+        elif table == "mud_faction_relations":
+            rows = [row for row in rows if row["faction_id"] in selected["mud_world_factions"]
+                    and row["other_faction_id"] in selected["mud_world_factions"]]
         elif table in {"mud_npc_combat_profiles", "mud_npc_equipment", "mud_npc_combat_rewards", "mud_npc_shops",
                        "mud_shop_stock", "mud_npc_trainers"}:
             rows = [row for row in rows if row["npc_definition_id"] in selected["mud_npc_definitions"]]
@@ -1100,7 +1127,8 @@ def _export_content(database, world_id, room_map):
                 "mud_dialogue_responses": "response", "mud_item_instances": "placed-item",
                 "mud_npc_instances": "placed-npc", "mud_shop_stock": "stock", "mud_npc_trainers": "trainer",
                 "mud_item_spawns": "spawn", "mud_room_discoveries": "discovery",
-                "mud_world_destinations": "destination"}
+                "mud_world_destinations": "destination", "mud_world_factions": "faction",
+                "mud_faction_relations": "faction-relation"}
     maps = {"rooms": room_map}
     for table in ID_TABLES:
         maps[table] = {key: f"{prefixes[table]}-{index}"
@@ -1125,8 +1153,9 @@ def _export_content(database, world_id, room_map):
                     if table == "mud_quest_objectives" and row["objective_type"] == "script":
                         result[column] = value
                         continue
-                    ref_table = (OBJECTIVE_TARGETS.get(row["objective_type"])
-                                 if table == "mud_quest_objectives" else "mud_item_definitions")
+                    ref_table = (OBJECTIVE_TARGETS.get(row["objective_type"]) if table == "mud_quest_objectives"
+                                 else "mud_world_factions" if row.get("reward_type") == "reputation"
+                                 else "mud_item_definitions")
                     value = _mapped(maps, ref_table, value, column)
                 elif column in CONDITION_COLUMNS.get(table, ()):
                     # Origins and skills are renamed in export() once their local keys are known.
@@ -1478,7 +1507,8 @@ def remove(database, world_id, *, remove_origins=False):
             # Keep definitions referenced by a player's possessions or quest history,
             # while separating them from a later installation with the same world ID.
             retired_id = f"retired:{world_id}:{uuid.uuid4().hex}"
-            for table in ("mud_item_definitions", "mud_npc_definitions", "mud_conversations", "mud_quests"):
+            for table in ("mud_item_definitions", "mud_npc_definitions", "mud_conversations", "mud_quests",
+                          "mud_world_factions"):
                 database.execute(f"UPDATE {table} SET world_id=? WHERE world_id=?", (retired_id, world_id))
             # Room items may contain other items; remove descendants before their
             # containers so the item-location constraint remains satisfied.

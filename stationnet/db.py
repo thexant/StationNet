@@ -2054,7 +2054,8 @@ def _migrate_mud_world_packages(database):
 
 
 def _migrate_mud_society(database):
-    """Add optional world life: clock, schedule and relationship settings per world, and NPC regard.
+    """Add optional world life: clock, schedule and relationship settings per world, NPC regard,
+    and factions with per-character reputation.
 
     Settings live in one JSON column whose empty default keeps every system
     off, so existing worlds play exactly as before.
@@ -2072,7 +2073,43 @@ def _migrate_mud_society(database):
       updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
       PRIMARY KEY(character_id,npc_definition_id));
     CREATE INDEX IF NOT EXISTS idx_mud_npc_relationships_npc ON mud_npc_relationships(npc_definition_id);
+    CREATE TABLE IF NOT EXISTS mud_world_factions (
+      id TEXT PRIMARY KEY,
+      world_id TEXT NOT NULL,
+      name TEXT NOT NULL,
+      description TEXT NOT NULL DEFAULT '',
+      default_reputation INTEGER NOT NULL DEFAULT 0 CHECK(default_reputation BETWEEN -1000 AND 1000),
+      defeat_reputation INTEGER NOT NULL DEFAULT 0 CHECK(defeat_reputation BETWEEN -1000 AND 1000),
+      public INTEGER NOT NULL DEFAULT 1 CHECK(public IN (0,1)),
+      ranks_json TEXT NOT NULL DEFAULT '',
+      sort_order INTEGER NOT NULL DEFAULT 0,
+      created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);
+    CREATE INDEX IF NOT EXISTS idx_mud_world_factions_world ON mud_world_factions(world_id,sort_order);
+    CREATE TABLE IF NOT EXISTS mud_faction_relations (
+      id TEXT PRIMARY KEY,
+      faction_id TEXT NOT NULL REFERENCES mud_world_factions(id) ON DELETE CASCADE,
+      other_faction_id TEXT NOT NULL REFERENCES mud_world_factions(id) ON DELETE CASCADE,
+      share_percent INTEGER NOT NULL CHECK(share_percent BETWEEN -100 AND 100 AND share_percent<>0),
+      UNIQUE(faction_id,other_faction_id),
+      CHECK(faction_id<>other_faction_id));
+    CREATE TABLE IF NOT EXISTS mud_character_reputation (
+      character_id TEXT NOT NULL REFERENCES mud_characters(id) ON DELETE CASCADE,
+      faction_id TEXT NOT NULL REFERENCES mud_world_factions(id) ON DELETE CASCADE,
+      reputation INTEGER NOT NULL CHECK(reputation BETWEEN -1000 AND 1000),
+      updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      PRIMARY KEY(character_id,faction_id));
     """)
+    npc_columns = {row["name"] for row in database.execute("PRAGMA table_info(mud_npc_definitions)")}
+    if "faction_id" not in npc_columns:
+        database.execute("ALTER TABLE mud_npc_definitions ADD COLUMN faction_id TEXT "
+                         "REFERENCES mud_world_factions(id) ON DELETE SET NULL")
+    stock_columns = {row["name"] for row in database.execute("PRAGMA table_info(mud_shop_stock)")}
+    if "conditions_json" not in stock_columns:
+        database.execute("ALTER TABLE mud_shop_stock ADD COLUMN conditions_json TEXT NOT NULL DEFAULT '[]'")
+    # Quests may reward standing with a faction (target_id names it).
+    _rebuild_with_check(database, "mud_quest_rewards", "'reputation'",
+                        "'experience','item','coins'", "'experience','item','coins','reputation'")
 
 
 def _migrate_mud_world_resource(database):

@@ -1,4 +1,4 @@
-"""Optional world life: a game clock, NPC schedules, and NPC relationships.
+"""Optional world life: a game clock, NPC schedules, NPC relationships, and factions.
 
 Every system here is off until a world enables it in its manifest (or the
 World Builder), so worlds that never mention them play exactly as before.
@@ -7,6 +7,7 @@ rules; mud.py owns the commands, events, and the scheduled tick.
 """
 import copy
 import json
+import re
 import time
 
 CLOCK_DEFAULTS = {"enabled": False, "day_minutes": 120, "start_hour": 6}
@@ -262,6 +263,143 @@ def adjust_disposition(database, character_id, npc_definition_id, amount, defaul
 def disposition_price_percent(value):
     """100 for neutral regard; trusted friends pay up to 10% less, enemies up to 10% more."""
     return 100 - value * DISPOSITION_PRICE_PERCENT // 100
+
+
+# --- Factions and reputation -----------------------------------------------
+
+REPUTATION_LIMIT = 1000
+RANK_KEY_RE = re.compile(r"^[a-z][a-z0-9-]{0,31}$")
+ATTITUDES = ("hostile", "peaceful")
+# Members attack at hated and hostile; prices ease as standing grows.
+DEFAULT_RANKS = (
+    {"key": "hated", "name": "Hated", "min": -1000, "attitude": "hostile", "talk": False, "trade": False},
+    {"key": "hostile", "name": "Hostile", "min": -600, "attitude": "hostile", "talk": False, "trade": False},
+    {"key": "unfriendly", "name": "Unfriendly", "min": -200, "price_percent": 115},
+    {"key": "neutral", "name": "Neutral", "min": -50},
+    {"key": "friendly", "name": "Friendly", "min": 100, "price_percent": 95},
+    {"key": "honored", "name": "Honored", "min": 400, "price_percent": 90},
+    {"key": "exalted", "name": "Exalted", "min": 800, "price_percent": 85},
+)
+RANK_DEFAULTS = {"price_percent": 100, "attitude": None, "talk": True, "trade": True}
+
+
+def validate_ranks(value):
+    """A faction's ranks, lowest first; an empty value means the default ranks."""
+    if value in (None, "", []):
+        return [{**RANK_DEFAULTS, **rank} for rank in DEFAULT_RANKS]
+    if isinstance(value, str):
+        try:
+            value = json.loads(value)
+        except json.JSONDecodeError as error:
+            raise ValueError("Faction ranks must be valid JSON.") from error
+    if not isinstance(value, list) or not 2 <= len(value) <= 10:
+        raise ValueError("A faction needs 2 to 10 ranks.")
+    ranks, keys = [], set()
+    for rank in value:
+        if not isinstance(rank, dict) or set(rank) - {"key", "name", "min", *RANK_DEFAULTS}:
+            raise ValueError("Each rank accepts key, name, min, price_percent, attitude, talk, and trade.")
+        if not isinstance(rank.get("key"), str) or not RANK_KEY_RE.fullmatch(rank["key"]) or rank["key"] in keys:
+            raise ValueError("Rank keys must be unique lowercase keys such as friendly.")
+        keys.add(rank["key"])
+        if not isinstance(rank.get("name"), str) or not 1 <= len(rank["name"].strip()) <= 40:
+            raise ValueError("Rank names must be 1 to 40 characters.")
+        if not _whole(rank.get("min"), -REPUTATION_LIMIT, REPUTATION_LIMIT):
+            raise ValueError(f"Rank min must be a whole number from -{REPUTATION_LIMIT} to {REPUTATION_LIMIT}.")
+        if not _whole(rank.get("price_percent", 100), 50, 200):
+            raise ValueError("Rank price_percent must be 50 to 200.")
+        if rank.get("attitude") not in (None, *ATTITUDES):
+            raise ValueError("Rank attitude must be hostile or peaceful, or left out.")
+        if any(type(rank.get(key, True)) is not bool for key in ("talk", "trade")):
+            raise ValueError("Rank talk and trade must be true or false.")
+        ranks.append({**RANK_DEFAULTS, **rank, "name": rank["name"].strip()})
+    if [rank["min"] for rank in ranks] != sorted({rank["min"] for rank in ranks}):
+        raise ValueError("List ranks from lowest to highest, each with a higher min than the last.")
+    return ranks
+
+
+def stored_ranks(text):
+    try:
+        return validate_ranks(text)
+    except ValueError:
+        return validate_ranks(None)
+
+
+def rank_for(ranks, value):
+    """The highest rank whose min the value reaches; below every rank means the lowest."""
+    return next((rank for rank in reversed(ranks) if value >= rank["min"]), ranks[0])
+
+
+def validate_faction(values):
+    """Normalize builder or package faction fields; raises ValueError."""
+    name = " ".join(str(values.get("name", "")).split())
+    if not 2 <= len(name) <= 80:
+        raise ValueError("Faction names must be 2 to 80 characters.")
+    description = str(values.get("description") or "").strip()
+    if len(description) > 1000:
+        raise ValueError("Faction descriptions must be up to 1000 characters.")
+    result = {"name": name, "description": description}
+    for key in ("default_reputation", "defeat_reputation"):
+        value = values.get(key, 0)
+        if not _whole(value, -REPUTATION_LIMIT, REPUTATION_LIMIT):
+            raise ValueError(f"Faction {key} must be a whole number from -{REPUTATION_LIMIT} to {REPUTATION_LIMIT}.")
+        result[key] = value
+    if values.get("public", 1) not in (0, 1) or not _whole(values.get("sort_order", 0), -100000, 100000):
+        raise ValueError("Faction public must be 0 or 1, and sort_order a whole number.")
+    result.update(public=values.get("public", 1), sort_order=values.get("sort_order", 0))
+    ranks = values.get("ranks_json")
+    result["ranks_json"] = "" if ranks in (None, "", []) else json.dumps(validate_ranks(ranks), separators=(",", ":"))
+    return result
+
+
+def validate_share(value):
+    if not _whole(value, -100, 100) or value == 0:
+        raise ValueError("A faction relation's share_percent must be a nonzero whole number from -100 to 100.")
+    return value
+
+
+def faction(database, faction_id):
+    return database.execute("SELECT * FROM mud_world_factions WHERE id=?", (faction_id,)).fetchone()
+
+
+def reputation(database, character_id, faction_row):
+    row = database.execute("SELECT reputation FROM mud_character_reputation WHERE character_id=? AND faction_id=?",
+                           (character_id, faction_row["id"])).fetchone()
+    return row["reputation"] if row else faction_row["default_reputation"]
+
+
+def standing(database, character_id, faction_row):
+    """(reputation, rank) of a character with a faction."""
+    value = reputation(database, character_id, faction_row)
+    return value, rank_for(stored_ranks(faction_row["ranks_json"]), value)
+
+
+def adjust_reputation(database, character_id, faction_id, amount):
+    """Change standing with a faction and, by their shares, with factions related to it.
+
+    Returns (faction row, old, new) for each faction whose standing changed.
+    Relations reach one step only, so allies of allies are unaffected.
+    """
+    changed = []
+    target = faction(database, faction_id)
+    if target is None or not amount:
+        return changed
+    shares = [(target, amount)] + [
+        (faction(database, row["other_faction_id"]), amount * row["share_percent"] // 100)
+        for row in database.execute("SELECT other_faction_id,share_percent FROM mud_faction_relations "
+                                    "WHERE faction_id=? ORDER BY other_faction_id", (faction_id,))]
+    for row, delta in shares:
+        if row is None or not delta:
+            continue
+        old = reputation(database, character_id, row)
+        new = max(-REPUTATION_LIMIT, min(REPUTATION_LIMIT, old + delta))
+        if new == old:
+            continue
+        database.execute(
+            "INSERT INTO mud_character_reputation(character_id,faction_id,reputation) VALUES(?,?,?) "
+            "ON CONFLICT(character_id,faction_id) DO UPDATE SET reputation=excluded.reputation,"
+            "updated_at=CURRENT_TIMESTAMP", (character_id, row["id"], new))
+        changed.append((row, old, new))
+    return changed
 
 
 def active_entry(spec, hour):

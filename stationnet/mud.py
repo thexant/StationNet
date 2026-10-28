@@ -244,7 +244,8 @@ def _current_mode(database, user_id):
 
 
 # Commands that belong to an optional world-life system, hidden from help while it is off.
-SOCIETY_ACTIONS = {"time": "clock", "relations": "relationships", "give": "relationships"}
+SOCIETY_ACTIONS = {"time": "clock", "relations": "relationships", "give": "relationships",
+                   "reputation": "factions"}
 # Commands that only exist to spend the resource; worlds without it hide them.
 RESOURCE_ACTIONS = frozenset({"spells", "cast"})
 RESOURCE_DISABLED_DESCRIPTIONS = {
@@ -277,9 +278,17 @@ def society_settings(database):
 
 def _hidden_actions(database, user_id):
     """World-life commands to leave out of help and suggestions for this player right now."""
-    settings = society_settings(database) if _current_mode(database, user_id) == "traditional" else None
-    return {key for key, system in SOCIETY_ACTIONS.items()
-            if settings is None or not settings[system]["enabled"]}
+    if _current_mode(database, user_id) != "traditional":
+        return set(SOCIETY_ACTIONS)
+    enabled = {key for key, section in society_settings(database).items() if section["enabled"]}
+    if _public_factions(database):
+        enabled.add("factions")
+    return {key for key, system in SOCIETY_ACTIONS.items() if system not in enabled}
+
+
+def _public_factions(database):
+    return database.execute("SELECT * FROM mud_world_factions WHERE world_id=? AND public=1 "
+                            "ORDER BY sort_order,name COLLATE NOCASE", (_active_world(database),)).fetchall()
 
 
 def _game_time(database, now=None):
@@ -2291,11 +2300,19 @@ def _world_shop_action(database, user, parameters):
         raise ActionError("Several merchants are here. Add 'from <merchant>' to your command.")
     npc, shop = merchants[0]
     character = _character_row(database, user["id"])
+    standing = _npc_faction_standing(database, npc, user["id"])
+    if standing and not standing[2]["trade"]:
+        raise ActionError(f"{npc['name']} will not trade with you.")
+    context = _ConditionContext(database, user["id"], npc["id"])
+
+    def offered(rows):
+        return [row for row in rows if mud_conditions.evaluate(row["conditions_json"], context)]
+
     if operation == "list":
-        stock = database.execute(
+        stock = offered(database.execute(
             "SELECT s.*,d.name FROM mud_shop_stock s JOIN mud_item_definitions d ON d.id=s.item_definition_id "
             "WHERE s.npc_definition_id=? AND (s.quantity IS NULL OR s.quantity>0) ORDER BY d.name COLLATE NOCASE",
-            (npc["definition_id"],)).fetchall()
+            (npc["definition_id"],)).fetchall())
         percent = _trade_percent(database, npc, user["id"])
         lines = [f"{npc['name']} offers:"] + [f"- {row['name']}: {_discounted(database, character['id'], row['price'], percent)} coins" +
                  (f" ({row['quantity']} left)" if row["quantity"] is not None else "") for row in stock]
@@ -2304,10 +2321,10 @@ def _world_shop_action(database, user, parameters):
         lines.append(f"You have {_wallet(database, character['id'])} coins. Use /shop buy <item> or /shop sell <item>.")
         return [EventDraft("\n".join(lines), event_type="shop")]
     if operation == "buy":
-        stock = database.execute(
+        stock = offered(database.execute(
             "SELECT s.*,d.name FROM mud_shop_stock s JOIN mud_item_definitions d ON d.id=s.item_definition_id "
             "WHERE s.npc_definition_id=? AND (s.item_definition_id=? OR d.name=? COLLATE NOCASE)",
-            (npc["definition_id"], target, target)).fetchall()
+            (npc["definition_id"], target, target)).fetchall())
         if len(stock) != 1:
             raise ActionError("That item is not sold here." if not stock else "Use a specific item ID.")
         row = stock[0]
@@ -2502,6 +2519,9 @@ def _grant_rewards(database, user, rewards):
             database.execute("UPDATE mud_character_wallets SET coins=coins+? WHERE character_id=?",
                              (reward["amount"], character["id"]))
             messages.append(f"{reward['amount']} coins")
+        elif reward["reward_type"] == "reputation":
+            messages += [f"standing: {part}" for part in _reputation_text(mud_society.adjust_reputation(
+                database, character["id"], reward["target_id"], reward["amount"]))]
     return messages
 
 
@@ -2887,6 +2907,15 @@ class _ConditionContext:
         value, tier = _npc_regard(self.database, npc, self.user_id)
         return None if value is None else (value, tier)
 
+    def reputation(self, faction_id):
+        if self.dungeon:
+            return None
+        row = mud_society.faction(self.database, faction_id)
+        if row is None:
+            return None
+        value, rank = mud_society.standing(self.database, self._character()["id"], row)
+        return value, rank["key"]
+
     def game_hour(self):
         moment = None if self.dungeon else _game_time(self.database)
         return moment["hour"] if moment else None
@@ -3145,11 +3174,23 @@ def _encounter_reward_drafts(database, encounter, npc):
                                              "defeat_npc", npc["definition_id"]):
             drafts.append(EventDraft(event.body, event.event_type, "private",
                                      str(participant["user_id"]), (participant["user_id"],)))
+        if encounter["scope_type"] != "instance":
+            drafts += _defeat_reputation(database, {"id": participant["user_id"]}, npc["definition_id"])
         drafts += fire_triggers(
             database, {"id": participant["user_id"]}, "defeat_npc",
             [npc["id"] if "id" in npc.keys() else None, npc["definition_id"]],
             instance_id=encounter["scope_key"] if encounter["scope_type"] == "instance" else None)
     return drafts
+
+
+def _defeat_reputation(database, user, npc_definition_id):
+    """Standing gained or lost for helping defeat a member of a faction."""
+    row = database.execute("SELECT f.id,f.defeat_reputation FROM mud_npc_definitions d "
+                           "JOIN mud_world_factions f ON f.id=d.faction_id WHERE d.id=?",
+                           (npc_definition_id,)).fetchone()
+    if row is None or not row["defeat_reputation"]:
+        return []
+    return _change_reputation(database, user, row["id"], row["defeat_reputation"])
 
 
 def validate_npc_behaviors(value):
@@ -3225,13 +3266,17 @@ def _social_hostility(database, npc, user_id, settings=None):
         return None
     settings = settings or society_settings(database)
     behaviors = _json_properties(npc["behaviors_json"])
+    standing = _npc_faction_standing(database, npc, user_id)
+    attitude = standing[2]["attitude"] if standing else None
+    if attitude == "hostile":
+        return True
     if settings["relationships"]["enabled"]:
         spec = behaviors.get("relationship") if isinstance(behaviors.get("relationship"), dict) else {}
         if spec.get("attacks_when_hostile", True):
             value, tier = _npc_regard(database, npc, user_id, settings)
             if tier == "hostile":
                 return True
-    return None
+    return False if attitude == "peaceful" else None
 
 
 def _npc_hostile_to(database, npc, user_id, settings=None):
@@ -3283,6 +3328,37 @@ def _active_hostiles(database, room, user_id=None):
     return enemies
 
 
+def _npc_faction_standing(database, npc, user_id):
+    """(faction, reputation, rank) of the player with the faction a world NPC belongs to, or None."""
+    if user_id is None or not _world_npc(npc):
+        return None
+    row = database.execute("SELECT f.* FROM mud_npc_definitions d JOIN mud_world_factions f ON f.id=d.faction_id "
+                           "WHERE d.id=?", (npc["definition_id"],)).fetchone()
+    if row is None:
+        return None
+    value, rank = mud_society.standing(database, f"stationnet:character:{user_id}", row)
+    return row, value, rank
+
+
+def _reputation_text(changes):
+    """'Harbor Guild +50 (now Friendly)' for each public faction whose standing changed."""
+    parts = []
+    for row, old, new in changes:
+        if not row["public"]:
+            continue
+        ranks = mud_society.stored_ranks(row["ranks_json"])
+        before, after = mud_society.rank_for(ranks, old), mud_society.rank_for(ranks, new)
+        parts.append(f"{row['name']} {new - old:+d}" + (f" (now {after['name']})" if after["key"] != before["key"] else ""))
+    return parts
+
+
+def _change_reputation(database, user, faction_id, amount):
+    """Change a player's standing with a faction and its related factions, and say so."""
+    changes = mud_society.adjust_reputation(database, f"stationnet:character:{user['id']}", faction_id, amount)
+    parts = _reputation_text(changes)
+    return [_private(user["id"], "Your standing changes: " + "; ".join(parts) + ".", "reward")] if parts else []
+
+
 def _relationship_spec(npc):
     behaviors = _json_properties(npc["behaviors_json"])
     return behaviors["relationship"] if isinstance(behaviors.get("relationship"), dict) else {}
@@ -3324,7 +3400,9 @@ def _change_disposition(database, user, npc_definition_id, amount, cause=None):
 def _trade_percent(database, npc, user_id):
     """Percent of the usual price this merchant charges this player (100 when nothing applies)."""
     value, _tier = _npc_regard(database, npc, user_id)
-    return 100 if value is None else mud_society.disposition_price_percent(value)
+    percent = 100 if value is None else mud_society.disposition_price_percent(value)
+    standing = _npc_faction_standing(database, npc, user_id)
+    return percent * standing[2]["price_percent"] // 100 if standing else percent
 
 
 def _is_hidden(database, user_id):
@@ -4630,6 +4708,9 @@ def _talk_action(database, user, parameters):
 
 def _talk_greeting(database, npc, user_id):
     """A tier greeting line to open a conversation, or an ActionError when the NPC will not talk."""
+    standing = _npc_faction_standing(database, npc, user_id)
+    if standing and not standing[2]["talk"]:
+        raise ActionError(f"{npc['name']} refuses to speak with you.")
     value, tier = _npc_regard(database, npc, user_id)
     if value is None:
         return ""
@@ -4696,6 +4777,8 @@ def _settle_outcomes(database, user, outcomes, claim=None, event_type="dialogue"
             events += _set_objective_progress(database, user, "possess_item", outcome["item"])
         elif outcome["type"] == "learn_destination":
             events += _learn_destination(database, user, outcome["destination"], "dialogue")
+        elif outcome["type"] == "reputation":
+            events += _change_reputation(database, user, outcome["faction"], outcome["amount"])
         elif outcome["type"] == "disposition" and (outcome.get("npc") or npc_definition_id):
             events += _change_disposition(database, user, outcome.get("npc") or npc_definition_id, outcome["amount"])
     return events
@@ -5974,7 +6057,7 @@ DIRECTION_ALIASES = {
 TRAVEL_SAFE_ACTIONS = frozenset({
     "travel", "stop", "look", "exits", "map", "say", "emote", "tell", "reply_player", "who",
     "help", "status", "character", "inventory", "quests", "skills", "spells", "description",
-    "block", "unblock", "directions", "destinations", "time", "relations",
+    "block", "unblock", "directions", "destinations", "time", "relations", "reputation",
 })
 
 
@@ -6392,6 +6475,26 @@ def _directions_action(database, user, parameters):
     if selected is None or selected["destination_id"] != destination["id"]:
         lines.append("You keep this destination in mind; /directions checks again and /directions clear forgets it.")
     return [EventDraft("\n".join(lines), "travel")]
+
+
+def reputation_state(database, user_id):
+    """Standing with the active world's public factions, for the sidebar."""
+    if _current_mode(database, user_id) != "traditional":
+        return []
+    character_id = f"stationnet:character:{user_id}"
+    result = []
+    for row in _public_factions(database):
+        value, rank = mud_society.standing(database, character_id, row)
+        result.append({"id": row["id"], "name": row["name"], "reputation": value, "rank": rank["name"]})
+    return result
+
+
+def _reputation_action(database, user, _parameters):
+    standing = reputation_state(database, user["id"])
+    if not standing or _current_room(database, user["id"]).get("instance_id"):
+        raise ActionError("No faction here keeps track of you.")
+    return [EventDraft("Your standing:\n" + "\n".join(
+        f"- {entry['name']}: {entry['rank']} ({entry['reputation']:+d})" for entry in standing))]
 
 
 def _relations_action(database, user, _parameters):
@@ -6981,6 +7084,8 @@ def _trigger_action(database, user, trigger, index, realm, instance_id=None):
             return _learn_destination(database, user, action["destination"], "script")
         if kind == "disposition":
             return _change_disposition(database, user, action["npc"], action["amount"])
+        if kind == "reputation":
+            return _change_reputation(database, user, action["faction"], action["amount"])
         if kind == "forget_destination":
             mud_wayfinding.forget(database, _character_row(database, user_id)["id"], action["destination"])
             return []
@@ -7269,6 +7374,10 @@ actions.register(ActionDefinition(
     description="List the places you know the way to.",
     commands=("destinations", "places"), handler=_destinations_action,
     group="NAVIGATION",
+))
+actions.register(ActionDefinition(
+    key="reputation", label="FACTION STANDING", description="See your standing with this world's factions.",
+    commands=("reputation", "standing", "factions"), handler=_reputation_action, group="SOCIAL",
 ))
 actions.register(ActionDefinition(
     key="relations", label="RELATIONSHIPS", description="See how the people of this world regard you.",
@@ -7935,6 +8044,7 @@ def index():
     inventory = inventory_state(database, g.user["id"])
     hub = hub_state(database, g.user["id"])
     quests = quest_state(database, g.user["id"])
+    standing = reputation_state(database, g.user["id"])
     combat = combat_state(database, g.user["id"])
     events = _recent_events(database, g.user["id"])
     cleared_view = database.execute(
@@ -7948,7 +8058,7 @@ def index():
         "mud/index.html", events=events, cleared_through_id=cleared_through_id,
         activity_cleared=cleared_view is not None,
         room=room, character=character, inventory=inventory,
-        quests=quests, combat=combat, hub=hub,
+        quests=quests, combat=combat, hub=hub, standing=standing,
         command_catalog=[
             {"name": name, "key": definition.key,
              "description": _action_description(definition, character["resource"])}
@@ -7985,6 +8095,7 @@ def updates():
         inventory = inventory_state(database, g.user["id"])
         hub = hub_state(database, g.user["id"])
         quests = quest_state(database, g.user["id"])
+        standing = reputation_state(database, g.user["id"])
         combat = combat_state(database, g.user["id"])
         database.commit()
     except (ActionError, sqlite3.Error) as problem:
@@ -7993,7 +8104,7 @@ def updates():
             return jsonify(error=str(problem)), problem.status
         raise
     return jsonify(events=events, room=room, character=character, inventory=inventory,
-                   quests=quests, combat=combat, hub=hub)
+                   quests=quests, combat=combat, hub=hub, standing=standing)
 
 
 @bp.post("/clear-events")
@@ -8211,11 +8322,12 @@ def perform_action():
         inventory = inventory_state(database, g.user["id"])
         hub = hub_state(database, g.user["id"])
         quests = quest_state(database, g.user["id"])
+        standing = reputation_state(database, g.user["id"])
         combat = combat_state(database, g.user["id"])
         database.commit()
         return jsonify(
             error=str(problem), room=room, character=character, inventory=inventory,
-            quests=quests, combat=combat, hub=hub
+            quests=quests, combat=combat, hub=hub, standing=standing
         ), problem.status
     database = get_db()
     room = _room_state(database, g.user["id"])
@@ -8223,12 +8335,13 @@ def perform_action():
     inventory = inventory_state(database, g.user["id"])
     hub = hub_state(database, g.user["id"])
     quests = quest_state(database, g.user["id"])
+    standing = reputation_state(database, g.user["id"])
     combat = combat_state(database, g.user["id"])
     database.commit()
     return jsonify(
         action=action_key, events=events,
         room=room, character=character, inventory=inventory,
-        quests=quests, combat=combat, hub=hub,
+        quests=quests, combat=combat, hub=hub, standing=standing,
     )
 
 
@@ -8450,6 +8563,7 @@ def builder():
                        for entry in skill_entries],
         npc_trainers=npc_trainers, item_categories=item_categories,
         resource=resource_settings(database), society=society_settings(database),
+        factions=_builder_factions(database), default_ranks=json.dumps(mud_society.validate_ranks(None), indent=1),
         game_time=_game_time(database), **dungeon_context, **trigger_context,
     )
 
@@ -8693,7 +8807,8 @@ def _builder_rules(database, field, validate):
         return None, str(problem)
     tables = {"item": "mud_item_definitions", "quest": "mud_quests", "objective": "mud_quest_objectives",
               "object": "mud_item_instances", "room": "mud_world_rooms",
-              "destination": "mud_world_destinations", "npc": "mud_npc_definitions"}
+              "destination": "mud_world_destinations", "npc": "mud_npc_definitions",
+              "faction": "mud_world_factions"}
     origins = character_creation.catalog(database)
     known = {"race": {entry["key"] for entry in origins["races"]},
              "class": {entry["key"] for entry in origins["classes"]},
@@ -8772,6 +8887,18 @@ def _missing_behavior_references(database, behaviors):
         query = f"SELECT 1 FROM {tables[kind]} WHERE id=?" + (" AND world_id=?" if kind == "room" else "")
         if database.execute(query, (ref, world_id) if kind == "room" else (ref,)).fetchone() is None:
             return kind, ref
+    return None
+
+
+def _save_npc_faction(database, npc_id):
+    """Store the NPC form's faction, when the form has one; returns an error or None."""
+    if "faction_id" not in request.form:
+        return None
+    faction_id = request.form.get("faction_id", "").strip() or None
+    if faction_id and database.execute("SELECT 1 FROM mud_world_factions WHERE id=? AND world_id=?",
+                                       (faction_id, _active_world(database))).fetchone() is None:
+        return "Choose a faction from this world."
+    database.execute("UPDATE mud_npc_definitions SET faction_id=? WHERE id=?", (faction_id, npc_id))
     return None
 
 
@@ -8885,7 +9012,7 @@ def builder_create_npc_definition():
     if error: flash(error, "error"); return _builder_redirect()
     if fields[2] and database.execute("SELECT 1 FROM mud_conversations WHERE id=?", (fields[2],)).fetchone() is None: flash("Choose an existing conversation.", "error"); return _builder_redirect()
     npc_id = f"world:npc-definition:{uuid.uuid4().hex}"; database.execute("INSERT INTO mud_npc_definitions(id,name,description,conversation_id,properties_json,behaviors_json,created_by,world_id) VALUES(?,?,?,?,?,?,?,(SELECT id FROM mud_world_packages WHERE active=1))", (npc_id, *fields, g.user["id"])); _save_npc_combat(database, npc_id, profile, equipment)
-    shop_error = _save_npc_shop(database, npc_id)
+    shop_error = _save_npc_faction(database, npc_id) or _save_npc_shop(database, npc_id)
     if shop_error: database.rollback(); flash(shop_error, "error"); return _builder_redirect()
     database.commit()
     flash(f"NPC definition {fields[0]} created.", "success"); return _builder_redirect()
@@ -8902,7 +9029,7 @@ def builder_update_npc_definition(npc_id):
     if error: flash(error, "error"); return _builder_redirect()
     if fields[2] and database.execute("SELECT 1 FROM mud_conversations WHERE id=?", (fields[2],)).fetchone() is None: flash("Choose an existing conversation.", "error"); return _builder_redirect()
     database.execute("UPDATE mud_npc_definitions SET name=?,description=?,conversation_id=?,properties_json=?,behaviors_json=?,updated_at=CURRENT_TIMESTAMP WHERE id=?", (*fields, npc_id)); _save_npc_combat(database, npc_id, profile, equipment)
-    shop_error = _save_npc_shop(database, npc_id)
+    shop_error = _save_npc_faction(database, npc_id) or _save_npc_shop(database, npc_id)
     if shop_error: database.rollback(); flash(shop_error, "error"); return _builder_redirect()
     database.commit(); flash("NPC definition updated.", "success"); return _builder_redirect()
 
@@ -8922,10 +9049,13 @@ def builder_add_shop_stock(npc_id):
             price is None or not 1 <= price <= 100000 or
             (quantity is not None and not 0 <= quantity <= 100000)):
         flash("Choose an item, valid price, and optional nonnegative stock quantity.", "error"); return _builder_redirect()
+    conditions, error = _builder_rules(database, "conditions_json", mud_conditions.validate_conditions)
+    if error: flash(error, "error"); return _builder_redirect()
     database.execute(
-        "INSERT INTO mud_shop_stock(id,npc_definition_id,item_definition_id,price,quantity) VALUES(?,?,?,?,?) "
-        "ON CONFLICT(npc_definition_id,item_definition_id) DO UPDATE SET price=excluded.price,quantity=excluded.quantity",
-        (f"world:stock:{uuid.uuid4().hex}", npc_id, item_id, price, quantity))
+        "INSERT INTO mud_shop_stock(id,npc_definition_id,item_definition_id,price,quantity,conditions_json) VALUES(?,?,?,?,?,?) "
+        "ON CONFLICT(npc_definition_id,item_definition_id) DO UPDATE SET price=excluded.price,quantity=excluded.quantity,"
+        "conditions_json=excluded.conditions_json",
+        (f"world:stock:{uuid.uuid4().hex}", npc_id, item_id, price, quantity, conditions))
     database.commit(); flash("Merchant stock saved.", "success"); return _builder_redirect()
 
 
@@ -9128,6 +9258,14 @@ def builder_delete_quest_objective(objective_id):
 def builder_create_quest_reward(quest_id):
     validate_csrf(); database = get_db(); reward_type = request.form.get("reward_type", ""); target_id = request.form.get("target_id", "").strip() or None; amount = request.form.get("amount", 1, type=int)
     if database.execute("SELECT 1 FROM mud_quests WHERE id=?", (quest_id,)).fetchone() is None: abort(404)
+    if reward_type == "reputation":
+        faction_id = request.form.get("faction_id", "").strip()
+        if database.execute("SELECT 1 FROM mud_world_factions WHERE id=? AND world_id=?",
+                            (faction_id, _active_world(database))).fetchone() is None or amount is None or not 1 <= amount <= 1000:
+            flash("Choose a faction and an amount from 1 to 1000 standing.", "error"); return _builder_redirect()
+        database.execute("INSERT INTO mud_quest_rewards(id,quest_id,reward_type,target_id,amount) VALUES(?,?,?,?,?)",
+                         (f"world:quest-reward:{uuid.uuid4().hex}", quest_id, reward_type, faction_id, amount))
+        database.commit(); flash("Quest reward added.", "success"); return _builder_redirect()
     if reward_type not in {"experience", "item", "coins"} or amount is None or not 1 <= amount <= 100000 or (reward_type == "item" and amount > 100): flash("Choose a valid reward amount (up to 100 items or 100,000 XP/coins).", "error"); return _builder_redirect()
     if reward_type == "item" and database.execute("SELECT 1 FROM mud_item_definitions WHERE id=?", (target_id,)).fetchone() is None: flash("Choose an item definition for an item reward.", "error"); return _builder_redirect()
     if reward_type in {"experience", "coins"}: target_id = None
@@ -9815,7 +9953,7 @@ TRIGGER_REFERENCE_TABLES = {
     "room": "mud_world_rooms", "object": "mud_item_instances", "item": "mud_item_definitions",
     "npc": "mud_npc_definitions", "npc_instance": "mud_npc_instances", "response": "mud_dialogue_responses",
     "quest": "mud_quests", "objective": "mud_quest_objectives", "exit": "mud_world_exits",
-    "destination": "mud_world_destinations",
+    "destination": "mud_world_destinations", "faction": "mud_world_factions",
 }
 
 
@@ -10015,6 +10153,117 @@ def builder_update_trigger(trigger_id):
     database.commit()
     flash(f"Trigger {trigger['name']} saved.", "success")
     return _events_redirect(trigger_id)
+
+
+def _builder_factions(database):
+    """The active world's factions with their relations, for the builder."""
+    rows = [dict(row) for row in database.execute(
+        "SELECT * FROM mud_world_factions WHERE world_id=? ORDER BY sort_order,name COLLATE NOCASE",
+        (_active_world(database),))]
+    for row in rows:
+        row["ranks"] = mud_society.stored_ranks(row["ranks_json"])
+        row["relations"] = [dict(relation) for relation in database.execute(
+            "SELECT r.*,f.name AS other_name FROM mud_faction_relations r JOIN mud_world_factions f "
+            "ON f.id=r.other_faction_id WHERE r.faction_id=? ORDER BY f.name COLLATE NOCASE", (row["id"],))]
+        row["members"] = [member["name"] for member in database.execute(
+            "SELECT name FROM mud_npc_definitions WHERE faction_id=? ORDER BY name COLLATE NOCASE", (row["id"],))]
+    return rows
+
+
+def _faction_fields():
+    try:
+        return mud_society.validate_faction({
+            "name": request.form.get("name", ""), "description": request.form.get("description", ""),
+            "default_reputation": request.form.get("default_reputation", 0, type=int),
+            "defeat_reputation": request.form.get("defeat_reputation", 0, type=int),
+            "public": 1 if request.form.get("public") == "1" else 0,
+            "sort_order": request.form.get("sort_order", 0, type=int),
+            "ranks_json": request.form.get("ranks_json", "").strip()}), None
+    except ValueError as problem:
+        return None, str(problem)
+
+
+def _world_faction_or_404(database, faction_id):
+    row = database.execute("SELECT * FROM mud_world_factions WHERE id=? AND world_id=?",
+                           (faction_id, _active_world(database))).fetchone()
+    if row is None:
+        abort(404)
+    return row
+
+
+@bp.post("/builder/factions")
+@builder_required
+def builder_create_faction():
+    validate_csrf(); database = get_db()
+    values, error = _faction_fields()
+    if error:
+        flash(error, "error"); return _builder_redirect()
+    database.execute(
+        "INSERT INTO mud_world_factions(id,world_id,name,description,default_reputation,defeat_reputation,public,"
+        "ranks_json,sort_order) VALUES(?,?,?,?,?,?,?,?,?)",
+        (f"world:faction:{uuid.uuid4().hex}", _active_world(database), values["name"], values["description"],
+         values["default_reputation"], values["defeat_reputation"], values["public"], values["ranks_json"],
+         values["sort_order"]))
+    database.commit(); flash(f"Faction {values['name']} created.", "success"); return _builder_redirect()
+
+
+@bp.post("/builder/factions/<path:faction_id>/delete")
+@builder_required
+def builder_delete_faction(faction_id):
+    validate_csrf(); database = get_db(); _world_faction_or_404(database, faction_id)
+    if request.form.get("confirmation") != "delete":
+        flash("Faction removal was not confirmed.", "error"); return _builder_redirect()
+    database.execute("UPDATE mud_npc_definitions SET faction_id=NULL WHERE faction_id=?", (faction_id,))
+    database.execute("DELETE FROM mud_quest_rewards WHERE reward_type='reputation' AND target_id=?", (faction_id,))
+    database.execute("DELETE FROM mud_world_factions WHERE id=?", (faction_id,))
+    database.commit(); flash("Faction removed; its members now belong to no faction.", "success")
+    return _builder_redirect()
+
+
+@bp.post("/builder/factions/<path:faction_id>/relations")
+@builder_required
+def builder_save_faction_relation(faction_id):
+    validate_csrf(); database = get_db(); _world_faction_or_404(database, faction_id)
+    other = request.form.get("other_faction_id", "").strip()
+    try:
+        share = mud_society.validate_share(request.form.get("share_percent", 0, type=int))
+    except ValueError as problem:
+        flash(str(problem), "error"); return _builder_redirect()
+    if other == faction_id or database.execute("SELECT 1 FROM mud_world_factions WHERE id=? AND world_id=?",
+                                               (other, _active_world(database))).fetchone() is None:
+        flash("Choose another faction from this world.", "error"); return _builder_redirect()
+    database.execute(
+        "INSERT INTO mud_faction_relations(id,faction_id,other_faction_id,share_percent) VALUES(?,?,?,?) "
+        "ON CONFLICT(faction_id,other_faction_id) DO UPDATE SET share_percent=excluded.share_percent",
+        (f"world:faction-relation:{uuid.uuid4().hex}", faction_id, other, share))
+    database.commit(); flash("Faction relation saved.", "success"); return _builder_redirect()
+
+
+@bp.post("/builder/faction-relations/<path:relation_id>/delete")
+@builder_required
+def builder_delete_faction_relation(relation_id):
+    validate_csrf(); database = get_db()
+    row = database.execute("SELECT faction_id FROM mud_faction_relations WHERE id=?", (relation_id,)).fetchone()
+    if row is None:
+        abort(404)
+    _world_faction_or_404(database, row["faction_id"])
+    database.execute("DELETE FROM mud_faction_relations WHERE id=?", (relation_id,))
+    database.commit(); flash("Faction relation removed.", "success"); return _builder_redirect()
+
+
+@bp.post("/builder/factions/<path:faction_id>")
+@builder_required
+def builder_update_faction(faction_id):
+    validate_csrf(); database = get_db(); _world_faction_or_404(database, faction_id)
+    values, error = _faction_fields()
+    if error:
+        flash(error, "error"); return _builder_redirect()
+    database.execute(
+        "UPDATE mud_world_factions SET name=?,description=?,default_reputation=?,defeat_reputation=?,public=?,"
+        "ranks_json=?,sort_order=?,updated_at=CURRENT_TIMESTAMP WHERE id=?",
+        (values["name"], values["description"], values["default_reputation"], values["defeat_reputation"],
+         values["public"], values["ranks_json"], values["sort_order"], faction_id))
+    database.commit(); flash("Faction updated.", "success"); return _builder_redirect()
 
 
 @bp.post("/builder/society/<section>")
