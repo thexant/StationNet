@@ -89,6 +89,8 @@ OBJECTIVE_TARGETS = {"talk_npc": "mud_npc_definitions", "defeat_npc": "mud_npc_d
 ORIGIN_KINDS = {"race": "races", "class": "classes"}
 # Content that NPC behaviors (schedules and the like) may name, besides rooms.
 BEHAVIOR_TABLES = {"item": "mud_item_definitions"}
+# Who owns a placed item, so taking it is theft: state_json key -> table.
+OWNER_TABLES = {"owner_faction": "mud_world_factions", "owner_npc": "mud_npc_instances"}
 DEFAULT_RESOURCE = {"enabled": True, "name": "Mana"}
 RESOURCE_NAME_RE = re.compile(r"^[^\W\d_][^\W\d_ '-]*(?:[ '-][^\W\d_]+)*$")
 
@@ -309,6 +311,15 @@ def read_package(payload):
                 destination_ids = {entry.get("id") for entry in content.get("mud_world_destinations", [])}
                 if set(taught) - destination_ids:
                     raise WorldError("Item teaches_destinations must name destinations in content.json.")
+            elif table == "mud_item_instances":
+                state = row.get("state_json", {})
+                try:
+                    state = json.loads(state) if isinstance(state, str) else state
+                except json.JSONDecodeError as problem:
+                    raise WorldError("Placed item state_json must be valid JSON.") from problem
+                for key, owner_table in OWNER_TABLES.items():
+                    if isinstance(state, dict) and key in state and state[key] not in raw_ids(owner_table):
+                        raise WorldError(f"Placed item {row.get('id')} names an unknown {key}: {state[key]}.")
             elif table == "mud_world_destinations":
                 if not isinstance(row.get("room_id"), str):
                     raise WorldError("Every destination needs a room_id.")
@@ -663,6 +674,12 @@ def _insert_content(database, document, installation_key, skill_map=None):
                                        ensure_ascii=False, separators=(",", ":"))
                 elif table == "mud_item_definitions" and column == "properties_json":
                     value = _remap_item_properties(value, condition_mapper)
+                elif table == "mud_item_instances" and column == "state_json":
+                    state = json.loads(value) if isinstance(value, str) else value
+                    if isinstance(state, dict):
+                        state = {key: (_mapped(maps, OWNER_TABLES[key], item, key) if key in OWNER_TABLES else item)
+                                 for key, item in state.items()}
+                    value = json.dumps(state, ensure_ascii=False, separators=(",", ":"))
                 elif table == "mud_npc_definitions" and column == "behaviors_json":
                     behaviors = json.loads(value) if isinstance(value, str) else value
                     value = json.dumps(mud_society.remap_behaviors(behaviors, lambda kind, ref: (
@@ -1171,6 +1188,14 @@ def _export_content(database, world_id, room_map):
                         value = json.loads(value)
                     except json.JSONDecodeError:
                         pass
+                    if table == "mud_item_instances" and column == "state_json" and isinstance(value, dict):
+                        for key, owner_table in OWNER_TABLES.items():
+                            if key in value:
+                                local = maps.get(owner_table, {}).get(value[key])
+                                if local is None:
+                                    del value[key]
+                                else:
+                                    value[key] = local
                     if table == "mud_npc_definitions" and column == "behaviors_json" and isinstance(value, dict):
                         # References outside the exported world are dropped rather than left dangling.
                         value = mud_society.remap_behaviors(value, lambda kind, ref: (

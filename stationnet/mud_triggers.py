@@ -30,14 +30,14 @@ MAX_PENDING_DELAYS = 20
 TRIGGER_ID_RE = re.compile(r"^[a-z][a-z0-9-]{0,63}$")
 SCOPES = ("character", "world")
 EVENT_TYPES = ("enter_room", "use_object", "take_item", "say_phrase", "defeat_npc",
-               "dialogue_choice", "quest_complete", "timer", "manual")
+               "dialogue_choice", "quest_complete", "timer", "manual", "crime")
 # Which source kinds each event accepts. Exactly one source is required,
 # except for manual triggers, which are only run by other triggers.
 EVENT_SOURCES = {
     "enter_room": ("room",), "use_object": ("object", "item"), "take_item": ("object", "item"),
     "say_phrase": ("room",), "defeat_npc": ("npc", "npc_instance"),
     "dialogue_choice": ("response",), "quest_complete": ("quest",), "timer": ("room",),
-    "manual": (),
+    "manual": (), "crime": ("room", "npc", "faction"),
 }
 EVENT_LABELS = {
     "enter_room": "A player enters a room", "use_object": "A player uses or interacts with an object",
@@ -45,20 +45,22 @@ EVENT_LABELS = {
     "defeat_npc": "A player helps defeat an NPC", "dialogue_choice": "A player picks a dialogue response",
     "quest_complete": "A player completes a quest", "timer": "A repeating timer (no player)",
     "manual": "Only when another trigger runs it",
+    "crime": "A player is seen committing a crime (by room, witness or victim NPC type, or faction)",
 }
 SOURCE_LABELS = {"room": "room", "object": "placed object", "item": "item type", "npc": "NPC type",
-                 "npc_instance": "placed NPC", "response": "dialogue response", "quest": "quest"}
+                 "npc_instance": "placed NPC", "response": "dialogue response", "quest": "quest",
+                 "faction": "faction"}
 ACTION_TYPES = ("message", "set_flag", "clear_flag", "give_item", "take_item", "experience", "coins",
                 "take_coins", "heal", "damage", "set_object_state", "set_exit", "show", "hide",
                 "spawn_npc", "teleport", "start_quest", "complete_objective", "run_trigger",
-                "learn_destination", "forget_destination", "disposition", "reputation")
+                "learn_destination", "forget_destination", "disposition", "reputation", "fine", "clear_fines")
 OUTCOME_ACTIONS = ("give_item", "take_item", "experience", "coins", "take_coins")
 MESSAGE_TARGETS = ("actor", "room", "other_room")
 EXIT_STATES = ("open", "locked", "hidden", "default")
 # Actions that need a player to act on. Timer triggers have no player.
 _ACTOR_ACTIONS = {"give_item", "take_item", "experience", "coins", "take_coins", "heal", "damage",
                   "teleport", "start_quest", "complete_objective", "learn_destination", "forget_destination",
-                  "disposition", "reputation"}
+                  "disposition", "reputation", "fine", "clear_fines"}
 # Procedural dungeons are generated fresh for each run, so their triggers only
 # use actions that make sense inside one run.
 DUNGEON_EVENTS = ("enter_room", "use_object", "take_item", "say_phrase", "defeat_npc", "manual")
@@ -79,6 +81,7 @@ _ACTION_REFERENCES = {
     "forget_destination": (("destination", "destination"),),
     "disposition": (("npc", "npc"),),
     "reputation": (("faction", "faction"),),
+    "fine": (("faction", "faction"),), "clear_fines": (("faction", "faction"),),
 }
 
 
@@ -204,6 +207,15 @@ def _action(raw, index, dungeon):
     elif kind in ("learn_destination", "forget_destination"):
         fields |= {"destination"}
         result["destination"] = _identifier(raw.get("destination"), f"{where} destination")
+    elif kind == "fine":
+        fields |= {"faction", "amount"}
+        if not _whole(raw.get("amount"), 1, 100_000):
+            raise ValueError(f"{where}: fine amount must be a whole number from 1 to 100,000.")
+        result.update(faction=_identifier(raw.get("faction"), f"{where} faction"), amount=raw["amount"])
+    elif kind == "clear_fines":
+        fields |= {"faction"}
+        if "faction" in raw:
+            result["faction"] = _identifier(raw["faction"], f"{where} faction")
     elif kind == "reputation":
         fields |= {"faction", "amount"}
         try:

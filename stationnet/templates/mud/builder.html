@@ -61,6 +61,23 @@
       <input id="relationships-hostile" name="hostile_at" type="number" min="-100" max="-21" value="{{ society.relationships.hostile_at }}">
       <button>SAVE RELATIONSHIPS</button>
     </form>
+    <h3>Crime</h3>
+    <p class="muted">With crime on, taking a placed item whose <code>state_json</code> names an <code>owner_faction</code> or <code>owner_npc</code> is theft, <code>/steal from &lt;npc&gt;</code> picks pockets of NPCs with a <code>steal</code> behaviour, and attacking a peaceful NPC that belongs to a faction (or is <code>lawful</code>) is assault. Each NPC in the room may notice; Stealth, Agility and hiding lower the odds. A seen crime costs standing with the factions involved and regard with the witnesses, and the owner's faction fines the player. Guards (<code>guard: true</code>) attack players who owe their faction, until they <code>/pay</code>. Players can never be victims.</p>
+    <form method="post" action="{{ url_for('mud.builder_set_society', section='crime') }}" class="builder-inline-form">
+      <input type="hidden" name="csrf_token" value="{{ session.csrf_token }}">
+      <label class="check"><input type="checkbox" name="enabled" value="1" {% if society.crime.enabled %}checked{% endif %}> Crimes have consequences</label>
+      <label for="crime-detection">Witness detection (%)</label>
+      <input id="crime-detection" name="detection" type="number" min="0" max="100" value="{{ society.crime.detection }}">
+      <label for="crime-expiry">Fines expire after hours (0 = never)</label>
+      <input id="crime-expiry" name="fine_expiry_hours" type="number" min="0" max="720" value="{{ society.crime.fine_expiry_hours }}">
+      {% for kind in ('theft', 'pickpocket', 'assault') %}
+      <label for="crime-fine-{{ kind }}">{{ kind|title }} fine</label>
+      <input id="crime-fine-{{ kind }}" name="fines.{{ kind }}" type="number" min="0" max="100000" value="{{ society.crime.fines[kind] }}">
+      <label for="crime-rep-{{ kind }}">{{ kind|title }} standing change</label>
+      <input id="crime-rep-{{ kind }}" name="reputation.{{ kind }}" type="number" min="-1000" max="0" value="{{ society.crime.reputation[kind] }}">
+      {% endfor %}
+      <button>SAVE CRIME</button>
+    </form>
   </section>
 
   {% if g.user.is_admin %}
@@ -153,7 +170,7 @@
   <section class="terminal-card builder-create" aria-labelledby="npc-heading">
     <p class="eyebrow">NPC LIBRARY / REUSABLE DEFINITIONS</p><h2 id="npc-heading">NPCs</h2>
     <p class="muted">Optional behaviours: ambient speech, wander or patrol, and reactions to movement, speech, emotes, and items. See the custom world guide for JSON examples.</p>
-    <details class="builder-exits"><summary>Daily schedules and relationships</summary>
+    <details class="builder-exits"><summary>Daily schedules, relationships, and crime</summary>
       <p class="muted">With the world clock on, a <code>schedule</code> moves an NPC between rooms by the hour and sends it home otherwise. Entries run from <code>from</code> up to (not including) <code>to</code> and may wrap past midnight; the first matching entry wins. <code>open: true</code> lets a merchant or trainer trade there, and scheduled merchants and trainers are closed at other times. <code>lines</code> are shown in the room while the NPC is there. <code>travel</code> is <code>walk</code> (one room per tick, by the shortest route) or <code>teleport</code>. A schedule replaces wander and patrol.{% if not society.clock.enabled %} <strong>The clock is off, so schedules are paused.</strong>{% endif %}</p>
       <pre>{"schedule": {"interval_seconds": 30, "travel": "walk",
   "entries": [{"from": 8, "to": 18, "room": "ROOM-ID", "open": true,
@@ -163,6 +180,10 @@
       <pre>{"relationship": {"default": 10, "gifts": {"ITEM-ID": 15},
   "greetings": {"friendly": "Good to see you again!", "unfriendly": "What now?"},
   "refuse_talk_below": -40}}</pre>
+      <p class="muted">For crime: <code>guard: true</code> makes an NPC attack players who owe fines to its faction; <code>lawful: true</code> makes attacking it assault even without a faction; <code>witness: false</code> makes it look away. A <code>steal</code> behaviour lets players pick its pocket.</p>
+      <pre>{"guard": true, "neutral": true}
+{"steal": {"difficulty": 30, "cooldown_seconds": 3600,
+  "coins": {"minimum": 2, "maximum": 12}, "items": [{"item": "ITEM-ID", "chance": 25}]}}</pre>
       <p class="muted">Room IDs for this world:</p>
       <ul class="builder-id-list">{% for room in rooms %}<li><code>{{ room.id }}</code> {{ room.name }}</li>{% endfor %}</ul>
     </details>
@@ -244,12 +265,13 @@
   <label>Key (blank = made from the name; used by run_trigger and exports)<input name="local_id" maxlength="64" pattern="[a-z][a-z0-9\-]{0,63}" value="{{ trigger.id if trigger else '' }}"></label>
   <label>When<select name="event" required>{% for value, label in trigger_events %}<option value="{{ value }}" {% if trigger and trigger.event==value %}selected{% endif %}>{{ label }}</option>{% endfor %}</select></label>
   <label>Involving (ignored for manual triggers)<select name="source"><option value="">Nothing (manual triggers)</option>
-    <optgroup label="Rooms (enter, say, timer)">{% for room in rooms %}<option value="room|{{ room.id }}" {% if trigger and trigger.source_key=='room|' ~ room.id %}selected{% endif %}>{{ room.name }}</option>{% endfor %}</optgroup>
+    <optgroup label="Rooms (enter, say, timer, crime)">{% for room in rooms %}<option value="room|{{ room.id }}" {% if trigger and trigger.source_key=='room|' ~ room.id %}selected{% endif %}>{{ room.name }}</option>{% endfor %}</optgroup>
     <optgroup label="Placed objects (use, take)">{% for item in trigger_objects %}<option value="object|{{ item.id }}" {% if trigger and trigger.source_key=='object|' ~ item.id %}selected{% endif %}>{{ item.name }} in {{ item.room_name }}</option>{% endfor %}</optgroup>
     <optgroup label="Any item of a type (use, take)">{% for item in definitions %}<option value="item|{{ item.id }}" {% if trigger and trigger.source_key=='item|' ~ item.id %}selected{% endif %}>{{ item.name }}</option>{% endfor %}</optgroup>
-    <optgroup label="Any NPC of a type (defeat)">{% for npc in npc_definitions %}<option value="npc|{{ npc.id }}" {% if trigger and trigger.source_key=='npc|' ~ npc.id %}selected{% endif %}>{{ npc.name }}</option>{% endfor %}</optgroup>
+    <optgroup label="Any NPC of a type (defeat, crime witness or victim)">{% for npc in npc_definitions %}<option value="npc|{{ npc.id }}" {% if trigger and trigger.source_key=='npc|' ~ npc.id %}selected{% endif %}>{{ npc.name }}</option>{% endfor %}</optgroup>
     <optgroup label="Placed NPCs (defeat)">{% for npc in trigger_npcs %}<option value="npc_instance|{{ npc.id }}" {% if trigger and trigger.source_key=='npc_instance|' ~ npc.id %}selected{% endif %}>{{ npc.name }} in {{ npc.room_name }}</option>{% endfor %}</optgroup>
     <optgroup label="Dialogue responses">{% for response in trigger_responses %}<option value="response|{{ response.id }}" {% if trigger and trigger.source_key=='response|' ~ response.id %}selected{% endif %}>{{ response.conversation_name }}: {{ response.response_text[:60] }}</option>{% endfor %}</optgroup>
+    <optgroup label="Factions (crime)">{% for faction in factions %}<option value="faction|{{ faction.id }}" {% if trigger and trigger.source_key=='faction|' ~ faction.id %}selected{% endif %}>{{ faction.name }}</option>{% endfor %}</optgroup>
     <optgroup label="Quests (complete)">{% for quest in quests %}<option value="quest|{{ quest.id }}" {% if trigger and trigger.source_key=='quest|' ~ quest.id %}selected{% endif %}>{{ quest.name }}</option>{% endfor %}</optgroup>
   </select></label>
   <label>Phrase (say a phrase only)<input name="phrase" maxlength="200" placeholder="open sesame" value="{{ trigger.phrase if trigger and trigger.phrase else '' }}"></label>
@@ -376,7 +398,7 @@ Condition: {"type":"knows_destination","destination":"DESTINATION ID"}   Dialogu
         </form>
       </section>
 
-      <section class="builder-exits"><h3>Items in {{ room.name }}</h3>{% for item in items_by_room[room.id] %}<form method="post" action="{{ url_for('mud.builder_delete_item_instance',instance_id=item.id) }}" class="builder-delete-exit"><input type="hidden" name="csrf_token" value="{{ session.csrf_token }}"><input type="hidden" name="confirmation" value="delete"><span>{{ item.name }} · {{ item.item_type }}</span> <button class="danger">REMOVE</button></form>{% else %}<p class="muted">No placed items.</p>{% endfor %}<form method="post" action="{{ url_for('mud.builder_place_selected_item') }}" class="builder-inline-form"><input type="hidden" name="csrf_token" value="{{ session.csrf_token }}"><input type="hidden" name="room_id" value="{{ room.id }}"><label>Place item<select name="definition_id" required><option value="" selected disabled>Choose an item</option>{% for definition in definitions %}<option value="{{ definition.id }}">{{ definition.name }}</option>{% endfor %}</select></label><label>Respawn seconds (0 = one time)<input type="number" name="respawn_seconds" min="0" max="86400" value="0"></label><label>Destination<select name="container_id"><option value="">Room floor</option>{% for item in items_by_room[room.id] if item.item_type=='container' %}<option value="{{ item.id }}">Inside {{ item.name }}</option>{% endfor %}</select></label><button {% if not definitions %}disabled{% endif %}>PLACE COPY</button></form></section>
+      <section class="builder-exits"><h3>Items in {{ room.name }}</h3>{% for item in items_by_room[room.id] %}<form method="post" action="{{ url_for('mud.builder_delete_item_instance',instance_id=item.id) }}" class="builder-delete-exit"><input type="hidden" name="csrf_token" value="{{ session.csrf_token }}"><input type="hidden" name="confirmation" value="delete"><span>{{ item.name }} · {{ item.item_type }}</span> <button class="danger">REMOVE</button></form>{% if factions or npcs_by_room[room.id] %}<form method="post" action="{{ url_for('mud.builder_set_item_owner',instance_id=item.id) }}" class="builder-inline-form"><input type="hidden" name="csrf_token" value="{{ session.csrf_token }}"><label>Owner of {{ item.name }} (taking it is theft)<select name="owner"><option value="">Nobody</option>{% for faction in factions %}<option value="faction|{{ faction.id }}" {% if item.owner == 'faction|' ~ faction.id %}selected{% endif %}>{{ faction.name }}</option>{% endfor %}{% for npc in npcs_by_room[room.id] %}<option value="npc|{{ npc.id }}" {% if item.owner == 'npc|' ~ npc.id %}selected{% endif %}>{{ npc.name }} (here)</option>{% endfor %}</select></label><button class="secondary">SAVE OWNER</button></form>{% endif %}{% else %}<p class="muted">No placed items.</p>{% endfor %}<form method="post" action="{{ url_for('mud.builder_place_selected_item') }}" class="builder-inline-form"><input type="hidden" name="csrf_token" value="{{ session.csrf_token }}"><input type="hidden" name="room_id" value="{{ room.id }}"><label>Place item<select name="definition_id" required><option value="" selected disabled>Choose an item</option>{% for definition in definitions %}<option value="{{ definition.id }}">{{ definition.name }}</option>{% endfor %}</select></label><label>Respawn seconds (0 = one time)<input type="number" name="respawn_seconds" min="0" max="86400" value="0"></label><label>Destination<select name="container_id"><option value="">Room floor</option>{% for item in items_by_room[room.id] if item.item_type=='container' %}<option value="{{ item.id }}">Inside {{ item.name }}</option>{% endfor %}</select></label><button {% if not definitions %}disabled{% endif %}>PLACE COPY</button></form></section>
 
       <section class="builder-exits"><h3>Renewable placements</h3>{% for spawn in spawns_by_room[room.id] %}<form method="post" action="{{ url_for('mud.builder_delete_item_spawn',spawn_id=spawn.id) }}"><input type="hidden" name="csrf_token" value="{{ session.csrf_token }}"><input type="hidden" name="confirmation" value="delete"><span>{{ spawn.name }} - every {{ spawn.respawn_seconds }} seconds{% if not spawn.live_instance_id %} - replenishing{% endif %}</span><button class="danger">REMOVE</button></form>{% else %}<p class="muted">No renewable placements.</p>{% endfor %}</section>
       <section class="builder-exits"><h3>Search discoveries</h3>{% for discovery in discoveries_by_room[room.id] %}<form method="post" action="{{ url_for('mud.builder_delete_discovery',discovery_id=discovery.id) }}"><input type="hidden" name="csrf_token" value="{{ session.csrf_token }}"><input type="hidden" name="confirmation" value="delete"><span>{{ discovery.clue }}{% if discovery.difficulty %} · difficulty {{ discovery.difficulty }}{% endif %}</span><button class="danger">REMOVE</button></form>{% endfor %}<form method="post" action="{{ url_for('mud.builder_add_discovery',room_id=room.id) }}" class="builder-inline-form"><input type="hidden" name="csrf_token" value="{{ session.csrf_token }}"><label>Clue<input name="clue" maxlength="500" required></label><label>Found item<select name="item_definition_id"><option value="">None</option>{% for item in definitions %}<option value="{{ item.id }}">{{ item.name }}</option>{% endfor %}</select></label><label>Search difficulty (0 = always found)<input type="number" name="difficulty" min="0" max="200" value="0"></label><button>ADD DISCOVERY</button></form></section>

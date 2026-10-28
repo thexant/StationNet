@@ -14,7 +14,9 @@ A context must provide these methods:
 Contexts may also provide game_hour(), the active world's hour or None, and
 disposition(npc_definition_id), an NPC's (regard, tier) toward the character or
 None while relationships are off; a missing NPC means the one being spoken to;
-and reputation(faction_id), the character's (standing, rank key) with a faction.
+reputation(faction_id), the character's (standing, rank key) with a faction; and
+fines(faction_id), unpaid fines in coins (to one faction, or to all for None),
+or None while crime is off.
 
 It also validates and checks equipment requirements, which gate items on
 attributes, level, and the wearer's race, class, or origin tags.
@@ -30,13 +32,13 @@ MAX_ID_LENGTH = 200
 QUEST_STATUSES = ("not_started", "active", "ready", "completed")
 CONDITION_TYPES = ("level", "race", "class", "tag", "has_item", "coins", "attribute", "skill",
                    "quest", "objective", "state", "claimed", "flag", "object_state", "in_room",
-                   "knows_destination", "time", "disposition", "reputation")
+                   "knows_destination", "time", "disposition", "reputation", "wanted")
 OUTCOME_TYPES = ("give_item", "take_item", "experience", "coins", "take_coins", "learn_destination", "disposition",
                  "reputation")
 # Condition types that only make sense in traditional worlds, where quests and
 # placed objects, rooms and wayfinding destinations exist.
 QUEST_CONDITION_TYPES = ("quest", "objective", "object_state", "in_room", "knows_destination", "time",
-                         "disposition", "reputation")
+                         "disposition", "reputation", "wanted")
 # Outcomes that teach world knowledge; procedural dungeons have no destinations.
 WORLD_OUTCOME_TYPES = ("learn_destination", "disposition", "reputation")
 REPUTATION_LIMIT = 1000
@@ -55,6 +57,7 @@ _REFERENCE_FIELDS = {
     # Optional: without an NPC these mean the one being spoken to.
     "disposition": ("npc", "npc"),
     "reputation": ("faction", "faction"),
+    "wanted": ("faction", "faction"),
 }
 
 
@@ -211,6 +214,13 @@ def _condition(raw, allowed, nested):
     elif kind == "knows_destination":
         fields |= {"destination"}
         result["destination"] = _identifier(raw.get("destination"), "knows_destination destination")
+    elif kind == "wanted":
+        fields |= {"faction", "min_fine"}
+        if "faction" in raw:
+            result["faction"] = _identifier(raw["faction"], "wanted faction")
+        if not _whole(raw.get("min_fine", 1), 1, 10_000_000):
+            raise ValueError("wanted min_fine must be a whole number of coins from 1.")
+        result["min_fine"] = raw.get("min_fine", 1)
     elif kind == "reputation":
         fields |= {"faction", "min", "max", "rank"}
         result["faction"] = _identifier(raw.get("faction"), "reputation faction")
@@ -403,6 +413,9 @@ def _holds(condition, context):
     if kind == "knows_destination":
         knows = getattr(context, "knows_destination", None)
         return bool(knows and knows(condition["destination"]))
+    if kind == "wanted":
+        owed = getattr(context, "fines", lambda faction: None)(condition.get("faction"))
+        return owed is not None and owed >= condition["min_fine"]
     if kind == "reputation":
         found = getattr(context, "reputation", lambda faction: None)(condition["faction"])
         if found is None:

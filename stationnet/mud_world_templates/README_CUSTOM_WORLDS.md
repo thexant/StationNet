@@ -444,13 +444,14 @@ its entries holds; groups cannot be nested. A list holds up to 20 entries.
 | `in_room` | `room` | The character is in that room. |
 | `knows_destination` | `destination` | The character has learned that [destination](#5e-wayfinding-destinations) (by visiting, dialogue, a trigger, or reading). Carrying a map does not count. |
 | `reputation` | `faction`, and `rank` (one or a list of rank keys) or `min`/`max` (-1000 to 1000) | The character's [standing](#factions-and-reputation) with the faction matches. |
+| `wanted` | optional `faction`, optional `min_fine` (default 1) | The character owes at least `min_fine` coins in unpaid [fines](#crime-and-consequences), to that faction or to any. Never holds while crime is off; add `"negate": true` to bar wanted characters. |
 | `disposition` | optional `npc` (definition), and `tier` (one or a list of `hostile`, `unfriendly`, `neutral`, `friendly`, `trusted`) or `min`/`max` (-100 to 100) | That NPC's [regard](#relationships) for the character matches. Without `npc` it means the NPC being spoken to. Never holds while relationships are off. |
 | `time` | `from`, `to` (hours 0–23) | The [world clock](#world-clock) reads an hour from `from` up to, but not including, `to`. `{"from": 20, "to": 4}` wraps past midnight. Never holds while the clock is off. |
 
 Flag keys are 1 to 80 lowercase letters, digits, and `. _ : -`, such as
 `gate.open` or `rats_slain`. Inside a procedural dungeon, `world` flags belong
 to that run. `object_state`, `in_room`, `knows_destination`, `time`,
-`disposition`, and `reputation` are not available in dungeon templates.
+`disposition`, `reputation`, and `wanted` are not available in dungeon templates.
 
 ### Outcomes
 
@@ -731,6 +732,7 @@ expressions, or loops, and nothing in a package can run code.
 | `defeat_npc` | `npc` (any NPC of that type) or `npc_instance` (one placed NPC) | An NPC is defeated. It fires once for **each** player who earned a share of the rewards. |
 | `dialogue_choice` | `response` | A player picks that dialogue response. It runs after the response's own outcomes and quest changes. |
 | `quest_complete` | `quest` | A player completes the quest, automatically or by turning it in. |
+| `crime` | `room`, `npc` (a witness or victim of that type), or `faction` (one whose standing the crime cost) | A player is seen committing a [crime](#crime-and-consequences). |
 | `timer` | `room`, plus `interval_seconds` (30–86,400) | Repeatedly while the world is active, whether or not anyone is there. Timers have no player. |
 | `manual` | none | Only when another trigger runs it with `run_trigger`. Use these to share a set of actions. |
 
@@ -774,6 +776,8 @@ left the world, or the dungeon run, by the time it is due.
 | `learn_destination`, `forget_destination` | `destination` | Teaches the player the way to a [destination](#5e-wayfinding-destinations), or makes them forget it. |
 | `disposition` | `npc` (definition), `amount` (-100 to 100, not 0) | Changes that NPC's [regard](#relationships) for the player. |
 | `reputation` | `faction`, `amount` (-1000 to 1000, not 0) | Changes the player's [standing](#factions-and-reputation) with a faction. |
+| `fine` | `faction`, `amount` (1–100,000) | Fines the player, as a [crime](#crime-and-consequences) would, without changing standing. |
+| `clear_fines` | optional `faction` | Pardons the player's unpaid fines, to that faction or to all. |
 
 Exits must have an `"id"` in `exits.json` before a trigger can name them.
 
@@ -1237,6 +1241,79 @@ triggers and stock, so a guild hall can admit only members of standing. Players
 see public factions with `/reputation` (or `/standing`) and in their Standing
 panel. In the World Builder, the **Factions** section creates factions, ranks
 and relations, and each NPC form chooses a faction.
+
+### Crime and consequences
+
+Crime is a light layer on top of factions and relationships. It is off until
+the world turns it on:
+
+```json
+"crime": {"enabled": true, "detection": 70, "fine_expiry_hours": 0,
+          "fines": {"theft": 25, "pickpocket": 40, "assault": 75},
+          "reputation": {"theft": -50, "pickpocket": -75, "assault": -100}}
+```
+
+| Field | Meaning |
+| --- | --- |
+| `detection` | Each witness's base chance (0–100) to notice a crime. |
+| `fine_expiry_hours` | Unpaid fines lapse after this many hours (0–720; `0` keeps them until paid). |
+| `fines` | Coins fined for each crime (0–100,000). |
+| `reputation` | Standing change for each crime (-1000 to 0), with every faction involved. |
+
+**Crimes.** Only NPCs and their belongings can be victims; players can never
+rob or report one another.
+
+- **Theft.** Taking a placed item, or an item from a placed container, whose
+  `state_json` names an owner: `{"owner_faction": "guild"}` or
+  `{"owner_npc": "stall-keeper"}`, a placed NPC. The item becomes stolen
+  goods, which merchants of the owning faction refuse to buy. Once taken it
+  is an ordinary item, so dropping and taking it again is no crime. In the
+  World Builder, each placed item in a room has an **Owner** choice.
+- **Pickpocketing.** `/steal from <npc>` against an NPC with a `steal`
+  behaviour. A failed attempt is always caught by the victim.
+- **Assault.** Attacking an NPC that was not hostile to you, when it belongs
+  to a faction or has `"lawful": true`. The victim always sees it, once per
+  fight.
+
+```json
+{"steal": {"difficulty": 30, "cooldown_seconds": 3600,
+  "coins": {"minimum": 2, "maximum": 12},
+  "items": [{"item": "silver-ring", "chance": 25}]}}
+```
+
+A pickpocket succeeds at `50 + score − difficulty` percent (5–95), where the
+score is the character's Stealth effect, plus twice their Agility above 10,
+plus 15 while hidden. Each NPC can only be robbed once per `cooldown_seconds`
+(60 to 604,800, default 3600). Success practices Stealth.
+
+**Witnesses.** Every NPC in the room may notice, except defeated ones and
+those with `"witness": false`. Each rolls `detection − Stealth − 2 × (Agility −
+10)`, minus 20 more while the thief hides, kept between 5% and 95%. A crime
+nobody notices has no consequences. A noticed crime:
+
+- tells the room who was seen;
+- fines the player on behalf of the first faction involved: the owner's,
+  the victim's, or else a witness's. Without any faction there is no fine;
+- costs standing with every faction involved, which passes on through
+  relations;
+- costs regard with each witness by the [relationship](#relationships)
+  `crime` amount;
+- fires `crime` [triggers](#5c-events-and-triggers-eventsjson);
+- lets any NPC now hostile to the player, such as a guard, attack at once.
+
+**Guards and fines.** An NPC with `"guard": true` and a faction attacks
+players who owe that faction fines. Before its first blow it shouts how much
+is owed. Players use `/fines` to list what they owe and `/pay` (or
+`/pay <faction>`) beside any member of the faction to settle it. Paying ends
+the fight with that faction and restores half the standing the crimes cost.
+The `wanted` condition bars wanted characters from exits, dialogue, quests,
+or anything else that takes conditions:
+
+```json
+{"from": "road", "to": "city", "name": "city gate", "direction": "north",
+ "conditions": [{"type": "wanted", "faction": "watch", "negate": true}],
+ "conditions_message": "The gate guard turns you away until you settle your fines."}
+```
 
 ## 6. Import, edit, export, and remove
 

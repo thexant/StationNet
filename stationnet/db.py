@@ -2055,7 +2055,7 @@ def _migrate_mud_world_packages(database):
 
 def _migrate_mud_society(database):
     """Add optional world life: clock, schedule and relationship settings per world, NPC regard,
-    and factions with per-character reputation.
+    factions with per-character reputation, and the fines crimes leave behind.
 
     Settings live in one JSON column whose empty default keeps every system
     off, so existing worlds play exactly as before.
@@ -2099,6 +2099,23 @@ def _migrate_mud_society(database):
       reputation INTEGER NOT NULL CHECK(reputation BETWEEN -1000 AND 1000),
       updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
       PRIMARY KEY(character_id,faction_id));
+    CREATE TABLE IF NOT EXISTS mud_character_crimes (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      character_id TEXT NOT NULL REFERENCES mud_characters(id) ON DELETE CASCADE,
+      world_id TEXT NOT NULL REFERENCES mud_world_packages(id) ON DELETE CASCADE,
+      faction_id TEXT REFERENCES mud_world_factions(id) ON DELETE SET NULL,
+      kind TEXT NOT NULL CHECK(kind IN ('theft','pickpocket','assault','other')),
+      fine INTEGER NOT NULL DEFAULT 0 CHECK(fine BETWEEN 0 AND 100000),
+      reputation_loss INTEGER NOT NULL DEFAULT 0,
+      status TEXT NOT NULL DEFAULT 'open' CHECK(status IN ('open','paid','expired','cleared')),
+      created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      settled_at TEXT);
+    CREATE INDEX IF NOT EXISTS idx_mud_character_crimes_open ON mud_character_crimes(character_id,world_id,status);
+    CREATE TABLE IF NOT EXISTS mud_pickpocket_marks (
+      character_id TEXT NOT NULL REFERENCES mud_characters(id) ON DELETE CASCADE,
+      npc_instance_id TEXT NOT NULL REFERENCES mud_npc_instances(id) ON DELETE CASCADE,
+      stolen_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      PRIMARY KEY(character_id,npc_instance_id));
     """)
     npc_columns = {row["name"] for row in database.execute("PRAGMA table_info(mud_npc_definitions)")}
     if "faction_id" not in npc_columns:

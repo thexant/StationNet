@@ -245,7 +245,7 @@ def _current_mode(database, user_id):
 
 # Commands that belong to an optional world-life system, hidden from help while it is off.
 SOCIETY_ACTIONS = {"time": "clock", "relations": "relationships", "give": "relationships",
-                   "reputation": "factions"}
+                   "reputation": "factions", "steal": "crime", "fines": "crime", "pay": "crime"}
 # Commands that only exist to spend the resource; worlds without it hide them.
 RESOURCE_ACTIONS = frozenset({"spells", "cast"})
 RESOURCE_DISABLED_DESCRIPTIONS = {
@@ -975,7 +975,8 @@ def _help_action(_database, _user, parameters):
             "learn": '/learn lockpicking from "Old Thief"', "practice_skill": '/practice blades',
             "pick": '/pick north', "interact": '/pull "Rusty Lever"', "travel": '/travel north',
             "directions": '/directions "Kessa Gate"', "use": '/read "Old Map"',
-            "give": '/give "Red Apple" to Baker',
+            "give": '/give "Red Apple" to Baker', "steal": '/steal from "Fat Merchant"',
+            "pay": '/pay "Town Watch"',
         }
         body = f"/{name}: {_action_description(definition, resource)}\nAliases: " + ", ".join(f"/{alias}" for alias in aliases)
         if definition.key in examples:
@@ -2347,6 +2348,10 @@ def _world_shop_action(database, user, parameters):
                              list(_inventory_rows(database, user["id"], True)), target)
         if item["item_type"] == "key" or item["acquired_run_id"]:
             raise ActionError("That item cannot be sold here.")
+        stolen_from = _json_properties(database.execute("SELECT state_json FROM mud_item_instances WHERE id=?",
+                                                        (item["id"],)).fetchone()["state_json"]).get("stolen_from")
+        if stolen_from and stolen_from in {standing[0]["id"] if standing else None, npc["id"]}:
+            raise ActionError(f"{npc['name']} recognizes {item['name']} as stolen and refuses to buy it.")
         if database.execute("SELECT 1 FROM mud_item_instances WHERE container_id=?", (item["id"],)).fetchone():
             raise ActionError("Empty this container before selling it.")
         price = _resale_price(database, item, shop["sell_percent"], 200 - _trade_percent(database, npc, user["id"]))
@@ -2916,6 +2921,11 @@ class _ConditionContext:
         value, rank = mud_society.standing(self.database, self._character()["id"], row)
         return value, rank["key"]
 
+    def fines(self, faction_id=None):
+        if self.dungeon or not society_settings(self.database)["crime"]["enabled"]:
+            return None
+        return _fines_owed(self.database, self.user_id, faction_id)
+
     def game_hour(self):
         moment = None if self.dungeon else _game_time(self.database)
         return moment["hour"] if moment else None
@@ -3196,10 +3206,14 @@ def _defeat_reputation(database, user, npc_definition_id):
 def validate_npc_behaviors(value):
     """Validate the small, supported authored behavior schema."""
     if not isinstance(value, dict) or set(value) - {"aggressive", "friendly", "neutral", "passive", "ambient", "wander", "patrol", "reactions",
-                                                    "schedule", "relationship"}:
+                                                    "schedule", "relationship", "steal", "guard", "lawful",
+                                                    "witness"}:
         raise ValueError("NPC behaviors contain an unsupported key.")
-    if any(type(value[key]) is not bool for key in ("aggressive", "friendly", "neutral", "passive") if key in value):
-        raise ValueError("aggressive, friendly, neutral, and passive must be true or false.")
+    if any(type(value[key]) is not bool for key in ("aggressive", "friendly", "neutral", "passive",
+                                                    *mud_society.CRIME_FLAGS) if key in value):
+        raise ValueError("aggressive, friendly, neutral, passive, guard, lawful, and witness must be true or false.")
+    if "steal" in value:
+        mud_society.validate_steal(value["steal"])
     for key in ("ambient", "wander", "patrol"):
         if key not in value:
             continue
@@ -3270,6 +3284,8 @@ def _social_hostility(database, npc, user_id, settings=None):
     attitude = standing[2]["attitude"] if standing else None
     if attitude == "hostile":
         return True
+    if behaviors.get("guard") and standing and _fines_owed(database, user_id, standing[0]["id"], settings):
+        return True
     if settings["relationships"]["enabled"]:
         spec = behaviors.get("relationship") if isinstance(behaviors.get("relationship"), dict) else {}
         if spec.get("attacks_when_hostile", True):
@@ -3326,6 +3342,119 @@ def _active_hostiles(database, room, user_id=None):
               and _engaged(database, encounter["id"], character_id)):
             enemies.append((npc, encounter))
     return enemies
+
+
+def _fines_owed(database, user_id, faction_id=None, settings=None):
+    """Unpaid fines in coins to one faction (or all); 0 while crime is off."""
+    crime = (settings or society_settings(database))["crime"]
+    if not crime["enabled"]:
+        return 0
+    mud_society.expire_fines(database, crime)
+    return sum(mud_society.open_fines(database, f"stationnet:character:{user_id}", _active_world(database),
+                                      faction_id).values())
+
+
+def _crime_roll():
+    """0-99; tests replace it to decide witness and pickpocket rolls."""
+    return secrets.randbelow(100)
+
+
+def _npc_faction_id(database, npc_definition_id):
+    row = database.execute("SELECT faction_id FROM mud_npc_definitions WHERE id=?", (npc_definition_id,)).fetchone()
+    return row["faction_id"] if row else None
+
+
+def _crime_witnesses(database, room_id, exclude=()):
+    """NPCs in the room who could notice a crime: visible, standing, and not set to look away."""
+    witnesses = []
+    for npc in _room_npc_rows(database, room_id):
+        if npc["id"] in exclude or _json_properties(npc["behaviors_json"]).get("witness") is False:
+            continue
+        if npc["combat_maximum_health"] is not None and _encounter_row(database, npc, create=False) is not None \
+                and _encounter_row(database, npc, create=False)["status"] == "defeated":
+            continue
+        witnesses.append(npc)
+    return witnesses
+
+
+def _commit_crime(database, user, kind, room, description, *, victim=None, faction_id=None, caught=False,
+                  retaliate=True):
+    """Roll each witness's chance to notice a crime and apply what follows.
+
+    victim is the NPC wronged (always a witness when caught); faction_id names the
+    owner when no NPC is. Players are never victims. Returns the events.
+    """
+    settings = society_settings(database)
+    crime = settings["crime"]
+    if not crime["enabled"] or room.get("instance_id"):
+        return []
+    character = _character_row(database, user["id"])
+    chance = mud_society.detection_chance(crime["detection"], _character_effects(database, character["id"])["stealth"],
+                                          character["agility"], _is_hidden(database, user["id"]))
+    noticed = [npc for npc in _crime_witnesses(database, room["id"], {victim["id"]} if victim else ())
+               if _crime_roll() < chance]
+    if victim is not None and (caught or (_crime_roll() < chance and
+                                          _json_properties(victim["behaviors_json"]).get("witness") is not False)):
+        noticed.insert(0, victim)
+    if not noticed:
+        return []
+    _set_hidden(database, user["id"], False)
+    factions = []
+    for candidate in [faction_id, *(_npc_faction_id(database, npc["definition_id"]) for npc in noticed)]:
+        if candidate and candidate not in factions:
+            factions.append(candidate)
+    name = character["display_name"]
+    recipients = set(_occupant_ids(database, room["id"])) | {user["id"]}
+    drafts = [EventDraft(f"{noticed[0]['name']} sees {name} {description}!", "combat", "room", room["id"],
+                         tuple(sorted(recipients)))]
+    fine, loss = crime["fines"][kind], crime["reputation"][kind]
+    if factions and fine:
+        mud_society.record_crime(database, character["id"], _active_world(database), factions[0], kind, fine, loss)
+        collector = mud_society.faction(database, factions[0])
+        drafts.append(_private(user["id"], f"You are fined {fine} coins by {collector['name']}. "
+                                           "Pay with /pay beside one of its members.", "combat"))
+    for faction in factions:
+        drafts += _change_reputation(database, user, faction, loss)
+    seen = []
+    for npc in noticed:
+        if npc["definition_id"] not in seen:
+            seen.append(npc["definition_id"])
+            drafts += _change_disposition(database, user, npc["definition_id"],
+                                          settings["relationships"]["crime"], "crime")
+    drafts += fire_triggers(database, user, "crime", [room["id"], *seen, *factions])
+    return drafts + (_entry_attack(database, user) if retaliate else [])
+
+
+def _item_owner(database, item_id):
+    """(faction ID, owning NPC instance ID) of a placed item or the container it sits in, or None."""
+    row = database.execute("SELECT state_json,container_id FROM mud_item_instances WHERE id=?", (item_id,)).fetchone()
+    while row is not None:
+        state = _json_properties(row["state_json"])
+        if state.get("owner_faction") or state.get("owner_npc"):
+            return state.get("owner_faction"), state.get("owner_npc")
+        row = (database.execute("SELECT state_json,container_id FROM mud_item_instances WHERE id=?",
+                                (row["container_id"],)).fetchone() if row["container_id"] else None)
+    return None
+
+
+def _take_owned_item(database, user, room, item, owner):
+    """Taking someone's belongings is theft: mark the item stolen and roll witnesses.
+
+    owner is the item's (faction, NPC instance) from _item_owner, read before it left its container.
+    """
+    if not society_settings(database)["crime"]["enabled"] or room.get("instance_id"):
+        return []
+    faction_id, owner_npc = owner
+    victim = next((npc for npc in _room_npc_rows(database, room["id"]) if npc["id"] == owner_npc), None)
+    if faction_id is None and owner_npc:
+        npc = database.execute("SELECT definition_id FROM mud_npc_instances WHERE id=?", (owner_npc,)).fetchone()
+        faction_id = _npc_faction_id(database, npc["definition_id"]) if npc else None
+    state = {key: value for key, value in _json_properties(
+        database.execute("SELECT state_json FROM mud_item_instances WHERE id=?", (item["id"],)).fetchone()["state_json"]
+    ).items() if key not in ("owner_faction", "owner_npc")}
+    state["stolen_from"] = faction_id or owner_npc
+    database.execute("UPDATE mud_item_instances SET state_json=? WHERE id=?", (json.dumps(state), item["id"]))
+    return _commit_crime(database, user, "theft", room, f"taking {item['name']}", victim=victim, faction_id=faction_id)
 
 
 def _npc_faction_standing(database, npc, user_id):
@@ -3647,6 +3776,12 @@ def _entry_attack(database, user):
     else:
         noticed = []
     # Only the first enemy gets a free strike; the rest join in and act from the next turn.
+    first = enemies[0][0]
+    if _world_npc(first) and _json_properties(first["behaviors_json"]).get("guard"):
+        owed = _fines_owed(database, user["id"], _npc_faction_id(database, first["definition_id"]))
+        if owed:
+            noticed.append(EventDraft(f"{first['name']} shouts: Halt! You owe {owed} coins. "
+                                      "Pay with /pay or face the law.", event_type="combat"))
     return noticed + [EventDraft(f"{enemies[0][0]['name']} notices you and attacks!", event_type="combat")] + \
         _enemy_turn(database, user, chosen=enemies[0][0]["id"], single=True)
 
@@ -3889,8 +4024,12 @@ def _attack_action(database, user, parameters):
 
 def _provoked(database, user, npc):
     """Consequences of attacking an NPC that was not hostile to the attacker."""
-    return _change_disposition(database, user, npc["definition_id"],
-                               society_settings(database)["relationships"]["attack"], "attack")
+    drafts = _change_disposition(database, user, npc["definition_id"],
+                                 society_settings(database)["relationships"]["attack"], "attack")
+    if _npc_faction_id(database, npc["definition_id"]) or _json_properties(npc["behaviors_json"]).get("lawful"):
+        drafts += _commit_crime(database, user, "assault", _current_room(database, user["id"]),
+                                f"attacking {npc['name']}", victim=npc, caught=True, retaliate=False)
+    return drafts
 
 
 def _fire_action(database, user, parameters):
@@ -4248,6 +4387,7 @@ def _get_action(database, user, parameters):
             raise ActionError("That item was already claimed by another explorer.", 409)
         _grant_item(database, user["id"], item["definition_id"], "expedition:item")
     else:
+        theft_owner = _item_owner(database, item["id"])
         database.execute(
             "UPDATE mud_item_instances SET room_id=NULL,container_id=NULL,owner_character_id=?,"
             "equipped_slot=NULL,possession_mode=?,updated_at=CURRENT_TIMESTAMP WHERE id=?",
@@ -4261,9 +4401,10 @@ def _get_action(database, user, parameters):
             database.execute("INSERT INTO mud_scheduled_events(event_kind,entity_id,due_at) VALUES('item_respawn',?,?) "
                              "ON CONFLICT(event_kind,entity_id) DO UPDATE SET due_at=excluded.due_at",
                              (spawn["id"], due))
+    theft = _take_owned_item(database, user, room, item, theft_owner) if not room.get("instance_id") and theft_owner else []
     return [EventDraft(f"You pick up {item['name']}.", event_type="item"),
             _room_item_event(database, user, room, f"{_character_row(database, user['id'])['display_name']} picks up {item['name']}.")] + \
-        _set_objective_progress(database, user, "possess_item", item["definition_id"]) + \
+        theft + _set_objective_progress(database, user, "possess_item", item["definition_id"]) + \
         fire_triggers(database, user, "take_item", [item["id"], item["definition_id"]],
                       instance_id=room.get("instance_id"))
 
@@ -6057,7 +6198,7 @@ DIRECTION_ALIASES = {
 TRAVEL_SAFE_ACTIONS = frozenset({
     "travel", "stop", "look", "exits", "map", "say", "emote", "tell", "reply_player", "who",
     "help", "status", "character", "inventory", "quests", "skills", "spells", "description",
-    "block", "unblock", "directions", "destinations", "time", "relations", "reputation",
+    "block", "unblock", "directions", "destinations", "time", "relations", "reputation", "fines",
 })
 
 
@@ -6475,6 +6616,111 @@ def _directions_action(database, user, parameters):
     if selected is None or selected["destination_id"] != destination["id"]:
         lines.append("You keep this destination in mind; /directions checks again and /directions clear forgets it.")
     return [EventDraft("\n".join(lines), "travel")]
+
+
+def _steal_action(database, user, parameters):
+    text = " ".join(str(value) for value in parameters.get("arguments", [])).strip()
+    text = re.sub(r"^from\s+", "", text, flags=re.I)
+    if not text:
+        raise ActionError("Steal from whom? Use /steal from <person>.")
+    room = _current_room(database, user["id"])
+    if room.get("instance_id") or not society_settings(database)["crime"]["enabled"]:
+        raise ActionError("There is nothing to steal here.")
+    if _active_hostiles(database, room, user["id"]):
+        raise ActionError("You cannot pick pockets in the middle of a fight.", 409)
+    npc = _npc_match(_room_npc_rows(database, room["id"]), text)
+    if npc["combat_maximum_health"] is not None and _encounter_row(database, npc)["status"] == "defeated":
+        raise ActionError(f"{npc['name']} has nothing you can reach right now.")
+    try:
+        spec = validate_npc_behaviors(_json_properties(npc["behaviors_json"])).get("steal")
+    except ValueError:
+        spec = None
+    if not spec:
+        raise ActionError(f"{npc['name']} has nothing worth stealing.")
+    character = _character_row(database, user["id"])
+    if database.execute("SELECT 1 FROM mud_pickpocket_marks WHERE character_id=? AND npc_instance_id=? "
+                        "AND stolen_at>datetime('now', ?)",
+                        (character["id"], npc["id"], f"-{spec.get('cooldown_seconds', 3600)} seconds")).fetchone():
+        raise ActionError(f"{npc['name']} is keeping a close watch on their belongings.")
+    hidden = _is_hidden(database, user["id"])
+    score = (_character_effects(database, character["id"])["stealth"] + 2 * (character["agility"] - 10)
+             + (15 if hidden else 0))
+    if _crime_roll() >= _skill_check_chance(score, spec.get("difficulty", 20)):
+        return [EventDraft(f"{npc['name']} catches your hand!", event_type="combat")] + _commit_crime(
+            database, user, "pickpocket", room, f"picking {npc['name']}'s pocket", victim=npc, caught=True)
+    database.execute("INSERT INTO mud_pickpocket_marks(character_id,npc_instance_id) VALUES(?,?) "
+                     "ON CONFLICT(character_id,npc_instance_id) DO UPDATE SET stolen_at=CURRENT_TIMESTAMP",
+                     (character["id"], npc["id"]))
+    taken = []
+    coins = spec.get("coins", {"minimum": 0, "maximum": 0})
+    amount = coins["minimum"] + secrets.randbelow(coins["maximum"] - coins["minimum"] + 1)
+    if amount:
+        _wallet(database, character["id"])
+        database.execute("UPDATE mud_character_wallets SET coins=coins+? WHERE character_id=?",
+                         (amount, character["id"]))
+        taken.append(f"{amount} coins")
+    for entry in spec.get("items", []):
+        definition = database.execute("SELECT name FROM mud_item_definitions WHERE id=?", (entry["item"],)).fetchone()
+        if definition is not None and _crime_roll() < entry.get("chance", 100):
+            _grant_item(database, user["id"], entry["item"], "steal:item")
+            taken.append(definition["name"])
+    found = (f"You lift {', '.join(taken)} from {npc['name']}." if taken
+             else f"You search {npc['name']}'s pockets but find nothing worth taking.")
+    return [EventDraft(found, event_type="item")] + _practice(database, character["id"], "hide") + _commit_crime(
+        database, user, "pickpocket", room, f"picking {npc['name']}'s pocket", victim=npc)
+
+
+def _fines_action(database, user, _parameters):
+    if not society_settings(database)["crime"]["enabled"] or _current_room(database, user["id"]).get("instance_id"):
+        raise ActionError("No one here keeps a record of crimes.")
+    _fines_owed(database, user["id"])
+    owed = mud_society.open_fines(database, f"stationnet:character:{user['id']}", _active_world(database))
+    if not owed:
+        return [EventDraft("You owe no fines.")]
+    return [EventDraft("Your unpaid fines:\n" + "\n".join(
+        f"- {mud_society.faction(database, faction)['name']}: {total} coins" for faction, total in owed.items())
+        + "\nPay with /pay beside a member of the faction.")]
+
+
+def _pay_action(database, user, parameters):
+    room = _current_room(database, user["id"])
+    if not society_settings(database)["crime"]["enabled"] or room.get("instance_id"):
+        raise ActionError("No one here keeps a record of crimes.")
+    _fines_owed(database, user["id"])
+    character = _character_row(database, user["id"])
+    world_id = _active_world(database)
+    owed = mud_society.open_fines(database, character["id"], world_id)
+    if not owed:
+        raise ActionError("You owe no fines.")
+    present = {_npc_faction_id(database, npc["definition_id"]) for npc in _crime_witnesses(database, room["id"])}
+    wanted = " ".join(str(value) for value in parameters.get("arguments", [])).strip().removeprefix("fine").strip()
+    chosen = [faction for faction in owed if not wanted or
+              mud_society.faction(database, faction)["name"].casefold().startswith(wanted.casefold())]
+    payable = [faction for faction in chosen if faction in present]
+    if not payable:
+        names = ", ".join(mud_society.faction(database, faction)["name"] for faction in chosen) or wanted
+        raise ActionError(f"Find a member of {names} to pay your fine.")
+    total = sum(owed[faction] for faction in payable)
+    _wallet(database, character["id"])
+    fighting = any(_npc_faction_id(database, npc["definition_id"]) in payable
+                   for npc, _encounter in _active_hostiles(database, room, user["id"]))
+    if not database.execute("UPDATE mud_character_wallets SET coins=coins-? WHERE character_id=? AND coins>=?",
+                            (total, character["id"], total)).rowcount:
+        raise ActionError(f"You need {total} coins to pay your fines.")
+    drafts = []
+    for faction in payable:
+        loss = database.execute("SELECT COALESCE(SUM(reputation_loss),0) FROM mud_character_crimes WHERE character_id=? "
+                                "AND world_id=? AND faction_id=? AND status='open'",
+                                (character["id"], world_id, faction)).fetchone()[0]
+        database.execute("UPDATE mud_character_crimes SET status='paid',settled_at=CURRENT_TIMESTAMP "
+                         "WHERE character_id=? AND world_id=? AND faction_id=? AND status='open'",
+                         (character["id"], world_id, faction))
+        # Paying restores half the standing the crimes cost.
+        drafts += _change_reputation(database, user, faction, -loss // 2)
+    if fighting:
+        # The law stands down once paid.
+        _leave_combat(database, user["id"], "room", room["id"])
+    return [EventDraft(f"You pay {total} coins in fines.", event_type="shop")] + drafts
 
 
 def reputation_state(database, user_id):
@@ -7086,6 +7332,19 @@ def _trigger_action(database, user, trigger, index, realm, instance_id=None):
             return _change_disposition(database, user, action["npc"], action["amount"])
         if kind == "reputation":
             return _change_reputation(database, user, action["faction"], action["amount"])
+        if kind == "fine":
+            mud_society.record_crime(database, _character_row(database, user_id)["id"], _active_world(database),
+                                     action["faction"], "other", action["amount"], 0)
+            name = mud_society.faction(database, action["faction"])
+            return [_private(user_id, f"You are fined {action['amount']} coins by {name['name'] if name else 'the law'}.",
+                             "combat")]
+        if kind == "clear_fines":
+            database.execute("UPDATE mud_character_crimes SET status='cleared',settled_at=CURRENT_TIMESTAMP "
+                             "WHERE character_id=? AND world_id=? AND status='open'"
+                             + (" AND faction_id=?" if "faction" in action else ""),
+                             (_character_row(database, user_id)["id"], _active_world(database),
+                              *([action["faction"]] if "faction" in action else [])))
+            return []
         if kind == "forget_destination":
             mud_wayfinding.forget(database, _character_row(database, user_id)["id"], action["destination"])
             return []
@@ -7374,6 +7633,18 @@ actions.register(ActionDefinition(
     description="List the places you know the way to.",
     commands=("destinations", "places"), handler=_destinations_action,
     group="NAVIGATION",
+))
+actions.register(ActionDefinition(
+    key="steal", label="PICK POCKET", description="Try to pick someone's pocket. Being seen is a crime.",
+    commands=("steal", "pickpocket"), handler=_steal_action, group="SOCIAL", show_context=False,
+))
+actions.register(ActionDefinition(
+    key="fines", label="FINES", description="List the fines you owe for crimes.",
+    commands=("fines", "bounty"), handler=_fines_action, group="SOCIAL",
+))
+actions.register(ActionDefinition(
+    key="pay", label="PAY FINES", description="Pay your fines to a member of the faction you owe.",
+    commands=("pay",), handler=_pay_action, group="SOCIAL", show_context=False,
 ))
 actions.register(ActionDefinition(
     key="reputation", label="FACTION STANDING", description="See your standing with this world's factions.",
@@ -8467,8 +8738,11 @@ def builder():
         item["teaches_destinations"] = mud_wayfinding.teaches(properties)
         definitions.append(item)
     items_by_room = {room["id"]: [] for room in rooms}
-    for row in database.execute("SELECT i.id,i.room_id,d.name,d.item_type,s.respawn_seconds FROM mud_item_instances i JOIN mud_item_definitions d ON d.id=i.definition_id LEFT JOIN mud_item_spawns s ON s.live_instance_id=i.id WHERE i.room_id IS NOT NULL ORDER BY d.name COLLATE NOCASE"):
-        items_by_room.setdefault(row["room_id"], []).append(dict(row))
+    for row in database.execute("SELECT i.id,i.room_id,i.state_json,d.name,d.item_type,s.respawn_seconds FROM mud_item_instances i JOIN mud_item_definitions d ON d.id=i.definition_id LEFT JOIN mud_item_spawns s ON s.live_instance_id=i.id WHERE i.room_id IS NOT NULL ORDER BY d.name COLLATE NOCASE"):
+        state = _json_properties(row["state_json"])
+        owner = ("faction|" + state["owner_faction"] if state.get("owner_faction")
+                 else "npc|" + state["owner_npc"] if state.get("owner_npc") else "")
+        items_by_room.setdefault(row["room_id"], []).append({**dict(row), "owner": owner})
     spawns_by_room = {room["id"]: [] for room in rooms}
     for row in database.execute("SELECT s.*,d.name FROM mud_item_spawns s JOIN mud_item_definitions d ON d.id=s.definition_id ORDER BY s.room_id,d.name"):
         spawns_by_room.setdefault(row["room_id"], []).append(dict(row))
@@ -9471,6 +9745,28 @@ def builder_delete_item_spawn(spawn_id):
                          (spawn["live_instance_id"], spawn["room_id"]))
     database.execute("DELETE FROM mud_item_spawns WHERE id=?", (spawn_id,))
     database.commit(); flash("Renewable placement removed.", "success"); return _builder_redirect(spawn["room_id"])
+
+
+@bp.post("/builder/item-instances/<path:instance_id>/owner")
+@builder_required
+def builder_set_item_owner(instance_id):
+    """Mark a placed item as belonging to a faction or a placed NPC, so taking it is theft."""
+    validate_csrf(); database = get_db()
+    item = database.execute("SELECT id,room_id,state_json FROM mud_item_instances WHERE id=? AND room_id IS NOT NULL",
+                            (instance_id,)).fetchone()
+    if item is None: abort(404)
+    kind, _, ref = request.form.get("owner", "").partition("|")
+    state = {key: value for key, value in _json_properties(item["state_json"]).items()
+             if key not in ("owner_faction", "owner_npc")}
+    if kind == "faction" and database.execute("SELECT 1 FROM mud_world_factions WHERE id=? AND world_id=?",
+                                              (ref, _active_world(database))).fetchone():
+        state["owner_faction"] = ref
+    elif kind == "npc" and database.execute("SELECT 1 FROM mud_npc_instances WHERE id=?", (ref,)).fetchone():
+        state["owner_npc"] = ref
+    elif kind:
+        flash("Choose a faction or a placed NPC as the owner.", "error"); return _builder_redirect(item["room_id"])
+    database.execute("UPDATE mud_item_instances SET state_json=? WHERE id=?", (json.dumps(state), instance_id))
+    database.commit(); flash("Item owner saved.", "success"); return _builder_redirect(item["room_id"])
 
 
 @bp.post("/builder/item-instances/<path:instance_id>/delete")

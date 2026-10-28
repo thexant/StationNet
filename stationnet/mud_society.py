@@ -1,4 +1,4 @@
-"""Optional world life: a game clock, NPC schedules, NPC relationships, and factions.
+"""Optional world life: a game clock, NPC schedules, NPC relationships, factions, and crime.
 
 Every system here is off until a world enables it in its manifest (or the
 World Builder), so worlds that never mention them play exactly as before.
@@ -14,7 +14,13 @@ CLOCK_DEFAULTS = {"enabled": False, "day_minutes": 120, "start_hour": 6}
 # How much an NPC's regard changes for a completed quest, an unprovoked attack,
 # or a witnessed crime, and the disposition at or below which it turns hostile.
 RELATIONSHIP_DEFAULTS = {"enabled": False, "quest_complete": 5, "attack": -40, "crime": -25, "hostile_at": -60}
-DEFAULT_SOCIETY = {"clock": CLOCK_DEFAULTS, "relationships": RELATIONSHIP_DEFAULTS}
+CRIMES = ("theft", "pickpocket", "assault")
+# Witness odds, and the fine and standing loss of each detected crime. A
+# fine_expiry_hours of 0 keeps fines until they are paid.
+CRIME_DEFAULTS = {"enabled": False, "detection": 70, "fine_expiry_hours": 0,
+                  "fines": {"theft": 25, "pickpocket": 40, "assault": 75},
+                  "reputation": {"theft": -50, "pickpocket": -75, "assault": -100}}
+DEFAULT_SOCIETY = {"clock": CLOCK_DEFAULTS, "relationships": RELATIONSHIP_DEFAULTS, "crime": CRIME_DEFAULTS}
 SOCIETY_KEYS = tuple(DEFAULT_SOCIETY)
 # Hours at which each part of the day begins, in order.
 PERIODS = ((0, "night"), (5, "dawn"), (7, "morning"), (12, "afternoon"), (17, "evening"), (21, "night"))
@@ -58,8 +64,26 @@ def validate_relationships(value):
         "quest_complete": (-100, 100), "attack": (-100, 100), "crime": (-100, 100), "hostile_at": (-100, -21)})
 
 
-VALIDATORS = {"clock": validate_clock, "relationships": validate_relationships}
-SECTION_LABELS = {"clock": "clock", "relationships": "relationship"}
+def validate_crime(value):
+    if value is None:
+        return copy.deepcopy(CRIME_DEFAULTS)
+    if not isinstance(value, dict):
+        raise SocietyError("crime must be an object.")
+    scalars = {key: item for key, item in CRIME_DEFAULTS.items() if not isinstance(item, dict)}
+    result = _section({key: item for key, item in value.items() if key in scalars or key not in CRIME_DEFAULTS},
+                      "crime", scalars, {"detection": (0, 100), "fine_expiry_hours": (0, 720)})
+    for key, (low, high) in (("fines", (0, 100000)), ("reputation", (-1000, 0))):
+        section = value.get(key, {})
+        if not isinstance(section, dict) or set(section) - set(CRIMES):
+            raise SocietyError(f"crime {key} accepts only {', '.join(CRIMES)}.")
+        if any(not _whole(amount, low, high) for amount in section.values()):
+            raise SocietyError(f"crime {key} must be whole numbers from {low} to {high}.")
+        result[key] = {**CRIME_DEFAULTS[key], **section}
+    return {key: result[key] for key in CRIME_DEFAULTS}
+
+
+VALIDATORS = {"clock": validate_clock, "relationships": validate_relationships, "crime": validate_crime}
+SECTION_LABELS = {"clock": "clock", "relationships": "relationship", "crime": "crime"}
 
 
 def validate_settings(value):
@@ -184,6 +208,9 @@ def behavior_references(behaviors):
     if isinstance(behaviors.get("relationship"), dict):
         for item in behaviors["relationship"].get("gifts", {}):
             yield "item", item
+    if isinstance(behaviors.get("steal"), dict):
+        for entry in behaviors["steal"].get("items", []):
+            yield "item", entry["item"]
 
 
 def remap_behaviors(behaviors, mapper):
@@ -200,6 +227,10 @@ def remap_behaviors(behaviors, mapper):
                  if mapper("item", item) is not None}
         relationship = {key: value for key, value in behaviors["relationship"].items() if key != "gifts"}
         result["relationship"] = {**relationship, **({"gifts": gifts} if gifts else {})}
+    if isinstance(behaviors.get("steal"), dict) and "items" in behaviors["steal"]:
+        result["steal"] = {**behaviors["steal"], "items": [
+            {**entry, "item": mapper("item", entry["item"])} for entry in behaviors["steal"]["items"]
+            if mapper("item", entry["item"]) is not None]}
     return result
 
 
@@ -400,6 +431,60 @@ def adjust_reputation(database, character_id, faction_id, amount):
             "updated_at=CURRENT_TIMESTAMP", (character_id, row["id"], new))
         changed.append((row, old, new))
     return changed
+
+
+# --- Crime -----------------------------------------------------------------
+
+CRIME_FLAGS = ("guard", "lawful", "witness")
+
+
+def validate_steal(spec):
+    """What a pickpocket can take from an NPC; item IDs are checked by the caller."""
+    if not isinstance(spec, dict) or set(spec) - {"difficulty", "coins", "items", "cooldown_seconds"}:
+        raise ValueError("steal accepts difficulty, coins, items, and cooldown_seconds.")
+    if not _whole(spec.get("difficulty", 20), 0, 200) or not _whole(spec.get("cooldown_seconds", 3600), 60, 604800):
+        raise ValueError("steal difficulty must be 0 to 200, and cooldown_seconds 60 to 604800.")
+    coins = spec.get("coins", {"minimum": 0, "maximum": 0})
+    if (not isinstance(coins, dict) or set(coins) != {"minimum", "maximum"}
+            or not _whole(coins["minimum"], 0, 100000) or not _whole(coins["maximum"], coins["minimum"], 100000)):
+        raise ValueError("steal coins needs minimum and maximum from 0 to 100000.")
+    items = spec.get("items", [])
+    if not isinstance(items, list) or len(items) > 10 or any(
+            not isinstance(entry, dict) or set(entry) - {"item", "chance"} or not isinstance(entry.get("item"), str)
+            or not _whole(entry.get("chance", 100), 1, 100) for entry in items):
+        raise ValueError("steal items lists up to 10 entries of item and chance (1 to 100).")
+    if not coins["maximum"] and not items:
+        raise ValueError("steal needs coins or items to take.")
+    return spec
+
+
+def detection_chance(detection, stealth, agility, hidden):
+    """A witness's percent chance to notice a crime: stealth, Agility and hiding all help."""
+    return max(5, min(95, detection - stealth - 2 * (agility - 10) - (20 if hidden else 0)))
+
+
+def expire_fines(database, crime):
+    if crime["fine_expiry_hours"]:
+        database.execute("UPDATE mud_character_crimes SET status='expired',settled_at=CURRENT_TIMESTAMP "
+                         "WHERE status='open' AND created_at<=datetime('now', ?)",
+                         (f"-{crime['fine_expiry_hours']} hours",))
+
+
+def open_fines(database, character_id, world_id, faction_id=None):
+    """Unpaid fines as {faction_id: total}; pass faction_id to read one faction."""
+    query = ("SELECT faction_id,SUM(fine) AS total FROM mud_character_crimes WHERE character_id=? AND world_id=? "
+             "AND status='open' AND faction_id IS NOT NULL")
+    parameters = [character_id, world_id]
+    if faction_id is not None:
+        query += " AND faction_id=?"
+        parameters.append(faction_id)
+    return {row["faction_id"]: row["total"] for row in database.execute(query + " GROUP BY faction_id", parameters)
+            if row["total"]}
+
+
+def record_crime(database, character_id, world_id, faction_id, kind, fine, reputation_loss):
+    database.execute("INSERT INTO mud_character_crimes(character_id,world_id,faction_id,kind,fine,reputation_loss) "
+                     "VALUES(?,?,?,?,?,?)", (character_id, world_id, faction_id, kind, fine, reputation_loss))
 
 
 def active_entry(spec, hour):
