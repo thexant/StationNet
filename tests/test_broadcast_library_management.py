@@ -80,3 +80,28 @@ def test_bulk_delete_checks_ownership_and_keeps_playlist_entries(tmp_path, monke
         assert track["audio_file_id"] is None
     assert not (Path(tmp_path) / "radio_audio" / str(owner) / "0.mp3").exists()
     assert (Path(tmp_path) / "radio_audio" / str(owner) / "2.mp3").exists()
+
+
+def test_audio_lookup_skips_external_broadcasts(tmp_path, monkeypatch):
+    app, client, _owner, ids, _foreign_id = setup_library(tmp_path, monkeypatch)
+    frequency = 95000
+    sessions = {
+        "external:1": {"status": "playing", "frequency_khz": frequency, "external": True},
+        "playlist:1": {"status": "playing", "frequency_khz": frequency,
+                       "audio_file_id": ids[0], "track_serial": 1, "session_key": "playlist:1"},
+    }
+    store = app.extensions["hosted_broadcasts"]
+    monkeypatch.setattr(store, "all_public", lambda: sessions)
+    monkeypatch.setattr(store, "advance", lambda *_args: True)
+    monkeypatch.setattr(app.extensions["radio"], "receiver_frequency", lambda _connection: frequency)
+    monkeypatch.setattr(broadcast, "effective_access", lambda _user, _frequency: "ALLOWED")
+
+    response = client.get(f"/radio/manage/audio/{ids[0]}")
+    assert response.status_code == 200
+    assert response.data == b"audio"
+
+    advanced = client.post("/radio/manage/advance", data={
+        "csrf_token": "library-test-token", "file_id": ids[0], "track_serial": 1,
+    })
+    assert advanced.status_code == 200
+    assert advanced.json == {"advanced": True}

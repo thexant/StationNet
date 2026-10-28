@@ -1965,7 +1965,7 @@ def _tuned_broadcast(file_id, track_serial):
         return None
     return next((item for item in _store().all_public().values()
                  if item and item["status"] == "playing" and
-                 item["frequency_khz"] == tuned and item["audio_file_id"] == file_id and
+                 item["frequency_khz"] == tuned and item.get("audio_file_id") == file_id and
                  item["track_serial"] == track_serial), None)
 
 
@@ -2013,7 +2013,7 @@ def broadcast_timing():
 def broadcast_audio(file_id):
     sessions = _store().all_public()
     item = next((value for value in sessions.values()
-                 if value and value["status"] == "playing" and value["audio_file_id"] == file_id), None)
+                 if value and value["status"] == "playing" and value.get("audio_file_id") == file_id), None)
     if not item or effective_access(g.user["id"], item["frequency_khz"]) == "DENIED":
         abort(403)
     tuned = current_app.extensions["radio"].receiver_frequency(_connection_id())
