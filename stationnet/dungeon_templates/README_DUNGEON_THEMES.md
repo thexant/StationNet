@@ -495,6 +495,16 @@ further, adding range ordering, local/shared reference resolution, definition
 compatibility, duplicate-ID, conversation-graph, pool cross-reference, and
 database checks, each reported with a JSON-path error.
 
+### Using a theme inside an authored world
+
+The same format powers **world dungeons**. World builders can create templates
+in the World Builder's **Dungeons** section, starting from any installed theme,
+and place entrances in their rooms. Those templates belong to the world and
+travel in its ZIP as `dungeons.json`. They take no `id` or `version`, because
+the station assigns them per revision. They also cannot bundle `origins` or
+`skills`. Enabling or disabling themes here does not affect them. See section
+5b of `README_CUSTOM_WORLDS.md`.
+
 ## Determinism and versioning
 
 Output is determined by the seed, the theme ID/version/content hash, the

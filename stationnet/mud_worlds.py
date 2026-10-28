@@ -10,7 +10,7 @@ import zipfile
 
 from flask import current_app
 
-from . import mud_conditions
+from . import mud_conditions, mud_world_dungeons
 
 
 MAX_ZIP_BYTES = 16 * 1024 * 1024
@@ -20,6 +20,8 @@ FILES = {"manifest.json", "rooms.json", "exits.json"}
 CONTENT_FILE = "content.json"
 ORIGINS_FILE = "origins.json"
 SKILLS_FILE = "skills.json"
+DUNGEONS_FILE = mud_world_dungeons.DUNGEONS_FILE
+OPTIONAL_FILES = {CONTENT_FILE, ORIGINS_FILE, SKILLS_FILE, DUNGEONS_FILE}
 # Order follows foreign-key dependencies. Only these authored columns cross
 # the package boundary; player state and generated dungeon data never do.
 CONTENT_TABLES = {
@@ -125,8 +127,8 @@ def read_package(payload):
     try:
         with zipfile.ZipFile(BytesIO(payload)) as archive:
             names = archive.namelist()
-            if not FILES <= set(names) or set(names) - FILES - {CONTENT_FILE, ORIGINS_FILE, SKILLS_FILE} or len(names) != len(set(names)):
-                raise WorldError("World ZIP must contain manifest.json, rooms.json, and exits.json at its root, with optional content.json, origins.json, and skills.json.")
+            if not FILES <= set(names) or set(names) - FILES - OPTIONAL_FILES or len(names) != len(set(names)):
+                raise WorldError("World ZIP must contain manifest.json, rooms.json, and exits.json at its root, with optional content.json, origins.json, skills.json, and dungeons.json.")
             docs = {}
             for name in names:
                 info = archive.getinfo(name)
@@ -299,9 +301,13 @@ def read_package(payload):
     if (not isinstance(skills, dict) or set(skills) != {"skills"} or not isinstance(skills["skills"], list)
             or len(skills["skills"]) > 100 or any(not isinstance(item, dict) for item in skills["skills"])):
         raise WorldError("skills.json must contain a skills array of at most 100 definition objects.")
+    try:
+        world_dungeons = mud_world_dungeons.read_document(docs.get(DUNGEONS_FILE), room_ids)
+    except mud_world_dungeons.WorldDungeonError as problem:
+        raise WorldError(str(problem)) from problem
     return {"id": world_id, "name": name, "author": author, "start_room": start, "resource": resource,
             "rooms": clean_rooms, "exits": clean_exits, "content": content, "origins": origins,
-            "skills": skills["skills"]}
+            "skills": skills["skills"], "dungeons": world_dungeons}
 
 
 def package_bytes(document):
@@ -331,6 +337,11 @@ def package_bytes(document):
             if len(encoded) > MAX_FILE_BYTES:
                 raise WorldError("skills.json is too large to export.")
             archive.writestr(SKILLS_FILE, encoded)
+        if document.get("dungeons"):
+            encoded = (json.dumps(document["dungeons"], ensure_ascii=False, indent=2) + "\n").encode("utf-8")
+            if len(encoded) > MAX_FILE_BYTES:
+                raise WorldError("dungeons.json is too large to export.")
+            archive.writestr(DUNGEONS_FILE, encoded)
     payload = stream.getvalue()
     if len(payload) > MAX_ZIP_BYTES:
         raise WorldError("World ZIP is too large to export.")
@@ -720,6 +731,14 @@ def install(database, payload, *, origin_mode="preserve", selected=None):
                 database.execute("UPDATE mud_world_exits SET key_item_id=? WHERE id=?",
                                  (_mapped(maps, "mud_item_definitions", item["key_item_id"], "key_item_id"),
                                   f"world:{world_id}:{installation_key}:exit:{ordinal}"))
+        if document["dungeons"]["templates"]:
+            try:
+                mud_world_dungeons.install_document(
+                    database, world_id, document["dungeons"],
+                    {room["id"]: prefix + room["id"] for room in document["rooms"]},
+                    maps, exit_mapper)
+            except mud_world_dungeons.WorldDungeonError as problem:
+                raise WorldError(str(problem)) from problem
         _install_origins(database, document, skill_map)
         set_availability(database, world_id, origin_mode, selected)
         with destination.open("xb") as target:
@@ -773,11 +792,18 @@ def _export_content(database, world_id, room_map):
         "SELECT definition_id FROM mud_npc_instances WHERE room_id IN "
         "(SELECT id FROM mud_world_rooms WHERE world_id=?)", (world_id,)
     )}
+    template_items, template_npcs = mud_world_dungeons.shared_references(database, world_id)
+    needed_items |= template_items
+    needed_npcs |= template_npcs
     needed_conversations = {row["conversation_id"] for row in database.execute(
         "SELECT conversation_id FROM mud_npc_definitions WHERE id IN "
         "(SELECT definition_id FROM mud_npc_instances WHERE room_id IN "
         "(SELECT id FROM mud_world_rooms WHERE world_id=?))", (world_id,)
     ) if row["conversation_id"]}
+    needed_conversations |= {row["conversation_id"] for row in database.execute(
+        f"SELECT conversation_id FROM mud_npc_definitions WHERE id IN ({','.join('?' for _ in template_npcs)})",
+        tuple(template_npcs),
+    ) if row["conversation_id"]} if template_npcs else set()
     for row in database.execute(
         "SELECT r.conditions_json,r.outcomes_json FROM mud_dialogue_responses r "
         "JOIN mud_dialogue_nodes n ON n.id=r.node_id JOIN mud_conversations c ON c.id=n.conversation_id "
@@ -976,6 +1002,10 @@ def export(database, world_id, *, origin_keys=None, skill_keys=None):
     for item in document["exits"]:
         if "conditions" in item:
             item["conditions"] = mud_conditions.remap(item["conditions"], _export_exit_reference(maps, local_reference))
+    world_dungeons = mud_world_dungeons.export_document(
+        database, world_id, ids, maps, _export_exit_reference(maps, local_reference))
+    if world_dungeons:
+        document["dungeons"] = world_dungeons
     return package_bytes(document)
 
 
@@ -1049,6 +1079,10 @@ def activate(database, world_id, *, origin_mode="preserve", selected=None,
         set_availability(database, world_id, origin_mode, selected)
         if world["active"]:
             return False
+        outgoing = database.execute("SELECT id FROM mud_world_packages WHERE active=1").fetchone()
+        if outgoing is not None:
+            # World dungeon runs end before the campaign is archived, so their loot is never kept.
+            mud.end_world_runs(database, outgoing["id"], f"The active MUD world changed to {world['name']}.")
         start = database.execute("SELECT id,name FROM mud_world_rooms WHERE id=? AND world_id=?",
                                  (world["start_room_id"], world_id)).fetchone()
         if start is None:

@@ -1425,6 +1425,7 @@ def init_db():
     _initialize_mud_world(database)
     _migrate_mud_world_packages(database)
     _migrate_mud_world_resource(database)
+    _migrate_mud_world_dungeons(database)
     database.execute("INSERT OR IGNORE INTO mud_portal_settings(id) VALUES(1)")
     database.execute("INSERT OR IGNORE INTO mud_crossover_settings(id) VALUES(1)")
     database.execute(
@@ -1695,6 +1696,48 @@ def _migrate_mud_origin_features(database):
         for column, definition in columns.items():
             if column not in existing:
                 database.execute(f"ALTER TABLE {table} ADD COLUMN {column} {definition}")
+
+
+def _migrate_mud_world_dungeons(database):
+    """Let authored worlds own dungeon templates and entrances; portal runs are unaffected."""
+    database.executescript("""
+    CREATE TABLE IF NOT EXISTS mud_world_dungeon_templates (
+      id TEXT PRIMARY KEY,
+      world_id TEXT NOT NULL REFERENCES mud_world_packages(id) ON DELETE CASCADE,
+      local_key TEXT NOT NULL,
+      theme_id TEXT NOT NULL UNIQUE,
+      name TEXT NOT NULL,
+      template_json TEXT NOT NULL,
+      revision INTEGER NOT NULL DEFAULT 1 CHECK(revision>=1),
+      updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      UNIQUE(world_id,local_key));
+    CREATE TABLE IF NOT EXISTS mud_world_dungeon_entrances (
+      id TEXT PRIMARY KEY,
+      world_id TEXT NOT NULL REFERENCES mud_world_packages(id) ON DELETE CASCADE,
+      room_id TEXT NOT NULL REFERENCES mud_world_rooms(id) ON DELETE CASCADE,
+      return_room_id TEXT REFERENCES mud_world_rooms(id) ON DELETE SET NULL,
+      template_id TEXT NOT NULL REFERENCES mud_world_dungeon_templates(id),
+      name TEXT NOT NULL COLLATE NOCASE,
+      description TEXT NOT NULL DEFAULT '',
+      difficulty INTEGER CHECK(difficulty IS NULL OR difficulty>=1),
+      size INTEGER CHECK(size IS NULL OR size>=2),
+      layout TEXT,
+      max_party INTEGER NOT NULL DEFAULT 4 CHECK(max_party BETWEEN 1 AND 20),
+      conditions_json TEXT NOT NULL DEFAULT '[]',
+      conditions_message TEXT NOT NULL DEFAULT '',
+      enabled INTEGER NOT NULL DEFAULT 1 CHECK(enabled IN (0,1)),
+      created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      UNIQUE(room_id,name));
+    CREATE INDEX IF NOT EXISTS idx_mud_world_dungeon_entrances_room
+      ON mud_world_dungeon_entrances(room_id,name);
+    """)
+    columns = {row["name"] for row in database.execute("PRAGMA table_info(mud_procedural_instances)")}
+    # No foreign keys: a run outlives edits to the entrance or room that launched it.
+    additions = {"world_entrance_id": "TEXT", "world_id": "TEXT", "return_room_id": "TEXT",
+                 "party_limit": "INTEGER"}
+    for name, declaration in additions.items():
+        if name not in columns:
+            database.execute(f"ALTER TABLE mud_procedural_instances ADD COLUMN {name} {declaration}")
 
 
 def _migrate_mud_skills(database):

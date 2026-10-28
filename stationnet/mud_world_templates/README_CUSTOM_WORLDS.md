@@ -575,6 +575,72 @@ format described in the [skills guide](../mud_skill_templates/README_SKILLS.md).
 }
 ```
 
+## 5b. World dungeons (`dungeons.json`)
+
+A world can place procedurally generated dungeons behind entrances in its own
+rooms. Every `/enter` builds a new, private layout from the entrance's
+template, so each run differs. A party shares one instance, and it never
+interferes with other players' runs or with the Dungeon Portals.
+
+`dungeons.json` is optional and holds two arrays:
+
+```json
+{
+  "templates": [
+    {"key": "old-mine", "name": "Old Mine", "template": { "...": "a dungeon theme, without id or version" }}
+  ],
+  "entrances": [
+    {"room": "cave-mouth", "return_room": "village", "template": "old-mine", "name": "old mine",
+     "description": "Rails vanish into the dark.", "difficulty": 2, "size": 12, "layout": "maze",
+     "max_party": 4, "conditions": [{"type": "level", "min": 3}],
+     "conditions_message": "The foreman waves you off.", "enabled": true}
+  ]
+}
+```
+
+- **Templates** use the dungeon theme format described in
+  `README_DUNGEON_THEMES.md`: generation bounds, layouts, special roles such as
+  bosses and treasure, and pools of rooms, environments, NPCs, enemies, items
+  and encounters, plus embedded definitions.
+  - Leave out `id` and `version`. The station assigns them, and every edit
+    becomes a new revision, so runs already in progress keep the layout and
+    content they started with.
+  - Templates cannot bundle `origins` or `skills`. Put those in the world's
+    `origins.json` and `skills.json` instead.
+  - Shared `definition_id` and `item_definition_id` values may name this
+    package's `content.json` items and NPCs, which are remapped on import, or
+    built-in `stationnet:` items. Conditions inside embedded dialogue should name
+    embedded items.
+- **Entrances.** `room` is where players type `/enter <name>`, or
+  `go <name>`. `return_room` is where explorers arrive after completing the run,
+  abandoning it, or recovering from death; it defaults to `room`.
+  - `difficulty`, `size` and `layout` are optional overrides within the
+    template's bounds.
+  - `max_party` is 1 to 20 (default 4).
+  - `conditions` use the same grammar as exit conditions.
+- **Play.** A world run keeps the world's progression track, inventory,
+  equipment, wallet and mana name, and follows the normal dungeon rules:
+  - Dungeon rest rates apply, and death costs this run's loot rather than
+    experience.
+  - Run loot cannot be dropped, stored or sold until the run is completed.
+  - Completing from the exit room pays every active explorer once.
+- **Parties.** The leader's entry message shows a party code. Others join with
+  `/join <code>` while standing at that entrance or its return room. `/run`
+  shows the code and progress. Everyone shares one instance, its combat and its
+  pickups.
+- **Disconnects.** A run survives disconnects and restarts. Reconnecting
+  returns you to your saved dungeon room. If you were moved out, use `/resume`
+  to go back, or `/abandon` to give the run up.
+- **Changing the active world** ends that world's live runs; their loot is
+  lost and their explorers are moved with everyone else. Deleting an entrance,
+  room or template never interrupts a run in progress. A missing return room
+  falls back to the start room.
+
+World builders can do all of this from the **Dungeons** section of the World
+Builder and the **Dungeon entrances** panel on each room. Templates can start
+from any installed dungeon theme and have an unsaved layout preview. The
+builder's export writes `dungeons.json` automatically.
+
 ## 6. Import, edit, export, and remove
 
 Download the starter ZIP from **SYSOP Settings → MUD service → Traditional
@@ -589,7 +655,7 @@ Compress-Archive -Path manifest.json,rooms.json,exits.json,content.json -Destina
 zip lantern-isles.zip manifest.json rooms.json exits.json content.json
 ```
 
-If you omit `content.json`, `origins.json`, or `skills.json`, omit them from the command too. Confirm the ZIP
+If you omit `content.json`, `origins.json`, `skills.json`, or `dungeons.json`, omit them from the command too. Confirm the ZIP
 lists the JSON files directly, without a containing folder. In **SYSOP Settings → MUD service →
 Traditional Worlds**, import the ZIP and select it as the active world. Choose
 whether its bundled races, classes, and skills replace, combine with, or are
@@ -604,7 +670,8 @@ classes, and skills to bundle in an export. The builder export includes the worl
 linked definitions automatically.
 
 Changing the active world moves traditional-world players to the new starting
-room and informs them. Procedural dungeon players remain where they are. To
+room and informs them. Dungeon Portals players remain where they are; runs
+in the outgoing world's own dungeons end, and their loot is lost. To
 uninstall a custom world, select another active world first, then use **Remove
 World**. The original station world cannot be uninstalled.
 

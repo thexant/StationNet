@@ -156,16 +156,21 @@ def test_agenda_calendar_and_shared_unlock(tmp_path):
                 page.locator('#agenda-task-form button[type="submit"]').click()
                 page.locator("#agenda-content").get_by_text("Prepare brief").click()
                 assert page.locator("#agenda-subtask-rows input[type=text]").count() == 19
-                geometry = page.locator("#agenda-task-dialog").evaluate("""dialog => {
-                    const scroll = dialog.querySelector('.agenda-task-scroll');
-                    const save = dialog.querySelector('button[type=submit]').getBoundingClientRect();
-                    const bounds = dialog.getBoundingClientRect();
-                    return { top: bounds.top, bottom: bounds.bottom, scrollable: scroll.scrollHeight > scroll.clientHeight,
-                        saveTop: save.top, saveBottom: save.bottom, scrollTop: scroll.scrollTop, viewport: innerHeight };
-                }""")
-                assert geometry["top"] >= 0 and geometry["bottom"] <= geometry["viewport"] + 1, geometry
-                assert geometry["scrollable"] and geometry["scrollTop"] == 0, geometry
-                assert geometry["saveTop"] >= 0 and geometry["saveBottom"] <= geometry["viewport"], geometry
+                for width, height in ((390, 844), (1536, 650), (1536, 814), (1920, 1018)):
+                    page.set_viewport_size({"width": width, "height": height})
+                    geometry = page.locator("#agenda-task-dialog").evaluate("""dialog => {
+                        const scroll = dialog.querySelector('.agenda-task-scroll');
+                        const save = dialog.querySelector('button[type=submit]').getBoundingClientRect();
+                        const header = dialog.querySelector('header').getBoundingClientRect();
+                        const bounds = dialog.getBoundingClientRect();
+                        return { top: bounds.top, bottom: bounds.bottom, scrollable: scroll.scrollHeight > scroll.clientHeight,
+                            headerTop: header.top, headerBottom: header.bottom, saveTop: save.top, saveBottom: save.bottom,
+                            scrollTop: scroll.scrollTop, viewport: innerHeight };
+                    }""")
+                    assert geometry["top"] >= 0 and geometry["bottom"] <= geometry["viewport"] + 1, geometry
+                    assert geometry["scrollable"] and geometry["scrollTop"] == 0, geometry
+                    assert geometry["headerTop"] >= geometry["top"] and geometry["headerBottom"] < geometry["saveTop"], geometry
+                    assert geometry["saveTop"] >= 0 and geometry["saveBottom"] <= geometry["viewport"], geometry
                 page.locator(".agenda-task-scroll").evaluate("element => element.scrollTop = element.scrollHeight")
                 assert page.locator(".agenda-task-scroll").evaluate("element => element.scrollTop > 0")
                 page.locator('#agenda-task-dialog [data-close]').click()

@@ -748,7 +748,7 @@ def validate_template(template, database=None):
                 count = pool.get("count", {})
                 if not isinstance(count, dict) or not _is_int(count.get("minimum", 0), 0, 100) or not _is_int(count.get("maximum", 1), 0, 100):
                     errors.append(f"{path}.count: requires integer minimum/maximum from 0 to 100")
-                elif count["minimum"] > count["maximum"]:
+                elif count.get("minimum", 0) > count.get("maximum", 1):
                     errors.append(f"{path}.count: minimum cannot exceed maximum")
                 choices = pool.get("choices")
                 if not isinstance(choices, list) or not choices:

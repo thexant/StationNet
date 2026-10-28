@@ -1071,18 +1071,32 @@ def _reconcile_player_location(database, user_id):
         "SELECT mode,location_type,location_key,instance_id "
         "FROM mud_player_locations WHERE user_id=?", (user_id,),
     ).fetchone()
-    if (location is not None and modes["procedural"] and
-            database.execute("SELECT 1 FROM mud_death_summaries WHERE user_id=?",
-                             (user_id,)).fetchone() is not None):
+    summary = database.execute(
+        "SELECT s.instance_id,i.world_id FROM mud_death_summaries AS s "
+        "LEFT JOIN mud_procedural_instances AS i ON i.id=s.instance_id WHERE s.user_id=?",
+        (user_id,),
+    ).fetchone()
+    if location is not None and summary is not None and (
+            modes["traditional"] if summary["world_id"] else modes["procedural"]):
         return location
     valid = False
     if location is not None:
         if location["mode"] == "traditional" and modes["traditional"]:
-            valid = (location["location_type"] == "world_room" and database.execute(
-                "SELECT 1 FROM mud_world_rooms WHERE id=? "
-                "AND world_id=(SELECT id FROM mud_world_packages WHERE active=1)",
-                (location["location_key"],),
-            ).fetchone() is not None)
+            if location["location_type"] == "dungeon_instance":
+                # A world dungeon run stays valid only while its world is the active one.
+                valid = database.execute(
+                    "SELECT 1 FROM mud_procedural_instances AS i "
+                    "JOIN mud_expedition_participants AS p ON p.instance_id=i.id "
+                    "WHERE i.id=? AND i.status='active' AND p.user_id=? AND p.status='active' "
+                    "AND i.world_id=(SELECT id FROM mud_world_packages WHERE active=1)",
+                    (location["instance_id"], user_id),
+                ).fetchone() is not None
+            else:
+                valid = (location["location_type"] == "world_room" and database.execute(
+                    "SELECT 1 FROM mud_world_rooms WHERE id=? "
+                    "AND world_id=(SELECT id FROM mud_world_packages WHERE active=1)",
+                    (location["location_key"],),
+                ).fetchone() is not None)
         elif location["mode"] == "procedural" and modes["procedural"]:
             valid = location["location_type"] in {"portal", "dungeon_instance"}
             if location["location_type"] == "dungeon_instance":
@@ -1144,8 +1158,49 @@ def _dungeon_room(database, instance_id, room_key):
     if row is None:
         return None
     room = dict(row)
-    room.update(location_type="dungeon_instance", mode="procedural", system_managed=True)
+    room.update(location_type="dungeon_instance", mode=_run_mode(database, instance_id),
+                system_managed=True)
     return room
+
+
+def _world_run(database, instance_id):
+    """The world entrance metadata of a run, or None for a Dungeon Portals run."""
+    row = database.execute(
+        "SELECT i.world_id,i.world_entrance_id,i.return_room_id,i.party_limit,"
+        "e.name AS entrance_name,e.room_id AS entrance_room_id "
+        "FROM mud_procedural_instances AS i LEFT JOIN mud_world_dungeon_entrances AS e "
+        "ON e.id=i.world_entrance_id WHERE i.id=? AND i.world_entrance_id IS NOT NULL",
+        (instance_id,),
+    ).fetchone() if instance_id else None
+    return row
+
+
+def _run_mode(database, instance_id):
+    """World dungeon runs keep the world's progression track and possessions."""
+    return "traditional" if _world_run(database, instance_id) else "procedural"
+
+
+def _return_destination(database, instance_id):
+    """Where a run's explorers go when they leave it: its return room, or the portals."""
+    run = _world_run(database, instance_id)
+    if run is None:
+        return "procedural", "portal", PORTAL_ROOM_ID
+    room = database.execute(
+        "SELECT id FROM mud_world_rooms WHERE id=? AND world_id=(SELECT id FROM mud_world_packages WHERE active=1)",
+        (run["return_room_id"],),
+    ).fetchone()
+    return "traditional", "world_room", room["id"] if room else _start_room(database)["id"]
+
+
+def _return_label(database, instance_id):
+    _mode, location_type, key = _return_destination(database, instance_id)
+    if location_type == "portal":
+        return "the Dungeon Portals"
+    return database.execute("SELECT name FROM mud_world_rooms WHERE id=?", (key,)).fetchone()["name"]
+
+
+def _leave_run_location(database, user_id, instance_id):
+    _set_player_location(database, user_id, *_return_destination(database, instance_id))
 
 
 def _current_room(database, user_id):
@@ -1167,8 +1222,8 @@ def _current_room(database, user_id):
         ).fetchone()
         if room is not None and participant is not None:
             return room
-        _set_player_location(database, user_id, "procedural", "portal", PORTAL_ROOM_ID)
-        return _portal_room(database)
+        _leave_run_location(database, user_id, location["instance_id"])
+        return _current_room(database, user_id)
     room = database.execute(
         "SELECT id,name,description FROM mud_world_rooms WHERE id=?",
         (location["location_key"],),
@@ -1199,6 +1254,17 @@ def _room_exits(database, room_id, instance_id=None):
         "WHERE e.from_room_id=? ORDER BY "
         "CASE WHEN e.direction IS NULL THEN 1 ELSE 0 END,e.name COLLATE NOCASE,e.id",
         (room_id,),
+    ).fetchall()
+
+
+def _room_entrances(database, room_id):
+    """Enabled world dungeon entrances in a room of the active world."""
+    return database.execute(
+        "SELECT e.*,t.name AS template_name FROM mud_world_dungeon_entrances AS e "
+        "JOIN mud_world_dungeon_templates AS t ON t.id=e.template_id "
+        "WHERE e.room_id=? AND e.enabled=1 "
+        "AND e.world_id=(SELECT id FROM mud_world_packages WHERE active=1) "
+        "ORDER BY e.name COLLATE NOCASE,e.id", (room_id,),
     ).fetchall()
 
 
@@ -1580,11 +1646,12 @@ def _leave_combat(database, user_id, scope_type="room", scope_key=None, defeated
 
 def _room_state(database, user_id):
     death = database.execute(
-        "SELECT summary FROM mud_death_summaries WHERE user_id=?", (user_id,)
+        "SELECT summary,instance_id FROM mud_death_summaries WHERE user_id=?", (user_id,)
     ).fetchone()
     if death is not None:
         return {"id": "stationnet:death-summary", "name": "Expedition Ended",
-                "description": death["summary"], "instructions": "Enter /continue to return to the Dungeon Portals.",
+                "description": death["summary"],
+                "instructions": f"Enter /continue to return to {_return_label(database, death['instance_id'])}.",
                 "system_managed": True, "mode": "procedural", "exits": [],
                 "occupants": [], "items": [], "npcs": []}
     room = _current_room(database, user_id)
@@ -1642,6 +1709,10 @@ def _room_state(database, user_id):
         exits.append({"id": "system:enter-portals", "name": "Enter the Dungeon Portals",
                       "direction": "portals", "destination_id": PORTAL_ROOM_ID,
                       "destination_name": _portal_room(database)["name"]})
+    if not portal and not instance_id:
+        exits += [{"id": entrance["id"], "name": f"enter {entrance['name']}", "direction": None,
+                   "destination_id": None, "destination_name": entrance["name"], "dungeon": True}
+                  for entrance in _room_entrances(database, room["id"])]
     return {
         "id": room["id"],
         "name": room["name"],
@@ -1649,7 +1720,7 @@ def _room_state(database, user_id):
         "instructions": (room["instructions"] if portal else
                          _expedition_status_text(database, user_id) if instance_id else ""),
         "system_managed": portal,
-        "mode": "procedural" if portal or instance_id else "traditional",
+        "mode": "procedural" if portal else room.get("mode", "traditional"),
         "exits": exits,
         "occupants": _room_occupants(database, room["id"], user_id, instance_id),
         "items": [{"id": item["id"], "name": item["name"], "display_name": label,
@@ -1685,6 +1756,12 @@ def _describe_room(database, room, viewer_id=None):
     elif (room["id"] != PORTAL_ROOM_ID and modes["procedural"]
           and room["id"] == _start_room(database)["id"]):
         routes = (routes + ", " if routes != "none" else "") + "PORTALS — Dungeon Portals"
+    if room["id"] != PORTAL_ROOM_ID and not instance_id:
+        delves = [f"ENTER {entrance['name']}" + ("" if not viewer_id or _exit_open_to(database, viewer_id, entrance)
+                                                else " [barred]")
+                  for entrance in _room_entrances(database, room["id"])]
+        if delves:
+            routes = (routes + ", " if routes != "none" else "") + ", ".join(delves)
     return (
         f"{room['name']}\n{room['description']}{instructions}\n\n"
         f"Exits: {routes}\nOther players: {people}\nNPCs: {npcs}\nItems: {items}"
@@ -2794,6 +2871,30 @@ def _examine_exit(database, _user, room, target):
 examinations.register(_examine_exit)
 
 
+def _examine_dungeon_entrance(database, user, room, target):
+    if room["id"] == PORTAL_ROOM_ID or room.get("instance_id"):
+        return None
+    entrance = _entrance_match(database, room["id"], target, required=False)
+    if entrance is None:
+        return None
+    rule = json.loads(database.execute(
+        "SELECT template_json FROM mud_world_dungeon_templates WHERE id=?", (entrance["template_id"],),
+    ).fetchone()["template_json"])["generation"]["difficulty"]
+    difficulty = entrance["difficulty"] or rule["default"]
+    lines = [entrance["name"], entrance["description"] or f"A way down into {entrance['template_name']}.",
+             f"Each descent is newly generated. Difficulty {difficulty} · recommended level "
+             f"{dungeons.recommended_level(difficulty)} · up to {entrance['max_party']} explorer"
+             f"{'s' if entrance['max_party'] != 1 else ''}."]
+    if not _exit_open_to(database, user["id"], entrance):
+        lines.append(f"Barred: {_exit_barred_message(entrance)}")
+    else:
+        lines.append(f"Enter with /enter {entrance['name']}.")
+    return "\n".join(lines)
+
+
+examinations.register(_examine_dungeon_entrance)
+
+
 def _combat_target(parameters):
     return str(parameters.get("npc_id") or " ".join(
         str(item) for item in parameters.get("arguments", [])
@@ -3278,15 +3379,14 @@ def _defeat_player(database, user, encounter, npc):
             "SELECT COUNT(*) FROM mud_item_instances WHERE owner_character_id=? "
             "AND acquired_run_id=?", (character["id"], instance_id),
         ).fetchone()[0]
-        daily_day = _daily_run_day(database, instance_id)
-        label = f"Dungeon of the Day {daily_day}" if daily_day else "Expedition"
         summary = (
             f"DEATH SUMMARY\n{npc['name']} defeated you in {old_room['name']}.\n"
-            f"{label} {run['join_code']} · {run['theme_id']} · difficulty {run['difficulty']}\n"
+            f"{_run_label(database, instance_id)} {run['join_code']} · {_run_theme_name(database, instance_id)} · "
+            f"difficulty {run['difficulty']}\n"
             f"Rooms visited: {participant['rooms_visited']}/{run['room_count']}\n"
             f"Run loot lost: {lost_items} item{'s' if lost_items != 1 else ''}. "
             "Previously owned items and earned experience remain.\n"
-            "Enter /continue to return to the Dungeon Portals."
+            f"Enter /continue to return to {_return_label(database, instance_id)}."
         )
         failed = database.execute(
             "UPDATE mud_expedition_participants SET status='failed',finished_at=CURRENT_TIMESTAMP "
@@ -3555,7 +3655,7 @@ def _flee_action(database, user, _parameters):
         ).fetchone()["depth"] for exit_row in exits]
         chosen = exits[candidates.index(min(candidates))]
         _leave_combat(database, user["id"], "instance", instance_id)
-        _set_player_location(database, user["id"], "procedural", "dungeon_instance",
+        _set_player_location(database, user["id"], _run_mode(database, instance_id), "dungeon_instance",
                              chosen["to_room_id"], instance_id)
         _record_expedition_visit(database, instance_id, user["id"], chosen["to_room_id"])
         drafts.append(EventDraft(f"You flee {chosen['direction']}.", event_type="movement"))
@@ -4534,16 +4634,17 @@ def _continue_action(database, user, parameters):
     if parameters.get("arguments"):
         raise ActionError("The continue command does not accept arguments.")
     pending = database.execute(
-        "SELECT 1 FROM mud_death_summaries WHERE user_id=?", (user["id"],)
+        "SELECT instance_id FROM mud_death_summaries WHERE user_id=?", (user["id"],)
     ).fetchone()
     if pending is None:
         raise ActionError("/continue is only available on the death summary screen.")
     database.execute("DELETE FROM mud_death_summaries WHERE user_id=?", (user["id"],))
-    _set_player_location(database, user["id"], "procedural", "portal", PORTAL_ROOM_ID)
+    _leave_run_location(database, user["id"], pending["instance_id"])
+    room = _current_room(database, user["id"])
     return [EventDraft(
-        f"You recover in {_portal_room(database)['name']}.\n\n"
-        f"{_describe_room(database, _portal_room(database), user['id'])}",
-        event_type="portal",
+        f"You recover in {room['name']}.\n\n"
+        f"{_describe_room(database, room, user['id'])}",
+        event_type="portal" if room["id"] == PORTAL_ROOM_ID else "room",
     )]
 
 
@@ -4552,6 +4653,8 @@ def _world_action(database, user, parameters):
         raise ActionError("The world command does not accept arguments.")
     modes = _mode_settings(database)
     room = _current_room(database, user["id"])
+    if room.get("instance_id"):
+        raise ActionError("Reach the dungeon exit and /complete the run, or /abandon it, to leave.")
     if room["id"] != PORTAL_ROOM_ID:
         raise ActionError("You are already in the traditional world.")
     if not modes["traditional"]:
@@ -4608,7 +4711,7 @@ def _record_expedition_visit(database, instance_id, user_id, room_key):
 
 def _enter_expedition(database, user, instance_id, room_key):
     _set_player_location(
-        database, user["id"], "procedural", "dungeon_instance", room_key, instance_id
+        database, user["id"], _run_mode(database, instance_id), "dungeon_instance", room_key, instance_id
     )
     _record_expedition_visit(database, instance_id, user["id"], room_key)
     return _entry_attack(database, user)
@@ -4774,6 +4877,26 @@ def _new_join_code(database):
     raise ActionError("Could not allocate an expedition code. Try again.", 503)
 
 
+def _run_label(database, instance_id):
+    daily_day = _daily_run_day(database, instance_id)
+    if daily_day:
+        return f"Dungeon of the Day {daily_day}"
+    world_run = _world_run(database, instance_id)
+    if world_run is None:
+        return "Expedition"
+    return f"{world_run['entrance_name'] or 'World dungeon'} run"
+
+
+def _run_theme_name(database, instance_id):
+    """Portal runs name their theme ID; world runs name the builder's template."""
+    row = database.execute(
+        "SELECT i.theme_id,t.name FROM mud_procedural_instances AS i "
+        "LEFT JOIN mud_world_dungeon_templates AS t ON t.theme_id=i.theme_id WHERE i.id=?",
+        (instance_id,),
+    ).fetchone()
+    return row["name"] or row["theme_id"]
+
+
 def _expedition_status_text(database, user_id):
     run = _active_expedition(database, user_id)
     if run is None:
@@ -4783,9 +4906,8 @@ def _expedition_status_text(database, user_id):
         "SELECT COUNT(*) AS amount FROM mud_expedition_participants "
         "WHERE instance_id=? AND status='active'", (run["id"],),
     ).fetchone()["amount"]
-    daily_day = _daily_run_day(database, run["id"])
-    label = f"Dungeon of the Day {daily_day}" if daily_day else "Expedition"
-    return (f"{label} {run['join_code']} · {run['theme_id']} · difficulty "
+    label = _run_label(database, run["id"])
+    return (f"{label} {run['join_code']} · {_run_theme_name(database, run['id'])} · difficulty "
             f"{run['difficulty']} · {run['rooms_visited']}/{total} rooms visited · "
             f"{active} active explorer{'s' if active != 1 else ''}. "
             "Reach the exit to secure this run's loot and earn the completion reward, "
@@ -4833,24 +4955,127 @@ def _expedition_action(database, user, parameters):
         )
     except (dungeons.TemplateError, dungeons.GenerationError) as problem:
         raise ActionError(f"Expedition generation failed: {problem}") from problem
-    code = _new_join_code(database)
-    database.execute(
-        "UPDATE mud_procedural_instances SET status='active',owner_user_id=?,join_code=?,"
-        "started_at=CURRENT_TIMESTAMP,updated_at=CURRENT_TIMESTAMP WHERE id=? AND status='pending'",
-        (user["id"], code, instance_id),
-    )
-    character = _character_row(database, user["id"])
-    database.execute(
-        "INSERT INTO mud_expedition_participants(instance_id,user_id,character_id,current_room_key) "
-        "VALUES(?,?,?,?)", (instance_id, user["id"], character["id"], manifest["entrance"]),
-    )
-    entry = _enter_expedition(database, user, instance_id, manifest["entrance"])
+    code, character, entry = _launch_run(database, user, instance_id, manifest)
     return [EventDraft(
         f"Expedition launched. Cooperative join code: {code}."
         f"{_difficulty_advice(character['level'], manifest['difficulty'])}\n\n"
         f"{_describe_room(database, _current_room(database, user['id']), user['id'])}",
         event_type="expedition",
     )] + entry
+
+
+def _launch_run(database, user, instance_id, manifest, entrance=None):
+    """Activate a freshly generated run with its owner inside; world runs record their origin."""
+    code = _new_join_code(database)
+    database.execute(
+        "UPDATE mud_procedural_instances SET status='active',owner_user_id=?,join_code=?,"
+        "world_id=?,world_entrance_id=?,return_room_id=?,party_limit=?,"
+        "started_at=CURRENT_TIMESTAMP,updated_at=CURRENT_TIMESTAMP WHERE id=? AND status='pending'",
+        (user["id"], code,
+         entrance["world_id"] if entrance else None, entrance["id"] if entrance else None,
+         (entrance["return_room_id"] or entrance["room_id"]) if entrance else None,
+         entrance["max_party"] if entrance else None, instance_id),
+    )
+    character = _character_row(database, user["id"])
+    database.execute(
+        "INSERT INTO mud_expedition_participants(instance_id,user_id,character_id,current_room_key) "
+        "VALUES(?,?,?,?)", (instance_id, user["id"], character["id"], manifest["entrance"]),
+    )
+    return code, character, _enter_expedition(database, user, instance_id, manifest["entrance"])
+
+
+def _entrance_match(database, room_id, target, required=True):
+    entrances = _room_entrances(database, room_id)
+    key = " ".join(str(target or "").casefold().split()).removeprefix("enter ").strip()
+    if not key:
+        if len(entrances) == 1:
+            return entrances[0]
+        if not required:
+            return None
+        if not entrances:
+            raise ActionError("There is no dungeon entrance here.")
+        raise ActionError("Choose an entrance: " + ", ".join(row["name"] for row in entrances) + ".")
+    matches = [row for row in entrances if key in {row["id"].casefold(),
+                                                   " ".join(row["name"].casefold().split())}]
+    if not matches and required:
+        raise ActionError(f'There is no dungeon entrance matching "{target}" here.')
+    return matches[0] if matches else None
+
+
+def _enter_dungeon_action(database, user, parameters):
+    """Generate a fresh, private run from a world entrance; its code lets a party join."""
+    room = _current_room(database, user["id"])
+    if room["id"] == PORTAL_ROOM_ID or room.get("instance_id") or room.get("system_managed"):
+        raise ActionError("World dungeon entrances are found in the traditional world.")
+    if not _mode_settings(database)["traditional"]:
+        raise ActionError("The traditional world is disabled.")
+    target = " ".join(str(value) for value in parameters.get("arguments", [])).strip()
+    entrance = _entrance_match(database, room["id"], target)
+    if _active_expedition(database, user["id"]):
+        raise ActionError("You already have an active dungeon run. /resume or /abandon it first.")
+    if not _exit_open_to(database, user["id"], entrance):
+        raise ActionError(_exit_barred_message(entrance))
+    if _active_hostiles(database, room, user["id"]) and not _is_hidden(database, user["id"]):
+        raise ActionError("A hostile enemy blocks your route. Fight or attempt to flee.", 409)
+    from . import mud_world_dungeons
+    template_row = database.execute(
+        "SELECT * FROM mud_world_dungeon_templates WHERE id=?", (entrance["template_id"],),
+    ).fetchone()
+    template = mud_world_dungeons.effective_template(template_row)
+    try:
+        instance_id, manifest = dungeons.create_instance(
+            database, template, secrets.token_hex(16), size=entrance["size"],
+            layout=entrance["layout"], difficulty=entrance["difficulty"],
+            instance_type="random", source_name=f"world:{entrance['world_id']}",
+        )
+    except (dungeons.TemplateError, dungeons.GenerationError) as problem:
+        raise ActionError(f"The way into {entrance['name']} will not open: {problem}") from problem
+    character_name = character_state(database, user["id"])["name"]
+    old_recipients = _occupant_ids(database, room["id"], user["id"])
+    _leave_combat(database, user["id"], "room", room["id"])
+    code, character, entry = _launch_run(database, user, instance_id, manifest, entrance)
+    party = ("" if entrance["max_party"] == 1 else
+             f" Party code: {code} — up to {entrance['max_party'] - 1} more explorer"
+             f"{'s' if entrance['max_party'] != 2 else ''} can /join {code} from {room['name']}.")
+    return [
+        EventDraft(f"You enter {entrance['name']}.{party}"
+                   f"{_difficulty_advice(character['level'], manifest['difficulty'])}\n\n"
+                   f"{_describe_room(database, _current_room(database, user['id']), user['id'])}",
+                   event_type="expedition"),
+        EventDraft(f"{character_name} enters {entrance['name']}.", event_type="departure",
+                   audience_type="room", audience_key=room["id"], recipient_ids=old_recipients),
+    ] + entry
+
+
+def end_world_runs(database, world_id, message):
+    """End a world's live dungeon runs, losing their loot, when the world stops being active."""
+    for run in database.execute(
+        "SELECT id FROM mud_procedural_instances WHERE world_id=? AND status='active'", (world_id,),
+    ).fetchall():
+        for participant in database.execute(
+            "SELECT user_id FROM mud_expedition_participants WHERE instance_id=? AND status='active'",
+            (run["id"],),
+        ).fetchall():
+            user_id = participant["user_id"]
+            _leave_combat(database, user_id, "instance", run["id"])
+            database.execute(
+                "UPDATE mud_expedition_participants SET status='abandoned',finished_at=CURRENT_TIMESTAMP "
+                "WHERE instance_id=? AND user_id=? AND status='active'", (run["id"], user_id),
+            )
+            _settle_run_loot(database, user_id, run["id"], keep=False)
+            location = database.execute(
+                "SELECT instance_id FROM mud_player_locations WHERE user_id=?", (user_id,),
+            ).fetchone()
+            if location is not None and location["instance_id"] == run["id"]:
+                _leave_run_location(database, user_id, run["id"])
+            _insert_event(database, EventDraft(
+                f"{message} Your dungeon run ended and its loot was lost.",
+                event_type="expedition", recipient_ids=(user_id,)), default_user_id=user_id)
+        database.execute(
+            "UPDATE mud_procedural_instances SET status='abandoned',terminal_reason='world_changed',"
+            "ended_at=CURRENT_TIMESTAMP,updated_at=CURRENT_TIMESTAMP WHERE id=? AND status='active'",
+            (run["id"],),
+        )
 
 
 def _difficulty_advice(level, difficulty):
@@ -4866,8 +5091,9 @@ def _difficulty_advice(level, difficulty):
 
 
 def _join_expedition_action(database, user, parameters):
-    if _current_room(database, user["id"])["id"] != PORTAL_ROOM_ID:
-        raise ActionError("Expeditions can only be joined from the Dungeon Portals.")
+    room = _current_room(database, user["id"])
+    if room.get("instance_id"):
+        raise ActionError("You are already inside a dungeon run.")
     if _active_expedition(database, user["id"]):
         raise ActionError("You already have an active expedition.")
     code = str(parameters.get("code") or " ".join(
@@ -4879,8 +5105,26 @@ def _join_expedition_action(database, user, parameters):
         "SELECT * FROM mud_procedural_instances WHERE join_code=? AND instance_type='random' "
         "AND status='active'", (code,),
     ).fetchone()
+    world_run = _world_run(database, run["id"]) if run is not None else None
+    if world_run is None and room["id"] != PORTAL_ROOM_ID:
+        if run is not None or not _room_entrances(database, room["id"]):
+            raise ActionError("Expeditions can only be joined from the Dungeon Portals.")
     if run is None:
         raise ActionError("That expedition is not active or the code is invalid.", 404)
+    if world_run is not None:
+        # A party gathers where the run began: at its entrance, or the room it returns to.
+        if room["id"] not in {world_run["entrance_room_id"], world_run["return_room_id"]}:
+            raise ActionError("Join a party at the dungeon entrance it set out from.")
+        if not _exit_open_to(database, user["id"], database.execute(
+                "SELECT conditions_json,conditions_message FROM mud_world_dungeon_entrances WHERE id=?",
+                (run["world_entrance_id"],)).fetchone() or {"conditions_json": "[]"}):
+            raise ActionError("You cannot pass that dungeon entrance.")
+        members = database.execute(
+            "SELECT COUNT(*) FROM mud_expedition_participants WHERE instance_id=? AND status='active'",
+            (run["id"],),
+        ).fetchone()[0]
+        if world_run["party_limit"] and members >= world_run["party_limit"]:
+            raise ActionError("That party is full.", 409)
     entrance = database.execute(
         "SELECT room_key FROM mud_dungeon_rooms WHERE instance_id=? AND role='entrance'",
         (run["id"],),
@@ -4893,6 +5137,8 @@ def _join_expedition_action(database, user, parameters):
         )
     except sqlite3.IntegrityError as problem:
         raise ActionError("You already participated in that expedition and cannot rejoin it.", 409) from problem
+    if world_run is not None:
+        _leave_combat(database, user["id"], "room", room["id"])
     entry = _enter_expedition(database, user, run["id"], entrance)
     recipients = _instance_participant_ids(database, run["id"], user["id"])
     return [
@@ -4905,14 +5151,22 @@ def _join_expedition_action(database, user, parameters):
 def _resume_expedition_action(database, user, parameters):
     if parameters.get("arguments"):
         raise ActionError("The resume command does not accept arguments.")
-    if _current_room(database, user["id"])["id"] != PORTAL_ROOM_ID:
+    room = _current_room(database, user["id"])
+    if room.get("instance_id"):
         raise ActionError("You are already inside an expedition.")
     run = _active_expedition(database, user["id"])
+    world_run = _world_run(database, run["id"]) if run else None
     if run is None:
         raise ActionError("You have no active expedition to resume.")
+    if world_run is None and room["id"] != PORTAL_ROOM_ID:
+        raise ActionError("You are already inside an expedition.")
+    if world_run is not None and not _mode_settings(database)["traditional"]:
+        raise ActionError("The traditional world is disabled.")
+    if world_run is not None:
+        _leave_combat(database, user["id"], "room", room["id"])
     _enter_expedition(database, user, run["id"], run["current_room_key"])
     return [EventDraft(
-        f"You resume {'Dungeon of the Day run' if _daily_run_day(database, run['id']) else 'expedition'} {run['join_code']}.\n\n"
+        f"You resume {'Dungeon of the Day run' if _daily_run_day(database, run['id']) else 'expedition' if world_run is None else _run_label(database, run['id'])} {run['join_code']}.\n\n"
         f"{_describe_room(database, _current_room(database, user['id']), user['id'])}",
         event_type="expedition",
     )]
@@ -4934,12 +5188,28 @@ def _abandon_expedition_action(database, user, parameters):
             database, run["id"], user["id"], "abandoned", run["rooms_visited"]
         )
     _settle_run_loot(database, user["id"], run["id"], keep=False)
-    _set_player_location(database, user["id"], "procedural", "portal", PORTAL_ROOM_ID)
+    location = database.execute(
+        "SELECT instance_id FROM mud_player_locations WHERE user_id=?", (user["id"],),
+    ).fetchone()
+    world_run = _world_run(database, run["id"])
+    # A world explorer displaced from the run abandons it from where they stand.
+    if world_run is None or location is None or location["instance_id"] == run["id"]:
+        _leave_run_location(database, user["id"], run["id"])
     _finish_empty_expedition(database, run["id"], "abandoned")
-    return [EventDraft(
-        f"You abandon {'Dungeon of the Day run' if _daily_run_day(database, run['id']) else 'expedition'} {run['join_code']}. This run's loot is lost; previously owned items and earned experience remain.",
+    label = ("Dungeon of the Day run" if _daily_run_day(database, run["id"]) else
+             "expedition" if world_run is None else _run_label(database, run["id"]))
+    events = [EventDraft(
+        f"You abandon {label} {run['join_code']}. This run's loot is lost; previously owned items and earned experience remain.",
         event_type="expedition",
     ), _room_entry_event(database, user)]
+    recipients = _instance_participant_ids(database, run["id"])
+    if world_run is not None and recipients:
+        events.append(EventDraft(
+            f"{_character_row(database, user['id'])['display_name']} abandons the run.",
+            event_type="departure", audience_type="instance", audience_key=run["id"],
+            recipient_ids=recipients,
+        ))
+    return events
 
 
 def _complete_expedition_action(database, user, parameters):
@@ -4959,12 +5229,16 @@ def _complete_expedition_action(database, user, parameters):
     ).fetchall()
     recipients = tuple(item["user_id"] for item in active)
     daily_day = _daily_run_day(database, run["id"])
+    # World runs always pay the world's track, even to an explorer displaced from the dungeon.
+    track = None
+    if _world_run(database, run["id"]) is not None:
+        track = "shared" if _crossover_settings(database)["progression_shared"] else "traditional"
     rewarded = 0
     coin_rewards = []
     level_drafts = []
     for participant in active:
         reward = max(1, (run["difficulty"] * 10 + participant["rooms_visited"] * 2) * dungeons.dungeon_xp_percent(
-            _character_row(database, participant["user_id"])["level"], run["difficulty"]) // 100)
+            _character_row(database, participant["user_id"], track)["level"], run["difficulty"]) // 100)
         claimed = database.execute(
             "UPDATE mud_expedition_participants SET status='completed',finished_at=CURRENT_TIMESTAMP,"
             "reward_experience=?,rewarded_at=CURRENT_TIMESTAMP WHERE instance_id=? AND user_id=? "
@@ -4989,7 +5263,7 @@ def _complete_expedition_action(database, user, parameters):
                     (reward, run["id"], participant["user_id"]),
                 )
         if claimed and (daily_day is None or daily_claimed):
-            level_up = level_up_text(award_experience(database, participant["user_id"], reward))
+            level_up = level_up_text(award_experience(database, participant["user_id"], reward, track))
             if level_up:
                 level_drafts.append(EventDraft(level_up, event_type="reward",
                                                audience_key=str(participant["user_id"]),
@@ -5006,7 +5280,7 @@ def _complete_expedition_action(database, user, parameters):
             )
             coin_rewards.append(coins)
         _leave_combat(database, participant["user_id"], "instance", run["id"])
-        _set_player_location(database, participant["user_id"], "procedural", "portal", PORTAL_ROOM_ID)
+        _leave_run_location(database, participant["user_id"], run["id"])
     database.execute(
         "UPDATE mud_procedural_instances SET status='completed',terminal_reason='success',"
         "ended_at=CURRENT_TIMESTAMP,updated_at=CURRENT_TIMESTAMP WHERE id=? AND status='active'",
@@ -5019,7 +5293,7 @@ def _complete_expedition_action(database, user, parameters):
         f"First-completion rewards were granted to {rewarded} eligible explorer{'s' if rewarded != 1 else ''}; repeat completions are recorded without another reward."
     )
     return [EventDraft(
-        f"{'Dungeon of the Day run' if daily_day else 'Expedition'} {run['join_code']} is complete. "
+        f"{_run_label(database, run['id'])} {run['join_code']} is complete. "
         f"Collected loot is safe, and each explorer earns coins based on difficulty and rooms visited. {reward_text}",
         event_type="reward", audience_type="instance", audience_key=run["id"],
         recipient_ids=recipients,
@@ -5271,6 +5545,9 @@ def _go_action(database, user, parameters):
     else:
         raise ActionError("Go where? Use /exits to list available routes.")
     if not matches:
+        if (destination and not instance_id and room["id"] != PORTAL_ROOM_ID
+                and _entrance_match(database, room["id"], destination, required=False)):
+            return _enter_dungeon_action(database, user, {"arguments": [destination]})
         raise ActionError(f'There is no exit matching "{destination or exit_id}" from here.')
     if len(matches) > 1:
         raise ActionError(f'More than one exit matches "{destination}". Use an exit name or direction.')
@@ -5286,7 +5563,7 @@ def _go_action(database, user, parameters):
     _leave_combat(database, user["id"], "instance" if instance_id else "room",
                   instance_id or room["id"])
     if instance_id:
-        _set_player_location(database, user["id"], "procedural", "dungeon_instance",
+        _set_player_location(database, user["id"], _run_mode(database, instance_id), "dungeon_instance",
                              chosen["to_room_id"], instance_id)
         _record_expedition_visit(database, instance_id, user["id"], chosen["to_room_id"])
         destination_room = _dungeon_room(database, instance_id, chosen["to_room_id"])
@@ -5613,6 +5890,12 @@ actions.register(ActionDefinition(
     key="join_expedition", label="JOIN EXPEDITION",
     description="Join an active cooperative expedition by code.",
     commands=("join",), handler=_join_expedition_action,
+    group="EXPEDITIONS", show_context=False,
+))
+actions.register(ActionDefinition(
+    key="enter_dungeon", label="ENTER DUNGEON",
+    description="Descend through a world dungeon entrance into a freshly generated run.",
+    commands=("enter", "delve"), handler=_enter_dungeon_action,
     group="EXPEDITIONS", show_context=False,
 ))
 actions.register(ActionDefinition(
@@ -6616,6 +6899,7 @@ def builder():
         rewards_by_quest.setdefault(row["quest_id"], []).append(dict(row))
     for row in database.execute("SELECT * FROM mud_quest_givers"):
         givers_by_quest.setdefault(row["quest_id"], set()).add(row["npc_definition_id"])
+    dungeon_context = _builder_dungeon_context(database)
     return render_template(
         "mud/builder.html", rooms=rooms, exits_by_room=exits_by_room,
         users=users, directions=DIRECTIONS, definitions=definitions, items_by_room=items_by_room,
@@ -6629,8 +6913,57 @@ def builder():
         skill_entries=[{**entry, "summary": mud_skills.describe_effects(entry["definition"])}
                        for entry in skill_entries],
         npc_trainers=npc_trainers, item_categories=item_categories,
-        resource=resource_settings(database),
+        resource=resource_settings(database), **dungeon_context,
     )
+
+
+def _builder_dungeon_context(database):
+    """World dungeon templates, entrances by room, clone sources, and an optional unsaved preview."""
+    from . import mud_world_dungeons
+    world = database.execute("SELECT id FROM mud_world_packages WHERE active=1").fetchone()
+    if world is None:
+        return {"dungeon_templates": [], "entrances_by_room": {}, "dungeon_bases": [],
+                "dungeon_layouts": sorted(dungeons.SUPPORTED_LAYOUTS), "dungeon_preview": None}
+    templates = []
+    for row in mud_world_dungeons.world_templates(database, world["id"]):
+        template = json.loads(row["template_json"])
+        generation = template.get("generation", {})
+        templates.append({**dict(row), "json": json.dumps(template, ensure_ascii=False, indent=2),
+                          "size": generation.get("size", {}), "difficulty": generation.get("difficulty", {}),
+                          "layouts": {entry.get("type"): entry.get("weight", 1)
+                                      for entry in generation.get("layouts", [])},
+                          "entrance_count": database.execute(
+                              "SELECT COUNT(*) FROM mud_world_dungeon_entrances WHERE template_id=?",
+                              (row["id"],)).fetchone()[0],
+                          "active_runs": database.execute(
+                              "SELECT COUNT(*) FROM mud_procedural_instances WHERE theme_id=? AND status='active'",
+                              (row["theme_id"],)).fetchone()[0]})
+    entrances_by_room = {}
+    for row in mud_world_dungeons.world_entrances(database, world["id"]):
+        entry = dict(row)
+        entry["conditions_text"] = "" if row["conditions_json"] in (None, "", "[]") else row["conditions_json"]
+        entrances_by_room.setdefault(row["room_id"], []).append(entry)
+    try:
+        bases = sorted(((key, template["name"]) for key, (_path, template) in dungeons.discover_templates().items()),
+                       key=lambda item: item[1].casefold())
+    except dungeons.TemplateError:
+        bases = []
+    preview = None
+    preview_id = request.args.get("preview")
+    if preview_id:
+        row = database.execute("SELECT * FROM mud_world_dungeon_templates WHERE id=? AND world_id=?",
+                               (preview_id, world["id"])).fetchone()
+        if row is not None:
+            seed = request.args.get("seed", "").strip()[:64] or secrets.token_hex(8)
+            try:
+                manifest = dungeons.generate_manifest(mud_world_dungeons.effective_template(row), seed,
+                                                      database=database)
+                text = dungeons.format_preview(manifest)
+            except (dungeons.TemplateError, dungeons.GenerationError) as problem:
+                text = f"Preview failed: {problem}"
+            preview = {"template_id": row["id"], "name": row["name"], "seed": seed, "text": text}
+    return {"dungeon_templates": templates, "entrances_by_room": entrances_by_room, "dungeon_bases": bases,
+            "dungeon_layouts": sorted(dungeons.SUPPORTED_LAYOUTS), "dungeon_preview": preview}
 
 
 @bp.get("/builder/export")
@@ -7537,6 +7870,256 @@ def builder_delete_exit(exit_id):
     database.commit()
     flash(f"Exit {exit_row['name']} removed.", "success")
     return _builder_redirect(exit_row["from_room_id"])
+
+
+def _active_world_id(database):
+    row = database.execute("SELECT id FROM mud_world_packages WHERE active=1").fetchone()
+    if row is None:
+        abort(404)
+    return row["id"]
+
+
+def _builder_dungeon_template(database, world_id, existing=None):
+    """Start from pasted JSON, a cloned theme, or the template being edited, then apply guided fields."""
+    from . import mud_world_dungeons
+    text = request.form.get("template_json", "").strip()
+    base = request.form.get("base", "").strip()
+    if text:
+        template = mud_world_dungeons.parse_template(text)
+    elif base.startswith("theme:"):
+        discovered = dungeons.discover_templates()
+        if base[6:] not in discovered:
+            raise mud_world_dungeons.WorldDungeonError("Choose an installed dungeon theme to start from.")
+        template = {key: value for key, value in discovered[base[6:]][1].items()
+                    if key not in ("origins", "skills", "author")}
+    elif base.startswith("template:"):
+        row = database.execute("SELECT template_json FROM mud_world_dungeon_templates WHERE id=? AND world_id=?",
+                               (base[9:], world_id)).fetchone()
+        if row is None:
+            raise mud_world_dungeons.WorldDungeonError("Choose one of this world's templates to copy.")
+        template = json.loads(row["template_json"])
+    elif existing is not None:
+        template = json.loads(existing["template_json"])
+    else:
+        raise mud_world_dungeons.WorldDungeonError("Paste template JSON or choose a theme to start from.")
+    generation = template.get("generation") if isinstance(template.get("generation"), dict) else None
+    if generation is not None:
+        for rule in ("size", "difficulty"):
+            values = {key: request.form.get(f"{rule}_{key}", "").strip()
+                      for key in ("minimum", "default", "maximum")}
+            if all(values.values()):
+                try:
+                    generation[rule] = {key: int(value) for key, value in values.items()}
+                except ValueError as problem:
+                    raise mud_world_dungeons.WorldDungeonError(f"Dungeon {rule} values must be whole numbers.") from problem
+        weights = {layout: request.form.get(f"layout_{layout}", "").strip()
+                   for layout in sorted(dungeons.SUPPORTED_LAYOUTS)}
+        if any(weights.values()):
+            try:
+                chosen = [{"type": layout, "weight": int(weight)} for layout, weight in weights.items()
+                          if weight and int(weight) > 0]
+            except ValueError as problem:
+                raise mud_world_dungeons.WorldDungeonError("Layout weights must be whole numbers.") from problem
+            if not chosen:
+                raise mud_world_dungeons.WorldDungeonError("Give at least one layout a weight above zero.")
+            generation["layouts"] = chosen
+    return template
+
+
+def _dungeon_template_error(problem):
+    errors = getattr(problem, "errors", None)
+    if errors:
+        shown = "; ".join(errors[:6])
+        return f"Dungeon template is invalid: {shown}" + (f" (and {len(errors) - 6} more)" if len(errors) > 6 else "")
+    return str(problem)
+
+
+@bp.post("/builder/dungeons")
+@builder_required
+def builder_create_dungeon_template():
+    from . import mud_world_dungeons
+    validate_csrf()
+    database = get_db()
+    world_id = _active_world_id(database)
+    try:
+        template = _builder_dungeon_template(database, world_id)
+        mud_world_dungeons.save_template(database, world_id, request.form.get("local_key", "").strip(),
+                                         request.form.get("name", ""), template)
+    except (mud_world_dungeons.WorldDungeonError, dungeons.TemplateError) as problem:
+        database.rollback()
+        flash(_dungeon_template_error(problem), "error")
+        return redirect(url_for("mud.builder", _anchor="dungeon-heading"))
+    database.commit()
+    flash("Dungeon template created.", "success")
+    return redirect(url_for("mud.builder", _anchor="dungeon-heading"))
+
+
+@bp.post("/builder/dungeons/<path:template_id>")
+@builder_required
+def builder_update_dungeon_template(template_id):
+    from . import mud_world_dungeons
+    validate_csrf()
+    database = get_db()
+    world_id = _active_world_id(database)
+    existing = database.execute("SELECT * FROM mud_world_dungeon_templates WHERE id=? AND world_id=?",
+                                (template_id, world_id)).fetchone()
+    if existing is None:
+        abort(404)
+    try:
+        template = _builder_dungeon_template(database, world_id, existing)
+        mud_world_dungeons.save_template(database, world_id, request.form.get("local_key", "").strip(),
+                                         request.form.get("name", ""), template, template_id)
+    except (mud_world_dungeons.WorldDungeonError, dungeons.TemplateError) as problem:
+        database.rollback()
+        flash(_dungeon_template_error(problem), "error")
+        return redirect(url_for("mud.builder", _anchor=f"dungeon-{template_id}"))
+    # New generation bounds can strand an entrance's overrides; those fall back to the template default.
+    generation = template["generation"]
+    layouts = {entry["type"] for entry in generation["layouts"]}
+    for rule in ("difficulty", "size"):
+        database.execute(
+            f"UPDATE mud_world_dungeon_entrances SET {rule}=NULL WHERE template_id=? "
+            f"AND {rule} IS NOT NULL AND ({rule}<? OR {rule}>?)",
+            (template_id, generation[rule]["minimum"], generation[rule]["maximum"]),
+        )
+    database.execute(
+        f"UPDATE mud_world_dungeon_entrances SET layout=NULL WHERE template_id=? AND layout IS NOT NULL "
+        f"AND layout NOT IN ({','.join('?' for _ in layouts)})", (template_id, *sorted(layouts)),
+    )
+    database.commit()
+    flash(f"Dungeon template {existing['name']} saved. New runs use it; runs in progress keep their layout.", "success")
+    return redirect(url_for("mud.builder", _anchor=f"dungeon-{template_id}"))
+
+
+@bp.post("/builder/dungeons/<path:template_id>/delete")
+@builder_required
+def builder_delete_dungeon_template(template_id):
+    validate_csrf()
+    database = get_db()
+    world_id = _active_world_id(database)
+    existing = database.execute("SELECT * FROM mud_world_dungeon_templates WHERE id=? AND world_id=?",
+                                (template_id, world_id)).fetchone()
+    if existing is None:
+        abort(404)
+    if request.form.get("confirmation") != "delete":
+        flash("Template deletion was not confirmed.", "error")
+        return redirect(url_for("mud.builder", _anchor=f"dungeon-{template_id}"))
+    if database.execute("SELECT 1 FROM mud_world_dungeon_entrances WHERE template_id=?",
+                        (template_id,)).fetchone():
+        flash("Remove or reassign the entrances that use this template first.", "error")
+        return redirect(url_for("mud.builder", _anchor=f"dungeon-{template_id}"))
+    database.execute("DELETE FROM mud_world_dungeon_templates WHERE id=?", (template_id,))
+    database.commit()
+    flash(f"Dungeon template {existing['name']} removed. Runs already in progress continue.", "success")
+    return redirect(url_for("mud.builder", _anchor="dungeon-heading"))
+
+
+def _builder_entrance_fields(database, world_id):
+    from . import mud_world_dungeons
+    room_id = request.form.get("room_id", "").strip()
+    return_room_id = request.form.get("return_room_id", "").strip() or room_id
+    rooms = {row["id"] for row in database.execute(
+        "SELECT id FROM mud_world_rooms WHERE id IN (?,?) AND world_id=?", (room_id, return_room_id, world_id))}
+    if room_id not in rooms or return_room_id not in rooms:
+        raise mud_world_dungeons.WorldDungeonError("Choose existing entrance and return rooms in this world.")
+    template_row = database.execute("SELECT * FROM mud_world_dungeon_templates WHERE id=? AND world_id=?",
+                                    (request.form.get("template_id", ""), world_id)).fetchone()
+    if template_row is None:
+        raise mud_world_dungeons.WorldDungeonError("Choose one of this world's dungeon templates.")
+    conditions, error = _builder_rules(database, "conditions_json", mud_conditions.validate_conditions)
+    if error:
+        raise mud_world_dungeons.WorldDungeonError(f"Entrance conditions: {error}")
+    fields = mud_world_dungeons.entrance_fields(
+        mud_world_dungeons.effective_template(template_row),
+        {**request.form.to_dict(), "conditions": conditions, "enabled": request.form.get("enabled") == "1"})
+    return room_id, return_room_id, template_row["id"], fields
+
+
+def _save_entrance(database, world_id, entrance_id=None):
+    room_id, return_room_id, template_id, fields = _builder_entrance_fields(database, world_id)
+    if database.execute(
+        "SELECT 1 FROM mud_world_dungeon_entrances WHERE room_id=? AND name=? COLLATE NOCASE AND id<>COALESCE(?,'')",
+        (room_id, fields["name"], entrance_id),
+    ).fetchone():
+        from . import mud_world_dungeons
+        raise mud_world_dungeons.WorldDungeonError("That room already has a dungeon entrance with this name.")
+    values = (room_id, return_room_id, template_id, fields["name"], fields["description"],
+              fields["difficulty"], fields["size"], fields["layout"], fields["max_party"],
+              json.dumps(fields["conditions"], separators=(",", ":")), fields["conditions_message"],
+              int(fields["enabled"]))
+    if entrance_id is None:
+        database.execute(
+            "INSERT INTO mud_world_dungeon_entrances(id,world_id,room_id,return_room_id,template_id,name,"
+            "description,difficulty,size,layout,max_party,conditions_json,conditions_message,enabled) "
+            "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            (f"world:dungeon-entrance:{uuid.uuid4().hex}", world_id, *values),
+        )
+    else:
+        database.execute(
+            "UPDATE mud_world_dungeon_entrances SET room_id=?,return_room_id=?,template_id=?,name=?,"
+            "description=?,difficulty=?,size=?,layout=?,max_party=?,conditions_json=?,"
+            "conditions_message=?,enabled=? WHERE id=?", (*values, entrance_id),
+        )
+    return room_id, fields["name"]
+
+
+@bp.post("/builder/entrances")
+@builder_required
+def builder_create_entrance():
+    from . import mud_world_dungeons
+    validate_csrf()
+    database = get_db()
+    world_id = _active_world_id(database)
+    try:
+        room_id, name = _save_entrance(database, world_id)
+    except mud_world_dungeons.WorldDungeonError as problem:
+        database.rollback()
+        flash(str(problem), "error")
+        return _builder_redirect(request.form.get("room_id"))
+    database.commit()
+    flash(f"Dungeon entrance {name} created.", "success")
+    return _builder_redirect(room_id)
+
+
+@bp.post("/builder/entrances/<path:entrance_id>")
+@builder_required
+def builder_update_entrance(entrance_id):
+    from . import mud_world_dungeons
+    validate_csrf()
+    database = get_db()
+    world_id = _active_world_id(database)
+    existing = database.execute("SELECT room_id FROM mud_world_dungeon_entrances WHERE id=? AND world_id=?",
+                                (entrance_id, world_id)).fetchone()
+    if existing is None:
+        abort(404)
+    try:
+        room_id, name = _save_entrance(database, world_id, entrance_id)
+    except mud_world_dungeons.WorldDungeonError as problem:
+        database.rollback()
+        flash(str(problem), "error")
+        return _builder_redirect(existing["room_id"])
+    database.commit()
+    flash(f"Dungeon entrance {name} saved. Runs already in progress keep their settings.", "success")
+    return _builder_redirect(room_id)
+
+
+@bp.post("/builder/entrances/<path:entrance_id>/delete")
+@builder_required
+def builder_delete_entrance(entrance_id):
+    validate_csrf()
+    database = get_db()
+    world_id = _active_world_id(database)
+    existing = database.execute("SELECT room_id,name FROM mud_world_dungeon_entrances WHERE id=? AND world_id=?",
+                                (entrance_id, world_id)).fetchone()
+    if existing is None:
+        abort(404)
+    if request.form.get("confirmation") != "delete":
+        flash("Entrance deletion was not confirmed.", "error")
+        return _builder_redirect(existing["room_id"])
+    database.execute("DELETE FROM mud_world_dungeon_entrances WHERE id=?", (entrance_id,))
+    database.commit()
+    flash(f"Dungeon entrance {existing['name']} removed. Runs already in progress continue.", "success")
+    return _builder_redirect(existing["room_id"])
 
 
 @bp.post("/builder/resource")
