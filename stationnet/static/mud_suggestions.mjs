@@ -75,6 +75,11 @@ export function commandSuggestions(value, state, catalog, limit = 6) {
       for (const child of item.contents || []) add(`/get ${targetName(child)} from ${targetName(item)}`, "Container contents");
     }
   }
+  if (room.wayfinding) {
+    if (room.wilderness && room.wayfinding.direction && (room.exits || []).some(exit => exit.direction === room.wayfinding.direction))
+      add(`/travel ${room.wayfinding.direction}`, `Toward ${room.wayfinding.destination}`);
+    add("/directions", `Check the way to ${room.wayfinding.destination}`);
+  }
   for (const exit of room.exits || []) {
     const direction = exit.direction || exit.name;
     if (direction) add(`/go ${direction}`, "Room exit");

@@ -19,7 +19,7 @@ from flask import Blueprint, abort, flash, g, jsonify, redirect, render_template
 
 from .auth import admin_required, login_required
 from .db import get_db
-from . import dungeons, character_creation, mud_combat, mud_conditions, mud_effects, mud_firearms, mud_compat, mud_skills, mud_triggers, mud_wilderness, moderation
+from . import dungeons, character_creation, mud_combat, mud_conditions, mud_effects, mud_firearms, mud_compat, mud_skills, mud_triggers, mud_wayfinding, mud_wilderness, moderation
 from .security import validate_csrf
 
 bp = Blueprint("mud", __name__, url_prefix="/mud")
@@ -943,6 +943,7 @@ def _help_action(_database, _user, parameters):
             "train": '/train strength 2', "skills": '/skills stealth',
             "learn": '/learn lockpicking from "Old Thief"', "practice_skill": '/practice blades',
             "pick": '/pick north', "interact": '/pull "Rusty Lever"', "travel": '/travel north',
+            "directions": '/directions "Kessa Gate"', "use": '/read "Old Map"',
         }
         body = f"/{name}: {_action_description(definition, resource)}\nAliases: " + ", ".join(f"/{alias}" for alias in aliases)
         if definition.key in examples:
@@ -952,6 +953,11 @@ def _help_action(_database, _user, parameters):
                      "seconds and stops for creatures, other players, paths out of the wilds, terrain changes, "
                      "blocked routes, or combat. Most other commands, including moving by hand, also stop it. "
                      "Use /travel alone to see progress and /stop to halt.")
+        if definition.key in {"directions", "destinations"}:
+            body += ("\nYou can ask the way to public places, places you have visited or learned of from people, "
+                     "books and events, and places on a map you carry. Directions follow real roads and exits but "
+                     "never move you. While a destination is chosen, moving tells you when your heading changes, "
+                     "and /travel stops where your way turns or when you arrive.")
         if definition.key in {"look", "get", "put", "open", "close"}:
             body += "\nQuote multiword targets. For duplicates use a number: Apple 2 or Apple (2)."
         return [EventDraft(body)]
@@ -965,6 +971,7 @@ def _help_action(_database, _user, parameters):
     lines.append('Direction shortcuts include /n, /s, /e, /w, /u, and /d. Plain text speaks to the room.')
     lines.append('In the wilderness, /travel <direction> walks you onward room by room until something '
                  'needs your attention; /stop halts.')
+    lines.append('Use /destinations to list places you know and /directions <place> to ask the way.')
     return [EventDraft("\n".join(lines))]
 
 
@@ -1774,6 +1781,7 @@ def _room_state(database, user_id):
         "dialogue_responses": dialogue_responses,
         "wilderness": room.get("kind") == "wild" and not instance_id,
         "travel": travel_state(database, user_id),
+        "wayfinding": None if instance_id or portal else wayfinding_state(database, user_id),
     }
 
 
@@ -2819,6 +2827,9 @@ class _ConditionContext:
 
     def room_id(self):
         return _current_room(self.database, self.user_id)["id"]
+
+    def knows_destination(self, destination_id):
+        return mud_wayfinding.knows(self.database, self._character()["id"], destination_id)
 
 
 def _describe_item(database, row, user_id=None):
@@ -4248,6 +4259,17 @@ def _use_item_effect(database, user, item):
         message = (f"The chart points {direction} toward the exit." if direction else
                    "The chart marks this room as the exit.")
         return [EventDraft(message, event_type="item")] + _enemy_turn(database, user)
+    taught = mud_wayfinding.teaches(properties)
+    if taught:
+        # Books, charts and letters teach the way for good; reading again teaches nothing new.
+        character_id = _character_row(database, user["id"])["id"]
+        learned = [name for name in (mud_wayfinding.learn(database, character_id, ref, "item") for ref in taught) if name]
+        message = properties.get("use_message")
+        lines = [message.strip() if isinstance(message, str) and message.strip() else f"You study {item['name']}."]
+        lines += [f"You now know the way to {name}." for name in learned] or ["You learn nothing new from it."]
+        if item["item_type"] == "consumable":
+            database.execute("DELETE FROM mud_item_instances WHERE id=?", (item["id"],))
+        return [EventDraft("\n".join(lines), event_type="item")] + _enemy_turn(database, user)
     message = properties.get("use_message")
     if not isinstance(message, str) or not message.strip():
         raise ActionError(f"{item['name']} has no usable effect yet.")
@@ -4497,6 +4519,8 @@ def _settle_outcomes(database, user, outcomes, claim=None, event_type="dialogue"
     for outcome in outcomes:
         if outcome["type"] == "give_item":
             events += _set_objective_progress(database, user, "possess_item", outcome["item"])
+        elif outcome["type"] == "learn_destination":
+            events += _learn_destination(database, user, outcome["destination"], "dialogue")
     return events
 
 
@@ -5735,6 +5759,8 @@ def _go_action(database, user, parameters, *, travel_step=None):
         events += _set_objective_progress(database, user, "visit_room", destination_room["id"])
         events += _wilderness_encounter(database, destination_room)
     events += _entry_triggers(database, user)
+    if not instance_id and travel_step is None:
+        events += _wayfinding_heading(database, user["id"], destination_room, only_changes=True)
     return events + _entry_attack(database, user)
 
 
@@ -5770,7 +5796,7 @@ DIRECTION_ALIASES = {
 TRAVEL_SAFE_ACTIONS = frozenset({
     "travel", "stop", "look", "exits", "map", "say", "emote", "tell", "reply_player", "who",
     "help", "status", "character", "inventory", "quests", "skills", "spells", "description",
-    "block", "unblock",
+    "block", "unblock", "directions", "destinations",
 })
 
 
@@ -5863,7 +5889,8 @@ def _stop_action(database, user, _parameters):
     if row is None:
         return [EventDraft("You are not travelling.", "travel")]
     return _cancel_travel(database, user["id"], f"You stop travelling after {row['steps']} "
-                                                f"room{'s' if row['steps'] != 1 else ''}.")
+                                                f"room{'s' if row['steps'] != 1 else ''}.") + _wayfinding_heading(
+        database, user["id"])
 
 
 def _travel_interruption(database, user_id, journey, room, direction, step, settings):
@@ -5887,6 +5914,9 @@ def _travel_interruption(database, user_id, journey, room, direction, step, sett
     if (any(not str(row["id"]).startswith("grid:") for row in _room_exits(database, room["id"], None, user_id))
             or _room_entrances(database, room["id"])):
         return "You stop: a path here leads out of the wilderness."
+    turn = _wayfinding_travel_stop(database, user_id, room, direction)
+    if turn:
+        return turn
     if step >= settings["max_steps"]:
         return f"You pause after {step} rooms on the road."
     return _travel_barrier(database, user_id, room, direction)
@@ -5917,17 +5947,18 @@ def _travel_step(database, journey, settings, now):
     direction = journey["direction"]
     barrier = _travel_barrier(database, user_id, room, direction)
     if barrier:
-        return _cancel_travel(database, user_id, barrier)
+        return _cancel_travel(database, user_id, barrier) + _wayfinding_heading(database, user_id, room)
     step = journey["steps"] + 1
     try:
         drafts = _go_action(database, user, {"arguments": [direction]}, travel_step=step)
     except ActionError as problem:
-        return _cancel_travel(database, user_id, str(problem))
+        return _cancel_travel(database, user_id, str(problem)) + _wayfinding_heading(database, user_id, room)
     drafts += _npc_reactions(database, user, "go")
     room = _current_room(database, user_id)
     reason = _travel_interruption(database, user_id, journey, room, direction, step, settings)
     if reason:
-        return drafts + _cancel_travel(database, user_id, reason) + [_room_entry_event(database, user)]
+        return (drafts + _cancel_travel(database, user_id, reason) + [_room_entry_event(database, user)]
+                + _wayfinding_heading(database, user_id, room))
     database.execute(
         "UPDATE mud_travel SET room_id=?,steps=?,next_due=? WHERE user_id=?",
         (room["id"], step, _scheduled_now(now + timedelta(seconds=settings["interval_seconds"])), user_id),
@@ -5945,6 +5976,262 @@ def process_travel(database, now=None, limit=50):
         for draft in _travel_step(database, journey, settings, now):
             _insert_event(database, draft, default_user_id=journey["user_id"])
     return len(journeys)
+
+
+# --- Wayfinding ---------------------------------------------------------------
+# /directions tells the way to a known destination along the real room graph and
+# never moves anyone. A chosen destination keeps a heading that /travel stops
+# and ordinary moves refresh. mud_wayfinding holds the search and the wording.
+
+def _destination_access(database, user_id):
+    """Destinations of the active world this player may ask the way to, with how they know each."""
+    character = _character_row(database, user_id)
+    known = mud_wayfinding.known_ids(database, character["id"])
+    held = _held_counts(database, user_id)
+    context = _ConditionContext(database, user_id)
+    result = []
+    for row in mud_wayfinding.world_destinations(database, _active_world(database)):
+        if row["public"]:
+            access = "public"
+        elif row["id"] in known:
+            access = "known"
+        elif any(held.get(item) for item in mud_wayfinding.map_items(row)):
+            access = "map"
+        else:
+            continue
+        if row["conditions_json"] not in (None, "", "[]") and not mud_conditions.evaluate(row["conditions_json"], context):
+            continue
+        result.append({**dict(row), "access": access})
+    return result
+
+
+def _learn_destination(database, user, destination_id, source):
+    name = mud_wayfinding.learn(database, _character_row(database, user["id"])["id"], destination_id, source)
+    return [_private(user["id"], f"You now know the way to {name}.")] if name else []
+
+
+def _discover_destinations(database, user, room_id):
+    character_id = _character_row(database, user["id"])["id"]
+    names = [name for name in (mud_wayfinding.learn(database, character_id, row["id"], "visit")
+                               for row in mud_wayfinding.discovered_here(database, room_id)) if name]
+    return [_private(user["id"], f"You will remember the way to {name}.") for name in names]
+
+
+def _route_exit_check(database, user_id):
+    """Judge stored exits for a route as movement would for this player, remembering each verdict.
+
+    Hidden, sealed and barred exits are never used; a locked one only if the
+    player has unlocked it or carries its key. Hostiles are passing trouble
+    and do not change the way.
+    """
+    character_id = _character_row(database, user_id)["id"]
+    unlocked = {row["exit_id"] for row in database.execute(
+        "SELECT exit_id FROM mud_exit_unlocks WHERE character_id=?", (character_id,))}
+    held = _held_counts(database, user_id)
+    context = _ConditionContext(database, user_id)
+    verdicts = {}
+
+    def allowed(item):
+        if item.id not in verdicts:
+            row = database.execute(
+                "SELECT state FROM mud_script_entity_states WHERE entity_type='exit' AND entity_id=? "
+                "AND scope_key IN (?,'') ORDER BY scope_key='' LIMIT 1", (item.id, character_id)).fetchone()
+            state = row["state"] if row else ("hidden" if item.hidden else "")
+            if state in ("hidden", "locked"):
+                verdict = False
+            elif item.conditions_json not in (None, "", "[]") and not mud_conditions.evaluate(
+                    item.conditions_json, context):
+                verdict = False
+            elif state != "open" and (item.key_item_id or item.pick_difficulty):
+                verdict = item.id in unlocked or bool(item.key_item_id and held.get(item.key_item_id))
+            else:
+                verdict = True
+            verdicts[item.id] = verdict
+        return verdicts[item.id]
+
+    return allowed
+
+
+def _room_position(room):
+    return (room["x"], room["y"], room["z"]) if room.get("x") is not None else None
+
+
+def _route_to(database, user_id, room, destination, fresh=False):
+    """(remembered route, index of this room on it, status); a lost or stale route is searched again."""
+    world_id = _active_world(database)
+    if not fresh:
+        tracked = mud_wayfinding.recall(database, user_id, destination["id"], world_id)
+        spot = tracked.locate(room["id"], _room_position(room)) if tracked else None
+        if spot is not None:
+            return tracked, spot, "ok"
+    route = mud_wayfinding.find_route(database, world_id, room["id"], destination["room_id"],
+                                      _route_exit_check(database, user_id))
+    if route.status != "ok":
+        mud_wayfinding.drop_route(user_id)
+        return None, None, route.status
+    return mud_wayfinding.remember(user_id, destination["id"], route), 0, "ok"
+
+
+def _landmarks(available):
+    return {row["room_id"]: row["name"] for row in available}
+
+
+def _selected_destination(database, user_id):
+    return database.execute(
+        "SELECT w.*,d.name,d.room_id FROM mud_wayfinding AS w JOIN mud_world_destinations AS d "
+        "ON d.id=w.destination_id WHERE w.user_id=? AND d.world_id=?", (user_id, _active_world(database))).fetchone()
+
+
+def _clear_destination(database, user_id):
+    database.execute("DELETE FROM mud_wayfinding WHERE user_id=?", (user_id,))
+    mud_wayfinding.drop_route(user_id)
+
+
+def wayfinding_state(database, user_id):
+    selected = _selected_destination(database, user_id)
+    return ({"destination": selected["name"], "heading": selected["last_hint"],
+             "direction": selected["last_direction"]} if selected else None)
+
+
+def _no_way_text(room, destination, status):
+    target = ((destination["x"], destination["y"], destination["z"])
+              if destination.get("x") is not None else None)
+    direction = mud_wayfinding.bearing(_room_position(room), target)
+    if status == "far" and direction:
+        return f"{destination['name']} lies far to the {direction}, but you cannot reckon a way there from here."
+    if direction:
+        return f"{destination['name']} lies to the {direction}, but you can see no way there from here."
+    return f"You know of {destination['name']}, but cannot make out a way there from here."
+
+
+def _directions_lines(database, user_id, room, destination, available):
+    """Fresh directions as (lines, heading direction, heading sentence)."""
+    previous = mud_wayfinding.recall(database, user_id, destination["id"], _active_world(database), stale=True)
+    before = None
+    if previous is not None:
+        spot = previous.locate(room["id"], _room_position(room))
+        before = [node.id for node in previous.nodes[spot:]] if spot is not None else None
+    tracked, spot, status = _route_to(database, user_id, room, destination, fresh=True)
+    if tracked is None:
+        return [_no_way_text(room, destination, status)], "", ""
+    start, steps = tracked.nodes[spot], tracked.steps[spot:]
+    landmarks = _landmarks(available)
+    lines = mud_wayfinding.describe(tracked.graph, database, start, steps, destination["name"], landmarks)
+    direction, hint = mud_wayfinding.heading(tracked.graph, database, start, steps, destination["name"], landmarks)
+    if before is not None and before != [node.id for node in tracked.nodes]:
+        lines.insert(0, "Your way has changed since you last asked.")
+    return lines, direction or "", hint
+
+
+def _wayfinding_heading(database, user_id, room=None, *, only_changes=False):
+    """The chosen destination's next leg as a private note; arriving clears the choice.
+
+    only_changes keeps ordinary moves quiet until the heading itself changes.
+    """
+    selected = _selected_destination(database, user_id)
+    if selected is None:
+        return []
+    room = room or _current_room(database, user_id)
+    if room.get("instance_id") or room.get("system_managed"):
+        return []
+    if room["id"] == selected["room_id"]:
+        _clear_destination(database, user_id)
+        return [_private(user_id, f"You have reached {selected['name']}.", "travel")]
+    available = _destination_access(database, user_id)
+    destination = next((row for row in available if row["id"] == selected["destination_id"]), None)
+    if destination is None:
+        _clear_destination(database, user_id)
+        return [_private(user_id, f"You no longer know the way to {selected['name']}.", "travel")]
+    tracked, spot, status = _route_to(database, user_id, room, destination)
+    if tracked is None:
+        direction, hint = "", _no_way_text(room, destination, status)
+    else:
+        direction, hint = mud_wayfinding.heading(tracked.graph, database, tracked.nodes[spot],
+                                                 tracked.steps[spot:], destination["name"], _landmarks(available))
+        direction = direction or ""
+    changed = direction != selected["last_direction"] or not selected["last_hint"]
+    database.execute("UPDATE mud_wayfinding SET last_hint=?,last_direction=? WHERE user_id=?",
+                     (hint, direction, user_id))
+    if only_changes and not changed:
+        return []
+    return [_private(user_id, f"Toward {destination['name']}: {hint}", "travel")]
+
+
+def _wayfinding_travel_stop(database, user_id, room, direction):
+    """Why travel along a chosen route should stop here: arrival, or the route turning away."""
+    selected = _selected_destination(database, user_id)
+    if selected is None:
+        return None
+    if room["id"] == selected["room_id"]:
+        _clear_destination(database, user_id)
+        return f"You have reached {selected['name']}."
+    tracked = mud_wayfinding.recall(database, user_id, selected["destination_id"], _active_world(database))
+    spot = tracked.locate(room["id"], _room_position(room)) if tracked else None
+    if spot is None or spot >= len(tracked.steps):
+        # Off the remembered route, travel behaves as it always has.
+        return None
+    heading = mud_wayfinding.turn_ahead(tracked.graph, database, tracked.nodes, tracked.steps, spot, direction)
+    return f"You stop: here your way toward {selected['name']} turns {heading}." if heading else None
+
+
+def _directions_action(database, user, parameters):
+    text = " ".join(str(item) for item in parameters.get("arguments", [])).strip()
+    if " ".join(text.casefold().split()) in ("clear", "none", "off", "stop", "forget"):
+        selected = _selected_destination(database, user["id"])
+        _clear_destination(database, user["id"])
+        return [EventDraft(f"You stop heading for {selected['name']}." if selected
+                           else "You have no destination chosen.", "travel")]
+    room = _current_room(database, user["id"])
+    if room.get("instance_id") or room.get("system_managed"):
+        raise ActionError("You cannot get your bearings here.")
+    available = _destination_access(database, user["id"])
+    selected = _selected_destination(database, user["id"])
+    if text:
+        matches = mud_wayfinding.match(available, text)
+        if not matches:
+            raise ActionError(f'You do not know the way to any place called "{text}". '
+                              "Use /destinations to list the places you know.")
+        if len(matches) > 1:
+            raise ActionError("Which place do you mean: " + ", ".join(row["name"] for row in matches[:8]) + "?")
+        destination = matches[0]
+    elif selected is None:
+        raise ActionError("Directions to where? Use /directions <place>; /destinations lists the places you know.")
+    else:
+        destination = next((row for row in available if row["id"] == selected["destination_id"]), None)
+        if destination is None:
+            _clear_destination(database, user["id"])
+            return [EventDraft(f"You no longer know the way to {selected['name']}.", "travel")]
+    if room["id"] == destination["room_id"]:
+        if selected is not None and selected["destination_id"] == destination["id"]:
+            _clear_destination(database, user["id"])
+        return [EventDraft(f"You are at {destination['name']}.", "travel")]
+    lines, direction, hint = _directions_lines(database, user["id"], room, destination, available)
+    database.execute(
+        "INSERT INTO mud_wayfinding(user_id,destination_id,last_hint,last_direction) VALUES(?,?,?,?) "
+        "ON CONFLICT(user_id) DO UPDATE SET destination_id=excluded.destination_id,last_hint=excluded.last_hint,"
+        "last_direction=excluded.last_direction,selected_at=CURRENT_TIMESTAMP",
+        (user["id"], destination["id"], hint, direction))
+    if selected is None or selected["destination_id"] != destination["id"]:
+        lines.append("You keep this destination in mind; /directions checks again and /directions clear forgets it.")
+    return [EventDraft("\n".join(lines), "travel")]
+
+
+def _destinations_action(database, user, _parameters):
+    available = _destination_access(database, user["id"])
+    if not available:
+        return [EventDraft("You know the way to no particular place yet. Explore, ask around, and look for maps.",
+                           "travel")]
+    selected = _selected_destination(database, user["id"])
+    chosen = selected["destination_id"] if selected else None
+    lines = ["Places you know the way to:"]
+    for category in mud_wayfinding.CATEGORIES:
+        names = [row["name"] + (" (heading here)" if row["id"] == chosen else "")
+                 + (" (by map)" if row["access"] == "map" else "")
+                 for row in available if row["category"] == category]
+        if names:
+            lines.append(f"{mud_wayfinding.CATEGORY_LABELS[category]}: " + ", ".join(names))
+    lines.append("Use /directions <place> to ask the way.")
+    return [EventDraft("\n".join(lines), "travel")]
 
 
 def _say_action(database, user, parameters):
@@ -6275,7 +6562,8 @@ def _entry_triggers(database, user):
     instance_id = room.get("instance_id")
     sources = ([f"role:{room['role']}", f"room_template:{room.get('room_template_id')}"] if instance_id
                else [room["id"]])
-    return fire_triggers(database, user, "enter_room", sources, instance_id=instance_id)
+    found = [] if instance_id else _discover_destinations(database, user, room["id"])
+    return found + fire_triggers(database, user, "enter_room", sources, instance_id=instance_id)
 
 
 def _private(user_id, text, event_type="world"):
@@ -6463,6 +6751,11 @@ def _trigger_action(database, user, trigger, index, realm, instance_id=None):
                 return []
             return _set_objective_progress(database, user, objective["objective_type"], objective["target_id"],
                                            action["objective"])
+        if kind == "learn_destination":
+            return _learn_destination(database, user, action["destination"], "script")
+        if kind == "forget_destination":
+            mud_wayfinding.forget(database, _character_row(database, user_id)["id"], action["destination"])
+            return []
         if kind == "run_trigger":
             targets = (_dungeon_triggers(database, instance_id, "manual", trigger_id=action["trigger"]) if instance_id
                        else _world_triggers(database, "manual", trigger_id=action["trigger"]))
@@ -6687,7 +6980,7 @@ actions.register(ActionDefinition(key="close", label="CLOSE", description="Close
 actions.register(ActionDefinition(key="put", label="PUT AWAY", description="Put a carried item in an open container.", commands=("put",), handler=_put_action, group="ITEMS", show_context=False))
 actions.register(ActionDefinition(key="equip", label="EQUIP", description="Equip a carried item.", commands=("equip", "wear"), handler=_equip_action, group="ITEMS", show_context=False))
 actions.register(ActionDefinition(key="unequip", label="UNEQUIP", description="Remove equipped gear.", commands=("unequip", "remove"), handler=_unequip_action, group="ITEMS", show_context=False))
-actions.register(ActionDefinition(key="use", label="USE", description="Use a carried item, or an object in this room.", commands=("use",), handler=_use_action, group="ITEMS", show_context=False))
+actions.register(ActionDefinition(key="use", label="USE", description="Use or read a carried item, or use an object in this room.", commands=("use", "read"), handler=_use_action, group="ITEMS", show_context=False))
 actions.register(ActionDefinition(key="interact", label="INTERACT", description="Work an object in this room; also /push, /pull, /press, /touch, /turn, or /activate <object>.", commands=("interact",), handler=_interact_action, group="ITEMS", show_context=False))
 actions.register(ActionDefinition(key="shop", label="SHOP", description="Browse, buy, or sell with a nearby merchant; the portal trader also serves the hub.", commands=("shop",), handler=_shop_action, group="HUB", show_context=False))
 actions.register(ActionDefinition(key="storage", label="PERSONAL STORAGE", description="Deposit or withdraw personal items in the portal room.", commands=("storage", "stash"), handler=_storage_action, group="HUB", show_context=False))
@@ -6736,6 +7029,18 @@ actions.register(ActionDefinition(
     description="Halt long-distance wilderness travel.",
     commands=("stop", "halt"), handler=_stop_action,
     group="NAVIGATION", show_context=False,
+))
+actions.register(ActionDefinition(
+    key="directions", label="DIRECTIONS",
+    description="Ask the way to a place you know and keep it as your destination; /directions clear forgets it.",
+    commands=("directions", "way"), handler=_directions_action,
+    group="NAVIGATION", show_context=False,
+))
+actions.register(ActionDefinition(
+    key="destinations", label="KNOWN DESTINATIONS",
+    description="List the places you know the way to.",
+    commands=("destinations", "places"), handler=_destinations_action,
+    group="NAVIGATION",
 ))
 actions.register(ActionDefinition(key="unlock", label="UNLOCK EXIT", description="Unlock a nearby keyed exit with a carried key.", commands=("unlock",), handler=_unlock_action, group="NAVIGATION", show_context=False))
 actions.register(ActionDefinition(key="pick", label="PICK LOCK", description="Pick a nearby lock using Lockpicking and Agility.", commands=("pick", "picklock"), handler=_pick_action, group="NAVIGATION", show_context=False))
@@ -7739,6 +8044,7 @@ def builder():
         item["on_hit_effects_json"] = json.dumps(properties.get("on_hit_effects", []))
         item["requirements_json"] = json.dumps(properties.get("requirements", {}))
         item["category"] = _item_category(properties) or ""
+        item["teaches_destinations"] = mud_wayfinding.teaches(properties)
         definitions.append(item)
     items_by_room = {room["id"]: [] for room in rooms}
     for row in database.execute("SELECT i.id,i.room_id,d.name,d.item_type,s.respawn_seconds FROM mud_item_instances i JOIN mud_item_definitions d ON d.id=i.definition_id LEFT JOIN mud_item_spawns s ON s.live_instance_id=i.id WHERE i.room_id IS NOT NULL ORDER BY d.name COLLATE NOCASE"):
@@ -7749,6 +8055,10 @@ def builder():
     discoveries_by_room = {room["id"]: [] for room in rooms}
     for row in database.execute("SELECT * FROM mud_room_discoveries ORDER BY room_id,id"):
         discoveries_by_room.setdefault(row["room_id"], []).append(dict(row))
+    world_destinations = _builder_destinations(database, _active_world(database))
+    destinations_by_room = {}
+    for entry in world_destinations:
+        destinations_by_room.setdefault(entry["room_id"], []).append(entry)
     conversations = [dict(row) for row in database.execute(
         "SELECT c.* FROM mud_conversations AS c WHERE c.world_id=(SELECT id FROM mud_world_packages WHERE active=1) AND NOT EXISTS "
         "(SELECT 1 FROM mud_dungeon_managed_definitions AS m WHERE m.definition_id=c.id) "
@@ -7827,6 +8137,8 @@ def builder():
         rewards_by_quest=rewards_by_quest, givers_by_quest=givers_by_quest,
         npc_equipment=npc_equipment, npc_combat_rewards=npc_combat_rewards,
         npc_shops=npc_shops, shop_stock=shop_stock, discoveries_by_room=discoveries_by_room,
+        world_destinations=world_destinations, destinations_by_room=destinations_by_room,
+        destination_categories=mud_wayfinding.CATEGORIES,
         skill_entries=[{**entry, "summary": mud_skills.describe_effects(entry["definition"])}
                        for entry in skill_entries],
         npc_trainers=npc_trainers, item_categories=item_categories,
@@ -7966,6 +8278,16 @@ def _item_definition_fields():
             return None, f"Invalid {field}: {problem}"
         if specs:
             properties[field] = specs
+    try:
+        taught = mud_wayfinding.validate_teaches(request.form.getlist("teaches_destinations"))
+    except mud_wayfinding.WayfindingError as problem:
+        return None, str(problem)
+    if taught:
+        database = get_db()
+        if any(database.execute("SELECT 1 FROM mud_world_destinations WHERE id=? AND world_id=?",
+                                (ref, _active_world(database))).fetchone() is None for ref in taught):
+            return None, "Choose existing destinations for the item to teach."
+        properties["teaches_destinations"] = taught
     return (name, description, item_type, json.dumps(properties, separators=(",", ":"), sort_keys=True), slot), None
 
 
@@ -8062,7 +8384,8 @@ def _builder_rules(database, field, validate):
     except ValueError as problem:
         return None, str(problem)
     tables = {"item": "mud_item_definitions", "quest": "mud_quests", "objective": "mud_quest_objectives",
-              "object": "mud_item_instances", "room": "mud_world_rooms"}
+              "object": "mud_item_instances", "room": "mud_world_rooms",
+              "destination": "mud_world_destinations"}
     origins = character_creation.catalog(database)
     known = {"race": {entry["key"] for entry in origins["races"]},
              "class": {entry["key"] for entry in origins["classes"]},
@@ -8526,6 +8849,94 @@ def builder_delete_discovery(discovery_id):
     database.commit(); flash("Room discovery removed.", "success"); return _builder_redirect(row["room_id"])
 
 
+def _builder_destinations(database, world_id):
+    result = []
+    for row in mud_wayfinding.world_destinations(database, world_id):
+        entry = dict(row)
+        entry["map_items"] = mud_wayfinding.map_items(row)
+        entry["conditions_text"] = "" if row["conditions_json"] in (None, "", "[]") else row["conditions_json"]
+        result.append(entry)
+    return result
+
+
+def _destination_fields(database, world_id, destination_id=None):
+    try:
+        order = int(request.form.get("sort_order", "").strip() or 0)
+    except ValueError:
+        return None, "Sort order must be a whole number."
+    try:
+        values = mud_wayfinding.validate_destination({
+            "name": request.form.get("name", ""), "aliases": request.form.get("aliases", ""),
+            "category": request.form.get("category") or "landmark", "description": request.form.get("description", ""),
+            "public": request.form.get("public") == "1", "discover_on_visit": request.form.get("discover_on_visit") == "1",
+            "map_items_json": request.form.getlist("map_items"), "sort_order": order})
+    except mud_wayfinding.WayfindingError as problem:
+        return None, str(problem)
+    if any(database.execute("SELECT 1 FROM mud_item_definitions WHERE id=? AND world_id=?",
+                            (item_id, world_id)).fetchone() is None for item_id in values["map_items"]):
+        return None, "Choose existing items as maps."
+    conditions, error = _builder_rules(database, "conditions_json", mud_conditions.validate_conditions)
+    if error:
+        return None, f"Destination conditions: {error}"
+    if database.execute("SELECT 1 FROM mud_world_destinations WHERE world_id=? AND name=? COLLATE NOCASE "
+                        "AND id<>COALESCE(?,'')", (world_id, values["name"], destination_id)).fetchone():
+        return None, "Another destination in this world already has that name."
+    return {**values, "map_items_json": json.dumps(values["map_items"]), "conditions_json": conditions}, None
+
+
+@bp.post("/builder/destinations")
+@builder_required
+def builder_create_destination():
+    validate_csrf(); database = get_db(); world_id = _active_world_id(database)
+    room_id = request.form.get("room_id", "").strip()
+    if database.execute("SELECT 1 FROM mud_world_rooms WHERE id=? AND world_id=?", (room_id, world_id)).fetchone() is None:
+        abort(404)
+    values, error = _destination_fields(database, world_id)
+    if error:
+        flash(error, "error"); return _builder_redirect(room_id)
+    database.execute(
+        "INSERT INTO mud_world_destinations(id,world_id,room_id,name,aliases,category,description,public,"
+        "discover_on_visit,map_items_json,conditions_json,sort_order) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
+        (f"world:destination:{uuid.uuid4().hex}", world_id, room_id, values["name"], values["aliases"],
+         values["category"], values["description"], values["public"], values["discover_on_visit"],
+         values["map_items_json"], values["conditions_json"], values["sort_order"]))
+    database.commit(); flash("Destination added.", "success"); return _builder_redirect(room_id)
+
+
+@bp.post("/builder/destinations/<path:destination_id>")
+@builder_required
+def builder_update_destination(destination_id):
+    validate_csrf(); database = get_db(); world_id = _active_world_id(database)
+    row = database.execute("SELECT room_id FROM mud_world_destinations WHERE id=? AND world_id=?",
+                           (destination_id, world_id)).fetchone()
+    if row is None:
+        abort(404)
+    values, error = _destination_fields(database, world_id, destination_id)
+    if error:
+        flash(error, "error"); return _builder_redirect(row["room_id"])
+    database.execute(
+        "UPDATE mud_world_destinations SET name=?,aliases=?,category=?,description=?,public=?,discover_on_visit=?,"
+        "map_items_json=?,conditions_json=?,sort_order=?,updated_at=CURRENT_TIMESTAMP WHERE id=?",
+        (values["name"], values["aliases"], values["category"], values["description"], values["public"],
+         values["discover_on_visit"], values["map_items_json"], values["conditions_json"], values["sort_order"],
+         destination_id))
+    database.commit(); flash("Destination updated.", "success"); return _builder_redirect(row["room_id"])
+
+
+@bp.post("/builder/destinations/<path:destination_id>/delete")
+@builder_required
+def builder_delete_destination(destination_id):
+    validate_csrf(); database = get_db()
+    if request.form.get("confirmation") != "delete":
+        abort(400)
+    row = database.execute("SELECT room_id FROM mud_world_destinations WHERE id=? AND world_id=?",
+                           (destination_id, _active_world_id(database))).fetchone()
+    if row is None:
+        abort(404)
+    database.execute("DELETE FROM mud_world_destinations WHERE id=?", (destination_id,))
+    database.commit(); flash("Destination removed.", "success"); return _builder_redirect(row["room_id"])
+
+
 @bp.post("/builder/items")
 @builder_required
 def builder_create_item_definition():
@@ -8750,6 +9161,7 @@ def builder_delete_room(room_id):
         _move_room_occupants(database, [room_id], start,
                              f"{room['name']} was removed by a world builder. You have been moved to {{name}}.")
         database.execute("DELETE FROM mud_world_rooms WHERE id=?", (room_id,))
+        mud_wilderness.touch_navigation(database)
         database.commit()
     except sqlite3.Error:
         database.rollback()
@@ -9081,6 +9493,7 @@ TRIGGER_REFERENCE_TABLES = {
     "room": "mud_world_rooms", "object": "mud_item_instances", "item": "mud_item_definitions",
     "npc": "mud_npc_definitions", "npc_instance": "mud_npc_instances", "response": "mud_dialogue_responses",
     "quest": "mud_quests", "objective": "mud_quest_objectives", "exit": "mud_world_exits",
+    "destination": "mud_world_destinations",
 }
 
 
@@ -9552,6 +9965,7 @@ def _wilderness_cell(database, world_id, text):
     for exit_row in cell["stored_exits"]:
         destination = _world_room(database, exit_row["to_room_id"])
         exit_row["destination_name"] = destination["name"] if destination else "?"
+    cell["destinations"] = [entry for entry in _builder_destinations(database, world_id) if entry["room_id"] == row["id"]]
     return cell
 
 
@@ -9610,6 +10024,7 @@ def builder_wilderness():
         bundled=sorted(mud_wilderness.bundled_presets().values(), key=lambda preset: preset["name"].casefold()),
         terrains=mud_wilderness.TERRAINS, lights=mud_wilderness.LIGHTS, exposures=mud_wilderness.EXPOSURES,
         directions=tuple(mud_wilderness.DELTAS), all_directions=DIRECTIONS,
+        destination_categories=mud_wayfinding.CATEGORIES,
         dungeon_templates=database.execute("SELECT id,name FROM mud_world_dungeon_templates WHERE world_id=? "
                                            "ORDER BY name COLLATE NOCASE", (world_id,)).fetchall(),
         cell_count=database.execute("SELECT COUNT(*) FROM mud_world_rooms WHERE world_id=? AND kind='wild'",

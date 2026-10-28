@@ -20,6 +20,7 @@ for(const mud of document.querySelectorAll("[data-mud]")){
   const roomName=mud.querySelector("[data-mud-room-name]");
   const roomPreview=mud.querySelector("[data-mud-room-preview]");
   const travelStatus=mud.querySelector("[data-mud-travel]");
+  const wayfindingStatus=mud.querySelector("[data-mud-wayfinding]");
   const sceneName=mud.querySelector("[data-mud-scene-name]");
   const roomDescription=mud.querySelector("[data-mud-room-description]");
   const roomInstructions=mud.querySelector("[data-mud-room-instructions]");
@@ -161,6 +162,12 @@ for(const mud of document.querySelectorAll("[data-mud]")){
     if(travelStatus){
       travelStatus.hidden=!room.travel;
       travelStatus.textContent=room.travel?`TRAVELLING ${room.travel.direction.toUpperCase()} · ${room.travel.steps} ROOM${room.travel.steps===1?"":"S"} · /stop`:"";
+    }
+    if(wayfindingStatus){
+      const way=room.wayfinding;
+      wayfindingStatus.hidden=!way;
+      wayfindingStatus.textContent=way?`TOWARD ${way.destination.toUpperCase()}${way.direction?` · ${way.direction.toUpperCase()}`:""} · /directions`:"";
+      wayfindingStatus.title=way?.heading||"";
     }
     sceneName.textContent=room.name||"Unknown Location";
     roomDescription.textContent=room.description||"";

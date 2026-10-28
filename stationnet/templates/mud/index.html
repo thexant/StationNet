@@ -27,6 +27,7 @@
             <span class="mud-game-location" data-mud-room-name>{{ room.name }}</span>
             <span class="mud-game-preview" data-mud-room-preview>{{ room.description }}</span>
             <span class="mud-game-travel" data-mud-travel {% if not room.travel %}hidden{% endif %}>{% if room.travel %}TRAVELLING {{ room.travel.direction|upper }} · {{ room.travel.steps }} ROOM{{ '' if room.travel.steps == 1 else 'S' }} · /stop{% endif %}</span>
+            <span class="mud-game-travel" data-mud-wayfinding {% if not room.wayfinding %}hidden{% endif %}>{% if room.wayfinding %}TOWARD {{ room.wayfinding.destination|upper }}{% if room.wayfinding.direction %} · {{ room.wayfinding.direction|upper }}{% endif %} · /directions{% endif %}</span>
           </div>
           <div class="mud-game-jumps">
             <button type="button" data-mud-jump-room aria-label="Show current room details" aria-controls="mud-room-view" aria-expanded="false">ROOM</button>

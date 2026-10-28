@@ -519,7 +519,8 @@ def _validate_response_rules(errors, response, path, local_items, database):
     from . import mud_conditions
     entries = []
     for field, validate in (("conditions", lambda value: mud_conditions.validate_conditions(
-            value, allow_quests=False)), ("outcomes", mud_conditions.validate_outcomes)):
+            value, allow_quests=False)), ("outcomes", lambda value: mud_conditions.validate_outcomes(
+            value, allow_world=False))):
         if field not in response:
             continue
         try:
@@ -569,7 +570,7 @@ def _response_rules_json(template, response):
         return origin(kind, ref)
 
     conditions = mud_conditions.validate_conditions(response.get("conditions", []), allow_quests=False)
-    outcomes = mud_conditions.validate_outcomes(response.get("outcomes", []))
+    outcomes = mud_conditions.validate_outcomes(response.get("outcomes", []), allow_world=False)
     return (canonical_json(mud_conditions.remap(conditions, resolve)),
             canonical_json(mud_conditions.remap(outcomes, resolve)))
 

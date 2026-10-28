@@ -1,4 +1,5 @@
 {% extends 'base.html' %}
+{% from 'mud/_destinations.html' import destination_editor with context %}
 {% block title %}MUD Wilderness Builder{% endblock %}
 {% macro preset_fields(entry=None) %}{% set p = entry.preset if entry else none %}
 <div class="builder-coordinates">
@@ -172,6 +173,7 @@
           <label>Template<select name="template_id">{% for template in dungeon_templates %}<option value="{{ template.id }}">{{ template.name }}</option>{% endfor %}</select></label>
           <label>Description (shown by /look)<textarea name="description" rows="2" maxlength="2000"></textarea></label>
           <button>ADD ENTRANCE</button></form>{% endif %}
+        {{ destination_editor(room.id, cell.destinations, item_definitions, destination_categories, cell.key) }}
       </div>
       {% if room.kind == 'wild' %}
       <form method="post" action="{{ url_for('mud.builder_wilderness_cell_options', room_id=room.id) }}" class="form-grid builder-subform">

@@ -1,0 +1,40 @@
+{# Wayfinding destination editor shared by the room cards and the wilderness inspector. #}
+{% macro destination_fields(entry, items, categories) %}
+  <label>Name players ask for<input name="name" minlength="2" maxlength="80" required value="{{ entry.name if entry else '' }}" placeholder="Kessa Gate"></label>
+  <label>Other names (comma separated)<input name="aliases" maxlength="900" value="{{ entry.aliases if entry else '' }}" placeholder="Kessa, the river town"></label>
+  <label>Kind<select name="category">{% for category in categories %}<option value="{{ category }}" {% if (entry.category if entry else 'landmark') == category %}selected{% endif %}>{{ category }}</option>{% endfor %}</select></label>
+  <label>Builder note (not shown to players)<input name="description" maxlength="1000" value="{{ entry.description if entry else '' }}"></label>
+  <label class="check"><input type="checkbox" name="public" value="1" {% if entry and entry.public %}checked{% endif %}> Known to everyone</label>
+  <label class="check"><input type="checkbox" name="discover_on_visit" value="1" {% if entry and entry.discover_on_visit %}checked{% endif %}> Remembered once a player visits</label>
+  <label>Maps that show the way (while carried)<select name="map_items" multiple size="3">{% for item in items %}<option value="{{ item.id }}" {% if entry and item.id in entry.map_items %}selected{% endif %}>{{ item.name }}</option>{% endfor %}</select></label>
+  <label>Conditions (JSON, optional)<input name="conditions_json" maxlength="4000" value="{{ entry.conditions_text if entry else '' }}" placeholder='[{"type":"level","min":5}]'><small>All must hold before any source gives directions.</small></label>
+  <label>Sort order<input type="number" name="sort_order" min="-1000" max="1000" value="{{ entry.sort_order if entry else 0 }}"></label>
+{% endmacro %}
+
+{% macro return_fields(return_cell) %}{% if return_cell %}<input type="hidden" name="return_to" value="wilderness"><input type="hidden" name="return_cell" value="{{ return_cell }}">{% endif %}{% endmacro %}
+
+{% macro destination_editor(room_id, destinations, items, categories, return_cell=None) %}
+<section class="builder-exits">
+  <h3>Wayfinding destination</h3>
+  <p class="muted">Name this room as a place players can ask the way to with /directions. Players learn it if it is known to everyone, when they visit, from a carried map, from dialogue or trigger outcomes (learn_destination), or by reading an item that teaches it.</p>
+  {% for entry in destinations %}
+  <form method="post" action="{{ url_for('mud.builder_update_destination', destination_id=entry.id) }}" class="form-grid builder-subform">
+    <input type="hidden" name="csrf_token" value="{{ session.csrf_token }}">{{ return_fields(return_cell) }}
+    <p class="muted">ID <code>{{ entry.id }}</code></p>
+    {{ destination_fields(entry, items, categories) }}
+    <button class="secondary">SAVE DESTINATION</button>
+  </form>
+  <form method="post" action="{{ url_for('mud.builder_delete_destination', destination_id=entry.id) }}" data-confirm="Remove the destination '{{ entry.name }}'? Players forget the way there.">
+    <input type="hidden" name="csrf_token" value="{{ session.csrf_token }}">{{ return_fields(return_cell) }}<input type="hidden" name="confirmation" value="delete">
+    <button class="danger">REMOVE {{ entry.name|upper }}</button>
+  </form>
+  {% endfor %}
+  <details{% if not destinations %} open{% endif %}><summary>Add a destination here</summary>
+    <form method="post" action="{{ url_for('mud.builder_create_destination') }}" class="form-grid builder-subform">
+      <input type="hidden" name="csrf_token" value="{{ session.csrf_token }}">{{ return_fields(return_cell) }}<input type="hidden" name="room_id" value="{{ room_id }}">
+      {{ destination_fields(None, items, categories) }}
+      <button>ADD DESTINATION</button>
+    </form>
+  </details>
+</section>
+{% endmacro %}

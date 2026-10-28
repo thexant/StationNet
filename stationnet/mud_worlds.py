@@ -10,7 +10,7 @@ import zipfile
 
 from flask import current_app
 
-from . import mud_conditions, mud_triggers, mud_wilderness, mud_world_dungeons
+from . import mud_conditions, mud_triggers, mud_wayfinding, mud_wilderness, mud_world_dungeons
 
 
 MAX_ZIP_BYTES = 16 * 1024 * 1024
@@ -49,6 +49,8 @@ CONTENT_TABLES = {
     "mud_item_spawns": ("id", "definition_id", "room_id", "respawn_seconds"),
     "mud_room_discoveries": ("id", "room_id", "clue", "item_definition_id", "difficulty"),
     "mud_npc_instances": ("id", "definition_id", "room_id", "state_json"),
+    "mud_world_destinations": ("id", "room_id", "name", "aliases", "category", "description", "public",
+                               "discover_on_visit", "map_items_json", "conditions_json", "sort_order"),
 }
 ID_TABLES = {table for table, columns in CONTENT_TABLES.items() if "id" in columns}
 REFERENCE_TABLE = {
@@ -64,9 +66,11 @@ REFERENCE_TABLE = {
 }
 # Quests and dialogue responses carry condition/outcome lists that name content.
 CONDITION_COLUMNS = {"mud_quests": ("conditions_json",),
-                     "mud_dialogue_responses": ("conditions_json", "outcomes_json")}
+                     "mud_dialogue_responses": ("conditions_json", "outcomes_json"),
+                     "mud_world_destinations": ("conditions_json",)}
 CONDITION_TABLES = {"item": "mud_item_definitions", "quest": "mud_quests",
-                    "objective": "mud_quest_objectives", "object": "mud_item_instances", "room": "rooms"}
+                    "objective": "mud_quest_objectives", "object": "mud_item_instances", "room": "rooms",
+                    "destination": "mud_world_destinations"}
 # What each kind of trigger reference names; exits and triggers are mapped separately.
 TRIGGER_TABLES = {**CONDITION_TABLES, "npc": "mud_npc_definitions", "npc_instance": "mud_npc_instances",
                   "response": "mud_dialogue_responses"}
@@ -248,6 +252,7 @@ def read_package(payload):
     content = docs.get(CONTENT_FILE, {})
     if not isinstance(content, dict) or set(content) - set(CONTENT_TABLES):
         raise WorldError("content.json must be an object of supported content tables.")
+    destination_names = set()
     for table, rows in content.items():
         if not isinstance(rows, list) or len(rows) > 5000 or any(not isinstance(row, dict) for row in rows):
             raise WorldError(f"{table} must be an array of at most 5000 objects.")
@@ -279,6 +284,30 @@ def read_package(payload):
                 except ValueError as problem:
                     raise WorldError(f"Invalid item requirements: {problem}") from problem
                 validate_object_properties(properties)
+                try:
+                    taught = mud_wayfinding.validate_teaches(properties.get("teaches_destinations", []))
+                except mud_wayfinding.WayfindingError as problem:
+                    raise WorldError(str(problem)) from problem
+                destination_ids = {entry.get("id") for entry in content.get("mud_world_destinations", [])}
+                if set(taught) - destination_ids:
+                    raise WorldError("Item teaches_destinations must name destinations in content.json.")
+            elif table == "mud_world_destinations":
+                if not isinstance(row.get("room_id"), str):
+                    raise WorldError("Every destination needs a room_id.")
+                try:
+                    clean = mud_wayfinding.validate_destination(row)
+                except mud_wayfinding.WayfindingError as problem:
+                    raise WorldError(str(problem)) from problem
+                item_ids = {entry.get("id") for entry in content.get("mud_item_definitions", [])}
+                if set(clean["map_items"]) - item_ids:
+                    raise WorldError("Destination map_items_json must name items in content.json.")
+                if clean["name"].casefold() in destination_names:
+                    raise WorldError(f"Two destinations are named {clean['name']!r}.")
+                destination_names.add(clean["name"].casefold())
+                # Store the normalized form; old fields keep their meaning.
+                row.update({key: clean[key] for key in ("name", "aliases", "category", "description",
+                                                       "public", "discover_on_visit", "sort_order")},
+                           map_items_json=clean["map_items"])
             elif table == "mud_npc_combat_profiles":
                 if any(row.get(key) is not None and not _whole(row[key], 0, 100)
                        for key in ("accuracy", "evasion")):
@@ -496,11 +525,14 @@ def _mapped(maps, table, value, column):
 
 
 def _remap_item_properties(value, mapper):
-    """Point item race/class requirements at bundled origin keys (or back to local keys)."""
+    """Point item race/class requirements at bundled origin keys (or back to local keys), and taught destinations."""
     properties = json.loads(value) if isinstance(value, str) else value
     if isinstance(properties, dict) and properties.get("requirements"):
         properties = {**properties, "requirements": mud_conditions.remap_item_requirements(
             mud_conditions.validate_item_requirements(properties["requirements"]), mapper)}
+    if isinstance(properties, dict) and properties.get("teaches_destinations"):
+        properties = {**properties, "teaches_destinations": [
+            mapper("destination", ref) for ref in mud_wayfinding.validate_teaches(properties["teaches_destinations"])]}
     if not isinstance(properties, (dict, list)):
         raise WorldError("properties_json must be JSON text or an object.")
     return json.dumps(properties, ensure_ascii=False, separators=(",", ":"))
@@ -591,6 +623,8 @@ def _insert_content(database, document, installation_key, skill_map=None):
                                        ensure_ascii=False, separators=(",", ":"))
                 elif table == "mud_item_definitions" and column == "properties_json":
                     value = _remap_item_properties(value, condition_mapper)
+                elif table == "mud_world_destinations" and column == "map_items_json":
+                    value = json.dumps([_mapped(maps, "mud_item_definitions", ref, column) for ref in value])
                 elif column.endswith("_json"):
                     if isinstance(value, (dict, list)):
                         value = json.dumps(value, ensure_ascii=False, separators=(",", ":"))
@@ -599,7 +633,8 @@ def _insert_content(database, document, installation_key, skill_map=None):
                 elif not isinstance(value, (str, int, float, type(None))):
                     raise WorldError(f"{table}.{column} must be a scalar value.")
                 fields[column] = value
-            if table in {"mud_item_definitions", "mud_npc_definitions", "mud_conversations", "mud_quests"}:
+            if table in {"mud_item_definitions", "mud_npc_definitions", "mud_conversations", "mud_quests",
+                         "mud_world_destinations"}:
                 fields["world_id"] = world_id
             names = list(fields)
             database.execute(
@@ -963,6 +998,8 @@ def _export_content(database, world_id, room_map):
         "SELECT e.key_item_id FROM mud_world_exits e JOIN mud_world_rooms r ON r.id=e.from_room_id WHERE r.world_id=? AND e.key_item_id IS NOT NULL", (world_id,))}
     needed_items |= {row["item_definition_id"] for row in database.execute(
         "SELECT s.item_definition_id FROM mud_shop_stock s JOIN mud_npc_definitions n ON n.id=s.npc_definition_id WHERE n.world_id=?", (world_id,))}
+    for row in database.execute("SELECT map_items_json FROM mud_world_destinations WHERE world_id=?", (world_id,)):
+        needed_items |= set(mud_wayfinding.map_items(row))
     needed_npcs = {row["definition_id"] for row in database.execute(
         "SELECT definition_id FROM mud_npc_instances WHERE spawned_by_trigger IS NULL AND room_id IN "
         "(SELECT id FROM mud_world_rooms WHERE world_id=?)", (world_id,)
@@ -1024,7 +1061,7 @@ def _export_content(database, world_id, room_map):
             rows = [row for row in rows if row["node_id"] in selected["mud_dialogue_nodes"]]
         elif table == "mud_item_instances":
             rows = [row for row in rows if row["id"] in placed_item_ids]
-        elif table in {"mud_item_spawns", "mud_room_discoveries"}:
+        elif table in {"mud_item_spawns", "mud_room_discoveries", "mud_world_destinations"}:
             rows = [row for row in rows if row["room_id"] in room_map]
         elif table == "mud_npc_instances":
             spawned = {row["id"] for row in database.execute(
@@ -1038,7 +1075,8 @@ def _export_content(database, world_id, room_map):
                 "mud_quest_objectives": "objective", "mud_quest_rewards": "quest-reward",
                 "mud_dialogue_responses": "response", "mud_item_instances": "placed-item",
                 "mud_npc_instances": "placed-npc", "mud_shop_stock": "stock", "mud_npc_trainers": "trainer",
-                "mud_item_spawns": "spawn", "mud_room_discoveries": "discovery"}
+                "mud_item_spawns": "spawn", "mud_room_discoveries": "discovery",
+                "mud_world_destinations": "destination"}
     maps = {"rooms": room_map}
     for table in ID_TABLES:
         maps[table] = {key: f"{prefixes[table]}-{index}"
@@ -1072,11 +1110,22 @@ def _export_content(database, world_id, room_map):
                         _stored_conditions(value, column),
                         lambda kind, ref: ref if kind not in CONDITION_TABLES
                         else _mapped(maps, CONDITION_TABLES[kind], ref, f"{kind} condition"))
+                elif table == "mud_world_destinations" and column == "map_items_json":
+                    value = [maps["mud_item_definitions"][ref] for ref in mud_wayfinding.map_items(row)
+                             if ref in maps["mud_item_definitions"]]
                 elif column.endswith("_json") and isinstance(value, str):
                     try:
                         value = json.loads(value)
                     except json.JSONDecodeError:
                         pass
+                    if (table == "mud_item_definitions" and column == "properties_json" and isinstance(value, dict)
+                            and "teaches_destinations" in value):
+                        # Destinations outside the exported rooms are dropped rather than left dangling.
+                        local = maps["mud_world_destinations"]
+                        value["teaches_destinations"] = [local[ref] for ref in mud_wayfinding.teaches(value)
+                                                         if ref in local]
+                        if not value["teaches_destinations"]:
+                            del value["teaches_destinations"]
                 result[column] = value
             output.append(result)
         if output:

@@ -53,4 +53,12 @@ assert.deepEqual(historyStep(history,-1,"unfinished",1),{index:0,value:"/attack 
 assert.deepEqual(historyStep(history,0,"unfinished",1),{index:1,value:"/look"});
 assert.deepEqual(historyStep(history,1,"unfinished",-1),{index:0,value:"/attack Rat 1"});
 assert.deepEqual(historyStep(history,0,"unfinished",-1),{index:-1,value:"unfinished"});
+const wayfinding = {...state,room:{...state.room,wilderness:true,
+  exits:[{direction:"north"},{direction:"northeast"}],
+  wayfinding:{destination:"Kessa Gate",direction:"northeast",heading:"Follow the road east."}}};
+assert.deepEqual(commandSuggestions("/tr",wayfinding,catalog), [
+  {command:"/travel northeast",detail:"Toward Kessa Gate"},
+  {command:"/travel north",detail:"Travel onward"},
+]);
+assert.deepEqual(values("/dir",wayfinding), ["/directions"]);
 console.log("MUD suggestions and command history passed");

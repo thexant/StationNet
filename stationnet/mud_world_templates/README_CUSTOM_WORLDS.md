@@ -303,6 +303,7 @@ The supported arrays are:
 | `mud_room_discoveries` | One-time per-character search clues and items | `room_id`, `clue`, optional `item_definition_id`, optional `difficulty` |
 | `mud_npc_trainers` | Skills an NPC teaches for coins | `npc_definition_id`, `skill_key`, `price`, `max_rank` |
 | `mud_quest_givers` | NPCs that offer quests | `quest_id`, `npc_definition_id` |
+| `mud_world_destinations` | Places players can ask the way to with `/directions` | `room_id`, `map_items_json`; see [wayfinding](#5e-wayfinding-destinations) |
 
 Only these fields are accepted for each array; omitted optional fields use
 database defaults. IDs and references are local to this ZIP. All references
@@ -329,6 +330,7 @@ must point to records in the same package, including room IDs in `rooms.json`.
 | `mud_room_discoveries` | `room_id`, `clue`, `item_definition_id`, `difficulty` |
 | `mud_npc_trainers` | `npc_definition_id`, `skill_key`, `price`, `max_rank` |
 | `mud_quest_givers` | `quest_id`, `npc_definition_id` (no `id` field) |
+| `mud_world_destinations` | `room_id`, `name`, `aliases`, `category`, `description`, `public`, `discover_on_visit`, `map_items_json`, `conditions_json`, `sort_order` |
 
 `mud_npc_combat_profiles` and `mud_npc_equipment` also have no `id` field;
 their NPC reference is their key. An item instance must be in a room **or**
@@ -434,11 +436,12 @@ its entries holds; groups cannot be nested. A list holds up to 20 entries.
 | `flag` | `scope` (`player`, the default, or `world`), `key`, and optionally `value` or `min`/`max` | With `value`, the flag equals that text. With `min`/`max`, the flag read as a number (unset is 0) is within the bounds. With neither, the flag is set. Triggers set flags; see [events](#5c-events-and-triggers-eventsjson). |
 | `object_state` | `object` (a placed item), `state` | The object's current state equals `state` (`""` until changed). |
 | `in_room` | `room` | The character is in that room. |
+| `knows_destination` | `destination` | The character has learned that [destination](#5e-wayfinding-destinations) (by visiting, dialogue, a trigger, or reading). Carrying a map does not count. |
 
 Flag keys are 1 to 80 lowercase letters, digits, and `. _ : -`, such as
 `gate.open` or `rats_slain`. Inside a procedural dungeon, `world` flags belong
-to that run. `object_state` and `in_room` are not available in dungeon
-templates.
+to that run. `object_state`, `in_room`, and `knows_destination` are not
+available in dungeon templates.
 
 ### Outcomes
 
@@ -455,6 +458,7 @@ nothing is granted.
 | `experience` | `amount` (1–100,000) | Awards experience (Intellect and Lore bonuses apply). |
 | `coins` | `amount` (1–100,000) | Gives coins. |
 | `take_coins` | `amount` (1–100,000) | Charges coins (refused if too few). |
+| `learn_destination` | `destination` | Teaches the way to a [destination](#5e-wayfinding-destinations). Not available in dungeon templates. |
 
 Item, quest, and objective IDs inside conditions and outcomes are local package
 IDs, like other references, and must exist in the package.
@@ -753,6 +757,7 @@ left the world, or the dungeon run, by the time it is due.
 | `start_quest` | `quest` | Gives the player a quest, if they can accept it. |
 | `complete_objective` | `objective` | Advances an objective by one, or completes it. Use it with `script` objectives, which only triggers can advance. |
 | `run_trigger` | `trigger` | Runs a `manual` trigger. The manual trigger's own conditions and limits still apply. |
+| `learn_destination`, `forget_destination` | `destination` | Teaches the player the way to a [destination](#5e-wayfinding-destinations), or makes them forget it. |
 
 Exits must have an `"id"` in `exits.json` before a trigger can name them.
 
@@ -980,6 +985,66 @@ Open **World Builder → Wilderness**.
 Players can type `/map` for a 15 × 9 view of the land around them. `@` marks
 the player, `P` other visible players, `*` authored landmarks, and each preset
 appears as its glyph.
+
+## 5e. Wayfinding destinations
+
+A destination names a room, authored or wilderness, as a place players can ask
+the way to. Towns, gates, landmarks, and dungeon mouths are typical. Players
+use these commands:
+
+- `/destinations` lists every place they know the way to.
+- `/directions <place>` describes a route and keeps that place as their
+  destination. `/directions` alone checks again from wherever they stand, and
+  `/directions clear` forgets the destination.
+
+Directions follow the real rooms: stored exits, wilderness grid links, walls,
+and exit locks and conditions, exactly as movement does. They never move
+anyone. Routes prefer roads and avoid rough ground: road is quickest, then
+grassland, then forest, hills, desert, and tundra, then dense forest and
+swamp, then mountains, and water is slowest. They read like a traveller's
+advice, not a list of steps:
+
+```text
+Kessa Gate is a long journey away to the northeast.
+Head northeast across the grassland some distance until you meet a road.
+Then follow the road north a long way, past the Old Watchtower.
+Then take the gate east to Market Square, where you will find Kessa Gate.
+```
+
+While a destination is chosen, an ordinary move mentions the new heading when
+it changes. Wilderness `/travel` stops where the route turns away from the
+travel direction, and on arrival. Whenever travel stops for any reason, the
+next leg is shown. Travelling off the route behaves exactly as before.
+
+Each `mud_world_destinations` row accepts these fields:
+
+| Field | Meaning |
+| --- | --- |
+| `id`, `room_id` | Local ID, and a room ID or `@x,y,z` wilderness square. |
+| `name` | 2–80 characters, unique in the world. Players type it, or any part of it. |
+| `aliases` | Other names, separated by commas (up to 10). |
+| `category` | `town`, `city`, `settlement`, `landmark` (default), `dungeon`, `road`, or `other`. Used to group `/destinations`. |
+| `description` | A note for builders; players never see it. |
+| `public` | `1` lets everyone ask the way. |
+| `discover_on_visit` | `1` makes a character remember the way after entering the room once. |
+| `map_items_json` | Item IDs (up to 10). Carrying any of them gives directions while it is carried; dropping it takes them away again. |
+| `conditions_json` | [Conditions](#conditions) that must also hold, however the place is known. |
+| `sort_order` | Lower numbers list first. |
+
+Players also learn destinations in these ways, and keep what they learn:
+
+- **Dialogue.** A response outcome: `{"type": "learn_destination", "destination": "kessa"}`.
+- **Triggers.** A `learn_destination` or `forget_destination` action.
+- **Books and letters.** An item whose `properties_json` has
+  `"teaches_destinations": ["kessa"]` teaches when used, or read with `/read`.
+  A consumable item is used up as it teaches.
+
+A player never learns that an unknown destination exists. Asking for one gives
+the same answer as asking for a place that does not exist. If no route exists
+(a gate is sealed, for example), the player learns only the general bearing,
+or nothing if the place is off the grid. In the World Builder, each room card
+and the wilderness room inspector has a **Wayfinding destination** form. The
+item form chooses which destinations an item teaches.
 
 ## 6. Import, edit, export, and remove
 

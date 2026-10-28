@@ -13,7 +13,7 @@ PERSISTENT_TABLES = (
 USER_TABLES = ("mud_player_locations", "mud_world_locations", "mud_player_stealth")
 OPTIONAL_TABLES = (
     "mud_expedition_participants", "mud_combat_participants", "mud_conversation_sessions",
-    "mud_dungeon_conversation_sessions",
+    "mud_dungeon_conversation_sessions", "mud_character_destinations",
 )
 
 

@@ -1462,6 +1462,7 @@ def init_db():
     _migrate_mud_world_dungeons(database)
     _migrate_mud_triggers(database)
     _migrate_mud_wilderness(database)
+    _migrate_mud_wayfinding(database)
     database.execute("INSERT OR IGNORE INTO mud_portal_settings(id) VALUES(1)")
     database.execute("INSERT OR IGNORE INTO mud_crossover_settings(id) VALUES(1)")
     database.execute("INSERT OR IGNORE INTO mud_travel_settings(id) VALUES(1)")
@@ -1884,6 +1885,70 @@ def _migrate_mud_triggers(database):
     if "spawned_by_trigger" not in npc_columns:
         database.execute("ALTER TABLE mud_npc_instances ADD COLUMN spawned_by_trigger TEXT")
     _rebuild_with_check(database, "mud_quest_objectives", "'script'", "'deliver_item')", "'deliver_item','script')")
+
+
+def _migrate_mud_wayfinding(database):
+    """Add named destinations, what characters know of them, and their chosen heading.
+
+    Old worlds have no destinations, so nothing changes for them. Knowledge
+    belongs to a character and cascades with it, like other progression.
+    SQL triggers bump one navigation revision whenever a room's grid links,
+    an exit or a preset changes, so cached route graphs never outlive an edit
+    made by any builder page, import, or script. Bulk room creation and
+    removal (fills, imports, clears) bump it once in mud_wilderness instead
+    of once per row.
+    """
+    database.executescript("""
+    CREATE TABLE IF NOT EXISTS mud_world_destinations (
+      id TEXT PRIMARY KEY,
+      world_id TEXT NOT NULL REFERENCES mud_world_packages(id) ON DELETE CASCADE,
+      room_id TEXT NOT NULL REFERENCES mud_world_rooms(id) ON DELETE CASCADE,
+      name TEXT NOT NULL,
+      aliases TEXT NOT NULL DEFAULT '',
+      category TEXT NOT NULL DEFAULT 'landmark',
+      description TEXT NOT NULL DEFAULT '',
+      public INTEGER NOT NULL DEFAULT 0 CHECK(public IN (0,1)),
+      discover_on_visit INTEGER NOT NULL DEFAULT 0 CHECK(discover_on_visit IN (0,1)),
+      map_items_json TEXT NOT NULL DEFAULT '[]',
+      conditions_json TEXT NOT NULL DEFAULT '[]',
+      sort_order INTEGER NOT NULL DEFAULT 0,
+      created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);
+    CREATE INDEX IF NOT EXISTS idx_mud_world_destinations_room ON mud_world_destinations(room_id);
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_mud_world_destinations_name
+      ON mud_world_destinations(world_id,name COLLATE NOCASE);
+    CREATE TABLE IF NOT EXISTS mud_character_destinations (
+      character_id TEXT NOT NULL REFERENCES mud_characters(id) ON DELETE CASCADE,
+      destination_id TEXT NOT NULL REFERENCES mud_world_destinations(id) ON DELETE CASCADE,
+      source TEXT NOT NULL DEFAULT '',
+      learned_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      PRIMARY KEY(character_id,destination_id));
+    CREATE TABLE IF NOT EXISTS mud_wayfinding (
+      user_id INTEGER PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+      destination_id TEXT NOT NULL REFERENCES mud_world_destinations(id) ON DELETE CASCADE,
+      last_hint TEXT NOT NULL DEFAULT '',
+      last_direction TEXT NOT NULL DEFAULT '',
+      selected_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);
+    CREATE TABLE IF NOT EXISTS mud_navigation_revision (
+      id INTEGER PRIMARY KEY CHECK(id=1),
+      revision INTEGER NOT NULL DEFAULT 1);
+    INSERT OR IGNORE INTO mud_navigation_revision(id,revision) VALUES(1,1);
+    DROP TRIGGER IF EXISTS trg_nav_room_insert;
+    DROP TRIGGER IF EXISTS trg_nav_room_delete;
+    CREATE TRIGGER IF NOT EXISTS trg_nav_room_update
+      AFTER UPDATE OF name,kind,x,y,z,preset_id,region_id,grid_link,blocked_dirs,world_id ON mud_world_rooms
+      BEGIN UPDATE mud_navigation_revision SET revision=revision+1 WHERE id=1; END;
+    CREATE TRIGGER IF NOT EXISTS trg_nav_exit_insert AFTER INSERT ON mud_world_exits
+      BEGIN UPDATE mud_navigation_revision SET revision=revision+1 WHERE id=1; END;
+    CREATE TRIGGER IF NOT EXISTS trg_nav_exit_delete AFTER DELETE ON mud_world_exits
+      BEGIN UPDATE mud_navigation_revision SET revision=revision+1 WHERE id=1; END;
+    CREATE TRIGGER IF NOT EXISTS trg_nav_exit_update AFTER UPDATE ON mud_world_exits
+      BEGIN UPDATE mud_navigation_revision SET revision=revision+1 WHERE id=1; END;
+    CREATE TRIGGER IF NOT EXISTS trg_nav_preset_update AFTER UPDATE OF preset_json ON mud_world_room_presets
+      BEGIN UPDATE mud_navigation_revision SET revision=revision+1 WHERE id=1; END;
+    CREATE TRIGGER IF NOT EXISTS trg_nav_region_update AFTER UPDATE OF name ON mud_world_regions
+      BEGIN UPDATE mud_navigation_revision SET revision=revision+1 WHERE id=1; END;
+    """)
 
 
 def _migrate_mud_skills(database):

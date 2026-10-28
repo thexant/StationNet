@@ -9,6 +9,7 @@ A context must provide these methods:
     level() race() class_key() tags() coins() item_count(item_id) attribute(name)
     skill_rank(skill_key) quest_status(quest_id) objective_complete(objective_id)
     state(key) claimed() flag(scope, key) object_state(object_id) room_id()
+    knows_destination(destination_id)
 
 It also validates and checks equipment requirements, which gate items on
 attributes, level, and the wearer's race, class, or origin tags.
@@ -23,11 +24,14 @@ MAX_OUTCOMES = 10
 MAX_ID_LENGTH = 200
 QUEST_STATUSES = ("not_started", "active", "ready", "completed")
 CONDITION_TYPES = ("level", "race", "class", "tag", "has_item", "coins", "attribute", "skill",
-                   "quest", "objective", "state", "claimed", "flag", "object_state", "in_room")
-OUTCOME_TYPES = ("give_item", "take_item", "experience", "coins", "take_coins")
+                   "quest", "objective", "state", "claimed", "flag", "object_state", "in_room",
+                   "knows_destination")
+OUTCOME_TYPES = ("give_item", "take_item", "experience", "coins", "take_coins", "learn_destination")
 # Condition types that only make sense in traditional worlds, where quests and
-# placed objects and rooms exist.
-QUEST_CONDITION_TYPES = ("quest", "objective", "object_state", "in_room")
+# placed objects, rooms and wayfinding destinations exist.
+QUEST_CONDITION_TYPES = ("quest", "objective", "object_state", "in_room", "knows_destination")
+# Outcomes that teach world knowledge; procedural dungeons have no destinations.
+WORLD_OUTCOME_TYPES = ("learn_destination",)
 FLAG_SCOPES = ("player", "world")
 # Flag keys are short lowercase names such as gate.open or wardens_slain.
 FLAG_KEY_RE = re.compile(r"^[a-z0-9][a-z0-9_.:-]{0,79}$")
@@ -38,6 +42,7 @@ _REFERENCE_FIELDS = {
     "quest": ("quest", "quest"), "objective": ("objective", "objective"),
     "give_item": ("item", "item"), "take_item": ("item", "item"),
     "object_state": ("object", "object"), "in_room": ("room", "room"),
+    "knows_destination": ("destination", "destination"), "learn_destination": ("destination", "destination"),
 }
 
 
@@ -191,6 +196,9 @@ def _condition(raw, allowed, nested):
     elif kind == "in_room":
         fields |= {"room"}
         result["room"] = _identifier(raw.get("room"), "in_room room")
+    elif kind == "knows_destination":
+        fields |= {"destination"}
+        result["destination"] = _identifier(raw.get("destination"), "knows_destination destination")
     unknown = set(raw) - fields
     if unknown:
         raise ValueError(f"{kind} conditions do not accept: {', '.join(sorted(unknown))}.")
@@ -209,20 +217,26 @@ def validate_conditions(value, *, allow_quests=True):
     return [_condition(item, allowed, False) for item in items]
 
 
-def validate_outcomes(value):
+def validate_outcomes(value, *, allow_world=True):
     """Return a normalized outcome list or raise ValueError."""
     items = _load(value, "Outcomes")
     if len(items) > MAX_OUTCOMES:
         raise ValueError(f"Use at most {MAX_OUTCOMES} outcomes.")
+    allowed = tuple(kind for kind in OUTCOME_TYPES if allow_world or kind not in WORLD_OUTCOME_TYPES)
     result = []
     for raw in items:
         if not isinstance(raw, dict):
             raise ValueError("Each outcome must be an object.")
         kind = raw.get("type")
-        if kind not in OUTCOME_TYPES:
-            raise ValueError(f"Unsupported outcome type {kind!r}; use one of {', '.join(OUTCOME_TYPES)}.")
+        if kind not in allowed:
+            raise ValueError(f"Unsupported outcome type {kind!r}; use one of {', '.join(allowed)}.")
         amount = raw.get("amount", 1)
-        if kind in ("give_item", "take_item"):
+        if kind == "learn_destination":
+            if set(raw) - {"type", "destination"}:
+                raise ValueError("learn_destination outcomes accept only destination.")
+            result.append({"type": kind, "destination": _identifier(raw.get("destination"),
+                                                                    "learn_destination destination")})
+        elif kind in ("give_item", "take_item"):
             if set(raw) - {"type", "item", "amount"}:
                 raise ValueError(f"{kind} outcomes accept only item and amount.")
             if not _whole(amount, 1, 100):
@@ -245,7 +259,7 @@ def _flatten(conditions):
 
 def references(conditions=(), outcomes=()):
     """Yield (kind, id) for every content reference; kinds are item, quest,
-    objective, skill, race, class, object (a placed item), and room."""
+    objective, skill, race, class, object (a placed item), room, and destination."""
     for entry in [*_flatten(conditions), *outcomes]:
         kind = entry.get("type")
         if kind in _REFERENCE_FIELDS:
@@ -314,6 +328,9 @@ def _holds(condition, context):
         return context.object_state(condition["object"]) == condition["state"]
     if kind == "in_room":
         return context.room_id() == condition["room"]
+    if kind == "knows_destination":
+        knows = getattr(context, "knows_destination", None)
+        return bool(knows and knows(condition["destination"]))
     return False
 
 

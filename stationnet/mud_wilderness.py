@@ -476,6 +476,18 @@ def _links(database, row):
     return preset["links"] if preset else "4"
 
 
+def touch_navigation(database):
+    """Tell cached route graphs that rooms appeared or vanished; see mud_wayfinding."""
+    database.execute("UPDATE mud_navigation_revision SET revision=revision+1 WHERE id=1")
+
+
+def grid_linked(direction, own_blocked, own_links, other_grid_link, other_blocked, other_links):
+    """Whether a grid-linked room reaches its neighbour in direction; shared with route finding."""
+    if direction in own_blocked or not other_grid_link or OPPOSITE[direction] in other_blocked:
+        return False
+    return direction not in DIAGONALS or (own_links == "8" and other_links == "8")
+
+
 def grid_exits(database, room_id, taken_directions=()):
     """Computed exits to grid neighbours, shaped like stored exit rows.
 
@@ -498,10 +510,9 @@ def grid_exits(database, room_id, taken_directions=()):
     result = []
     for direction, delta in DELTAS.items():
         other = neighbours.get(delta)
-        if (other is None or direction in taken or direction in own_blocked or not other["grid_link"]
-                or OPPOSITE[direction] in _blocked(other)):
-            continue
-        if direction in DIAGONALS and not (own_links == "8" and _links(database, other) == "8"):
+        if other is None or direction in taken or not grid_linked(
+                direction, own_blocked, own_links, other["grid_link"], _blocked(other),
+                _links(database, other) if direction in DIAGONALS else ""):
             continue
         result.append({"id": f"grid:{room_id}:{direction}", "name": direction, "direction": direction,
                        "to_room_id": other["id"], "key_item_id": None, "pick_difficulty": None,
@@ -611,6 +622,8 @@ def fill(database, world_id, shape, preset_id, region_id=None, mode="empty"):
             "INSERT OR IGNORE INTO mud_world_rooms(id,name,description,world_id,kind,x,y,z,preset_id,region_id) "
             "VALUES(?,'','',?,'wild',?,?,?,?,?)", inserts[start:start + CHUNK])
     created = database.total_changes - before
+    if created:
+        touch_navigation(database)
     for start in range(0, len(updates), CHUNK):
         database.executemany("UPDATE mud_world_rooms SET preset_id=?,region_id=?,updated_at=CURRENT_TIMESTAMP "
                              "WHERE id=? AND kind='wild'", updates[start:start + CHUNK])
@@ -641,6 +654,7 @@ def delete_cells(database, room_ids):
         marks = ",".join("?" * len(chunk))
         database.execute(f"DELETE FROM mud_item_instances WHERE room_id IN ({marks})", chunk)
         database.execute(f"DELETE FROM mud_world_rooms WHERE kind='wild' AND id IN ({marks})", chunk)
+    touch_navigation(database)
 
 
 def convert_to_authored(database, room_id):
@@ -690,6 +704,7 @@ def place_authored(database, room_id, position, grid_link=True, blocked_dirs="")
             absorbed = other["id"]
             for table, column in (("mud_npc_instances", "room_id"), ("mud_item_instances", "room_id"),
                                   ("mud_item_spawns", "room_id"), ("mud_room_discoveries", "room_id"),
+                                  ("mud_world_destinations", "room_id"),
                                   ("mud_world_dungeon_entrances", "room_id"),
                                   ("mud_world_dungeon_entrances", "return_room_id"),
                                   ("mud_world_exits", "from_room_id"), ("mud_world_exits", "to_room_id")):
@@ -1045,6 +1060,7 @@ def install_cells(database, world_id, installation_key, document):
     for cell in document["cells"]:
         database.execute("UPDATE mud_world_rooms SET grid_link=?,blocked_dirs=? WHERE id=?",
                          (int(cell["grid_link"]), cell["blocked_dirs"], cell_id(world_id, *cell["position"])))
+    touch_navigation(database)
     return preset_ids, region_ids
 
 
