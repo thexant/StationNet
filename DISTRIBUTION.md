@@ -89,16 +89,19 @@ python packaging/build.py windows
 ```
 
 The ZIP in `dist/` contains the embedded Python executable, dependencies, Kiwix reader, app
-assets, `start.bat`, and `install.ps1`. On the destination computer, unzip it
+assets, `start.bat`, `manager.bat`, and `install.ps1`. `core\` holds two executables built
+from `packaging/StationNet.spec`: the console server `StationNet.exe` and the windowed
+Station Manager `StationNetManager.exe`, which share one set of libraries. On the destination computer, unzip it
 and double-click `install.bat` (or run `start.bat` directly for a portable
 copy). The installer writes the shared core to `%LOCALAPPDATA%\StationNet\core`
-and `%LOCALAPPDATA%\StationNet\start.bat`; start with the latter. No Python or
+and `%LOCALAPPDATA%\StationNet\start.bat`; start with the latter, or open
+`manager.bat` beside it to create and run several stations. No Python or
 pip is needed on that computer. Each station's persistent data lives in its own
 folder under the sibling `stations` directory (`stations\default` unless
 `--station ID` is passed to `start.bat`). A portable copy keeps `stations`
 beside its `start.bat`.
 
-To upgrade, stop StationNet, unzip a newly built ZIP and run its `install.bat`
+To upgrade, stop every station (the Station Manager can do this), unzip a newly built ZIP and run its `install.bat`
 again. It stages the new `core` folder, swaps it into place, and leaves
 `stations` alone. Keep a backup of `stations` before upgrades. If a portable
 copy is used, replace only `core` and `start.bat`, never `stations`.
@@ -125,6 +128,9 @@ unzip it, then run:
 sh install.sh
 ~/.local/share/stationnet/start.sh
 ```
+
+`~/.local/share/stationnet/manager.sh` opens the Station Manager; it needs the
+OS's Tkinter package (`python3-tk` on Debian and Raspberry Pi OS).
 
 The destination needs a matching Python 3.11+ with venv; package installation
 uses `--no-index` and needs no network. The installer puts the replaceable

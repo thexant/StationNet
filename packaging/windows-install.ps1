@@ -15,6 +15,7 @@ try {
     if (Test-Path -LiteralPath $core) { Move-Item -LiteralPath $core -Destination $old }
     Move-Item -LiteralPath $stage -Destination $core
     Copy-Item -LiteralPath (Join-Path $source 'start.bat') -Destination (Join-Path $target 'start.bat') -Force
+    Copy-Item -LiteralPath (Join-Path $source 'manager.bat') -Destination (Join-Path $target 'manager.bat') -Force
 } catch {
     if ((Test-Path -LiteralPath $old) -and -not (Test-Path -LiteralPath $core)) { Move-Item -LiteralPath $old -Destination $core }
     throw
@@ -28,4 +29,5 @@ if ((Test-Path -LiteralPath (Join-Path $legacyApp 'StationNet.exe')) -and (Test-
     Remove-Item -LiteralPath $legacyApp -Recurse -Force
 }
 Write-Host "Installed at $target. Run $target\start.bat"
+Write-Host "To create and run several stations, open $target\manager.bat"
 Write-Host 'Open http://127.0.0.1:8080 to create the first sysop account.'

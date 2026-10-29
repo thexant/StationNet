@@ -26,8 +26,11 @@ if ! mv "$STAGE" "$TARGET/core"; then
 fi
 cp "$PACKAGE_DIR/start.sh" "$TARGET/start.sh"
 chmod +x "$TARGET/start.sh"
+cp "$PACKAGE_DIR/manager.sh" "$TARGET/manager.sh"
+chmod +x "$TARGET/manager.sh"
 if [ -d "$OLD" ]; then rm -rf -- "$OLD"; fi
 # Pre-stations installs kept the application (code only, never data) in app/.
 if [ -f "$TARGET/app/run.py" ] && [ -f "$TARGET/core/run.py" ]; then rm -rf -- "$TARGET/app"; fi
 echo "Installed. Start with: $TARGET/start.sh"
+echo "To create and run several stations: $TARGET/manager.sh (needs Tkinter, e.g. python3-tk)"
 echo 'Open http://127.0.0.1:8080 to create the first sysop account.'

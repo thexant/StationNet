@@ -52,7 +52,7 @@ printf 'Station data will be stored in "%s/stations/default".\n' "$INSTALL_DIR"
 if [[ -f "$INSTALL_DIR/data/station.db" ]]; then
     printf 'The existing station in "%s/data" will be migrated there on first start.\n' "$INSTALL_DIR"
 fi
-printf 'Use ./run.sh to start StationNet later.\n'
+printf 'Use ./run.sh to start StationNet later, or ./manager.sh to create and run several stations.\n'
 
 if [[ -t 0 ]]; then
     read -r -p 'Start StationNet now? [y/N]: ' start_now

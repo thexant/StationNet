@@ -49,7 +49,7 @@ echo [4/5] Preparing the stations directory...
 if not exist "%INSTALL_DIR%\stations" mkdir "%INSTALL_DIR%\stations"
 if errorlevel 1 goto :failed
 
-echo [5/5] Creating run.bat...
+echo [5/5] Creating run.bat and manager.bat...
 (
     echo @echo off
     echo setlocal EnableExtensions
@@ -67,12 +67,25 @@ echo [5/5] Creating run.bat...
     echo if errorlevel 1 pause
 ) > "%INSTALL_DIR%\run.bat"
 if errorlevel 1 goto :failed
+(
+    echo @echo off
+    echo setlocal EnableExtensions
+    echo cd /d "%%~dp0"
+    echo if not exist ".venv\Scripts\pythonw.exe" ^(
+    echo     echo ERROR: StationNet is not installed in this folder.
+    echo     echo Run install.bat first.
+    echo     pause
+    echo     exit /b 1
+    echo ^)
+    echo start "" ".venv\Scripts\pythonw.exe" "manager.py"
+) > "%INSTALL_DIR%\manager.bat"
+if errorlevel 1 goto :failed
 
 echo.
 echo StationNet is installed successfully.
 echo Station data will be stored in "%INSTALL_DIR%\stations\default".
 if exist "%INSTALL_DIR%\data\station.db" echo The existing station in "%INSTALL_DIR%\data" will be migrated there on first start.
-echo Use run.bat to start StationNet later.
+echo Use run.bat to start StationNet later, or manager.bat to create and run several stations.
 echo.
 choice /C YN /N /M "Start StationNet now? [Y/N]: "
 if errorlevel 2 goto :done
@@ -114,6 +127,8 @@ exit /b 1
 echo.
 echo To start StationNet later, run:
 echo   "%INSTALL_DIR%\run.bat"
+echo To manage several stations from a desktop window, run:
+echo   "%INSTALL_DIR%\manager.bat"
 echo.
 pause
 exit /b 0

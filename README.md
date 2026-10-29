@@ -47,14 +47,16 @@ Windows (easy setup):
 2. Use the generated `run.bat` to start StationNet at any time.
 3. Open `http://127.0.0.1:8080` and complete first-run setup.
 
-To reset an installed copy, double-click `uninstall.bat`. It optionally backs up station data (the `stations/` folder, plus any pre-stations `data/` folder), including WIKI archives, then removes only the generated environment, station data, `run.bat`, and cache files. The StationNet directory and application source remain intact, ready for `install.bat` to be run again.
+To host more than one station from the same installation, use the generated `manager.bat` instead (see *Station Manager* below).
+
+To reset an installed copy, double-click `uninstall.bat`. It optionally backs up station data (the `stations/` folder, plus any pre-stations `data/` folder), including WIKI archives, then removes only the generated environment, station data, `run.bat`, `manager.bat`, and cache files. The StationNet directory and application source remain intact, ready for `install.bat` to be run again.
 
 ### Linux, macOS, and Unix
 
 From the extracted StationNet directory, make the scripts executable once, then install and run:
 
 ```sh
-chmod +x install.sh run.sh uninstall.sh
+chmod +x install.sh run.sh manager.sh uninstall.sh
 ./install.sh
 ./run.sh
 ```
@@ -104,7 +106,8 @@ StationNet/
   run.py, stationnet/, .venv/, kiwix_tools/   shared core (packaged builds: core/)
   stations/
     default/                                  one self-contained folder per station
-      station.json                            station settings: id, host, port, https, kiwix_serve
+      station.json                            station settings: id, name, host, port, https, kiwix_serve
+      run/                                    runtime files while it runs: lock, status, log
       station.db, secret.key, uploads/, applications/, themes/, mud_worlds/, kiwix_data/, ...
 ```
 
@@ -113,6 +116,12 @@ Every database, upload, installed program, theme, world, and WIKI archive a stat
 **Upgrading from a `data/` folder.** When `stations/default/` does not exist yet and a pre-stations `data/` folder holds a station, the first start migrates it. Run `python run.py --migrate-only --dry-run` to preview, or `--migrate-only` to migrate without starting. Stop StationNet first; the migration refuses to run while the database or port is in use. It copies everything except ZIM archives into a staging folder, verifies each file's SHA-256 hash plus the database's integrity and row counts, and only then renames the staging folder to `stations/default/`. It then deletes the verified originals from `data/`, leaving the ZIM archives and a `MIGRATED.txt` note listing them; move those archives into `stations/default/kiwix_data/` by hand. If anything fails before the rename, `data/` is left untouched. Migration never overwrites an existing station folder; if both exist, StationNet refuses to start until one is moved aside.
 
 Back up a station's folder to preserve station identity, accounts, messages, mail, announcements, the `uploads/` file archive, and sysop-installed games and apps in `applications/`. Bundled games and apps remain in StationNet's program files. Never publish a station folder's files.
+
+### Station Manager
+
+`manager.bat` (Windows), `./manager.sh` (Linux/macOS), or `manager.bat`/`manager.sh` in a packaged install opens a desktop window listing every station under `stations/`, with its name, status, port, and addresses. **+ New Station** asks for a name, id, port (the next free one is suggested), and whether other devices on the network may connect, then creates `stations/<id>/station.json`. Each station can be started, stopped, restarted, opened in the browser, or have its log opened.
+
+Each station runs as its own process with only its own folder and `station.json`; environment overrides such as `STATIONNET_PORT` are not passed on. Stations started from the manager are detached from it, so closing the window leaves them running, and reopening it finds them again. Status comes from the station itself: while running it holds an OS lock on `run/station.lock` and describes itself in `run/status.json`, so a crashed or killed station is reported as **CRASHED** and its last log line is shown. **Stop** asks the station to shut down gracefully through `run/stop.request`. A station that has not stopped after 20 seconds offers **Force Stop**, which ends only that station's own process. Starting a station that is already running, including from `run.py` or `start.bat`, is refused. Tkinter is required; on Debian or Raspberry Pi OS install `python3-tk`.
 
 ### Optional imageboard
 

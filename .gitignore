@@ -15,6 +15,7 @@ kiwix_tools/
 instance/
 .coverage
 run.bat
+manager.bat
 dist/
 build/
 android/.gradle/

@@ -1,6 +1,9 @@
 """StationNet production entry point."""
 import argparse
+import signal
 import socket
+import threading
+from datetime import datetime, timezone
 from pathlib import Path
 
 
@@ -53,14 +56,71 @@ def main(argv=None):
         instance.write_config_if_missing(station.data_dir, instance.new_config(station.id))
         station.config = instance.load_config(station.data_dir)
 
+    from stationnet.station_runtime import AlreadyRunning, StationRuntime
+    runtime = StationRuntime(station.data_dir)
+    try:
+        runtime.acquire()
+    except AlreadyRunning as exc:
+        raise SystemExit(f"ERROR: {exc}")
+    try:
+        _serve(station, runtime)
+    finally:
+        runtime.release()
+        runtime.clear_stop()
+
+
+def _interrupted(signum, frame):
+    raise KeyboardInterrupt
+
+
+def _serve(station, runtime):
+    """Run the server while publishing status and honoring stop requests."""
     import uvicorn
     from stationnet import create_app
     from stationnet.multiplayer_socket import create_asgi_app
+    runtime.clear_stop()
+    status = {"host": station.host, "port": station.port,
+              "started_at": datetime.now(timezone.utc).isoformat(timespec="seconds")}
+    runtime.write_status(state="starting", **status)
     mode = "standalone" if station.standalone else f"station '{station.id}'"
-    print(f"StationNet {mode}: data in {station.data_dir}")
-    print(f"StationNet listening on http://{station.host}:{station.port} (WebSocket enabled)")
-    uvicorn.run(create_asgi_app(create_app(station.app_config())), host=station.host, port=station.port,
-                ws_max_size=16 * 1024, ws_max_queue=64, workers=1)
+    print(f"StationNet {mode}: data in {station.data_dir}", flush=True)
+    print(f"StationNet listening on http://{station.host}:{station.port} (WebSocket enabled)", flush=True)
+    clean = False
+    try:
+        server = uvicorn.Server(uvicorn.Config(
+            create_asgi_app(create_app(station.app_config())), host=station.host, port=station.port,
+            ws_max_size=16 * 1024, ws_max_queue=64, workers=1))
+        done = threading.Event()
+
+        def watch():
+            announced = False
+            while not done.wait(0.5):
+                if not announced and server.started:
+                    runtime.write_status(state="running", **status)
+                    announced = True
+                if runtime.stop_requested_at() is not None:
+                    server.should_exit = True
+
+        watcher = threading.Thread(target=watch, name="station-runtime", daemon=True)
+        watcher.start()
+        # uvicorn re-raises the signal that stopped it once shutdown is done;
+        # make SIGTERM end up as the same clean interrupt as Ctrl+C.
+        signal.signal(signal.SIGTERM, _interrupted)
+        try:
+            server.run()
+            clean = server.started or runtime.stop_requested_at() is not None
+        except KeyboardInterrupt:
+            clean = True
+        finally:
+            done.set()
+            # Its last status write must not land after the cleanup below.
+            watcher.join()
+    finally:
+        # A status left behind with the lock free tells launchers it failed.
+        if clean:
+            runtime.clear_status()
+        else:
+            runtime.write_status(state="failed", **status)
 
 if __name__ == "__main__":
     main()

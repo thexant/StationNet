@@ -39,6 +39,7 @@ def copy_app(destination):
             raise FileNotFoundError(f"MIDI distribution asset is missing: {asset}")
     destination.mkdir(parents=True, exist_ok=True)
     shutil.copy2(ROOT / "run.py", destination / "run.py")
+    shutil.copy2(ROOT / "manager.py", destination / "manager.py")
     shutil.copy2(ROOT / "icon.png", destination / "icon.png")
     shutil.copy2(ROOT / "requirements.txt", destination / "requirements.txt")
     shutil.copytree(ROOT / "stationnet", destination / "stationnet",
@@ -68,6 +69,7 @@ def build_posix():
                         "-r", str(ROOT / "requirements.txt")], check=True)
         shutil.copy2(ROOT / "packaging" / "posix-install.sh", package / "install.sh")
         shutil.copy2(ROOT / "packaging" / "posix-start.sh", package / "start.sh")
+        shutil.copy2(ROOT / "packaging" / "posix-manager.sh", package / "manager.sh")
         archive(package, f"StationNet-{sys.platform}-{platform.machine()}-{sys.implementation.cache_tag}.zip")
 
 
@@ -76,16 +78,15 @@ def build_windows():
         raise SystemExit("Build the Windows executable on Windows.")
     subprocess.run([sys.executable, "-c", "import PyInstaller"], check=True)
     with build_workspace() as workspace:
+        # The spec builds StationNet.exe and StationNetManager.exe into one folder.
         subprocess.run([sys.executable, "-m", "PyInstaller", "--noconfirm", "--clean",
-                        "--onedir", "--name", "StationNet", "--collect-all", "stationnet",
-                        "--add-data", f"{ROOT / 'icon.png'}{';' if sys.platform == 'win32' else ':'}.",
-                        "--collect-all", "pyfiglet",
                         "--distpath", str(workspace / "frozen"), "--workpath", str(workspace / "build"),
-                        "--specpath", str(workspace), str(ROOT / "run.py")], cwd=ROOT, check=True)
+                        str(ROOT / "packaging" / "StationNet.spec")], cwd=ROOT, check=True)
         package = workspace / "StationNet"
         shutil.copytree(workspace / "frozen" / "StationNet", package / "core")
         install_kiwix_tools(package / "core" / "kiwix_tools")
         shutil.copy2(ROOT / "packaging" / "windows-start.bat", package / "start.bat")
+        shutil.copy2(ROOT / "packaging" / "windows-manager.bat", package / "manager.bat")
         shutil.copy2(ROOT / "packaging" / "windows-install.bat", package / "install.bat")
         shutil.copy2(ROOT / "packaging" / "windows-install.ps1", package / "install.ps1")
         archive(package, f"StationNet-Windows-{platform.machine()}.zip")
@@ -100,7 +101,7 @@ def build_source():
             "README.md", "DISTRIBUTION.md", "BROADCASTING.md",
             "package.json", "package-lock.json",
             "build-all.ps1", "install.bat", "uninstall.bat", "install.sh",
-            "uninstall.sh", "run.sh",
+            "uninstall.sh", "run.sh", "manager.sh",
         ):
             source = ROOT / name
             if not source.is_file():
