@@ -2,9 +2,11 @@
 import io
 import zipfile
 from flask import request
+from PIL import Image
+import pymupdf
 from pypdf import PdfWriter
 
-from stationnet import create_app
+from stationnet import create_app, library
 from stationnet.db import get_db
 
 
@@ -39,6 +41,14 @@ def pdf():
                          "/Subject": "Operational reference"})
     writer.write(stream)
     return stream.getvalue()
+
+
+def illustrated_pdf():
+    with pymupdf.open() as document:
+        for color in ((1, 0, 0), (0, 0, 1)):
+            page = document.new_page(width=360, height=480)
+            page.draw_rect(page.rect, color=color, fill=color)
+        return document.tobytes()
 
 
 def test_library_file_size_setting_controls_member_and_station_uploads(tmp_path):
@@ -126,7 +136,7 @@ def test_pdf_library_upload_reader_and_modes(tmp_path):
         assert book["format"] == "pdf" and book["page_count"] == 2
         assert book["title"] == "Station Manual" and book["author"] == "Ada Reader"
     assert b"Station Manual" in client.get("/library?q=Station").data
-    assert client.get("/library/1/cover").mimetype == "image/svg+xml"
+    assert client.get("/library/1/cover").mimetype == "image/jpeg"
     assert client.get("/library/1/download").data == data
     inline = client.get("/library/1/pdf")
     assert inline.data == data and inline.mimetype == "application/pdf"
@@ -153,6 +163,63 @@ def test_pdf_library_upload_reader_and_modes(tmp_path):
     sign_in(client, admin)
     assert client.post("/library/station-upload", data={"csrf_token": "library-test",
         "file": (io.BytesIO(data), "station.pdf")}, content_type="multipart/form-data").status_code == 302
+
+
+def test_pdf_first_page_cover_is_cached_for_new_and_existing_books(tmp_path):
+    app = create_app({"TESTING": True, "DATA_DIR": str(tmp_path)})
+    with app.app_context():
+        db = get_db()
+        db.execute("INSERT INTO station(name,description,callsign,library_enabled) VALUES('Test','Test','TST-1',1)")
+        member = db.execute("INSERT INTO users(username,callsign,password_hash) VALUES('member','MEM-1','unused')").lastrowid
+        db.commit()
+    client = app.test_client()
+    sign_in(client, member)
+    data = illustrated_pdf()
+    result = client.post("/library/upload", data={"csrf_token": "library-test",
+        "file": (io.BytesIO(data), "illustrated.pdf")}, content_type="multipart/form-data")
+    assert result.status_code == 302
+    with app.app_context():
+        book = get_db().execute("SELECT * FROM library_books").fetchone()
+        cover_path = tmp_path / "library" / f"users/{member}" / (book["stored_name"] + ".cover.jpg")
+    assert cover_path.is_file()
+    assert b'/library/1/cover' in client.get("/library").data
+    assert b'/library/1/cover' in client.get("/library/1").data
+    cover = client.get("/library/1/cover")
+    assert cover.mimetype == "image/jpeg"
+    with Image.open(io.BytesIO(cover.data)) as image:
+        assert image.size == (360, 480)
+        red, green, blue = image.getpixel((180, 240))
+        assert red > 200 and green < 50 and blue < 50
+    cover.close()
+
+    cover_path.unlink()  # Simulate a PDF uploaded before thumbnail support.
+    regenerated = client.get("/library/1/cover")
+    assert regenerated.mimetype == "image/jpeg"
+    regenerated.close()
+    assert cover_path.is_file()
+    assert client.post("/library/1/delete", data={"csrf_token": "library-test"}).status_code == 302
+    assert not cover_path.exists()
+
+
+def test_pdf_cover_render_failure_preserves_document_and_fallback(tmp_path, monkeypatch):
+    app = create_app({"TESTING": True, "DATA_DIR": str(tmp_path)})
+    with app.app_context():
+        db = get_db()
+        db.execute("INSERT INTO station(name,description,callsign,library_enabled) VALUES('Test','Test','TST-1',1)")
+        member = db.execute("INSERT INTO users(username,callsign,password_hash) VALUES('member','MEM-1','unused')").lastrowid
+        db.commit()
+    client = app.test_client()
+    sign_in(client, member)
+    def fail(*args):
+        raise RuntimeError("Render failed")
+    monkeypatch.setattr(library, "_render_pdf_cover", fail)
+    data = pdf()
+    result = client.post("/library/upload", data={"csrf_token": "library-test",
+        "file": (io.BytesIO(data), "manual.pdf")}, content_type="multipart/form-data")
+    assert result.status_code == 302
+    assert client.get("/library/1/cover").mimetype == "image/svg+xml"
+    assert client.get("/library/1/read").status_code == 200
+    assert client.get("/library/1/download").data == data
 
 
 def test_library_upload_read_progress_bookmarks_and_modes(tmp_path):

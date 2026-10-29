@@ -2,6 +2,8 @@
 import html
 from html.parser import HTMLParser
 import io
+import math
+import os
 from pathlib import Path
 import posixpath
 import secrets
@@ -10,6 +12,8 @@ import textwrap
 from urllib.parse import unquote
 import zipfile
 import xml.etree.ElementTree as ET
+from PIL import Image
+import pymupdf
 from pypdf import PdfReader
 from pypdf.errors import PdfReadError
 
@@ -66,6 +70,31 @@ def _path(book):
     return (Path(current_app.config["DATA_DIR"]) / "library" /
             ("station" if book["station_post"] else f"users/{book['uploader_id']}") /
             book["stored_name"])
+
+
+def _pdf_cover_path(book):
+    path = _path(book)
+    return path.with_name(path.name + ".cover.jpg")
+
+
+def _render_pdf_cover(pdf_path, cover_path):
+    """Cache a bounded image of page one without leaving a partial cover."""
+    temporary = cover_path.with_name(cover_path.name + "." + secrets.token_hex(8) + ".tmp")
+    try:
+        with pymupdf.open(pdf_path) as document:
+            page = document[0]
+            width, height = page.rect.width, page.rect.height
+            if not all(math.isfinite(value) and value > 0 for value in (width, height)):
+                raise ValueError("PDF first page has invalid dimensions")
+            scale = min(360 / width, 480 / height)
+            pixmap = page.get_pixmap(matrix=pymupdf.Matrix(scale, scale),
+                                     colorspace=pymupdf.csRGB, alpha=False)
+            image = Image.frombytes("RGB", (pixmap.width, pixmap.height), pixmap.samples)
+            image.thumbnail((360, 480), Image.Resampling.LANCZOS)
+            image.save(temporary, format="JPEG", quality=85, optimize=True)
+        os.replace(temporary, cover_path)
+    finally:
+        temporary.unlink(missing_ok=True)
 
 
 def _book(book_id):
@@ -358,6 +387,7 @@ def _save_upload(station_post):
     filename = secrets.token_hex(20) + "." + kind
     path = folder / filename
     saved = False
+    cover_path = path.with_name(path.name + ".cover.jpg") if kind == "pdf" else None
     try:
         if not station_post:
             database.execute("BEGIN IMMEDIATE")
@@ -367,6 +397,11 @@ def _save_upload(station_post):
         uploaded.stream.seek(0)
         with path.open("xb") as output:
             shutil.copyfileobj(uploaded.stream, output, length=1024 * 1024)
+        if cover_path is not None:
+            try:
+                _render_pdf_cover(path, cover_path)
+            except Exception:
+                current_app.logger.exception("Could not render PDF cover for %s", filename)
         cursor = database.execute(
             "INSERT INTO library_books(uploader_id,station_post,title,author,description,language,"
             "publisher,identifier,stored_name,original_name,size_bytes,cover_path,format,page_count,category_id) "
@@ -384,6 +419,8 @@ def _save_upload(station_post):
     finally:
         if not saved:
             path.unlink(missing_ok=True)
+            if cover_path is not None:
+                cover_path.unlink(missing_ok=True)
 
 
 @bp.route("/upload", methods=("GET", "POST"))
@@ -469,6 +506,16 @@ def pdf_file(book_id):
 def cover(book_id):
     book = _book(book_id)
     if _format(book) == "pdf":
+        cover_path = _pdf_cover_path(book)
+        if not cover_path.is_file() and _path(book).is_file():
+            try:
+                _render_pdf_cover(_path(book), cover_path)
+            except Exception:
+                current_app.logger.exception("Could not render PDF cover for book %s", book_id)
+        if cover_path.is_file():
+            response = send_file(cover_path, mimetype="image/jpeg", conditional=True)
+            response.headers["Cache-Control"] = "private, max-age=3600"
+            return response
         title_lines = textwrap.wrap(book["title"][:100], width=18,
                                     break_long_words=True, break_on_hyphens=False)[:6]
         title = "".join(f'<tspan x="42" dy="38">{html.escape(line)}</tspan>'
@@ -628,6 +675,8 @@ def delete(book_id):
     if book["uploader_id"] != g.user["id"] and not g.user["is_admin"]:
         abort(403)
     try:
+        if _format(book) == "pdf":
+            _pdf_cover_path(book).unlink(missing_ok=True)
         _path(book).unlink(missing_ok=True)
     except OSError:
         flash("Book could not be removed from storage.", "error")

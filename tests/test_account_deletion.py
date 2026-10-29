@@ -44,6 +44,8 @@ def seed_content(app, member, other):
                    "VALUES(?,?,?,?,?)", (member, "upload", "member.txt", "General", 4))
         db.execute("INSERT INTO videos(uploader_id,title,stored_name,mime_type,size_bytes) "
                    "VALUES(?,?,?,?,?)", (member, "video", "member.mp4", "video/mp4", 4))
+        db.execute("INSERT INTO library_books(uploader_id,title,stored_name,original_name,size_bytes,format,page_count) "
+                   "VALUES(?,?,?,?,?,?,?)", (member, "manual", "member.pdf", "member.pdf", 4, "pdf", 1))
         db.execute("INSERT INTO imageboard_threads(author_id,subject,image_name,image_type,thumb_name,created_at,bumped_at) "
                    "VALUES(?,?,?,?,?,?,?)", (member, "thread", "member.jpg", "image/jpeg", "member-thumb.jpg", "now", "now"))
         db.execute("INSERT INTO office_documents(owner_id,envelope) VALUES(?,?)", (member, "encrypted"))
@@ -62,6 +64,7 @@ def seed_content(app, member, other):
                    "VALUES('test','shared','shared','shared-save','{}',2,?)", (member,))
         db.commit()
     for relative in ("profile_photos/member.png", "uploads/member.txt", "videos/users/2/member.mp4",
+                     "library/users/2/member.pdf", "library/users/2/member.pdf.cover.jpg",
                      "imageboard/member.jpg", "imageboard/member-thumb.jpg", "radio_audio/2/member.mp3",
                      "radio_content/2/member-radio.png"):
         path = data / relative
@@ -76,6 +79,7 @@ def assert_wiped(app, member, other):
         assert db.execute("SELECT 1 FROM users WHERE id=?", (member,)).fetchone() is None
         for table, column in (("posts", "author_id"), ("station_chat_messages", "author_id"),
                               ("archive_files", "uploader_id"), ("videos", "uploader_id"),
+                              ("library_books", "uploader_id"),
                               ("imageboard_threads", "author_id"), ("office_documents", "owner_id"),
                               ("radio_audio_files", "owner_id"), ("radio_broadcast_content", "owner_id")):
             assert db.execute(f"SELECT 1 FROM {table} WHERE {column}=?", (member,)).fetchone() is None
@@ -90,6 +94,7 @@ def assert_wiped(app, member, other):
         assert db.execute("SELECT 1 FROM posts WHERE author_id=?", (other,)).fetchone() is not None
     data = Path(app.config["DATA_DIR"])
     for relative in ("profile_photos/member.png", "uploads/member.txt", "videos/users/2/member.mp4",
+                     "library/users/2/member.pdf", "library/users/2/member.pdf.cover.jpg",
                      "imageboard/member.jpg", "imageboard/member-thumb.jpg", "radio_audio/2/member.mp3",
                      "radio_content/2/member-radio.png"):
         assert not (data / relative).exists()

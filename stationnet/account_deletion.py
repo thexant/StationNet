@@ -70,10 +70,16 @@ def delete_account(user_id):
         collect(data / "videos" / "station", "SELECT stored_name FROM videos WHERE uploader_id=? AND station_post=1")
         collect(data / "videos" / "users" / str(user_id),
                 "SELECT stored_name FROM videos WHERE uploader_id=? AND station_post=0")
-        collect(data / "library" / "station",
-                "SELECT stored_name FROM library_books WHERE uploader_id=? AND station_post=1")
-        collect(data / "library" / "users" / str(user_id),
-                "SELECT stored_name FROM library_books WHERE uploader_id=? AND station_post=0")
+        for station_post, root in ((1, data / "library" / "station"),
+                                   (0, data / "library" / "users" / str(user_id))):
+            for row in database.execute(
+                    "SELECT stored_name,format FROM library_books WHERE uploader_id=? AND station_post=?",
+                    (user_id, station_post)):
+                path = _stored_file(root, row["stored_name"])
+                if path is not None:
+                    files.add(path)
+                    if row["format"] == "pdf":
+                        files.add(path.with_name(path.name + ".cover.jpg"))
         collect(data / "arcade" / "roms", "SELECT stored_name FROM arcade_games WHERE uploader_id=?")
         collect(data / "arcade" / "covers", "SELECT cover_name FROM arcade_games WHERE uploader_id=?",
                 columns=("cover_name",))
