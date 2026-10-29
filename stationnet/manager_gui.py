@@ -4,35 +4,69 @@ import subprocess
 import sys
 import tkinter as tk
 import webbrowser
+from datetime import datetime
 from pathlib import Path
 from tkinter import font as tkfont
 from tkinter import messagebox
 
-from . import instance
-from .station_manager import StationManager, clean_environment
+from . import instance, station_hours, themes
+from .host_power import HostPower, manager_command
+from .hours_scheduler import HoursScheduler, HoursState
+from .station_manager import (ACTIVE, DEFAULT_THEME, LAN_HOST, LOCAL_HOST, StationManager, clean_environment,
+                              lan_address)
+from .station_runtime import HostLock
 
 REFRESH_MS = 1000
-BG = "#0f1519"
-CARD = "#121b20"
-BORDER = "#2a3b40"
-TEXT = "#e3eaee"
-MUTED = "#98a6ad"
-FIELD = "#0b1114"
-BUTTON = "#141e23"
-BUTTON_HOVER = "#1d2b31"
-PRIMARY = "#1e3a2c"
-PRIMARY_HOVER = "#27513b"
-PRIMARY_TEXT = "#c9f5d6"
-ERROR = "#f0716a"
+HOST_LOCK = ".manager.lock"
+# Status colours are the same under every theme.
 STATES = {
     "running": ("RUNNING", "#3fcf6e"),
     "starting": ("STARTING", "#e0b341"),
     "stopping": ("STOPPING", "#e0b341"),
     "restarting": ("RESTARTING", "#e0b341"),
-    "stopped": ("STOPPED", "#7d8a91"),
-    "crashed": ("CRASHED", ERROR),
-    "error": ("CONFIG ERROR", ERROR),
+    "stopped": ("STOPPED", "#8b8b86"),
+    "crashed": ("CRASHED", "#ff3237"),
+    "error": ("CONFIG ERROR", "#ff3237"),
 }
+
+
+def _luminance(color):
+    channels = [int(color[i:i + 2], 16) / 255 for i in (1, 3, 5)]
+    r, g, b = [c / 12.92 if c <= 0.03928 else ((c + 0.055) / 1.055) ** 2.4 for c in channels]
+    return 0.2126 * r + 0.7152 * g + 0.0722 * b
+
+
+def contrast(first, second):
+    light, dark = sorted((_luminance(first), _luminance(second)), reverse=True)
+    return (light + 0.05) / (dark + 0.05)
+
+
+def readable(color, background, minimum=4.5):
+    """``color``, or black or white if a custom theme makes it hard to read."""
+    if contrast(color, background) >= minimum:
+        return color
+    return max(("#ffffff", "#000000"), key=lambda option: contrast(option, background))
+
+
+def colors(palette):
+    """Manager colour roles from a StationNet site palette (see station.css)."""
+    card = palette["field"]
+    return {
+        "bg": palette["black"], "card": card, "border": palette["green-dim"],
+        "heading": readable(palette["green-bright"], card), "text": readable(palette["white"], card),
+        "muted": readable(palette["grey"], card), "link": readable(palette["cyan"], card),
+        "error": readable(palette["red"], card), "field": palette["field"],
+        "button": palette["button"], "button_border": palette["green"],
+        "button_text": readable(palette["green"], palette["button"]),
+        "primary_border": palette["green-bright"],
+        "primary_text": readable(palette["green-bright"], palette["button"]),
+        "hover": palette["green"], "hover_text": readable(palette["black"], palette["green"]),
+    }
+
+
+# The manager itself wears StationNet's default theme.
+DEFAULT = colors(themes.palette(DEFAULT_THEME))
+BG, TEXT, MUTED, FIELD, BORDER, ERROR = (DEFAULT[key] for key in ("bg", "text", "muted", "field", "border", "error"))
 
 
 def open_path(path):
@@ -57,17 +91,18 @@ class Fonts:
         self.small_bold = tkfont.Font(root, family=family, size=9, weight="bold")
 
 
-def make_button(parent, fonts, text, command, primary=False):
+def make_button(parent, fonts, text, command, primary=False, colors=DEFAULT):
     """A flat button with a 1px border; returns the frame to pack."""
-    normal, hover = (PRIMARY, PRIMARY_HOVER) if primary else (BUTTON, BUTTON_HOVER)
+    normal, hover = colors["button"], colors["hover"]
+    text_color = colors["primary_text"] if primary else colors["button_text"]
     # Windows ignores highlight colors on buttons, so a frame draws the border.
-    border = tk.Frame(parent, bg=PRIMARY_HOVER if primary else BORDER, padx=1, pady=1)
+    border = tk.Frame(parent, bg=colors["primary_border"] if primary else colors["button_border"], padx=1, pady=1)
     button = tk.Button(border, text=text, command=command, font=fonts.small_bold if primary else fonts.small,
-                       bg=normal, fg=PRIMARY_TEXT if primary else TEXT, activebackground=hover,
-                       activeforeground=TEXT, relief="flat", bd=0, padx=10, pady=3, cursor="hand2")
+                       bg=normal, fg=text_color, activebackground=hover, activeforeground=colors["hover_text"],
+                       relief="flat", bd=0, padx=10, pady=3, cursor="hand2")
     button.pack()
-    button.bind("<Enter>", lambda _event: button.configure(bg=hover))
-    button.bind("<Leave>", lambda _event: button.configure(bg=normal))
+    button.bind("<Enter>", lambda _event: button.configure(bg=hover, fg=colors["hover_text"]))
+    button.bind("<Leave>", lambda _event: button.configure(bg=normal, fg=text_color))
     return border
 
 
@@ -75,60 +110,121 @@ def separator(parent):
     return tk.Frame(parent, bg=BORDER, height=1)
 
 
+def host_lock(manager):
+    """Held by the one open manager that carries out station hours."""
+    return HostLock(manager.stations_dir / HOST_LOCK)
+
+
+def countdown(seconds):
+    minutes, seconds = divmod(max(0, int(seconds)), 60)
+    return f"{minutes}:{seconds:02d}"
+
+
+def short_time(moment, clock="12h"):
+    return station_hours.format_time(moment.strftime("%H:%M"), clock)
+
+
 class StationCard(tk.Frame):
     def __init__(self, parent, app):
-        super().__init__(parent, bg=CARD, highlightthickness=1, highlightbackground=BORDER, padx=12, pady=10)
+        super().__init__(parent, highlightthickness=1, padx=12, pady=10)
         self.app = app
         fonts = app.fonts
-        top = tk.Frame(self, bg=CARD)
-        top.pack(fill="x")
-        self.name = tk.Label(top, font=fonts.title, bg=CARD, fg=TEXT, anchor="w")
+        self.top = tk.Frame(self)
+        self.top.pack(fill="x")
+        self.name = tk.Label(self.top, font=fonts.title, anchor="w")
         self.name.pack(side="left")
-        self.status = tk.Label(top, font=fonts.small_bold, bg=CARD, anchor="e")
+        self.status = tk.Label(self.top, font=fonts.small_bold, anchor="e")
         self.status.pack(side="right")
-        self.dot = tk.Canvas(top, width=12, height=12, bg=CARD, highlightthickness=0)
+        self.dot = tk.Canvas(self.top, width=12, height=12, highlightthickness=0)
         self.dot.pack(side="right", padx=(0, 6))
         self.dot_item = self.dot.create_oval(1, 1, 11, 11, outline="")
-        self.summary = tk.Label(self, font=fonts.body, bg=CARD, fg=MUTED, anchor="w", justify="left")
+        self.summary = tk.Label(self, font=fonts.body, anchor="w", justify="left")
         self.summary.pack(fill="x", pady=(6, 0))
-        self.address = tk.Label(self, font=fonts.body, bg=CARD, fg=TEXT, anchor="w", justify="left")
-        self.folder_note = tk.Label(self, font=fonts.small, bg=CARD, fg=MUTED, anchor="w", justify="left")
-        self.detail = tk.Label(self, font=fonts.small, bg=CARD, fg=ERROR, anchor="w", justify="left")
-        self.buttons = tk.Frame(self, bg=CARD)
+        self.address = tk.Label(self, font=fonts.body, anchor="w", justify="left")
+        self.hours_line = tk.Label(self, font=fonts.small, anchor="w", justify="left")
+        self.countdown = tk.Label(self, font=fonts.small_bold, anchor="w", justify="left")
+        self.folder_note = tk.Label(self, font=fonts.small, anchor="w", justify="left")
+        self.restart_note = tk.Label(self, font=fonts.small_bold, anchor="w", justify="left")
+        self.detail = tk.Label(self, font=fonts.small, anchor="w", justify="left")
+        self.buttons = tk.Frame(self)
         self.buttons.pack(fill="x", pady=(8, 0))
         self.button_key = None
+        self.colors = None
+        self.apply_colors(DEFAULT)
         self.bind("<Configure>", self._wrap)
+
+    def apply_colors(self, colors):
+        """Recolour the card for its station's theme."""
+        self.colors = colors
+        card = colors["card"]
+        self.configure(bg=card, highlightbackground=colors["border"], highlightcolor=colors["border"])
+        for widget in (self.top, self.buttons, self.dot, self.status):
+            widget.configure(bg=card)
+        for widget, role in ((self.name, "heading"), (self.summary, "muted"), (self.address, "link"),
+                             (self.hours_line, "muted"), (self.folder_note, "muted"), (self.detail, "error")):
+            widget.configure(bg=card, fg=colors[role])
+        for widget in (self.restart_note, self.countdown):
+            widget.configure(bg=card, fg=readable(STATES["restarting"][1], card))
+        self.button_key = None  # rebuild the buttons in the new colours
 
     def _wrap(self, event):
         width = max(200, event.width - 30)
         self.detail.configure(wraplength=width)
         self.address.configure(wraplength=width)
         self.folder_note.configure(wraplength=width)
+        self.restart_note.configure(wraplength=width)
+        self.hours_line.configure(wraplength=width)
 
-    def update_info(self, info):
+    def update_info(self, info, hours=None):
+        """``hours`` is the station's HoursState from the scheduler, if any."""
+        hours = hours or HoursState()
         state = info.state
         if self.app.manager.restarting(info.id) and state in ("stopping", "stopped", "crashed"):
             state = "restarting"
         label, color = STATES[state]
+        colors_now = colors(self.app.manager.palette(info))
+        if colors_now != self.colors:
+            self.apply_colors(colors_now)
         self.name.configure(text=info.name)
-        self.status.configure(text=label, fg=color)
+        self.status.configure(text=label, fg=readable(color, self.colors["card"]))
         self.dot.itemconfigure(self.dot_item, fill=color)
         if info.error:
             self.summary.configure(text=f"Station id: {info.id}")
         else:
-            access = "Local network" if info.lan else "Local only"
-            self.summary.configure(text=f"Port {info.port} · {access} · folder {info.folder}")
+            access = {"local": "Local only", "lan": "Local network"}.get(info.access, f"Address {info.host}")
+            https = " · HTTPS proxy" if info.https else ""
+            self.summary.configure(text=f"Port {info.port} · {access}{https} · folder {info.folder}")
         self._show(self.address, "  ·  ".join(info.addresses), before=self.buttons)
+        self._show(self.hours_line, self._hours_text(info), before=self.buttons)
+        self._show(self.countdown, {
+            "warning": f"Closing for station hours in {countdown(hours.seconds_left or 0)}",
+            "closing": "Closing for station hours…",
+            "sleep": f"This computer sleeps in {countdown(hours.seconds_left or 0)}",
+        }.get(hours.phase), before=self.buttons)
         note = None
         if info.pending_folder and not info.rename_error:
             note = f"Folder will be renamed to {info.pending_folder} when the station stops or restarts."
         self._show(self.folder_note, note, before=self.buttons)
-        detail = info.error or (info.detail if state in ("crashed", "stopped") else None) or info.rename_error
+        restart = None
+        if info.restart_needed and state != "restarting":
+            restart = f"Restart to apply the new {', '.join(info.restart_needed)}."
+        self._show(self.restart_note, restart, before=self.buttons)
+        detail = (info.error or (info.detail if state in ("crashed", "stopped") else None) or info.rename_error
+                  or hours.note)
         self._show(self.detail, detail, before=self.buttons)
-        key = (state, info.can_force_stop, bool(info.error))
+        key = (state, info.can_force_stop, bool(info.error), bool(info.restart_needed), hours.phase)
         if key != self.button_key:
             self.button_key = key
-            self._build_buttons(info, state)
+            self._build_buttons(info, state, hours.phase)
+
+    @staticmethod
+    def _hours_text(info):
+        if info.hours is None:
+            return None
+        text = f"Station hours {info.hours.text}"
+        if info.extended_until is not None and info.extended_until > datetime.now():
+            return f"{text} · extended until {short_time(info.extended_until, info.hours.clock)}"
+        return f"{text} · sleeps after closing" if info.hours.sleep else text
 
     def _show(self, widget, text, before):
         if text:
@@ -138,16 +234,20 @@ class StationCard(tk.Frame):
         elif widget.winfo_manager():
             widget.pack_forget()
 
-    def _build_buttons(self, info, state):
+    def _build_buttons(self, info, state, phase=None):
         for child in self.buttons.winfo_children():
             child.destroy()
         app, station_id = self.app, info.id
         actions = []
+        if phase == "warning":
+            actions.append(("Stay Online", lambda: app.stay_online(station_id), True))
+        elif phase == "sleep":
+            actions.append(("Cancel Sleep", app.cancel_sleep, True))
         if info.error:
             actions.append(("Folder", lambda: app.open_folder(station_id)))
         elif state == "running":
             actions += [("Open", lambda: app.open_browser(station_id)),
-                        ("Restart", lambda: app.act(app.manager.restart, station_id)),
+                        ("Restart", lambda: app.act(app.manager.restart, station_id), bool(info.restart_needed)),
                         ("Stop", lambda: app.act(app.manager.stop, station_id))]
         elif state == "starting":
             actions.append(("Stop", lambda: app.act(app.manager.stop, station_id)))
@@ -156,71 +256,188 @@ class StationCard(tk.Frame):
         elif state == "stopping" and info.can_force_stop:
             actions.append(("Force Stop", lambda: app.force_stop(station_id)))
         if not info.error:
-            actions.append(("Logs", lambda: app.open_log(station_id)))
-        for text, command in actions:
-            make_button(self.buttons, app.fonts, text, command).pack(side="left", padx=(0, 8))
+            actions += [("Settings", lambda: app.open_settings(station_id)),
+                        ("Hours", lambda: app.open_hours(station_id)),
+                        ("Logs", lambda: app.open_log(station_id))]
+        for text, command, *primary in actions:
+            make_button(self.buttons, app.fonts, text, command, primary=bool(primary and primary[0]),
+                        colors=self.colors).pack(side="left", padx=(0, 8))
 
 
-class NewStationDialog(tk.Toplevel):
-    def __init__(self, app):
+class Dialog(tk.Toplevel):
+    """A modal form in two columns, labels on the left."""
+
+    def __init__(self, app, heading):
         super().__init__(app.root, bg=BG, padx=18, pady=16)
         self.app = app
-        fonts = app.fonts
-        self.title("New Station")
+        self.row = 0
+        self.focus_widget = None
+        self.title(heading.title())
         self.resizable(False, False)
         self.transient(app.root)
-        self.name = tk.StringVar()
-        self.port = tk.StringVar()
-        self.lan = tk.BooleanVar(value=False)
-        self.start_now = tk.BooleanVar(value=True)
-        try:
-            self.port.set(str(app.manager.suggest_port()))
-        except ValueError:
-            pass
-        tk.Label(self, text="NEW STATION", font=fonts.heading, bg=BG, fg=TEXT).grid(
-            row=0, column=0, columnspan=2, sticky="w", pady=(0, 12))
-        name_entry = self._field(1, "Name", self.name)
-        tk.Label(self, text="Optional. Leave blank to name it during setup.", font=fonts.small, bg=BG,
-                 fg=MUTED).grid(row=2, column=1, sticky="w")
-        self._field(3, "Port", self.port, width=8)
-        tk.Label(self, text="Access", font=fonts.body, bg=BG, fg=MUTED).grid(row=4, column=0, sticky="nw", pady=4)
-        access = tk.Frame(self, bg=BG)
-        access.grid(row=4, column=1, sticky="w", pady=4)
-        for text, value in (("Local only (this computer)", False), ("Local network (other devices)", True)):
-            tk.Radiobutton(access, text=text, variable=self.lan, value=value, font=fonts.body, bg=BG, fg=TEXT,
-                           selectcolor=FIELD, activebackground=BG, activeforeground=TEXT,
-                           highlightthickness=0).pack(anchor="w")
-        tk.Checkbutton(self, text="Start the station now", variable=self.start_now, font=fonts.body, bg=BG,
-                       fg=TEXT, selectcolor=FIELD, activebackground=BG, activeforeground=TEXT,
-                       highlightthickness=0).grid(row=5, column=1, sticky="w", pady=(6, 0))
-        self.error = tk.Label(self, font=fonts.small, bg=BG, fg=ERROR, wraplength=340, justify="left")
-        self.error.grid(row=6, column=0, columnspan=2, sticky="w", pady=(8, 0))
+        self._label(heading.upper(), font=app.fonts.heading, pady=(0, 12))
+
+    def _label(self, text, font=None, fg=TEXT, pady=0):
+        label = tk.Label(self, text=text, font=font or self.app.fonts.body, bg=BG, fg=fg, justify="left",
+                         wraplength=360)
+        label.grid(row=self.row, column=0, columnspan=2, sticky="w", pady=pady)
+        self.row += 1
+        return label
+
+    def _hint(self, text, parent=None, row=None):
+        parent = parent or self
+        label = tk.Label(parent, text=text, font=self.app.fonts.small, bg=BG, fg=MUTED, justify="left",
+                         wraplength=300)
+        if row is None:
+            row, self.row = self.row, self.row + 1
+        label.grid(row=row, column=1, sticky="w")
+        return label
+
+    def _entry(self, parent, variable, width=32, show=None):
+        return tk.Entry(parent, textvariable=variable, width=width, font=self.app.fonts.body, bg=FIELD, fg=TEXT,
+                        insertbackground=TEXT, relief="flat", highlightthickness=1, show=show,
+                        highlightbackground=BORDER, highlightcolor=DEFAULT["heading"], disabledbackground=BG,
+                        disabledforeground=MUTED)
+
+    def _field(self, label, variable, width=32, parent=None, show=None):
+        parent = parent or self
+        row = self.row if parent is self else parent.grid_size()[1]
+        tk.Label(parent, text=label, font=self.app.fonts.body, bg=BG, fg=MUTED).grid(row=row, column=0, sticky="w",
+                                                                                  padx=(0, 12), pady=4)
+        entry = self._entry(parent, variable, width=width, show=show)
+        entry.grid(row=row, column=1, sticky="w", pady=4, ipady=3)
+        if parent is self:
+            self.row += 1
+        return entry
+
+    def _radio(self, parent, text, variable, value, command=None):
+        return tk.Radiobutton(parent, text=text, variable=variable, value=value, command=command,
+                              font=self.app.fonts.body, bg=BG, fg=TEXT, selectcolor=FIELD, activebackground=BG,
+                              activeforeground=TEXT, highlightthickness=0, disabledforeground=MUTED)
+
+    def _check(self, text, variable, command=None):
+        check = tk.Checkbutton(self, text=text, variable=variable, command=command, font=self.app.fonts.body,
+                               bg=BG, fg=TEXT, selectcolor=FIELD, activebackground=BG, activeforeground=TEXT,
+                               highlightthickness=0, disabledforeground=MUTED)
+        check.grid(row=self.row, column=1, sticky="w", pady=(6, 0))
+        self.row += 1
+        return check
+
+    def _finish(self, buttons):
+        """Add the error line and the buttons ((text, command, primary), right to left), then show."""
+        self.error = tk.Label(self, font=self.app.fonts.small, bg=BG, fg=ERROR, wraplength=360, justify="left")
+        self.error.grid(row=self.row, column=0, columnspan=2, sticky="w", pady=(8, 0))
         row = tk.Frame(self, bg=BG)
-        row.grid(row=7, column=0, columnspan=2, sticky="e", pady=(10, 0))
-        make_button(row, fonts, "Cancel", self.destroy).pack(side="right")
-        make_button(row, fonts, "Create Station", self.create, primary=True).pack(side="right", padx=(0, 8))
-        self.bind("<Return>", lambda _event: self.create())
+        row.grid(row=self.row + 1, column=0, columnspan=2, sticky="e", pady=(10, 0))
+        make_button(row, self.app.fonts, "Cancel", self.destroy).pack(side="right")
+        for text, command, primary in buttons:
+            make_button(row, self.app.fonts, text, command, primary=primary).pack(side="right", padx=(0, 8))
+        self.bind("<Return>", lambda _event: buttons[0][1]())
         self.bind("<Escape>", lambda _event: self.destroy())
-        name_entry.focus_set()
+        if self.focus_widget is not None:
+            self.focus_widget.focus_set()
         self.update_idletasks()
-        x = app.root.winfo_rootx() + (app.root.winfo_width() - self.winfo_width()) // 2
-        y = app.root.winfo_rooty() + 60
+        root = self.app.root
+        x = root.winfo_rootx() + (root.winfo_width() - self.winfo_width()) // 2
+        y = root.winfo_rooty() + 40
         self.geometry(f"+{max(0, x)}+{max(0, y)}")
         self.grab_set()
 
-    def _field(self, row, label, variable, width=32):
-        tk.Label(self, text=label, font=self.app.fonts.body, bg=BG, fg=MUTED).grid(row=row, column=0, sticky="w",
-                                                                                padx=(0, 12), pady=4)
-        entry = tk.Entry(self, textvariable=variable, width=width, font=self.app.fonts.body, bg=FIELD, fg=TEXT,
-                         insertbackground=TEXT, relief="flat", highlightthickness=1,
-                         highlightbackground=BORDER, highlightcolor=PRIMARY_TEXT)
-        entry.grid(row=row, column=1, sticky="w", pady=4, ipady=3)
-        return entry
+
+class StationForm(Dialog):
+    """The server settings shared by New Station and Station Settings."""
+
+    def __init__(self, app, heading, info=None):
+        super().__init__(app, heading)
+        self.name = tk.StringVar(value=info.name if info else "")
+        self.port = tk.StringVar(value=str(info.port) if info else "")
+        self.access = tk.StringVar(value=info.access if info else "local")
+        self.address = tk.StringVar(value=info.host if info and info.access == "address" else lan_address() or "")
+        self.https = tk.BooleanVar(value=info.https if info else False)
+        self.name_entry = self.focus_widget = self._field("Name", self.name)
+        self.name_hint = self._hint("")
+        self._field("Port", self.port, width=8)
+        tk.Label(self, text="Access", font=app.fonts.body, bg=BG, fg=MUTED).grid(row=self.row, column=0, sticky="nw",
+                                                                            pady=4)
+        access = tk.Frame(self, bg=BG)
+        access.grid(row=self.row, column=1, sticky="w", pady=4)
+        self.row += 1
+        for text, value in (("Local only (this computer)", "local"),
+                            ("Local network (every network adapter)", "lan"),
+                            ("One address of this computer:", "address")):
+            self._radio(access, text, self.access, value, command=self._access_changed).pack(anchor="w")
+        self.address_entry = self._entry(access, self.address, width=18)
+        self.address_entry.pack(anchor="w", padx=(22, 0), pady=(2, 0), ipady=3)
+        self._check("Served through an HTTPS proxy", self.https)
+        self._hint("Only when visitors reach the station at an https:// address; sign-in stops "
+                   "working over plain http.")
+        self._access_changed()
+
+    def _access_changed(self):
+        self.address_entry.configure(state="normal" if self.access.get() == "address" else "disabled")
+
+    def host(self):
+        access = self.access.get()
+        return LAN_HOST if access == "lan" else self.address.get() if access == "address" else LOCAL_HOST
+
+
+class NewStationDialog(StationForm):
+    def __init__(self, app):
+        super().__init__(app, "New Station")
+        manager = app.manager
+        self.name.set(manager.suggest_name())
+        try:
+            self.port.set(str(manager.suggest_port()))
+        except ValueError:
+            pass
+        self.start_now = tk.BooleanVar(value=True)
+        self.with_sysop = tk.BooleanVar(value=False)
+        self.username = tk.StringVar()
+        self.password = tk.StringVar()
+        self.confirm = tk.StringVar()
+        self.description = tk.StringVar()
+        self.registration = tk.StringVar(value="open")
+        self._check("Create the SYSOP account now", self.with_sysop, command=self._sysop_changed)
+        self.sysop_hint = self._hint("")
+        self.sysop_row = self.row
+        self.row += 1
+        self.sysop = tk.Frame(self, bg=BG)
+        self._field("Username", self.username, width=24, parent=self.sysop)
+        self._field("Password", self.password, width=24, parent=self.sysop, show="•")
+        self._field("Confirm", self.confirm, width=24, parent=self.sysop, show="•")
+        self._field("Description", self.description, parent=self.sysop)
+        tk.Label(self.sysop, text="Registration", font=app.fonts.body, bg=BG, fg=MUTED).grid(
+            row=4, column=0, sticky="nw", pady=4)
+        policy = tk.Frame(self.sysop, bg=BG)
+        policy.grid(row=4, column=1, sticky="w", pady=4)
+        for text, value in (("Open: anyone may create an account", "open"),
+                            ("Private: a single-use invitation is required", "private"),
+                            ("Disabled: no new accounts", "disabled")):
+            self._radio(policy, text, self.registration, value).pack(anchor="w")
+        self._check("Start the station now", self.start_now)
+        self._sysop_changed()
+        self._finish([("Create Station", self.create, True)])
+
+    def _sysop_changed(self):
+        if self.with_sysop.get():
+            self.sysop.grid(row=self.sysop_row, column=0, columnspan=2, sticky="w", pady=(4, 0))
+            self.sysop_hint.configure(text="The station starts fully set up, with this account as its SYSOP.")
+            self.name_hint.configure(text="Shown to visitors; it can be changed later.")
+        else:
+            self.sysop.grid_remove()
+            self.sysop_hint.configure(text="Leave unchecked to finish setup in the browser.")
+            self.name_hint.configure(text="Optional. Leave blank to name it during setup.")
 
     def create(self):
         manager = self.app.manager
+        sysop = None
+        if self.with_sysop.get():
+            sysop = {"username": self.username.get(), "password": self.password.get(),
+                     "confirm_password": self.confirm.get(), "description": self.description.get(),
+                     "registration_mode": self.registration.get()}
         try:
-            info = manager.create_station(self.name.get(), self.port.get().strip(), lan=self.lan.get())
+            info = manager.create_station(self.name.get(), self.port.get(), host=self.host(),
+                                          https=self.https.get(), sysop=sysop)
         except (ValueError, OSError) as exc:
             self.error.configure(text=str(exc))
             return
@@ -231,10 +448,156 @@ class NewStationDialog(tk.Toplevel):
         self.app.refresh(reschedule=False)
 
 
+class SettingsDialog(StationForm):
+    def __init__(self, app, info):
+        super().__init__(app, "Station Settings", info)
+        self.station_id = info.id
+        self.name_hint.configure(text=f"Folder {info.folder}. Station content, accounts and modules are "
+                                      "managed in the station's own SYSOP settings.")
+        buttons = [("Save", self.save, info.state not in ACTIVE)]
+        if info.state in ACTIVE:
+            self._label("Changes take effect when the station restarts.", fg=STATES["starting"][1],
+                        pady=(10, 0))
+            buttons.append(("Save & Restart", lambda: self.save(restart=True), True))
+        self._finish(buttons)
+
+    def save(self, restart=False):
+        manager = self.app.manager
+        try:
+            manager.update_station(self.station_id, self.name.get(), self.port.get(), self.host(),
+                                   https=self.https.get())
+        except (ValueError, OSError) as exc:
+            self.error.configure(text=str(exc))
+            return
+        self.destroy()
+        if restart:
+            self.app.act(manager.restart, self.station_id)
+        self.app.refresh(reschedule=False)
+
+
+class HoursDialog(Dialog):
+    """A station's daily hours; saved to station.json and shown at once."""
+
+    def __init__(self, app, info):
+        super().__init__(app, "Station Hours")
+        self.station_id = info.id
+        try:
+            saved = instance.load_config(info.data_dir).get("hours")
+        except ValueError:
+            saved = None
+        saved = saved if isinstance(saved, dict) else {}
+        clock = saved.get("clock") if saved.get("clock") in station_hours.CLOCKS else "12h"
+
+        def shown(key, default):
+            try:
+                return station_hours.format_time(station_hours.parse_time(saved.get(key) or default), clock)
+            except ValueError:
+                return str(saved.get(key) or "")
+
+        self.enabled = tk.BooleanVar(value=bool(saved.get("enabled")))
+        self.open = tk.StringVar(value=shown("open", "08:00"))
+        self.close = tk.StringVar(value=shown("close", "21:00"))
+        self.clock = tk.StringVar(value=clock)
+        self.warning = tk.StringVar(value=str(saved.get("warning_minutes") or station_hours.DEFAULT_WARNING))
+        self.sleep = tk.BooleanVar(value=bool(saved.get("sleep")))
+        self.message = tk.StringVar(value=saved.get("adjusted_message") or station_hours.DEFAULT_MESSAGE)
+        self._label(f"{info.name}: shown under the station's header while it runs. The station closes at its "
+                    "closing time and is started at its opening time while this manager is open.",
+                    fg=MUTED, pady=(0, 8))
+        self._check("Keep station hours", self.enabled, command=self._enabled_changed)
+        self.widgets = [self._field("Opens", self.open, width=10), self._field("Closes", self.close, width=10)]
+        self._hint("Such as 8:00 AM or 21:00. Closing before the opening time runs past midnight.")
+        tk.Label(self, text="Show as", font=app.fonts.body, bg=BG, fg=MUTED).grid(row=self.row, column=0,
+                                                                                 sticky="nw", pady=4)
+        clocks = tk.Frame(self, bg=BG)
+        clocks.grid(row=self.row, column=1, sticky="w", pady=4)
+        self.row += 1
+        for text, value in (("12-hour (8:00AM - 9:00PM)", "12h"), ("24-hour (08:00 - 21:00)", "24h")):
+            radio = self._radio(clocks, text, self.clock, value)
+            radio.pack(anchor="w")
+            self.widgets.append(radio)
+        self.widgets.append(self._field("Warning", self.warning, width=4))
+        self._hint("Minutes before closing that Stay Online is offered here.")
+        self.widgets.append(self._check("SLEEP: put this computer to sleep after closing", self.sleep))
+        self._hint("Only if no other station is running then. The computer is woken before the next "
+                   "opening (see Power for this computer's wake settings).")
+        self.widgets.append(self._field("Extended", self.message))
+        self._hint("Shown in place of the hours after Stay Online, until the next opening.")
+        self.focus_widget = self.widgets[0]
+        self._enabled_changed()
+        self._finish([("Save", self.save, True)])
+
+    def _enabled_changed(self):
+        state = "normal" if self.enabled.get() else "disabled"
+        for widget in self.widgets:
+            widget.configure(state=state)
+
+    def save(self):
+        values = {"enabled": self.enabled.get(), "open": self.open.get(), "close": self.close.get(),
+                  "clock": self.clock.get(), "warning_minutes": self.warning.get(), "sleep": self.sleep.get(),
+                  "adjusted_message": self.message.get()}
+        try:
+            self.app.manager.update_hours(self.station_id, values)
+        except (ValueError, OSError) as exc:
+            self.error.configure(text=str(exc))
+            return
+        self.destroy()
+        self.app.refresh(reschedule=False)
+
+
+class PowerDialog(Dialog):
+    """This computer's sleep and wake settings, shared by every station."""
+
+    def __init__(self, app):
+        super().__init__(app, "Sleep and Wake")
+        root = app.manager.root
+        settings = station_hours.load_host(root)
+        self.countdown = tk.StringVar(value=str(settings["sleep_countdown_minutes"]))
+        self.lead = tk.StringVar(value=str(settings["wake_lead_minutes"]))
+        self._label("These apply to this computer and every station on it.", fg=MUTED, pady=(0, 8))
+        self.focus_widget = self._field("Sleep after", self.countdown, width=4)
+        self._hint("Minutes Cancel Sleep is offered after a station with SLEEP closes.")
+        self._field("Wake", self.lead, width=4)
+        self._hint("Minutes before the earliest opening that the computer is woken.")
+        _supported, note = HostPower(root, settings=settings).support()
+        scheduler = app.scheduler
+        if scheduler is None:
+            status = "Another open Station Manager is carrying out station hours."
+        elif scheduler.wake_error:
+            status = scheduler.wake_error
+        elif scheduler.next_wake:
+            status = f"Next wake: {scheduler.next_wake:%a %d %b} {short_time(scheduler.next_wake)}."
+        else:
+            status = "No wake is scheduled: no station with hours has SLEEP on."
+        self._label(status, pady=(10, 0))
+        self._label(note, font=app.fonts.small, fg=MUTED, pady=(4, 0))
+        readme = next((path for path in (root / "README.md", app.core_dir / "README.md") if path.is_file()), None)
+        if readme is not None:
+            link = self._label("Open the setup instructions (README, Station Hours)", font=app.fonts.small,
+                               fg=DEFAULT["link"], pady=(4, 0))
+            link.configure(cursor="hand2")
+            link.bind("<Button-1>", lambda _event: app._open(readme))
+        self._finish([("Save", self.save, True)])
+
+    def save(self):
+        try:
+            values = station_hours.check_host(self.countdown.get(), self.lead.get())
+            station_hours.save_host(self.app.manager.root, **values)
+        except (ValueError, OSError) as exc:
+            self.error.configure(text=str(exc))
+            return
+        self.destroy()
+        self.app.refresh(reschedule=False)
+
+
 class ManagerApp:
     def __init__(self, root, manager, icon=None):
         self.root = root
         self.manager = manager
+        self.core_dir = manager.core_dir
+        self.hours_states = {}
+        self.scheduler = None
+        self.host_lock = host_lock(manager)
         self.fonts = Fonts(root)
         self.cards = {}
         self.order = []
@@ -250,7 +613,7 @@ class ManagerApp:
                 pass
         shell = tk.Frame(root, bg=BG, padx=12, pady=10)
         shell.pack(fill="both", expand=True)
-        tk.Label(shell, text="STATIONNET MANAGER", font=self.fonts.heading, bg=BG, fg=TEXT,
+        tk.Label(shell, text="STATIONNET MANAGER", font=self.fonts.heading, bg=BG, fg=DEFAULT["heading"],
                  anchor="w").pack(fill="x")
         separator(shell).pack(fill="x", pady=(8, 10))
         bar = tk.Frame(shell, bg=BG)
@@ -259,17 +622,22 @@ class ManagerApp:
         self.count.pack(side="left")
         make_button(bar, self.fonts, "+ New Station", lambda: NewStationDialog(self),
                     primary=True).pack(side="right")
+        make_button(bar, self.fonts, "Sleep & Wake", lambda: PowerDialog(self)).pack(side="right", padx=(0, 8))
+        self.power_note = tk.Label(bar, font=self.fonts.small, bg=BG, fg=MUTED)
+        self.power_note.pack(side="left", padx=(16, 0))
         self._build_list(shell)
         separator(shell).pack(fill="x", pady=(10, 6))
         footer = tk.Frame(shell, bg=BG)
         footer.pack(fill="x")
         self.running = tk.Label(footer, font=self.fonts.small_bold, bg=BG, fg=STATES["running"][1])
         self.running.pack(side="left")
-        exit_link = tk.Label(footer, text="Exit", font=self.fonts.small, bg=BG, fg=TEXT, cursor="hand2")
+        exit_link = tk.Label(footer, text="Exit", font=self.fonts.small, bg=BG, fg=DEFAULT["link"], cursor="hand2")
         exit_link.pack(side="right")
-        exit_link.bind("<Button-1>", lambda _event: root.destroy())
-        tk.Label(footer, text="Closing the manager leaves stations running.", font=self.fonts.small,
-                 bg=BG, fg=MUTED).pack(side="right", padx=(0, 16))
+        exit_link.bind("<Button-1>", lambda _event: self.close())
+        root.protocol("WM_DELETE_WINDOW", self.close)
+        self.closing_note = tk.Label(footer, text="Closing the manager leaves stations running.",
+                                     font=self.fonts.small, bg=BG, fg=MUTED)
+        self.closing_note.pack(side="right", padx=(0, 16))
         self.empty = tk.Label(self.inner, text="No stations yet. Use + New Station to create one.",
                               font=self.fonts.body, bg=BG, fg=MUTED)
         self.refresh()
@@ -310,6 +678,7 @@ class ManagerApp:
             self.count.configure(text=f"Cannot read {self.manager.stations_dir}: {exc}")
             stations = None
         if stations is not None:
+            self._run_hours(stations)
             self._render(stations)
         if reschedule:
             self.root.after(REFRESH_MS, self.refresh)
@@ -323,7 +692,7 @@ class ManagerApp:
             card = self.cards.get(info.id)
             if card is None:
                 card = self.cards[info.id] = StationCard(self.inner, self)
-            card.update_info(info)
+            card.update_info(info, self.hours_states.get(info.id))
         if ids != self.order:
             # Re-pack in order so new stations take their sorted place.
             self.order = ids
@@ -340,6 +709,68 @@ class ManagerApp:
         running = sum(info.state == "running" for info in stations)
         self.running.configure(text=f"● {running} running" if running else "",
                                fg=STATES["running"][1])
+        with_hours = any(info.hours is not None for info in stations)
+        self.closing_note.configure(text="Closing the manager leaves stations running; station hours "
+                                         "are kept only while it is open." if with_hours else
+                                         "Closing the manager leaves stations running.")
+        scheduler, note, color = self.scheduler, "", MUTED
+        if with_hours and scheduler is None:
+            note = "Station hours are kept by another open Station Manager."
+        elif scheduler is not None and scheduler.wake_error:
+            note, color = scheduler.wake_error, ERROR
+        elif scheduler is not None and scheduler.next_wake:
+            note = f"Next wake {scheduler.next_wake:%a} {short_time(scheduler.next_wake)}"
+        self.power_note.configure(text=note, fg=color)
+
+    def _run_hours(self, stations):
+        """Carry out station hours, if this is the manager that keeps them."""
+        if self.scheduler is None and self.host_lock.acquire():
+            settings = station_hours.load_host(self.manager.root)
+            power = HostPower(self.manager.root, manager_command(self.manager.root, self.core_dir), settings)
+            self.scheduler = HoursScheduler(self.manager, power)
+        if self.scheduler is None:
+            self.hours_states = {}
+            return
+        before = {key for key, state in self.hours_states.items() if state.phase in ("warning", "sleep")}
+        try:
+            self.hours_states = self.scheduler.tick(stations)
+        except (OSError, ValueError) as exc:
+            self.power_note.configure(text=f"Station hours: {exc}", fg=ERROR)
+            return
+        now = {key for key, state in self.hours_states.items() if state.phase in ("warning", "sleep")}
+        if now - before:
+            self._attention()
+        # Show a stop the scheduler just asked for without waiting a second.
+        for index, info in enumerate(stations):
+            if info.state == "running" and self.hours_states.get(info.id, HoursState()).phase == "closing":
+                stations[index] = self.manager.station(info.id)
+
+    def _attention(self):
+        """Bring the window forward so Stay Online or Cancel Sleep is seen."""
+        root = self.root
+        root.deiconify()
+        root.lift()
+        try:
+            root.attributes("-topmost", True)
+            root.after(800, lambda: root.attributes("-topmost", False))
+        except tk.TclError:
+            pass
+        root.bell()
+
+    def stay_online(self, station_id):
+        if self.scheduler is not None:
+            self.act(self.scheduler.stay_online, station_id)
+
+    def cancel_sleep(self):
+        if self.scheduler is not None:
+            self.scheduler.cancel_sleep()
+        self.refresh(reschedule=False)
+
+    def close(self):
+        if self.scheduler is not None:
+            self.scheduler.shutdown()
+        self.host_lock.release()
+        self.root.destroy()
 
     def act(self, action, station_id):
         try:
@@ -369,6 +800,20 @@ class ManagerApp:
         if info.addresses:
             webbrowser.open(info.addresses[0] + "/")
 
+    def open_settings(self, station_id):
+        info = self.manager.station(station_id)
+        if info.error:
+            messagebox.showerror("StationNet Manager", info.error, parent=self.root)
+            return
+        SettingsDialog(self, info)
+
+    def open_hours(self, station_id):
+        info = self.manager.station(station_id)
+        if info.error:
+            messagebox.showerror("StationNet Manager", info.error, parent=self.root)
+            return
+        HoursDialog(self, info)
+
     def open_log(self, station_id):
         path = self.manager.station(station_id).log_path
         if not path.is_file():
@@ -387,16 +832,46 @@ class ManagerApp:
             messagebox.showerror("StationNet Manager", f"Cannot open {path}: {exc}", parent=self.root)
 
 
-def main(source_root):
+def wake_handled(source_root):
+    """True if another open manager already keeps this install's station hours."""
+    root = instance.install_root(source_root)
+    return HostLock(instance.stations_root(root) / HOST_LOCK).held_elsewhere()
+
+
+def _core_dir(source_root):
+    return Path(sys.executable).parent if getattr(sys, "frozen", False) else Path(source_root)
+
+
+def launch_minimized(source_root):
+    """Start a minimized manager in its own process, outside the wake task that
+    Task Scheduler may end or replace."""
+    root = instance.install_root(source_root)
+    command = [part if part != "--hours-wake" else "--minimized"
+               for part in manager_command(root, _core_dir(source_root))]
+    options = {"stdin": subprocess.DEVNULL, "stdout": subprocess.DEVNULL, "stderr": subprocess.DEVNULL,
+               "cwd": str(root)}
+    if sys.platform == "win32":
+        flags = subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP
+        try:
+            subprocess.Popen(command, creationflags=flags | subprocess.CREATE_BREAKAWAY_FROM_JOB, **options)
+        except OSError:
+            subprocess.Popen(command, creationflags=flags, **options)
+    else:
+        subprocess.Popen(command, start_new_session=True, **options)
+
+
+def main(source_root, minimized=False):
+    """``minimized`` starts the window minimized, as the wake timer does."""
     clean_environment()
     source_root = Path(source_root)
+    core_dir = _core_dir(source_root)
     if getattr(sys, "frozen", False):
-        core_dir = Path(sys.executable).parent
         icon = Path(getattr(sys, "_MEIPASS", core_dir)) / "icon.png"
     else:
-        core_dir = source_root
         icon = source_root / "icon.png"
     manager = StationManager(instance.install_root(source_root), core_dir)
     root = tk.Tk()
     ManagerApp(root, manager, icon=icon)
+    if minimized:
+        root.iconify()
     root.mainloop()

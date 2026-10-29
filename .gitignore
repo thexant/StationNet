@@ -16,6 +16,7 @@ instance/
 .coverage
 run.bat
 manager.bat
+manager.json
 dist/
 build/
 android/.gradle/

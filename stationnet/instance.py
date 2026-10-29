@@ -18,6 +18,9 @@ from pathlib import Path
 
 DEFAULT_STATION = "default"
 CONFIG_NAME = "station.json"
+# A first SYSOP account the launcher prepared; the station creates it on its
+# first start and deletes the file.
+SETUP_NAME = "setup.json"
 CONFIG_FORMAT = 1
 _STATION_ID = re.compile(r"^[a-z0-9][a-z0-9_-]{0,63}$")
 
@@ -86,12 +89,15 @@ def write_config_if_missing(data_dir, values):
     return True
 
 
-def update_config(data_dir, **changes):
-    """Merge ``changes`` into an existing station.json, replacing it atomically."""
+def update_config(data_dir, remove=(), **changes):
+    """Merge ``changes`` into an existing station.json (dropping the keys in
+    ``remove``), replacing it atomically."""
     path = Path(data_dir) / CONFIG_NAME
     values = load_config(data_dir)
     if not path.is_file():
         raise ValueError(f"{path} does not exist")
+    for key in remove:
+        values.pop(key, None)
     values.update(changes)
     temp = path.with_name(f".{CONFIG_NAME}.{os.getpid()}.tmp")
     temp.write_text(json.dumps(values, indent=2) + "\n", encoding="utf-8")
@@ -115,13 +121,15 @@ def sync_name(config_path, name):
 
     Best effort: the database stays authoritative, and the next start or
     settings save retries. Returns True when station.json holds ``name``.
+    A rename the launcher left pending is settled by this one.
     """
     if not config_path or not name:
         return False
     data_dir = Path(config_path).parent
     try:
-        if load_config(data_dir).get("name") != name:
-            update_config(data_dir, name=name)
+        config = load_config(data_dir)
+        if config.get("name") != name or "pending_name" in config:
+            update_config(data_dir, remove=("pending_name",), name=name)
     except (OSError, ValueError):
         return False
     return True

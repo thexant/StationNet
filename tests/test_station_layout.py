@@ -309,3 +309,90 @@ def test_station_name_reaches_station_json(tmp_path):
     app = create_app({"TESTING": True, **station.app_config()})
     _quiesce(app)
     assert instance.load_config(folder)["name"] == "Sysop Name"  # startup sync from the database
+
+
+def test_update_config_removes_keys(tmp_path):
+    _write_station(tmp_path, id="alpha", pending_name="Old")
+    instance.update_config(tmp_path, remove=("pending_name", "absent"), name="Alpha")
+    assert instance.load_config(tmp_path) == {"id": "alpha", "name": "Alpha"}
+
+
+def _manager_station(tmp_path, **config):
+    folder = tmp_path / "stations" / "station-abc123"
+    _write_station(folder, id="station-abc123", **config)
+    return folder, instance.resolve(tmp_path, "station-abc123")
+
+
+def test_prepared_setup_initializes_the_station(tmp_path):
+    from stationnet.security import hash_password
+    folder, station = _manager_station(tmp_path, name="Night Owl")
+    (folder / instance.SETUP_NAME).write_text(json.dumps({
+        "name": "Night Owl", "description": "Late", "username": "owl", "registration_mode": "disabled",
+        "password_hash": hash_password("correct horse battery")}), encoding="utf-8")
+    app = create_app({"TESTING": True, **station.app_config()})
+    try:
+        assert not (folder / instance.SETUP_NAME).exists()
+        client = app.test_client()
+        assert client.get("/setup").status_code == 302
+        with app.app_context():
+            row = get_db().execute("SELECT name,description,registration_mode FROM station").fetchone()
+            admin = get_db().execute("SELECT username,is_admin FROM users").fetchone()
+        assert tuple(row) == ("Night Owl", "Late", "disabled") and tuple(admin) == ("owl", 1)
+        with client.session_transaction() as session:
+            session["csrf_token"] = "test-token"
+        login = client.post("/login", data={"csrf_token": "test-token", "username": "owl",
+                                            "password": "correct horse battery"})
+        assert login.status_code == 302 and "/login" not in login.headers["Location"]
+    finally:
+        _quiesce(app)
+
+
+def test_unusable_prepared_setup_falls_back_to_first_run(tmp_path):
+    folder, station = _manager_station(tmp_path, name="Night Owl")
+    (folder / instance.SETUP_NAME).write_text(json.dumps({"name": "Night Owl", "username": "x"}),
+                                              encoding="utf-8")
+    app = create_app({"TESTING": True, **station.app_config()})
+    try:
+        assert not (folder / instance.SETUP_NAME).exists()
+        assert app.test_client().get("/setup").status_code == 200
+    finally:
+        _quiesce(app)
+
+
+def test_pending_name_reaches_the_database(tmp_path):
+    folder, station = _manager_station(tmp_path)
+    app = create_app({"TESTING": True, **station.app_config()})
+    with app.app_context():
+        get_db().execute("INSERT INTO station(name,description,callsign) VALUES('Old Name','','OLD-1')")
+        get_db().commit()
+    _quiesce(app)
+    instance.update_config(folder, name="New Name", pending_name="New Name")
+    app = create_app({"TESTING": True, **station.app_config()})
+    _quiesce(app)
+    assert _station_rows(folder / "station.db") == [("New Name",)]
+    config = instance.load_config(folder)
+    assert config["name"] == "New Name" and "pending_name" not in config
+
+
+def test_station_hours_line_follows_station_json(tmp_path):
+    from stationnet.security import hash_password
+    hours = {"enabled": True, "open": "08:00", "close": "21:00", "adjusted_message": "OPEN LATE TONIGHT"}
+    folder, station = _manager_station(tmp_path, name="Night Owl", hours=hours)
+    (folder / instance.SETUP_NAME).write_text(json.dumps({
+        "name": "Night Owl", "description": "", "username": "owl", "registration_mode": "open",
+        "password_hash": hash_password("correct horse battery")}), encoding="utf-8")
+    app = create_app({"TESTING": True, **station.app_config()})
+    try:
+        client = app.test_client()
+        page = client.get("/login").get_data(as_text=True)
+        assert 'class="node-line station-hours-line"' in page
+        assert 'STATION HOURS: <b class="station-hours-value">8:00AM - 9:00PM</b>' in page
+        # The manager's changes show without restarting the station.
+        instance.update_config(folder, hours={**hours, "clock": "24h"}, hours_extended_until="2999-01-01T08:00")
+        assert "OPEN LATE TONIGHT" in client.get("/login").get_data(as_text=True)
+        instance.update_config(folder, remove=("hours_extended_until",))
+        assert "08:00 - 21:00" in client.get("/login").get_data(as_text=True)
+        instance.update_config(folder, hours={**hours, "enabled": False})
+        assert "station-hours-line" not in client.get("/login").get_data(as_text=True)
+    finally:
+        _quiesce(app)

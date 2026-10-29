@@ -1,6 +1,7 @@
 """First-run setup and local authentication."""
 import hashlib
 import hmac
+import json
 import secrets
 import sqlite3
 from pathlib import Path
@@ -8,7 +9,7 @@ from datetime import datetime, timedelta, timezone
 from functools import wraps
 from flask import Blueprint, current_app, flash, g, redirect, render_template, request, session, url_for
 from .db import get_db, get_station
-from .instance import load_config, sync_name
+from .instance import SETUP_NAME, load_config, sync_name
 from .security import check_password, generate_station_callsign, generate_user_callsign, hash_password, valid_username, validate_csrf, validate_password
 from .realtime import ONLINE_SECONDS, utc_now
 
@@ -141,6 +142,74 @@ def admin_required(view):
         return view(**kwargs)
     return wrapped
 
+REGISTRATION_MODES = ("open", "private", "disabled")
+
+
+def initialize_station(database, name, description, registration_mode, username, password_hash):
+    """Create the station record and its first SYSOP in one transaction.
+
+    Returns ``(user_id, user_callsign)``; raises sqlite3.IntegrityError
+    (after rolling back) if the station already exists.
+    """
+    try:
+        database.execute("BEGIN IMMEDIATE")
+        database.execute(
+            "INSERT INTO station(id,name,description,callsign,registration_open,"
+            "registration_mode,guest_access) VALUES(1,?,?,?,?,?,1)",
+            (name, description, generate_station_callsign(), registration_mode == "open", registration_mode),
+        )
+        user_callsign = generate_user_callsign(database)
+        cursor = database.execute("INSERT INTO users(username,callsign,password_hash,is_admin) VALUES(?,?,?,1)", (username, user_callsign, password_hash))
+        database.execute(
+            "INSERT OR IGNORE INTO radio_group_memberships(user_id,group_id) "
+            "SELECT ?,id FROM radio_permission_groups WHERE name='OPERATORS'",
+            (cursor.lastrowid,),
+        )
+        database.commit()
+    except Exception:
+        database.rollback()
+        raise
+    return cursor.lastrowid, user_callsign
+
+
+def apply_prepared_setup(database, data_dir):
+    """Initialize the station from a launcher-prepared setup.json, if any.
+
+    The file is deleted either way (it holds a password hash); an unusable
+    one leaves the station to the usual first-run page. Returns True if the
+    station was initialized.
+    """
+    path = Path(data_dir) / SETUP_NAME
+    if not path.is_file():
+        return False
+    try:
+        values = json.loads(path.read_text(encoding="utf-8"))
+        name = str(values["name"]).strip()
+        description = str(values.get("description") or "").strip()
+        username = str(values["username"]).strip()
+        password_hash = values["password_hash"]
+        registration_mode = values.get("registration_mode", "open")
+        if not (2 <= len(name) <= 80 and len(description) <= 500 and valid_username(username)
+                and isinstance(password_hash, str) and password_hash.startswith("scrypt:")
+                and registration_mode in REGISTRATION_MODES):
+            raise ValueError("invalid values")
+        initialize_station(database, name, description, registration_mode, username, password_hash)
+    except (OSError, ValueError, KeyError, TypeError, AttributeError, sqlite3.Error) as exc:
+        print(f"WARNING: Ignoring {path} ({exc}); finish setup in the browser.", flush=True)
+        initialized = False
+    else:
+        print(f"Station initialized from {path.name}. SYSOP: {username}", flush=True)
+        initialized = True
+    path.unlink(missing_ok=True)
+    return initialized
+
+
+def _discard_prepared_setup():
+    path = current_app.config.get("STATION_CONFIG")
+    if path:
+        (Path(path).parent / SETUP_NAME).unlink(missing_ok=True)
+
+
 @bp.route("/setup", methods=("GET", "POST"))
 def setup():
     if request.method == "POST":
@@ -158,35 +227,26 @@ def setup():
         if error:
             flash(error, "error")
         else:
-            database = get_db(); callsign = generate_station_callsign()
+            database = get_db()
+            registration_mode = request.form.get("registration_mode")
+            if registration_mode not in REGISTRATION_MODES:
+                registration_mode = (
+                    "open" if request.form.get("registration_open") == "open" else "disabled"
+                )
             try:
-                database.execute("BEGIN IMMEDIATE")
-                registration_mode = request.form.get("registration_mode")
-                if registration_mode not in {"open", "private", "disabled"}:
-                    registration_mode = (
-                        "open" if request.form.get("registration_open") == "open" else "disabled"
-                    )
-                database.execute(
-                    "INSERT INTO station(id,name,description,callsign,registration_open,"
-                    "registration_mode,guest_access) VALUES(1,?,?,?,?,?,1)",
-                    (name, description, callsign, registration_mode == "open", registration_mode),
+                user_id, user_callsign = initialize_station(
+                    database, name, description, registration_mode, username, hash_password(password)
                 )
-                user_callsign = generate_user_callsign(database)
-                cursor = database.execute("INSERT INTO users(username,callsign,password_hash,is_admin) VALUES(?,?,?,1)", (username, user_callsign, hash_password(password)))
-                database.execute(
-                    "INSERT OR IGNORE INTO radio_group_memberships(user_id,group_id) "
-                    "SELECT ?,id FROM radio_permission_groups WHERE name='OPERATORS'",
-                    (cursor.lastrowid,),
-                )
-                database.commit(); session.clear(); session["user_id"] = cursor.lastrowid; establish_connection(cursor.lastrowid)
+                session.clear(); session["user_id"] = user_id; establish_connection(user_id)
                 sync_name(current_app.config.get("STATION_CONFIG"), name)
+                _discard_prepared_setup()
                 flash(
                     f"Station initialized. Operator: {username} - [{user_callsign}]",
                     "success",
                 )
                 return redirect(url_for("station.terminal"))
             except sqlite3.IntegrityError:
-                database.rollback(); flash("Station setup could not be saved. Please retry.", "error")
+                flash("Station setup could not be saved. Please retry.", "error")
     return render_template("setup.html", suggested_name=_configured_name())
 
 

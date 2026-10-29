@@ -3,6 +3,7 @@ import os
 import re
 import socket
 import time
+from datetime import datetime
 import urllib.error
 import urllib.request
 from pathlib import Path
@@ -326,3 +327,161 @@ def test_two_stations_run_independently(manager):
                 manager.force_stop(info.id)
         for process, _started in manager._launches.values():
             process.wait(timeout=30)
+
+
+SYSOP = {"username": "sysop", "password": "correct horse battery", "confirm_password": "correct horse battery",
+         "description": "Night shift", "registration_mode": "private"}
+
+
+def test_create_station_prepares_the_first_sysop(manager):
+    info = manager.create_station("Night Owl", _free_port(), sysop=SYSOP)
+    text = (info.data_dir / instance.SETUP_NAME).read_text(encoding="utf-8")
+    setup = json.loads(text)
+    assert setup["name"] == "Night Owl" and setup["username"] == "sysop"
+    assert setup["registration_mode"] == "private" and setup["password_hash"].startswith("scrypt:")
+    assert "correct horse" not in text
+
+
+@pytest.mark.parametrize("name, changes, message", [
+    ("", {}, "between 2 and 80"),
+    ("Valid", {"username": "x"}, "usernames"),
+    ("Valid", {"confirm_password": "something else"}, "do not match"),
+    ("Valid", {"password": "short", "confirm_password": "short"}, "at least 10"),
+    ("Valid", {"registration_mode": "anyone"}, "registration policy"),
+])
+def test_create_station_rejects_a_bad_sysop(manager, name, changes, message):
+    with pytest.raises(ValueError, match=message):
+        manager.create_station(name, _free_port(), sysop={**SYSOP, **changes})
+    assert manager.list_stations() == []
+
+
+def test_create_station_with_a_chosen_address(manager):
+    info = manager.create_station("Gamma", _free_port(), host="127.0.0.1", https=True)
+    assert (info.access, info.https) == ("local", True)
+    with pytest.raises(ValueError, match="IPv4"):
+        manager.create_station("Delta", _free_port(), host="not-an-ip")
+    with pytest.raises(ValueError, match="not an address of this computer"):
+        manager.create_station("Delta", _free_port(), host="192.0.2.77")
+
+
+def test_suggest_name_skips_taken_names(manager):
+    assert manager.suggest_name() == "Station 1"
+    manager.create_station("Station 1", _free_port())
+    manager.create_station("station 2", _free_port())
+    assert manager.suggest_name() == "Station 3"
+
+
+def test_update_station_writes_its_config(manager):
+    alpha = manager.create_station("Alpha", _free_port())
+    beta = manager.create_station("Beta", _free_port())
+    port = _free_port()
+    info = manager.update_station(alpha.id, "Alpha Prime", port, station_manager.LAN_HOST, https=True)
+    config = instance.load_config(info.data_dir)
+    assert (config["port"], config["host"], config["https"]) == (port, "0.0.0.0", True)
+    assert config["name"] == config["pending_name"] == "Alpha Prime"
+    assert (info.name, info.port, info.access) == ("Alpha Prime", port, "lan")
+    assert info.pending_folder == "alpha-prime"
+    with pytest.raises(ValueError, match="another station"):
+        manager.update_station(alpha.id, "Alpha", beta.port, station_manager.LOCAL_HOST)
+    with pytest.raises(ValueError, match="between 2 and 80"):
+        manager.update_station(alpha.id, "", port, station_manager.LOCAL_HOST)
+    with socket.socket() as listener:
+        listener.bind(("127.0.0.1", 0))
+        listener.listen()
+        busy = listener.getsockname()[1]
+        with pytest.raises(ValueError, match="in use"):
+            manager.update_station(alpha.id, "Alpha", busy, station_manager.LOCAL_HOST)
+        # An unchanged port is the station's own and is not probed again.
+        instance.update_config(manager.station(beta.id).data_dir, port=busy)
+        assert manager.update_station(beta.id, "Beta", busy, station_manager.LOCAL_HOST).port == busy
+
+
+def test_update_station_keeps_an_unnamed_station_unnamed(manager):
+    info = manager.create_station("", _free_port())
+    manager.update_station(info.id, info.name, info.port, info.host, https=True)
+    config = instance.load_config(info.data_dir)
+    assert "name" not in config and "pending_name" not in config and config["https"] is True
+
+
+def test_update_station_renames_a_prepared_setup(manager):
+    info = manager.create_station("Night Owl", _free_port(), sysop=SYSOP)
+    manager.update_station(info.id, "Early Bird", info.port, info.host)
+    setup = json.loads((info.data_dir / instance.SETUP_NAME).read_text(encoding="utf-8"))
+    assert setup["name"] == "Early Bird" and setup["username"] == "sysop"
+
+
+def test_running_station_reports_settings_waiting_for_a_restart(manager):
+    info = manager.create_station("Alpha", _free_port())
+    runtime = StationRuntime(info.data_dir)
+    runtime.acquire()
+    try:
+        runtime.write_status(state="running", host=info.host, port=info.port, https=False)
+        assert manager.station(info.id).restart_needed == []
+        updated = manager.update_station(info.id, "Alpha Prime", _free_port(), station_manager.LAN_HOST,
+                                         https=True)
+        assert updated.restart_needed == ["name", "port", "network access", "HTTPS proxy"]
+        assert updated.folder == info.folder  # the rename waits for the station to stop
+    finally:
+        runtime.release()
+        runtime.clear_status()
+    assert manager.station(info.id).restart_needed == []
+
+
+def _set_station_theme(data_dir, theme):
+    import sqlite3
+    with sqlite3.connect(data_dir / "station.db") as database:
+        database.execute("CREATE TABLE IF NOT EXISTS station (id INTEGER PRIMARY KEY, site_theme TEXT)")
+        database.execute("INSERT OR REPLACE INTO station (id, site_theme) VALUES (1, ?)", (theme,))
+    database.close()
+
+
+def test_station_theme_defaults_without_a_database(manager):
+    info = manager.create_station("Alpha", _free_port())
+    assert info.theme == "cyan"
+    assert not (info.data_dir / "station.db").exists()
+    assert manager.palette(info)["green"] == station_manager.themes.palette("cyan")["green"]
+
+
+def test_station_theme_follows_the_station_setting(manager):
+    info = manager.create_station("Alpha", _free_port())
+    _set_station_theme(info.data_dir, "amber")
+    assert manager.station(info.id).theme == "amber"
+    _set_station_theme(info.data_dir, "violet")
+    info = manager.station(info.id)
+    assert info.theme == "violet"
+    assert manager.palette(info) == station_manager.themes.palette("violet")
+
+
+def test_station_theme_falls_back_for_unreadable_database(manager):
+    info = manager.create_station("Alpha", _free_port())
+    (info.data_dir / "station.db").write_bytes(b"not a database")
+    assert manager.station(info.id).theme == "cyan"
+
+
+def test_station_palette_reads_custom_themes(manager):
+    info = manager.create_station("Alpha", _free_port())
+    _set_station_theme(info.data_dir, "custom-sunset")
+    info = manager.station(info.id)
+    default = station_manager.themes.palette("cyan")
+    assert manager.palette(info) == default  # theme file missing
+    site = {key: "#123456" for key in station_manager.themes.SITE_KEYS}
+    (info.data_dir / "themes").mkdir()
+    (info.data_dir / "themes" / "sunset.json").write_text(json.dumps(
+        {"id": "sunset", "name": "Sunset", "author": "Tester", "site": site}), encoding="utf-8")
+    assert manager.palette(info)["green"] == "#123456"
+
+
+def test_update_hours_and_extension(manager):
+    info = manager.create_station("Alpha", _free_port())
+    assert info.hours is None
+    info = manager.update_hours(info.id, {"enabled": True, "open": "8am", "close": "21:00", "sleep": True})
+    assert (info.hours.open, info.hours.close, info.hours.sleep) == ("08:00", "21:00", True)
+    until = datetime(2026, 10, 29, 8, 0)
+    manager.set_extended(info.id, until)
+    assert manager.station(info.id).extended_until == until
+    assert instance.load_config(info.data_dir)["hours_extended_until"] == "2026-10-29T08:00"
+    # Saving hours again ends a running extension.
+    info = manager.update_hours(info.id, {"enabled": False, "open": "8am", "close": "21:00"})
+    assert info.hours is None and info.extended_until is None
+    with pytest.raises(ValueError, match="must differ"):
+        manager.update_hours(info.id, {"enabled": True, "open": "9pm", "close": "21:00"})

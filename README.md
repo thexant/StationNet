@@ -119,11 +119,41 @@ Back up a station's folder to preserve station identity, accounts, messages, mai
 
 ### Station Manager
 
-`manager.bat` (Windows), `./manager.sh` (Linux/macOS), or `manager.bat`/`manager.sh` in a packaged install opens a desktop window listing every station under `stations/`, with its name, status, port, and addresses. **+ New Station** asks for an optional name, a port (the next free one is suggested), and whether other devices on the network may connect, then creates the station in a temporary folder such as `stations/station-a7f92c/`. Each station can be started, stopped, restarted, opened in the browser, or have its log opened.
+`manager.bat` (Windows), `./manager.sh` (Linux/macOS), or `manager.bat`/`manager.sh` in a packaged install opens a desktop window listing every station under `stations/`, with its name, status, port, and addresses. **+ New Station** suggests a name (`Station 1`, `Station 2`, …) and the next free port, asks who may connect, and creates the station in a temporary folder such as `stations/station-a7f92c/`. Each station can be started, stopped, restarted, opened in the browser, or have its log opened.
+
+New Station can also create the station's first SYSOP account (username, password, description, and registration policy, as on the first-run page). The manager stores only a password hash, in the station's `setup.json`; the station creates the account on its first start and deletes the file, so the browser never shows first-run setup. Leave the option unchecked to finish setup in the browser as before.
+
+**Settings** on a station card changes the server settings kept in its `station.json`: name, port, access (this computer only, every network adapter, or one chosen IPv4 address of this computer), and **Served through an HTTPS proxy**, which makes session cookies secure-only for stations reached through a TLS reverse proxy. Ports already assigned to another station or in use by another program are refused. A running station keeps its current settings until it restarts: its card shows **Restart to apply…** with what changed, and the dialog offers **Save & Restart**. A new name reaches the station's database on its next start (`pending_name` in `station.json`); a later rename in Sysop settings takes precedence. Everything else about a station, such as its description, accounts, themes, and modules, stays in its own Sysop settings.
 
 A station's id (the `id` in its `station.json`, also what `run.py --station` takes) never changes. Its folder follows its name instead: once a station is named, in the manager, at first-run setup, or later in Sysop settings, its folder is renamed to a file-safe form of the name (`Night Owl BBS` → `stations/night-owl-bbs/`). Stations with the same name get `-2`, `-3`, … folders, and names with no usable letters or digits keep their current folder. A running station's folder is never renamed: the manager shows the pending name and applies it when the station is stopped or restarted (starting with `run.py` applies it too). A rename is a single in-place move, so if it fails, for example because another program has a file open, the folder and its data stay exactly as they were, the error is shown, and the rename is tried again later.
 
 Each station runs as its own process with only its own folder and `station.json`; environment overrides such as `STATIONNET_PORT` are not passed on. Stations started from the manager are detached from it, so closing the window leaves them running, and reopening it finds them again. Status comes from the station itself: while running it holds an OS lock on `run/station.lock` and describes itself in `run/status.json`, so a crashed or killed station is reported as **CRASHED** and its last log line is shown. **Stop** asks the station to shut down gracefully through `run/stop.request`. A station that has not stopped after 20 seconds offers **Force Stop**, which ends only that station's own process. Starting a station that is already running, including from `run.py` or `start.bat`, is refused. Tkinter is required; on Debian or Raspberry Pi OS install `python3-tk`.
+
+#### Station Hours
+
+**Hours** on a station card sets the station's daily opening and closing times. Hours are kept only in the station's `station.json` and are not part of the SYSOP settings page. While hours are on, the station shows them on a line under its header, for example `STATION HOURS: 8:00AM - 9:00PM` (or `08:00 - 21:00` with the 24-hour clock). Saved hours show at once; the station does not need a restart. A closing time earlier than the opening time runs past midnight.
+
+- **Closing.** For the last few minutes before closing (5 by default, set per station as *Warning*), the station's card shows a countdown and a **Stay Online** button, and the manager window is brought forward. Stay Online cancels that closing: the station stays up until its next opening time, and its header line shows the *Extended* message instead of the hours (default `HOURS TEMPORARILY EXTENDED`). The next day's closing happens as usual. Without Stay Online, the station is stopped cleanly at its closing time.
+- **Opening.** At its opening time a stopped station is started. If you stop a station by hand during its hours, it stays stopped until the next opening.
+- **SLEEP.** With SLEEP on, a station that closes is followed by a **Cancel Sleep** countdown (5 minutes by default). After it, the computer goes to sleep. Sleep is decided for the whole computer, not one station: if any other station is still running then, the computer stays awake. For example, Station A closing at 19:00 with SLEEP on does not sleep the computer while Station B, which closes at 23:59, is still running. Stations closing at the same moment are waited for.
+- **Waking.** While any station has SLEEP on, the manager keeps one wake timer for this install. The timer is set a few minutes (5 by default) before the earliest next opening of any station with hours, and the stations then start at their opening times. If the computer is already awake when the timer fires, nothing extra happens. While a station is open, or about to open, the manager also keeps the computer from sleeping when idle.
+
+**Sleep & Wake** in the manager's toolbar sets the sleep countdown and the wake lead time for this computer, and shows the next scheduled wake. These are saved in `manager.json` in the install folder. Station hours are kept only while a Station Manager is open, though it can be minimized. If several manager windows are open, only the first one carries out station hours. On Windows, the wake timer opens the manager, minimized, if it is not already open.
+
+**Setting up wake on Windows.** The wake timer is a Task Scheduler task named `StationNet Wake <id>`. It runs as your account, so no administrator rights are needed, but you must be signed in (a locked screen is fine). Windows only honours it when wake timers are allowed:
+
+1. Open **Control Panel → Power Options → Change plan settings → Change advanced power settings → Sleep → Allow wake timers** and choose **Enable** for both *On battery* and *Plugged in*.
+2. In a command prompt, run `powercfg /a`. If *Standby (S3)* is available, wake timers work. If only *Standby (S0 Low Power Idle)* (Modern Standby) is listed, Windows may ignore wake timers. On such PCs, consider leaving SLEEP off so the computer stays on.
+3. If the computer hibernates instead of sleeping, or does not wake, turn off *Hibernate after* and *hybrid sleep* in the same Sleep section. Some PCs also need *wake timers* or *RTC wake* enabled in their BIOS/UEFI settings.
+4. To check your setup, open **Sleep & Wake** to see the next scheduled wake, then run `powercfg /waketimers` in a command prompt. The task is also listed in Task Scheduler. In a source install, `python -m stationnet.host_power status` prints the same details, and `python -m stationnet.host_power sleep` tests sleep.
+
+**Linux and macOS.** Sleep uses `systemctl suspend` (Linux) or `pmset sleepnow` (macOS). Setting a wake timer needs root, so it is not automatic. Add a `wake_command` to `manager.json`, where `{epoch}` is the wake time in Unix seconds and `{iso}` is the local time. For example:
+
+```json
+{"wake_command": "sudo -n rtcwake -m no -t {epoch}"}
+```
+
+This needs a sudoers rule such as `youruser ALL=(root) NOPASSWD: /usr/sbin/rtcwake`. A `sleep_command` overrides how the computer is put to sleep on any platform.
 
 ### Optional imageboard
 

@@ -86,9 +86,15 @@ def parse(data):
     return document
 
 
-def custom_themes():
+def custom_themes(folder=None):
+    """Valid custom themes in ``folder`` (default: the running station's)."""
     found = OrderedDict()
-    for path in sorted(directory().glob("*.json")):
+    folder = Path(folder) if folder is not None else directory()
+    try:
+        paths = sorted(folder.glob("*.json"))
+    except OSError:
+        return found
+    for path in paths:
         if path.name == "template-theme.json" or path.is_symlink():
             continue
         try:
@@ -111,10 +117,11 @@ def options(kind):
     return result
 
 
-def palette(theme_id, kind="site"):
+def palette(theme_id, kind="site", folder=None):
     if theme_id in THEMES:
         return dict(zip(KEYS, THEMES[theme_id]))
-    custom = custom_themes().get(theme_id.removeprefix("custom-")) if theme_id.startswith("custom-") else None
+    custom = (custom_themes(folder).get(theme_id.removeprefix("custom-"))
+              if isinstance(theme_id, str) and theme_id.startswith("custom-") else None)
     if custom and kind in custom:
         result = dict(zip(KEYS, THEMES["cyan"]))
         result.update(custom[kind])

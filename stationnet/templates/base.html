@@ -8,7 +8,7 @@
   <link rel="icon" type="image/png" href="{{ url_for('pwa.icon', size=192) }}">
   <link rel="apple-touch-icon" href="{{ url_for('pwa.icon', size=192) }}">
   <title>{% block title %}StationNet{% endblock %}{% if g.station %} :: {{ g.station.name }}{% endif %}</title>
-  <link rel="stylesheet" href="{{ url_for('static',filename='station.css',v='mud-worlds-1') }}">
+  <link rel="stylesheet" href="{{ url_for('static',filename='station.css',v='station-hours-1') }}">
   <link rel="stylesheet" href="{{ url_for('station.masthead_css') }}">
   {% set header_tagline = station_header_tagline() if g.station else none %}
   {% if header_tagline and header_tagline.color %}<style nonce="{{ g.style_nonce }}">.brand-tag-current { color: {{ header_tagline.color }}; --tagline-ink: {{ header_tagline.color }}; }</style>{% endif %}
@@ -44,6 +44,11 @@
         <button type="button" class="sfx-toggle" data-vfx-toggle aria-pressed="true" aria-label="Disable CRT scanline effect">VFX: ON</button>
         {% if g.user and g.station.play_station_midi and g.station_midi_exists %}<button type="button" class="sfx-toggle" data-music-toggle data-midi-url="{{ url_for('station.station_midi_theme',v=g.station_midi_version) }}" data-midi-version="{{ g.station_midi_version }}" data-midi-volume="{{ g.station.station_midi_volume }}" data-midi-preference-url="{{ url_for('station.station_midi_preference') }}" data-midi-csrf="{{ session.csrf_token }}" data-midi-enabled="{{ 'true' if g.user.station_midi_enabled else 'false' }}" data-midi-asset-base="{{ url_for('static',filename='midi') }}" data-user-id="{{ g.user.id }}" aria-pressed="{{ 'true' if g.user.station_midi_enabled else 'false' }}" aria-label="{{ 'Disable' if g.user.station_midi_enabled else 'Enable' }} station MIDI music">MUSIC: {{ 'ON' if g.user.station_midi_enabled else 'OFF' }}</button>{% endif %}
       </div>
+      {% if g.station_hours %}
+      <div class="node-line station-hours-line">
+        <span>{{ g.station_hours[0] }} <b class="station-hours-value">{{ g.station_hours[1] }}</b></span>
+      </div>
+      {% endif %}
       {% if g.user or g.station.guest_access %}
       <nav class="service-nav" id="service-nav" aria-label="Station services" tabindex="-1">
         <a href="{{ url_for('station.terminal') }}" {% if request.endpoint=='station.terminal' %}aria-current="page"{% endif %}>STATION</a>

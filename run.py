@@ -115,7 +115,7 @@ def _serve(station, runtime):
     from stationnet import create_app
     from stationnet.multiplayer_socket import create_asgi_app
     runtime.clear_stop()
-    status = {"host": station.host, "port": station.port,
+    status = {"host": station.host, "port": station.port, "https": station.https,
               "started_at": datetime.now(timezone.utc).isoformat(timespec="seconds")}
     runtime.write_status(state="starting", **status)
     mode = "standalone" if station.standalone else f"station '{station.id}'"

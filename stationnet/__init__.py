@@ -4,7 +4,7 @@ import secrets
 from datetime import timedelta
 from pathlib import Path
 from flask import Flask, abort, g, jsonify, redirect, render_template, request, url_for
-from . import announcements, applications, arcade, archive, auth, board, broadcast, chat, db, downloads, dungeons, events, feeds, header_taglines, imageboard, kiwix, library, mail, moderation, mud, mud_worlds, office, programs, pwa, radio, station, themes, users, videos
+from . import announcements, applications, arcade, archive, auth, board, broadcast, chat, db, downloads, dungeons, events, feeds, header_taglines, imageboard, kiwix, library, mail, moderation, mud, mud_worlds, office, programs, pwa, radio, station, station_hours, themes, users, videos
 from .ansi import station_banner
 from .realtime import DirectChatStore
 from .radio import RadioStore
@@ -18,6 +18,23 @@ def _secret(data_dir):
     value = secrets.token_hex(32)
     path.write_text(value, encoding="utf-8")
     return value
+
+def _apply_launcher_changes(station_dir):
+    """Carry out what the Station Manager set while the station was stopped:
+    a prepared first SYSOP account, or a new station name."""
+    from .instance import load_config
+    database = db.get_db()
+    if db.get_station() is None:
+        auth.apply_prepared_setup(database, station_dir)
+        return
+    try:
+        name = load_config(station_dir).get("pending_name")
+    except ValueError:
+        return
+    if isinstance(name, str) and 2 <= len(name.strip()) <= 80:
+        database.execute("UPDATE station SET name=? WHERE id=1", (name.strip(),))
+        database.commit()
+
 
 def create_app(test_config=None):
     """Build the app; ``test_config`` also carries instance.Station.app_config()."""
@@ -77,6 +94,8 @@ def create_app(test_config=None):
     app.register_blueprint(programs.bp)
     with app.app_context():
         db.init_db()
+        if app.config.get("STATION_CONFIG"):
+            _apply_launcher_changes(Path(app.config["STATION_CONFIG"]).parent)
         station_row = db.get_station()
         if station_row is not None:
             from .instance import sync_name
@@ -93,6 +112,7 @@ def create_app(test_config=None):
         purge_pending_files()
         auth.load_logged_in_user()
         g.station = db.get_station()
+        g.station_hours = station_hours.header_for(app.config.get("STATION_CONFIG")) if g.station else None
         g.station_icon_exists = (data_dir / "station_icon.png").is_file()
         midi_path = data_dir / "station_theme.mid"
         g.station_midi_exists = midi_path.is_file()

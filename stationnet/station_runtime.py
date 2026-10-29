@@ -58,6 +58,50 @@ def _retry(action, attempts=20):
             time.sleep(0.05)
 
 
+class HostLock:
+    """An OS file lock one process holds for as long as it keeps it, such as
+    the Station Manager that runs station hours for an install."""
+
+    def __init__(self, path):
+        self.path = Path(path)
+        self._handle = None
+
+    def acquire(self):
+        """True if this process now holds the lock."""
+        if self._handle is not None:
+            return True
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        handle = open(self.path, "a+b")
+        if not _try_lock(handle):
+            handle.close()
+            return False
+        self._handle = handle
+        return True
+
+    def held_elsewhere(self):
+        if self._handle is not None:
+            return False
+        try:
+            handle = open(self.path, "r+b")
+        except FileNotFoundError:
+            return False
+        with handle:
+            if not _try_lock(handle):
+                return True
+            _unlock(handle)
+            return False
+
+    def release(self):
+        if self._handle is None:
+            return
+        try:
+            _unlock(self._handle)
+        except OSError:
+            pass
+        self._handle.close()
+        self._handle = None
+
+
 class StationRuntime:
     def __init__(self, data_dir):
         self.folder = Path(data_dir) / RUN_DIR

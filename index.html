@@ -1,0 +1,313 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="dark">
+  <meta name="theme-color" content="#000000">
+  <meta name="description" content="StationNet is a self-hosted community station for messages, bulletins, files, radio, games, and more. Find out what a station is, visit one, or run your own.">
+  <title>StationNet // Your community station</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      --black: #000;
+      --green: #00ed45;
+      --green-bright: #71ff8a;
+      --green-dim: #008d31;
+      --cyan: #00d8cf;
+      --magenta: #d829be;
+      --amber: #e6a431;
+      --red: #ff3237;
+      --grey: #8b8b86;
+      --white: #d8d8cf;
+      --surface-button: #001b08;
+      --surface-soft: #010701;
+      --mono: "Lucida Console", "Cascadia Mono", "Courier New", monospace;
+      font-family: var(--mono);
+      font-size: 16px;
+      scroll-behavior: smooth;
+    }
+    * { box-sizing: border-box; }
+    html { min-width: 320px; background: var(--black); }
+    body { min-width: 320px; margin: 0; color: var(--green); background: var(--black); line-height: 1.65; }
+    body::after { content: ""; position: fixed; inset: 0; z-index: 20; pointer-events: none; opacity: .045; background: repeating-linear-gradient(0deg, transparent 0 2px, #fff 2px 3px); }
+    body.no-vfx::after { display: none; }
+    ::selection { color: var(--black); background: var(--green); }
+    a { color: var(--cyan); text-underline-offset: .22em; }
+    a:hover { color: var(--magenta); }
+    a:focus-visible, button:focus-visible { outline: 2px solid var(--cyan); outline-offset: 3px; }
+    .skip-link { position: fixed; top: -5rem; left: 1rem; z-index: 30; padding: .55rem .8rem; color: var(--black); background: var(--green); }
+    .skip-link:focus { top: 1rem; }
+    .shell { width: min(1040px, 100%); min-height: 100vh; margin: auto; padding: .85rem clamp(.8rem, 3vw, 1.5rem) 1rem; }
+    .system-line, .node-line, .statusbar { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: .35rem 1.2rem; color: var(--grey); font-size: .68rem; letter-spacing: .05em; text-transform: uppercase; }
+    .system-line { font-family: "Courier New", monospace; }
+    .system-line b, .node-line b { color: var(--red); font-weight: 400; }
+    .brand { display: grid; justify-items: center; gap: .45rem; margin: clamp(1.6rem, 4vw, 3rem) auto 1.25rem; color: var(--cyan); text-align: center; text-decoration: none; }
+    .brand:hover { color: var(--cyan); }
+    .ansi-logo { width: max-content; max-width: 100%; margin: 0; overflow-x: auto; color: var(--cyan); font-family: var(--mono); font-size: clamp(.39rem, 1.35vw, .88rem); font-weight: 700; line-height: 1.08; letter-spacing: .02em; text-align: left; text-shadow: .13em .1em 0 var(--magenta); white-space: pre; }
+    .brand-tag { color: var(--green); font-size: .72rem; letter-spacing: .16em; }
+    .node-line { justify-content: center; margin-bottom: 1rem; }
+    .service-nav { display: flex; flex-wrap: wrap; justify-content: center; align-items: center; gap: .25rem .55rem; padding: .55rem .2rem; border-top: 1px solid var(--green-dim); border-bottom: 1px solid var(--green-dim); }
+    .service-nav a { display: inline-flex; align-items: center; min-height: 2rem; padding: .2rem; color: var(--green); font-size: .72rem; font-weight: 700; letter-spacing: .035em; text-decoration: none; }
+    .service-nav a:hover, .service-nav a:focus-visible { color: var(--white); text-shadow: 0 0 .55rem var(--green); }
+    .service-nav i { color: var(--cyan); font-style: normal; }
+    main { padding: 1.4rem 0 2rem; }
+    h1, h2, h3, p { margin-top: 0; }
+    h1, h2, h3 { color: var(--green-bright); }
+    h1 { margin-bottom: .8rem; font-size: clamp(1.55rem, 4.2vw, 2.7rem); font-weight: 400; line-height: 1.18; letter-spacing: .045em; text-transform: uppercase; }
+    h2 { margin-bottom: .7rem; font-size: clamp(1.15rem, 2.7vw, 1.55rem); font-weight: 400; line-height: 1.3; }
+    h3 { margin-bottom: .45rem; font-size: .95rem; letter-spacing: .045em; }
+    p { max-width: 72ch; }
+    .eyebrow, .kicker { margin-bottom: .65rem; color: var(--cyan); font-size: .68rem; letter-spacing: .15em; text-transform: uppercase; }
+    .muted { color: var(--grey); }
+    .lead { color: var(--white); font-size: clamp(.95rem, 1.8vw, 1.12rem); line-height: 1.75; }
+    .button-row { display: flex; flex-wrap: wrap; gap: .65rem; }
+    .button, button { display: inline-flex; align-items: center; justify-content: space-between; gap: .8rem; min-height: 2.7rem; padding: .65rem .9rem; border: 1px solid var(--green); border-radius: 0; color: var(--green-bright); background: var(--surface-button); font: inherit; font-size: .73rem; font-weight: 700; letter-spacing: .06em; text-decoration: none; cursor: pointer; }
+    .button:hover, button:hover { color: var(--black); background: var(--green); }
+    .button.secondary { border-color: var(--cyan); color: var(--cyan); background: var(--black); }
+    .button.secondary:hover { color: var(--black); background: var(--cyan); }
+    .button .arrow { color: var(--cyan); }
+    .button:hover .arrow { color: var(--black); }
+    .hero { display: grid; grid-template-columns: minmax(0, 1.45fr) minmax(15rem, .8fr); gap: 1.2rem; align-items: stretch; }
+    .hero-copy { padding: clamp(1rem, 2.4vw, 1.7rem); border: 1px solid var(--cyan); background: linear-gradient(115deg, rgba(0, 216, 207, .075), transparent 58%); }
+    .hero-copy .lead { margin-bottom: 1.25rem; }
+    .hero-copy .button-row { margin-top: 1.55rem; }
+    .hero-copy .button { min-height: 3.2rem; }
+    .hero-aside { display: grid; align-content: start; gap: .9rem; padding: 1.1rem; border: 1px solid var(--green-dim); background: var(--surface-soft); }
+    .aside-heading { margin: 0; padding-bottom: .45rem; border-bottom: 1px solid var(--green-dim); color: var(--green-bright); font-size: .75rem; letter-spacing: .08em; }
+    .aside-row { display: grid; grid-template-columns: 2.3rem minmax(0, 1fr); gap: .55rem; align-items: baseline; font-size: .76rem; }
+    .aside-row .number { color: var(--cyan); }
+    .aside-row strong { display: block; color: var(--green); font-size: .73rem; }
+    .aside-row small { display: block; color: var(--grey); line-height: 1.5; }
+    .aside-foot { margin: .3rem 0 0; padding-top: .65rem; border-top: 1px dotted var(--green-dim); color: var(--grey); font-size: .68rem; }
+    .section { margin-top: clamp(2.9rem, 6vw, 5rem); scroll-margin-top: 1rem; }
+    .section-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: .55rem 1.4rem; margin-bottom: 1.2rem; padding-bottom: .5rem; border-bottom: 1px solid var(--green-dim); }
+    .section-head h2 { margin: 0; }
+    .section-head .eyebrow { margin: 0 0 .15rem auto; color: var(--grey); }
+    .intro-grid { display: grid; grid-template-columns: minmax(0, 1.25fr) minmax(15rem, .75fr); gap: 1.4rem; }
+    .intro-grid p { color: var(--white); }
+    .definition { padding: 1rem; border: 1px solid var(--green-dim); }
+    .definition .kicker { color: var(--amber); }
+    .definition p { margin-bottom: 0; font-size: .85rem; }
+    .philosophy { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: .8rem; margin-top: 1.3rem; }
+    .philosophy article { min-width: 0; padding: 1rem; border-top: 1px solid var(--cyan); background: var(--surface-soft); }
+    .philosophy .index { color: var(--cyan); font-size: .7rem; }
+    .philosophy h3 { margin: .35rem 0; }
+    .philosophy p { margin: 0; color: var(--grey); font-size: .78rem; }
+    .service-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: .9rem; }
+    .service-card { min-width: 0; padding: 1.1rem; border: 1px solid var(--green-dim); background: var(--surface-soft); }
+    .service-card .card-top { display: flex; align-items: baseline; justify-content: space-between; gap: .4rem; margin-bottom: .75rem; padding-bottom: .45rem; border-bottom: 1px solid var(--green-dim); }
+    .service-card .card-top h3 { margin: 0; }
+    .service-card .card-top span { color: var(--cyan); font-size: .66rem; }
+    .service-card p { margin: 0; color: var(--white); font-size: .82rem; }
+    .service-card strong { color: var(--green-bright); font-weight: 400; }
+    .service-note { margin: 1rem 0 0; color: var(--grey); font-size: .78rem; }
+    .service-note b { color: var(--amber); font-weight: 400; }
+    .radio-feature { display: grid; grid-template-columns: minmax(0, 1.15fr) minmax(15rem, .85fr); gap: 1.2rem; align-items: center; padding: 1.1rem; border: 1px solid var(--cyan); }
+    .radio-feature p { margin-bottom: .75rem; color: var(--white); font-size: .84rem; }
+    .radio-feature p:last-child { margin-bottom: 0; }
+    .radio-display { padding: .9rem; border: 1px solid var(--green-dim); background: #020702; }
+    .radio-display .display-top { display: flex; justify-content: space-between; gap: .5rem; padding-bottom: .5rem; border-bottom: 1px solid var(--green-dim); color: var(--grey); font-size: .67rem; }
+    .radio-display .frequency { display: block; margin: .7rem 0 .3rem; color: var(--green-bright); font-size: clamp(1.5rem, 3vw, 2.3rem); letter-spacing: .1em; text-align: center; }
+    .radio-display .frequency small { color: var(--cyan); font-size: .65rem; }
+    .radio-display .meter { height: 2.4rem; margin: .5rem 0; border: 1px solid var(--green-dim); background: repeating-linear-gradient(90deg, transparent 0 8%, rgba(0, 237, 69, .13) 8% 8.5%), linear-gradient(0deg, transparent 49%, var(--green-dim) 50%, transparent 51%); }
+    .radio-display .display-bottom { color: var(--grey); font-size: .65rem; text-align: center; }
+    .audience-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: .9rem; }
+    .audience-card { display: flex; flex-direction: column; min-width: 0; padding: 1.1rem; border: 1px solid var(--green-dim); }
+    .audience-card .kicker { margin-bottom: .3rem; }
+    .audience-card h3 { font-size: 1.1rem; }
+    .audience-card p { flex: 1; color: var(--white); font-size: .81rem; }
+    .audience-card .button { justify-content: space-between; align-self: stretch; margin-top: .45rem; }
+    .source-panel { display: grid; grid-template-columns: minmax(0, 1.2fr) minmax(14rem, .8fr); gap: 1.5rem; align-items: center; padding: 1.1rem; border: 1px solid var(--green); }
+    .source-panel p { margin-bottom: .7rem; color: var(--white); font-size: .83rem; }
+    .source-panel p:last-child { margin-bottom: 0; }
+    .source-actions { display: grid; gap: .6rem; }
+    .source-actions .button { width: 100%; }
+    .source-actions small { color: var(--grey); font-size: .68rem; }
+    .statusbar { padding: .55rem .7rem; border: 1px solid var(--green-dim); color: var(--green-dim); }
+    .statusbar a { color: var(--cyan); }
+    .carrier { display: inline-flex; align-items: center; gap: .4rem; color: var(--green); }
+    .carrier::before { content: ""; width: .45rem; height: .45rem; border-radius: 50%; background: var(--green); box-shadow: 0 0 .5rem var(--green); }
+    .vfx-toggle { min-height: auto; padding: .12rem .38rem; border-color: var(--green-dim); color: var(--cyan); background: transparent; font-size: .62rem; line-height: 1.4; }
+    .vfx-toggle:hover { background: var(--cyan); }
+    @media (max-width: 760px) {
+      .hero, .intro-grid, .radio-feature, .source-panel { grid-template-columns: 1fr; }
+      .hero-aside { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .hero-aside .aside-heading, .hero-aside .aside-foot { grid-column: 1 / -1; }
+      .audience-grid { grid-template-columns: 1fr; }
+      .audience-card p { flex: 0; }
+      .audience-card .button { align-self: flex-start; }
+    }
+    @media (max-width: 540px) {
+      .shell { padding-inline: .8rem; }
+      .system-line, .node-line { justify-content: center; text-align: center; }
+      .ansi-logo { font-size: clamp(.32rem, 1.55vw, .5rem); }
+      .brand-tag { font-size: .6rem; }
+      .service-nav { gap: .1rem .35rem; }
+      .service-nav a { font-size: .65rem; }
+      .service-nav i:nth-of-type(n+5) { display: none; }
+      .hero-aside, .service-grid, .philosophy { grid-template-columns: 1fr; }
+      .button-row { display: grid; }
+      .button-row .button { width: 100%; }
+      .section-head .eyebrow { margin-left: 0; }
+      .audience-card .button { align-self: stretch; }
+    }
+    @media (prefers-reduced-motion: reduce) {
+      :root { scroll-behavior: auto; }
+      *, *::before, *::after { animation-duration: .01ms !important; transition-duration: .01ms !important; }
+    }
+  </style>
+</head>
+<body>
+  <a class="skip-link" href="#main">Skip to content</a>
+  <div class="shell" id="top">
+    <header>
+      <div class="system-line"><span>STATIONNET // PUBLIC INFORMATION</span><span>INDEPENDENT STATIONS · SHARED CURIOSITY</span></div>
+      <a class="brand" href="#top" aria-label="StationNet home">
+        <pre class="ansi-logo" aria-hidden="true"> ___ _____ _ _____ ___ ___  _  _ _  _ ___ _____
+/ __|_   _/_\_   _|_ _/ _ \| \| | \| | __|_   _|
+\__ \ | |/ _ \| |  | | (_) | .` | .` | _|  | |
+|___/ |_/_/ \_\_| |___\___/|_|\_|_|\_|___| |_|</pre>
+        <span class="brand-tag">// YOUR COMMUNITY STATION //</span>
+      </a>
+      <div class="node-line">
+        <span>NODE: <b>STATIONNET</b></span>
+        <span>MODE: <b>WELCOME</b></span>
+        <button class="vfx-toggle" type="button" id="vfx-toggle" aria-pressed="true" aria-label="Disable scanline effect">VFX: ON</button>
+      </div>
+      <nav class="service-nav" aria-label="Page sections">
+        <a href="#about">ABOUT</a><i aria-hidden="true">*</i>
+        <a href="#services">SERVICES</a><i aria-hidden="true">*</i>
+        <a href="#radio">RADIO</a><i aria-hidden="true">*</i>
+        <a href="#stations">STATIONS</a><i aria-hidden="true">*</i>
+        <a href="#get-started">GET STARTED</a><i aria-hidden="true">*</i>
+        <a href="#source">SOURCE</a>
+      </nav>
+    </header>
+
+    <main id="main">
+      <section class="hero" aria-labelledby="welcome-title">
+        <div class="hero-copy">
+          <p class="kicker">// INCOMING CONNECTION //</p>
+          <h1 id="welcome-title">Welcome to StationNet</h1>
+          <p class="lead">A StationNet station is a small, independent online place run by a person or community. Open it in your browser to leave a bulletin, talk with other members, share a file, tune the radio, or see what someone has built.</p>
+          <p>It brings back a good idea from early computing: the network can feel like a place with regulars, local character, and somebody at the controls.</p>
+          <div class="button-row">
+            <a class="button" href="#about">WHAT IS A STATION? <span class="arrow" aria-hidden="true">→</span></a>
+            <a class="button secondary" href="#get-started">FIND YOUR WAY IN <span aria-hidden="true">→</span></a>
+          </div>
+        </div>
+        <aside class="hero-aside" aria-label="A quick look at a station">
+          <p class="aside-heading">STATION DIRECTORY // A QUICK LOOK</p>
+          <div class="aside-row"><span class="number">01</span><div><strong>COMMUNITY</strong><small>Bulletins, chat, mail, events, and people.</small></div></div>
+          <div class="aside-row"><span class="number">02</span><div><strong>ON THE AIR</strong><small>Shared frequencies, Morse, pictures, voice, and programs.</small></div></div>
+          <div class="aside-row"><span class="number">03</span><div><strong>EXPLORE</strong><small>Games, apps, worlds, files, books, and video.</small></div></div>
+          <div class="aside-row"><span class="number">04</span><div><strong>MAKE IT YOURS</strong><small>Every Sysop chooses the station's look and services.</small></div></div>
+          <p class="aside-foot">A sketch of what StationNet can offer. Each station is different.</p>
+        </aside>
+      </section>
+
+      <section class="section" id="about" aria-labelledby="about-title">
+        <div class="section-head"><h2 id="about-title">&gt; A familiar idea, on a newer screen</h2><p class="eyebrow">WHAT IT IS</p></div>
+        <div class="intro-grid">
+          <div>
+            <p>Before social feeds filled the web, people called into bulletin board systems, or <strong>BBSs</strong>: computers that hosted messages, files, games, and conversations for their own communities. StationNet takes that sense of a shared local hangout and makes it available through a modern browser.</p>
+            <p>It also borrows from radio, where you tune to a frequency and meet whoever is there, and from projects like PirateBox and LibraryBox, which showed how a small local network could share useful things without depending on a big central service. You don't need a radio license or old computer to enjoy the idea: visit an address, enter a station, and look around.</p>
+          </div>
+          <aside class="definition">
+            <p class="kicker">// IN PLAIN LANGUAGE //</p>
+            <p>A <strong>station</strong> is the software running on someone's computer, plus the people and material they choose to host there. Its operator is the <strong>Sysop</strong>—short for system operator.</p>
+          </aside>
+        </div>
+        <div class="philosophy">
+          <article><span class="index">[01] OWNED BY ITS HOST</span><h3>A place, not a feed</h3><p>Messages and shared material belong to a particular station, giving its community a sense of where it gathers.</p></article>
+          <article><span class="index">[02] RUN BY PEOPLE</span><h3>Local character</h3><p>A Sysop chooses the name, rules, services, and atmosphere. A quiet reading room and a noisy game night can both be StationNet.</p></article>
+          <article><span class="index">[03] REACHABLE BY BROWSER</span><h3>Easy to enter</h3><p>Visitors use a web browser. Hosts can start locally without a domain, cloud account, Docker, or external database.</p></article>
+        </div>
+      </section>
+
+      <section class="section" id="services" aria-labelledby="services-title">
+        <div class="section-head"><h2 id="services-title">&gt; What you might find inside</h2><p class="eyebrow">STATION SERVICES</p></div>
+        <div class="service-grid">
+          <article class="service-card"><div class="card-top"><h3>People &amp; conversation</h3><span>01 / 04</span></div><p>Read or post <strong>bulletins</strong>, talk in public chat, send private mail, browse member profiles and feeds, or check announcements and events. There is also a shared file archive and an optional imageboard.</p></article>
+          <article class="service-card"><div class="card-top"><h3>Games &amp; applications</h3><span>02 / 04</span></div><p>Explore installable <strong>games and utilities</strong>, including programs made for StationNet. Stations can offer an <strong>MUD</strong>—a text-based multiplayer world where you travel, meet characters, and take on adventures.</p></article>
+          <article class="service-card"><div class="card-top"><h3>Media &amp; collections</h3><span>03 / 04</span></div><p>A station may run an <strong>arcade</strong> for classic games, a <strong>video</strong> collection, an <strong>EPUB and PDF library</strong>, or a local <strong>wiki</strong> of offline reference material. The content comes from that station's operator and members.</p></article>
+          <article class="service-card"><div class="card-top"><h3>Tools &amp; creativity</h3><span>04 / 04</span></div><p>Optional <strong>Office</strong> tools include documents, sheets, presentations, an agenda, and drawing. Members can also make music with a MIDI composer or write BASIC programs that can become StationNet games and apps.</p></article>
+        </div>
+        <p class="service-note"><b>GOOD TO KNOW:</b> A Sysop can enable, disable, and configure services. You will not find every feature on every station.</p>
+      </section>
+
+      <section class="section" id="radio" aria-labelledby="radio-title">
+        <div class="section-head"><h2 id="radio-title">&gt; Tune in, then say hello</h2><p class="eyebrow">THE RADIO ROOM</p></div>
+        <div class="radio-feature">
+          <div>
+            <p>StationNet's radio is a shared room with frequencies instead of channels in a feed. Depending on a station's settings and your permissions, you can listen, key out Morse code, send simple slow-scan pictures, or use push-to-talk voice. Authorized hosts can put together music and spoken programs for other members to hear.</p>
+            <p>It is intentionally local to a station. It is a way for people there to make a little noise together, not a worldwide radio network. Live voice depends on a browser connection and suitable network setup.</p>
+          </div>
+          <div class="radio-display" aria-label="Illustration of a StationNet-style radio console">
+            <div class="display-top"><span>RADIO // ILLUSTRATION</span><span>LOCAL STATION</span></div>
+            <span class="frequency">TUNE IN <small>↗</small></span>
+            <div class="meter" aria-hidden="true"></div>
+            <div class="display-bottom">CW · SSTV · VOICE · BROADCASTS</div>
+          </div>
+        </div>
+      </section>
+
+      <section class="section" id="stations" aria-labelledby="stations-title">
+        <div class="section-head"><h2 id="stations-title">&gt; Many stations, many atmospheres</h2><p class="eyebrow">NO CENTRAL HUB REQUIRED</p></div>
+        <div class="intro-grid">
+          <div>
+            <p>StationNet is software people host for themselves. Each station has its own accounts, content, settings, rules, and Sysop. One might be open to a neighborhood; another might be an invitation-only place for friends. The same software can feel very different from one address to the next.</p>
+            <p>There is no official master list of stations. You might learn about one from a friend, a local group, or a community that shares its address. Some stations are only reachable on the same local network; others may be made available more widely by their operators. If the station you want does not exist yet, you can run it.</p>
+          </div>
+          <aside class="definition">
+            <p class="kicker">// THE SYSOP'S DESK //</p>
+            <p>The Sysop decides who can join, which services appear, what members can share, and how the station looks. Colours, banners, icons, and station messages can all give it its own identity.</p>
+          </aside>
+        </div>
+      </section>
+
+      <section class="section" id="get-started" aria-labelledby="get-started-title">
+        <div class="section-head"><h2 id="get-started-title">&gt; Choose a route</h2><p class="eyebrow">NEXT CONNECTION</p></div>
+        <div class="audience-grid">
+          <article class="audience-card"><p class="kicker">[01] VISIT</p><h3>Explore a station</h3><p>Ask a friend or community whether they run one, then open the address they share. Your first stop may be a welcome page; the Sysop decides whether guests can browse or new members can sign up. There is no central station directory to search.</p><a class="button" href="#stations">HOW STATIONS WORK <span class="arrow" aria-hidden="true">→</span></a></article>
+          <article class="audience-card"><p class="kicker">[02] HOST</p><h3>Run your own</h3><p>Start a station on your own computer for a LAN, friends, or a wider community you choose to reach. The project README has installation steps and the distribution guide explains packaged downloads.</p><a class="button" href="https://github.com/thexant/StationNet#install-and-run">READ INSTALL GUIDE <span class="arrow" aria-hidden="true">↗</span></a></article>
+          <article class="audience-card"><p class="kicker">[03] MAKE</p><h3>Build an app or game</h3><p>StationNet applications are installable ZIP packages. The developer guide covers the manifest, JavaScript runtime, and other supported formats, so you can make something a Sysop can add to a station.</p><a class="button" href="https://github.com/thexant/StationNet/blob/main/stationnet/application_packages/APIREADME.md">OPEN DEVELOPER GUIDE <span class="arrow" aria-hidden="true">↗</span></a></article>
+        </div>
+      </section>
+
+      <section class="section" id="source" aria-labelledby="source-title">
+        <div class="section-head"><h2 id="source-title">&gt; Source &amp; development</h2><p class="eyebrow">OPEN FOR INSPECTION</p></div>
+        <div class="source-panel">
+          <div>
+            <p>StationNet's source code and documentation are available in its public GitHub repository. You can see how the station works, follow its development, and read the guides for hosting or building applications.</p>
+            <p class="muted">The repository does not currently include a project-wide license file. Its bundled components have their own licenses; check those terms before reusing or redistributing code.</p>
+          </div>
+          <div class="source-actions"><a class="button secondary" href="https://github.com/thexant/StationNet">VIEW THE SOURCE <span aria-hidden="true">↗</span></a><small>GitHub is only needed to follow these links. This page works on its own.</small></div>
+        </div>
+      </section>
+    </main>
+
+    <footer class="statusbar"><span>STATION: YOURS TO DISCOVER</span><span>USER: WELCOME</span><a href="#top">BACK TO TOP ↑</a><span class="carrier">CARRIER</span></footer>
+  </div>
+  <script>
+    (() => {
+      const toggle = document.getElementById('vfx-toggle');
+      let enabled = true;
+      try { enabled = localStorage.getItem('stationnet-site-vfx') !== 'off'; } catch (_) {}
+      function update() {
+        document.body.classList.toggle('no-vfx', !enabled);
+        toggle.setAttribute('aria-pressed', String(enabled));
+        toggle.setAttribute('aria-label', enabled ? 'Disable scanline effect' : 'Enable scanline effect');
+        toggle.textContent = 'VFX: ' + (enabled ? 'ON' : 'OFF');
+      }
+      toggle.addEventListener('click', () => {
+        enabled = !enabled;
+        try { localStorage.setItem('stationnet-site-vfx', enabled ? 'on' : 'off'); } catch (_) {}
+        update();
+      });
+      update();
+    })();
+  </script>
+</body>
+</html>
