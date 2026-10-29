@@ -70,6 +70,56 @@ vfxToggle?.addEventListener("click",()=>{
   renderVfxToggle();
 });
 
+// Each page load leaves fullscreen, and browsers only re-enter it from a user
+// gesture, so a remembered preference resumes on the page's first click or key.
+const fullscreenStorageKey="stationnet.fullscreen.enabled";
+let fullscreenWanted=false;
+try{fullscreenWanted=localStorage.getItem(fullscreenStorageKey)==="true"}catch(_){}
+let pageLeaving=false;
+addEventListener("pagehide",()=>{pageLeaving=true});
+const fullscreenToggle=document.querySelector("[data-fullscreen-toggle]");
+const saveFullscreen=value=>{
+  fullscreenWanted=value;
+  try{localStorage.setItem(fullscreenStorageKey,String(value))}catch(_){}
+};
+const enterFullscreen=()=>document.documentElement.requestFullscreen().catch(()=>{});
+const renderFullscreenToggle=()=>{
+  if(!fullscreenToggle)return;
+  const active=Boolean(document.fullscreenElement);
+  const label=`${active?"Exit":"Enter"} fullscreen`;
+  fullscreenToggle.setAttribute("aria-pressed",String(active));
+  fullscreenToggle.setAttribute("aria-label",label);
+  fullscreenToggle.title=label;
+};
+if(fullscreenToggle&&document.fullscreenEnabled&&typeof document.documentElement.requestFullscreen==="function"){
+  fullscreenToggle.hidden=false;
+  renderFullscreenToggle();
+  fullscreenToggle.addEventListener("click",()=>{
+    if(document.fullscreenElement){
+      saveFullscreen(false);
+      document.exitFullscreen().catch(()=>{});
+    }else{
+      saveFullscreen(true);
+      enterFullscreen();
+    }
+  });
+  document.addEventListener("fullscreenchange",()=>{
+    // Leaving with Esc or the browser's own controls turns the preference off.
+    if(!document.fullscreenElement&&!pageLeaving&&fullscreenWanted)saveFullscreen(false);
+    renderFullscreenToggle();
+  });
+  if(fullscreenWanted&&!document.fullscreenElement){
+    const resume=event=>{
+      removeEventListener("pointerdown",resume,true);
+      removeEventListener("keydown",resume,true);
+      if(event.target===fullscreenToggle||document.fullscreenElement||!fullscreenWanted)return;
+      enterFullscreen();
+    };
+    addEventListener("pointerdown",resume,true);
+    addEventListener("keydown",resume,true);
+  }
+}
+
 const musicToggle=document.querySelector("[data-music-toggle]");
 if(musicToggle){
   const musicPositionKey=`stationnet.music.position.${musicToggle.dataset.userId}.${musicToggle.dataset.midiVersion}`;

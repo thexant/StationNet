@@ -77,6 +77,10 @@ def build_windows():
     if sys.platform != "win32":
         raise SystemExit("Build the Windows executable on Windows.")
     subprocess.run([sys.executable, "-c", "import PyInstaller"], check=True)
+    # PyInstaller only warns about missing imports, so a frozen build would crash at startup.
+    if subprocess.run([sys.executable, "-c", "import pymupdf, pyfiglet, pystray"]).returncode:
+        raise SystemExit(f"Runtime dependencies are missing; run `{sys.executable} -m pip install "
+                         f"-r requirements.txt` and build again.")
     with build_workspace() as workspace:
         # The spec builds StationNet.exe and StationNetManager.exe into one folder.
         subprocess.run([sys.executable, "-m", "PyInstaller", "--noconfirm", "--clean",

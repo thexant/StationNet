@@ -8,12 +8,12 @@
   <link rel="icon" type="image/png" href="{{ url_for('pwa.icon', size=192) }}">
   <link rel="apple-touch-icon" href="{{ url_for('pwa.icon', size=192) }}">
   <title>{% block title %}StationNet{% endblock %}{% if g.station %} :: {{ g.station.name }}{% endif %}</title>
-  <link rel="stylesheet" href="{{ url_for('static',filename='station.css',v='station-hours-1') }}">
+  <link rel="stylesheet" href="{{ url_for('static',filename='station.css',v='fullscreen-1') }}">
   <link rel="stylesheet" href="{{ url_for('station.masthead_css') }}">
   {% set header_tagline = station_header_tagline() if g.station else none %}
   {% if header_tagline and header_tagline.color %}<style nonce="{{ g.style_nonce }}">.brand-tag-current { color: {{ header_tagline.color }}; --tagline-ink: {{ header_tagline.color }}; }</style>{% endif %}
   {% block extra_styles %}{% endblock %}
-  <script src="{{ url_for('static',filename='station.js',v='station-hours-1') }}" defer></script>
+  <script src="{{ url_for('static',filename='station.js',v='fullscreen-1') }}" defer></script>
   <script src="{{ url_for('static',filename='account-deletion.js',v='1') }}" defer></script>
   <script src="{{ url_for('static',filename='pwa.js',v='1') }}" defer></script>
   <script src="{{ url_for('static',filename='feeds.js',v='1') }}" defer></script>
@@ -42,6 +42,7 @@
         <span>SYSTEM DATE/TIME: <b data-date>--- -- ----</b> <b data-clock>--:--:--</b></span>
         <button type="button" class="sfx-toggle" data-sfx-toggle aria-pressed="true" aria-label="Disable interface sound effects">SFX: ON</button>
         <button type="button" class="sfx-toggle" data-vfx-toggle aria-pressed="true" aria-label="Disable CRT scanline effect">VFX: ON</button>
+        <button type="button" class="sfx-toggle fullscreen-toggle" data-fullscreen-toggle aria-pressed="false" aria-label="Enter fullscreen" title="Enter fullscreen" hidden><svg class="fullscreen-enter" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M8 3H5a2 2 0 0 0-2 2v3"/><path d="M21 8V5a2 2 0 0 0-2-2h-3"/><path d="M3 16v3a2 2 0 0 0 2 2h3"/><path d="M16 21h3a2 2 0 0 0 2-2v-3"/></svg><svg class="fullscreen-exit" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M8 3v3a2 2 0 0 1-2 2H3"/><path d="M21 8h-3a2 2 0 0 1-2-2V3"/><path d="M3 16h3a2 2 0 0 1 2 2v3"/><path d="M16 21v-3a2 2 0 0 1 2-2h3"/></svg></button>
         {% if g.user and g.station.play_station_midi and g.station_midi_exists %}<button type="button" class="sfx-toggle" data-music-toggle data-midi-url="{{ url_for('station.station_midi_theme',v=g.station_midi_version) }}" data-midi-version="{{ g.station_midi_version }}" data-midi-volume="{{ g.station.station_midi_volume }}" data-midi-preference-url="{{ url_for('station.station_midi_preference') }}" data-midi-csrf="{{ session.csrf_token }}" data-midi-enabled="{{ 'true' if g.user.station_midi_enabled else 'false' }}" data-midi-asset-base="{{ url_for('static',filename='midi') }}" data-user-id="{{ g.user.id }}" aria-pressed="{{ 'true' if g.user.station_midi_enabled else 'false' }}" aria-label="{{ 'Disable' if g.user.station_midi_enabled else 'Enable' }} station MIDI music">MUSIC: {{ 'ON' if g.user.station_midi_enabled else 'OFF' }}</button>{% endif %}
       </div>
       {% if g.station_hours %}

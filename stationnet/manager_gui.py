@@ -9,7 +9,8 @@ from pathlib import Path
 from tkinter import font as tkfont
 from tkinter import messagebox
 
-from . import instance, station_hours, themes
+from . import autostart, instance, station_hours, themes
+from . import tray as tray_module
 from .host_power import HostPower, manager_command
 from .hours_scheduler import HoursScheduler, HoursState
 from .station_manager import (ACTIVE, DEFAULT_THEME, LAN_HOST, LOCAL_HOST, StationManager, clean_environment,
@@ -371,6 +372,10 @@ class StationForm(Dialog):
         self._check("Served through an HTTPS proxy", self.https)
         self._hint("Only when visitors reach the station at an https:// address; sign-in stops "
                    "working over plain http.")
+        self.start_with_manager = tk.BooleanVar(value=info.start_with_manager if info else False)
+        self._check("Start Station with Manager", self.start_with_manager)
+        self._hint("Started when the Station Manager opens, unless it is already running or closed "
+                   "for station hours.")
         self._access_changed()
 
     def _access_changed(self):
@@ -437,7 +442,8 @@ class NewStationDialog(StationForm):
                      "registration_mode": self.registration.get()}
         try:
             info = manager.create_station(self.name.get(), self.port.get(), host=self.host(),
-                                          https=self.https.get(), sysop=sysop)
+                                          https=self.https.get(), sysop=sysop,
+                                          start_with_manager=self.start_with_manager.get())
         except (ValueError, OSError) as exc:
             self.error.configure(text=str(exc))
             return
@@ -465,7 +471,7 @@ class SettingsDialog(StationForm):
         manager = self.app.manager
         try:
             manager.update_station(self.station_id, self.name.get(), self.port.get(), self.host(),
-                                   https=self.https.get())
+                                   https=self.https.get(), start_with_manager=self.start_with_manager.get())
         except (ValueError, OSError) as exc:
             self.error.configure(text=str(exc))
             return
@@ -501,11 +507,14 @@ class HoursDialog(Dialog):
         self.warning = tk.StringVar(value=str(saved.get("warning_minutes") or station_hours.DEFAULT_WARNING))
         self.sleep = tk.BooleanVar(value=bool(saved.get("sleep")))
         self.message = tk.StringVar(value=saved.get("adjusted_message") or station_hours.DEFAULT_MESSAGE)
+        self.label = tk.StringVar(value=saved.get("label") or station_hours.LABEL)
         self._label(f"{info.name}: shown under the station's header while it runs. The station closes at its "
                     "closing time and is started at its opening time while this manager is open.",
                     fg=MUTED, pady=(0, 8))
         self._check("Keep station hours", self.enabled, command=self._enabled_changed)
-        self.widgets = [self._field("Opens", self.open, width=10), self._field("Closes", self.close, width=10)]
+        self.widgets = [self._field("Label", self.label, width=24)]
+        self._hint("Shown before the hours in the station's header.")
+        self.widgets += [self._field("Opens", self.open, width=10), self._field("Closes", self.close, width=10)]
         self._hint("Such as 8:00 AM or 21:00. Closing before the opening time runs past midnight.")
         tk.Label(self, text="Show as", font=app.fonts.body, bg=BG, fg=MUTED).grid(row=self.row, column=0,
                                                                                  sticky="nw", pady=4)
@@ -523,7 +532,7 @@ class HoursDialog(Dialog):
                    "opening (see Power for this computer's wake settings).")
         self.widgets.append(self._field("Extended", self.message))
         self._hint("Shown in place of the hours after Stay Online, until the next opening.")
-        self.focus_widget = self.widgets[0]
+        self.focus_widget = self.widgets[1]
         self._enabled_changed()
         self._finish([("Save", self.save, True)])
 
@@ -535,7 +544,7 @@ class HoursDialog(Dialog):
     def save(self):
         values = {"enabled": self.enabled.get(), "open": self.open.get(), "close": self.close.get(),
                   "clock": self.clock.get(), "warning_minutes": self.warning.get(), "sleep": self.sleep.get(),
-                  "adjusted_message": self.message.get()}
+                  "adjusted_message": self.message.get(), "label": self.label.get()}
         try:
             self.app.manager.update_hours(self.station_id, values)
         except (ValueError, OSError) as exc:
@@ -590,6 +599,49 @@ class PowerDialog(Dialog):
         self.app.refresh(reschedule=False)
 
 
+class OptionsDialog(Dialog):
+    """How the Station Manager window itself behaves on this computer."""
+
+    def __init__(self, app):
+        super().__init__(app, "Manager Options")
+        settings = station_hours.load_host(app.manager.root)
+        self.fullscreen = tk.BooleanVar(value=bool(settings["fullscreen"]))
+        self.startup = tk.BooleanVar(value=autostart.enabled(app.manager.root))
+        self.tray = tk.BooleanVar(value=bool(settings["minimize_to_tray"]))
+        self._label("These apply to this computer's Station Manager.", fg=MUTED, pady=(0, 8))
+        self._check("Fullscreen", self.fullscreen)
+        self._hint("F11 switches fullscreen on and off; Esc leaves it.")
+        startup = self._check("Start with Windows", self.startup)
+        if autostart.SUPPORTED:
+            self._hint("Opens the manager minimized when you sign in to Windows.")
+        else:
+            startup.configure(state="disabled")
+            self._hint("Available only on Windows.")
+        tray = self._check("Minimize to tray", self.tray)
+        problem = tray_module.unavailable(app.icon)
+        if problem:
+            tray.configure(state="disabled")
+            self._hint(problem)
+        else:
+            self._hint("Minimizing hides the window to the notification area; open it again from there.")
+        self._finish([("Save", self.save, True)])
+
+    def save(self):
+        app = self.app
+        try:
+            if autostart.SUPPORTED and self.startup.get() != autostart.enabled(app.manager.root):
+                autostart.set_enabled(app.manager.root, self.startup.get(),
+                                      manager_command(app.manager.root, app.core_dir))
+            station_hours.save_host(app.manager.root, fullscreen=self.fullscreen.get(),
+                                    minimize_to_tray=self.tray.get())
+        except OSError as exc:
+            self.error.configure(text=str(exc))
+            return
+        self.destroy()
+        app.set_fullscreen(self.fullscreen.get())
+        app.minimize_to_tray = self.tray.get()
+
+
 class ManagerApp:
     def __init__(self, root, manager, icon=None):
         self.root = root
@@ -601,11 +653,15 @@ class ManagerApp:
         self.fonts = Fonts(root)
         self.cards = {}
         self.order = []
+        self.icon = icon if icon and Path(icon).is_file() else None
+        self.tray = None
+        settings = station_hours.load_host(manager.root)
+        self.minimize_to_tray = bool(settings["minimize_to_tray"])
         root.title("StationNet Manager")
         root.configure(bg=BG)
         root.geometry("760x600")
         root.minsize(520, 360)
-        if icon and Path(icon).is_file():
+        if self.icon:
             try:
                 self._icon = tk.PhotoImage(file=str(icon))
                 root.iconphoto(True, self._icon)
@@ -623,6 +679,7 @@ class ManagerApp:
         make_button(bar, self.fonts, "+ New Station", lambda: NewStationDialog(self),
                     primary=True).pack(side="right")
         make_button(bar, self.fonts, "Sleep & Wake", lambda: PowerDialog(self)).pack(side="right", padx=(0, 8))
+        make_button(bar, self.fonts, "Options", lambda: OptionsDialog(self)).pack(side="right", padx=(0, 8))
         self.power_note = tk.Label(bar, font=self.fonts.small, bg=BG, fg=MUTED)
         self.power_note.pack(side="left", padx=(16, 0))
         self._build_list(shell)
@@ -640,7 +697,72 @@ class ManagerApp:
         self.closing_note.pack(side="right", padx=(0, 16))
         self.empty = tk.Label(self.inner, text="No stations yet. Use + New Station to create one.",
                               font=self.fonts.body, bg=BG, fg=MUTED)
+        root.bind("<F11>", lambda _event: self.set_fullscreen(not self.fullscreen()))
+        root.bind("<Escape>", lambda _event: self.set_fullscreen(False) if self.fullscreen() else None)
+        root.bind("<Unmap>", self._unmapped)
+        self.set_fullscreen(bool(settings["fullscreen"]))
+        self._autostart()
         self.refresh()
+
+    def fullscreen(self):
+        try:
+            return bool(self.root.attributes("-fullscreen"))
+        except tk.TclError:
+            return False
+
+    def set_fullscreen(self, on):
+        try:
+            self.root.attributes("-fullscreen", bool(on))
+        except tk.TclError:
+            pass
+
+    def _autostart(self):
+        """Start each station marked Start Station with Manager that is stopped
+        and, if it keeps hours, open now."""
+        now = datetime.now()
+        problems = []
+        for info in self.manager.list_stations():
+            if info.error or not info.start_with_manager or info.state not in ("stopped", "crashed"):
+                continue
+            extended = info.extended_until is not None and info.extended_until > now
+            if info.hours is not None and not extended and not station_hours.is_open(info.hours, now):
+                continue
+            try:
+                self.manager.start(info.id)
+            except (ValueError, OSError) as exc:
+                problems.append(f"{info.name}: {exc}")
+        if problems:
+            self.root.after(0, lambda: messagebox.showerror(
+                "StationNet Manager", "Could not start:\n\n" + "\n".join(problems), parent=self.root))
+
+    def _unmapped(self, event):
+        # <Unmap> also reaches the root for its children; only a minimized window counts.
+        if event.widget is not self.root or not self.minimize_to_tray:
+            return
+        self.root.after_idle(self._to_tray)
+
+    def _to_tray(self):
+        if self.root.state() != "iconic" or not self.minimize_to_tray:
+            return
+        if self.tray is None:
+            if tray_module.unavailable(self.icon):
+                return
+            try:
+                self.tray = tray_module.TrayIcon(self.icon, "StationNet Manager",
+                                                 on_show=lambda: self.root.after(0, self.show_window),
+                                                 on_exit=lambda: self.root.after(0, self.close))
+            except Exception:  # noqa: BLE001 - a tray that fails leaves an ordinary minimized window
+                self.minimize_to_tray = False
+                return
+        self.root.withdraw()
+        self.tray.show()
+
+    def show_window(self):
+        if self.tray is not None:
+            self.tray.hide()
+        self.root.deiconify()
+        self.root.lift()
+        self.root.focus_force()
 
     def _build_list(self, parent):
         holder = tk.Frame(parent, bg=BG)
@@ -748,6 +870,8 @@ class ManagerApp:
     def _attention(self):
         """Bring the window forward so Stay Online or Cancel Sleep is seen."""
         root = self.root
+        if self.tray is not None:
+            self.tray.hide()
         root.deiconify()
         root.lift()
         try:
@@ -770,6 +894,8 @@ class ManagerApp:
         if self.scheduler is not None:
             self.scheduler.shutdown()
         self.host_lock.release()
+        if self.tray is not None:
+            self.tray.stop()
         self.root.destroy()
 
     def act(self, action, station_id):
@@ -846,8 +972,7 @@ def launch_minimized(source_root):
     """Start a minimized manager in its own process, outside the wake task that
     Task Scheduler may end or replace."""
     root = instance.install_root(source_root)
-    command = [part if part != "--hours-wake" else "--minimized"
-               for part in manager_command(root, _core_dir(source_root))]
+    command = autostart.minimized_command(manager_command(root, _core_dir(source_root)))
     options = {"stdin": subprocess.DEVNULL, "stdout": subprocess.DEVNULL, "stderr": subprocess.DEVNULL,
                "cwd": str(root)}
     if sys.platform == "win32":
@@ -871,7 +996,9 @@ def main(source_root, minimized=False):
         icon = source_root / "icon.png"
     manager = StationManager(instance.install_root(source_root), core_dir)
     root = tk.Tk()
-    ManagerApp(root, manager, icon=icon)
+    app = ManagerApp(root, manager, icon=icon)
     if minimized:
         root.iconify()
+        # A window minimized before it was ever shown sends no <Unmap>.
+        root.after(500, app._to_tray)
     root.mainloop()

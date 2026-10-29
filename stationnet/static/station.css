@@ -153,6 +153,12 @@ a:hover { color: var(--magenta); }
 .sfx-toggle { justify-self: center; min-height: auto; padding: .08rem .35rem; color: var(--cyan); border-color: var(--green-dim); background: transparent; font-size: .62rem; line-height: 1.35; }
 .sfx-toggle:hover { color: #000; background: var(--cyan); }
 .sfx-toggle[aria-pressed="false"] { color: var(--grey); border-color: var(--border-muted); }
+.fullscreen-toggle[hidden] { display: none; }
+.fullscreen-toggle svg { display: block; width: .85rem; height: .85rem; }
+.fullscreen-toggle[aria-pressed="false"] { color: var(--cyan); border-color: var(--green-dim); }
+.fullscreen-toggle[aria-pressed="false"]:hover { color: #000; }
+.fullscreen-toggle[aria-pressed="true"] .fullscreen-enter,
+.fullscreen-toggle[aria-pressed="false"] .fullscreen-exit { display: none; }
 .service-nav { display: flex; justify-content: center; align-items: center; flex-wrap: wrap; gap: .6rem; padding: .55rem .2rem; border-top: 1px solid var(--green-dim); border-bottom: 1px solid var(--green-dim); outline: none; }
 .service-nav:focus-visible { outline: 2px solid var(--cyan); outline-offset: 2px; }
 .service-nav a { display: inline-flex; align-items: center; min-height: 2rem; gap: .25rem; color: var(--green); font-size: .77rem; font-weight: 700; letter-spacing: .03em; text-decoration: none; }

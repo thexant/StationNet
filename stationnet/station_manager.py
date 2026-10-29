@@ -60,6 +60,8 @@ class StationInfo:
     # closing stops counting.
     hours: object = None
     extended_until: object = None
+    # Started by the Station Manager when it opens, if not already running.
+    start_with_manager: bool = False
 
     @property
     def folder(self):
@@ -265,6 +267,7 @@ class StationManager:
         name = config.get("name")
         info.hours = station_hours.Hours.from_config(config)
         info.extended_until = station_hours.extended_until(config)
+        info.start_with_manager = bool(config.get("start_with_manager"))
         if info.state in ("starting", "running") and status:
             info.restart_needed = self._restart_needed(info, status, config)
         info.pending_folder = station_dirs.pending_folder(info.data_dir, name)
@@ -382,7 +385,7 @@ class StationManager:
                 return port
         raise ValueError("No free port is available.")
 
-    def create_station(self, name, port, lan=False, host=None, https=False, sysop=None):
+    def create_station(self, name, port, lan=False, host=None, https=False, sysop=None, start_with_manager=False):
         """Create a stopped station in a temporary ``station-xxxxxx`` folder.
 
         ``host`` defaults to every interface with ``lan``, else this computer
@@ -409,6 +412,8 @@ class StationManager:
         values = instance.new_config(station_id, host=host, port=port)
         if https:
             values["https"] = True
+        if start_with_manager:
+            values["start_with_manager"] = True
         if name:
             values["name"] = name
         try:
@@ -421,7 +426,7 @@ class StationManager:
             raise
         return self.station(station_id)
 
-    def update_station(self, station_id, name, port, host, https=False):
+    def update_station(self, station_id, name, port, host, https=False, start_with_manager=False):
         """Save a station's server settings to its station.json.
 
         A running station keeps its current settings until it restarts; the
@@ -436,7 +441,7 @@ class StationManager:
         changed = str(port).strip() != str(info.port) or host != info.host
         # Unchanged, the port is the running station's own; start() probes it anyway.
         port = self.check_port(port, host, station_id, probe=changed)
-        changes = {"host": host, "port": port, "https": bool(https)}
+        changes = {"host": host, "port": port, "https": bool(https), "start_with_manager": bool(start_with_manager)}
         # An unnamed station shows a placeholder name; keeping it is no rename.
         if name and name != info.name:
             # The station's database holds its name; it takes this one at

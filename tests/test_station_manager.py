@@ -396,6 +396,15 @@ def test_update_station_writes_its_config(manager):
         assert manager.update_station(beta.id, "Beta", busy, station_manager.LOCAL_HOST).port == busy
 
 
+def test_start_with_manager_is_saved(manager):
+    info = manager.create_station("Alpha", _free_port(), start_with_manager=True)
+    assert info.start_with_manager is True
+    assert instance.load_config(info.data_dir)["start_with_manager"] is True
+    info = manager.update_station(info.id, info.name, info.port, info.host)
+    assert info.start_with_manager is False
+    assert manager.create_station("Beta", _free_port()).start_with_manager is False
+
+
 def test_update_station_keeps_an_unnamed_station_unnamed(manager):
     info = manager.create_station("", _free_port())
     manager.update_station(info.id, info.name, info.port, info.host, https=True)

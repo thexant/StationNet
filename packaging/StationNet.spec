@@ -4,7 +4,7 @@
 # (StationNetManager.exe), sharing the same libraries.
 from pathlib import Path
 
-from PyInstaller.utils.hooks import collect_all
+from PyInstaller.utils.hooks import collect_all, collect_submodules
 
 ROOT = Path(SPECPATH).parent
 
@@ -19,7 +19,9 @@ for package in ("stationnet", "pyfiglet"):
 
 server = Analysis([str(ROOT / "run.py")], pathex=[str(ROOT)], binaries=binaries, datas=datas,
                   hiddenimports=hiddenimports, noarchive=False, optimize=0)
-manager = Analysis([str(ROOT / "manager.py")], pathex=[str(ROOT)], hiddenimports=["tkinter"],
+# pystray picks its platform backend at runtime, so PyInstaller cannot see it.
+manager = Analysis([str(ROOT / "manager.py")], pathex=[str(ROOT)],
+                   hiddenimports=["tkinter", *collect_submodules("pystray")],
                    noarchive=False, optimize=0)
 
 server_exe = EXE(PYZ(server.pure), server.scripts, [], exclude_binaries=True, name="StationNet",

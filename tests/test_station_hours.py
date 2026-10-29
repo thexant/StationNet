@@ -29,14 +29,17 @@ def test_format_both_clocks():
 
 def test_check_validates_and_normalizes():
     values = station_hours.check({"enabled": True, "open": "8am", "close": "9:00 pm", "sleep": 1,
-                                  "warning_minutes": "10", "adjusted_message": "  OPEN   LATE "})
+                                  "warning_minutes": "10", "adjusted_message": "  OPEN   LATE ",
+                                  "label": "  BBS   HOURS: "})
     assert values == {"enabled": True, "open": "08:00", "close": "21:00", "clock": "12h", "sleep": True,
-                      "warning_minutes": 10, "adjusted_message": "OPEN LATE"}
+                      "warning_minutes": 10, "adjusted_message": "OPEN LATE", "label": "BBS HOURS:"}
     assert station_hours.check({"enabled": False})["adjusted_message"] == station_hours.DEFAULT_MESSAGE
+    assert station_hours.check({"enabled": False, "label": "  "})["label"] == station_hours.LABEL
     for bad in ({"enabled": True, "close": "21:00"}, {"enabled": True, "open": "8:00", "close": "08:00"},
                 {"enabled": True, "open": "8:00", "close": "9:00", "warning_minutes": 0},
                 {"enabled": True, "open": "8:00", "close": "9:00", "clock": "36h"},
-                {"enabled": True, "open": "8:00", "close": "9:00", "adjusted_message": "x" * 81}):
+                {"enabled": True, "open": "8:00", "close": "9:00", "adjusted_message": "x" * 81},
+                {"enabled": True, "open": "8:00", "close": "9:00", "label": "x" * 41}):
         with pytest.raises(ValueError):
             station_hours.check(bad)
 
@@ -82,6 +85,9 @@ def test_header_text():
     assert header_text(extended, now)[:3] == ("STATION HOURS:", "OPEN LATE", None)
     assert header_text(extended, datetime(2026, 10, 29, 8, 0)).value == "8:00AM - 9:00PM"
     assert header_text({}, now) is None
+    labelled = {"hours": {**config["hours"], "label": "OPEN:"}}
+    assert header_text(labelled, now).label == "OPEN:"
+    assert header_text({**labelled, "hours_extended_until": "2026-10-29T08:00"}, now).label == "OPEN:"
 
 
 def test_host_settings_round_trip(tmp_path):

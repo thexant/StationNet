@@ -2,7 +2,7 @@
 
 StationNet is a self-hosted, browser-accessible communications station inspired by BBS software, monochrome terminals, early computer networks, and amateur radio. It provides local station setup, accounts, a responsive terminal workspace, community services, an optional native MUD with persistent rooms and navigation, and an ephemeral shared radio with configurable bands, live Morse/CW keying, simplified SSTV picture transmissions, and half-duplex WebRTC voice. It requires no Docker, domain, cloud account, or external database.
 
-MUD worlds can be shared as ZIP files in `data/mud_worlds/`. SYSOP Settings can import, enable, disable, and remove worlds, and several can run at once; the World Builder edits and exports whichever installed world you choose. Packages include rooms, exits, and optional items, NPCs, dialogue, quests, and placements. See the [file-authored world guide](stationnet/mud_world_templates/README_CUSTOM_WORLDS.md) for the format and a complete example.
+MUD worlds can be shared as ZIP files in `data/mud_worlds/`. SYSOP Settings can import, enable, disable, and remove worlds, and several can run at once; the World Builder edits and exports whichever installed world you choose. Packages include rooms, exits, and optional items, NPCs, dialogue, quests, and placements. Use the [single-file MUD creator handbook](MUD_CREATOR_HANDBOOK.md) for a complete world handoff; the [file-authored world guide](stationnet/mud_world_templates/README_CUSTOM_WORLDS.md) remains a focused format reference.
 
 Authored worlds can configure the following:
 
