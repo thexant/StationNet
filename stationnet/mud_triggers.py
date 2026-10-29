@@ -53,21 +53,24 @@ SOURCE_LABELS = {"room": "room", "object": "placed object", "item": "item type",
 ACTION_TYPES = ("message", "set_flag", "clear_flag", "give_item", "take_item", "experience", "coins",
                 "take_coins", "heal", "damage", "set_object_state", "set_exit", "show", "hide",
                 "spawn_npc", "teleport", "start_quest", "complete_objective", "run_trigger",
-                "learn_destination", "forget_destination", "disposition", "reputation", "fine", "clear_fines")
+                "learn_destination", "forget_destination", "disposition", "reputation", "fine", "clear_fines",
+                "apply_effect")
 OUTCOME_ACTIONS = ("give_item", "take_item", "experience", "coins", "take_coins")
 MESSAGE_TARGETS = ("actor", "room", "other_room")
 EXIT_STATES = ("open", "locked", "hidden", "default")
 # Actions that need a player to act on. Timer triggers have no player.
 _ACTOR_ACTIONS = {"give_item", "take_item", "experience", "coins", "take_coins", "heal", "damage",
                   "teleport", "start_quest", "complete_objective", "learn_destination", "forget_destination",
-                  "disposition", "reputation", "fine", "clear_fines"}
+                  "disposition", "reputation", "fine", "clear_fines", "apply_effect"}
 # Procedural dungeons are generated fresh for each run, so their triggers only
 # use actions that make sense inside one run.
 DUNGEON_EVENTS = ("enter_room", "use_object", "take_item", "say_phrase", "defeat_npc", "manual")
-DUNGEON_SOURCES = {"enter_room": ("room_role", "room_template"), "say_phrase": ("room_role", "room_template"),
+# An environment source matches rooms that drew that environment from pools.environments.
+DUNGEON_SOURCES = {"enter_room": ("room_role", "room_template", "environment"),
+                   "say_phrase": ("room_role", "room_template", "environment"),
                    "use_object": ("item",), "take_item": ("item",), "defeat_npc": ("npc",), "manual": ()}
 DUNGEON_ACTIONS = ("message", "set_flag", "clear_flag", "give_item", "take_item", "experience", "coins",
-                   "take_coins", "heal", "damage", "run_trigger")
+                   "take_coins", "heal", "damage", "run_trigger", "apply_effect")
 # Which field of each action names other content, and what kind it is.
 _ACTION_REFERENCES = {
     "give_item": (("item", "item"),), "take_item": (("item", "item"),),
@@ -82,6 +85,7 @@ _ACTION_REFERENCES = {
     "disposition": (("npc", "npc"),),
     "reputation": (("faction", "faction"),),
     "fine": (("faction", "faction"),), "clear_fines": (("faction", "faction"),),
+    "apply_effect": (("effect", "effect"),),
 }
 
 
@@ -224,6 +228,12 @@ def _action(raw, index, dungeon):
         except ValueError as problem:
             raise ValueError(f"{where}: {problem}") from problem
         result.update(faction=outcome["faction"], amount=outcome["amount"])
+    elif kind == "apply_effect":
+        fields |= {"effect", "potency", "duration"}
+        if not _whole(raw.get("potency", 1), 1, 1000) or not _whole(raw.get("duration", 3), 1, 100):
+            raise ValueError(f"{where}: apply_effect potency must be 1 to 1,000 and duration 1 to 100 turns.")
+        result.update(effect=_identifier(raw.get("effect"), f"{where} effect"),
+                      potency=raw.get("potency", 1), duration=raw.get("duration", 3))
     elif kind == "disposition":
         fields |= {"npc", "amount"}
         if not _whole(raw.get("amount"), -100, 100) or raw["amount"] == 0:

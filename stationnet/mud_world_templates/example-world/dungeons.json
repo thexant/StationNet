@@ -1,0 +1,64 @@
+{
+  "templates": [
+    {"key": "sea-caves", "name": "Sea Caves",
+     "template": {
+       "schema_version": 2,
+       "name": "Sea Caves",
+       "description": "Tide-carved caves under the cliffs.",
+       "definitions": {
+         "items": [
+           {"id": "pearl", "name": "Cave Pearl", "description": "A pearl the size of a lantern bead.",
+            "item_type": "misc", "properties": {"value": 15}}
+         ],
+         "enemies": [
+           {"id": "crab", "name": "Lantern Crab", "description": "A crab with a glowing shell.",
+            "properties": {"on_hit_effects": [{"key": "searing-light", "potency": 1, "duration": 2}]},
+            "combat": {"maximum_health": 20, "attack": 3, "defense": 1, "experience_reward": 12,
+                       "respawn_seconds": 60}},
+           {"id": "tide-king", "name": "Tide King", "description": "An old crab crowned in barnacles.",
+            "boss": true,
+            "combat": {"maximum_health": 40, "attack": 5, "defense": 2, "experience_reward": 40,
+                       "respawn_seconds": 60},
+            "loot": [{"type": "item", "item_local_id": "pearl", "amount": 1}]}
+         ]
+       },
+       "generation": {
+         "size": {"minimum": 4, "default": 5, "maximum": 8},
+         "difficulty": {"minimum": 1, "default": 1, "maximum": 4},
+         "layouts": [{"type": "linear", "weight": 1}],
+         "special_roles": [{"role": "boss", "count": 1, "min_depth_ratio": 0.8}]
+       },
+       "rewards": {"experience_percent": 120, "risk_loot": {"enabled": true, "chance_percent": 50,
+                   "tiers": {"1": [{"item_local_id": "pearl"}]}}},
+       "scaling": {"offset": 2, "per_step": {"maximum_health": 6}},
+       "bosses": {"health_percent": 150},
+       "pools": {
+         "rooms": [
+           {"id": "cave", "names": [{"text": "Dripping Cave"}],
+            "descriptions": [{"text": "Water drips from a ceiling of pale stone."}]},
+           {"id": "throne", "conditions": {"roles": ["boss"]}, "names": [{"text": "Barnacle Throne"}],
+            "descriptions": [{"text": "Shells heap into a throne."}]}
+         ],
+         "environments": [
+           {"id": "tidepool", "descriptions": [{"text": "A tidepool glows faintly here."}]}
+         ],
+         "enemies": [
+           {"id": "crabs", "count": {"minimum": 1, "maximum": 1}, "choices": [{"local_id": "crab"}]},
+           {"id": "king", "count": {"minimum": 1, "maximum": 1}, "choices": [{"local_id": "tide-king"}]}
+         ],
+         "encounters": [
+           {"id": "crab-fight", "enemy_pool": "crabs", "conditions": {"roles": ["normal", "exit"]}},
+           {"id": "king-fight", "enemy_pool": "king", "conditions": {"roles": ["boss"]}}
+         ]
+       },
+       "triggers": [
+         {"id": "tidepool-rest", "name": "Tidepool", "event": "enter_room", "source": {"environment": "tidepool"},
+          "actions": [{"type": "apply_effect", "effect": "tide-blessing", "potency": 1, "duration": 2}]}
+       ]
+     }}
+  ],
+  "entrances": [
+    {"room": "cliffs", "template": "sea-caves", "name": "Cave Mouth",
+     "description": "A cold cave mouth under the cliffs.", "max_party": 4}
+  ]
+}

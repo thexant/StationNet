@@ -1476,6 +1476,7 @@ def init_db():
     _migrate_mud_discoveries(database)
     _migrate_mud_banking(database)
     _migrate_mud_multiworld(database)
+    _migrate_mud_package_definitions(database)
     database.execute("INSERT OR IGNORE INTO mud_portal_settings(id) VALUES(1)")
     database.execute("INSERT OR IGNORE INTO mud_travel_settings(id) VALUES(1)")
     database.execute(
@@ -3097,6 +3098,60 @@ def _split_procedural_character(database, character, policy, procedural_only):
         database.execute("UPDATE mud_character_wallets SET character_id=? WHERE character_id=?", (pid, cid))
     normalize_mud_character(database, pid, "procedural", "procedural", "procedural")
     return pid
+
+
+def _migrate_mud_package_definitions(database):
+    """Installed abilities and effects, their package links, and world package format 2 fields."""
+    database.executescript("""
+    CREATE TABLE IF NOT EXISTS mud_effect_definitions (
+      key TEXT PRIMARY KEY,
+      definition_json TEXT NOT NULL,
+      imported INTEGER NOT NULL DEFAULT 1 CHECK(imported IN (0,1)),
+      installed INTEGER NOT NULL DEFAULT 1 CHECK(installed IN (0,1)),
+      created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);
+    CREATE TABLE IF NOT EXISTS mud_ability_definitions (
+      key TEXT PRIMARY KEY,
+      definition_json TEXT NOT NULL,
+      imported INTEGER NOT NULL DEFAULT 1 CHECK(imported IN (0,1)),
+      installed INTEGER NOT NULL DEFAULT 1 CHECK(installed IN (0,1)),
+      created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);
+    CREATE TABLE IF NOT EXISTS mud_world_effects (
+      world_id TEXT NOT NULL REFERENCES mud_world_packages(id) ON DELETE CASCADE,
+      effect_key TEXT NOT NULL,
+      local_key TEXT NOT NULL,
+      PRIMARY KEY(world_id,effect_key));
+    CREATE TABLE IF NOT EXISTS mud_world_abilities (
+      world_id TEXT NOT NULL REFERENCES mud_world_packages(id) ON DELETE CASCADE,
+      ability_key TEXT NOT NULL,
+      local_key TEXT NOT NULL,
+      PRIMARY KEY(world_id,ability_key));
+    CREATE TABLE IF NOT EXISTS mud_dungeon_effects (
+      theme_id TEXT NOT NULL,
+      effect_key TEXT NOT NULL,
+      local_key TEXT NOT NULL,
+      PRIMARY KEY(theme_id,effect_key));
+    CREATE TABLE IF NOT EXISTS mud_dungeon_abilities (
+      theme_id TEXT NOT NULL,
+      ability_key TEXT NOT NULL,
+      local_key TEXT NOT NULL,
+      PRIMARY KEY(theme_id,ability_key));
+    CREATE TABLE IF NOT EXISTS mud_world_upgrades (
+      id INTEGER PRIMARY KEY,
+      world_id TEXT NOT NULL,
+      from_hash TEXT,
+      to_hash TEXT NOT NULL,
+      summary_json TEXT NOT NULL DEFAULT '{}',
+      upgraded_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);
+    """)
+    columns = {row["name"] for row in database.execute("PRAGMA table_info(mud_world_packages)")}
+    for name, ddl in (("progression_json", "TEXT NOT NULL DEFAULT '{}'"),
+                      ("format_version", "INTEGER NOT NULL DEFAULT 1"),
+                      ("package_hash", "TEXT")):
+        if name not in columns:
+            database.execute(f"ALTER TABLE mud_world_packages ADD COLUMN {name} {ddl}")
+    # The legacy enabled flag on shared definitions is never read; keep it mirroring installed.
+    database.execute("UPDATE mud_skill_definitions SET enabled=installed WHERE enabled<>installed")
+    database.execute("UPDATE mud_origin_definitions SET enabled=installed WHERE enabled<>installed")
 
 
 def _migrate_mud_multiworld(database):

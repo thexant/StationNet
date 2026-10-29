@@ -20,7 +20,7 @@ from flask import (Blueprint, abort, current_app, flash, g, jsonify, redirect, r
 
 from .auth import admin_required, login_required
 from .db import get_db
-from . import dungeons, character_creation, mud_combat, mud_conditions, mud_effects, mud_firearms, mud_compat, mud_gathering, mud_work, mud_scope, mud_skills, mud_society, mud_triggers, mud_wayfinding, mud_wilderness, moderation
+from . import dungeons, character_creation, mud_abilities, mud_combat, mud_conditions, mud_effects, mud_progression, mud_firearms, mud_compat, mud_gathering, mud_work, mud_scope, mud_skills, mud_society, mud_triggers, mud_wayfinding, mud_wilderness, moderation
 from .security import validate_csrf
 
 bp = Blueprint("mud", __name__, url_prefix="/mud")
@@ -179,22 +179,24 @@ def level_bonuses(level):
     }
 
 
-def health_per_level(vitality):
-    return max(1, HEALTH_PER_LEVEL + (vitality - 10) // 2)
+def health_per_level(vitality, base=HEALTH_PER_LEVEL):
+    return max(1, base + (vitality - 10) // 2)
 
 
-def mana_per_level(intellect):
-    return max(1, 2 + (intellect - 10) // 2)
+def mana_per_level(intellect, base=2):
+    return max(1, base + (intellect - 10) // 2)
 
 
-def resource_delta(level, old_attributes, new_attributes):
+def resource_delta(level, old_attributes, new_attributes, settings=None):
     """Return the maximum health and mana change caused by an attribute change."""
+    settings = settings or mud_progression.DEFAULTS
+    health_base, mana_base = settings["health_per_level"], settings["mana_per_level"]
     health = ((new_attributes["vitality"] - old_attributes["vitality"]) * 5 +
-              (level - 1) * (health_per_level(new_attributes["vitality"]) -
-                             health_per_level(old_attributes["vitality"])))
+              (level - 1) * (health_per_level(new_attributes["vitality"], health_base) -
+                             health_per_level(old_attributes["vitality"], health_base)))
     mana = ((new_attributes["intellect"] - old_attributes["intellect"]) * 3 +
-            (level - 1) * (mana_per_level(new_attributes["intellect"]) -
-                           mana_per_level(old_attributes["intellect"])))
+            (level - 1) * (mana_per_level(new_attributes["intellect"], mana_base) -
+                           mana_per_level(old_attributes["intellect"], mana_base)))
     return health, mana
 
 
@@ -368,7 +370,8 @@ def character_state(database, user_id, track_key=None):
                        "next_rank_at": mud_skills.next_rank_cost(skill["rank"]),
                        "effects": mud_skills.describe_effects(definition, skill["rank"]) if definition else ""})
     skills.sort(key=lambda skill: (mud_skills.GROUPS.index(skill["group"]), skill["name"].casefold()))
-    at_max_level = row["level"] >= MAX_LEVEL
+    level_cap = min(MAX_LEVEL, mud_progression.for_character(database, row["id"])["level_cap"])
+    at_max_level = row["level"] >= level_cap
     level_floor = experience_for_level(row["level"])
     next_floor = experience_for_level(row["level"] + 1)
     return {
@@ -378,7 +381,7 @@ def character_state(database, user_id, track_key=None):
         "creation_state": origin["creation_state"],
         "race": race["name"] if race else None,
         "class": archetype["name"] if archetype else None,
-        "origin": _origin_summary(race, archetype, known),
+        "origin": _origin_summary(race, archetype, known, mud_abilities.names(database)),
         "skills": skills,
         "skill_points": mud_skills.available_points(database, row["id"]),
         "mode": _current_mode(database, user_id),
@@ -389,7 +392,7 @@ def character_state(database, user_id, track_key=None):
             "procedural": "Procedural progression",
         }[row["track_key"]],
         "level": row["level"],
-        "max_level": MAX_LEVEL,
+        "max_level": level_cap,
         "at_max_level": at_max_level,
         "experience": row["experience"],
         "experience_into_level": 0 if at_max_level else row["experience"] - level_floor,
@@ -421,6 +424,9 @@ def award_experience(database, user_id, amount, track_key=None):
     before = character_state(database, user_id, resolved_track)
     skill_notices = []
     points_before = mud_skills.earned_points(mud_skills.highest_level(database, before["id"]))
+    settings = mud_progression.for_character(database, before["id"])
+    # A world's experience rate scales the award before personal bonuses.
+    amount = max(1, amount * settings["experience_percent"] // 100)
     if before["creation_state"] == "complete":
         bonus = max(0, before["attributes"]["intellect"] - 8)
         bonus += _character_effects(database, before["id"])["experience_percent"]
@@ -431,12 +437,12 @@ def award_experience(database, user_id, amount, track_key=None):
     if experience > MAX_EXPERIENCE:
         raise ValueError("Experience total exceeds the supported range.")
     # Levels are capped, but a character already above the cap is never demoted.
-    level = max(before["level"], min(MAX_LEVEL, level_for_experience(experience)))
+    level = max(before["level"], min(MAX_LEVEL, settings["level_cap"], level_for_experience(experience)))
     levels_gained = level - before["level"]
     points_gained = sum(attribute_points_for_level(reached)
                         for reached in range(before["level"] + 1, level + 1))
-    health_gain = levels_gained * health_per_level(before["attributes"]["vitality"])
-    mana_gain = levels_gained * mana_per_level(before["attributes"]["intellect"])
+    health_gain = levels_gained * health_per_level(before["attributes"]["vitality"], settings["health_per_level"])
+    mana_gain = levels_gained * mana_per_level(before["attributes"]["intellect"], settings["mana_per_level"])
     maximum_health = before["maximum_health"] + health_gain
     current_health = min(
         maximum_health, before["health"] + health_gain
@@ -464,9 +470,11 @@ def award_experience(database, user_id, amount, track_key=None):
     }
 
 
-def _origin_summary(race, archetype, skills):
+def _origin_summary(race, archetype, skills, ability_names=None):
     """Player-facing digest of what a race and class do beyond attributes."""
     profile = character_creation.origin_profile(race, archetype)
+    ability_names = ability_names if ability_names is not None else {key: key for key in SPELLS}
+    abilities = [ability_names[key] for key in profile["spells"] if key in ability_names]
     proficiencies = profile["proficiencies"]
     affinities = {(skills[key]["name"] if key in skills else key): value
                   for key, value in profile["skill_affinities"].items()}
@@ -475,7 +483,7 @@ def _origin_summary(race, archetype, skills):
                                           if item not in proficiencies["weapons"]]
     summary = [label + ": " + text for label, text in (
         ("Traits", ", ".join(profile["tags"])),
-        ("Abilities", ", ".join(name for name in profile["spells"] if name in SPELLS)),
+        ("Abilities", ", ".join(abilities)),
         ("Trained with", ", ".join(trained)),
         ("Resists", " · ".join(f"{key} {value}%" for key, value in profile["resistances"].items() if value)),
         ("Learns faster", " · ".join(f"{key} {value:+d}%" for key, value in affinities.items() if value)),
@@ -485,7 +493,7 @@ def _origin_summary(race, archetype, skills):
         "summary": summary,
         "traits": [origin["traits"] for origin in (race, archetype) if origin],
         "tags": profile["tags"],
-        "abilities": [name for name in profile["spells"] if name in SPELLS],
+        "abilities": abilities,
         "proficiencies": trained,
         "resistances": profile["resistances"],
         "affinities": affinities,
@@ -720,7 +728,8 @@ def _train_action(database, user, parameters):
     if old[attribute] + amount > ATTRIBUTE_CAP:
         raise ActionError(f"{attribute.title()} cannot exceed {ATTRIBUTE_CAP}.")
     new = {**old, attribute: old[attribute] + amount}
-    health_delta, mana_delta = resource_delta(character["level"], old, new)
+    health_delta, mana_delta = resource_delta(character["level"], old, new,
+                                              mud_progression.for_character(database, character["id"]))
     trained = dict(character["trained_attributes"])
     trained[attribute] = trained.get(attribute, 0) + amount
     updated = database.execute(
@@ -1183,7 +1192,7 @@ def _active_expedition(database, user_id):
 
 def _dungeon_room(database, instance_id, room_key):
     row = database.execute(
-        "SELECT room_key AS id,name,description,role,depth,difficulty,instance_id,room_template_id "
+        "SELECT room_key AS id,name,description,role,depth,difficulty,instance_id,room_template_id,environment_id "
         "FROM mud_dungeon_rooms WHERE instance_id=? AND room_key=?",
         (instance_id, room_key),
     ).fetchone()
@@ -1511,18 +1520,33 @@ def _json_properties(raw):
     return value if isinstance(value, dict) else {}
 
 
-def _effect_specs(properties, field):
+def _effect_specs(properties, field, database=None):
     value = properties.get(field, [])
     if not isinstance(value, list):
         return []
     valid = []
     for spec in value:
         try:
-            mud_effects.validate(spec)
+            mud_effects.validate(spec, database)
             valid.append(spec)
         except ValueError:
             continue
     return valid
+
+
+def _regenerate_character(database, user_id, regen):
+    """Heal-over-time effects restore health, never beyond the maximum."""
+    character = _character_row(database, user_id)
+    if character["current_health"] <= 0:
+        return []
+    restored = min(sum(amount for _, amount in regen), character["maximum_health"] - character["current_health"])
+    if restored <= 0:
+        return []
+    database.execute("UPDATE mud_character_progression SET current_health=current_health+? "
+                     "WHERE character_id=? AND track_key=?", (restored, character["id"], character["track_key"]))
+    return [EventDraft(f"You recover {restored} health from {', '.join(name for name, _ in regen)} "
+                       f"({character['current_health'] + restored}/{character['maximum_health']} health).",
+                       event_type="combat")]
 
 
 def _integer_property(properties, *names):
@@ -2167,9 +2191,9 @@ def _resale_price(database, item, percent, regard_percent=100):
 
 
 def _wallet(database, character_id):
-    database.execute(
-        "INSERT OR IGNORE INTO mud_character_wallets(character_id) VALUES(?)", (character_id,),
-    )
+    if database.execute("SELECT 1 FROM mud_character_wallets WHERE character_id=?", (character_id,)).fetchone() is None:
+        database.execute("INSERT INTO mud_character_wallets(character_id,coins) VALUES(?,?)",
+                         (character_id, mud_progression.for_character(database, character_id)["starting_coins"]))
     return database.execute(
         "SELECT coins FROM mud_character_wallets WHERE character_id=?", (character_id,),
     ).fetchone()["coins"]
@@ -3708,8 +3732,11 @@ def _enemy_turn(database, user, defending=False, chosen=None, single=False):
         guard_name = _character_row(database, guard)["display_name"]
         drafts.append(EventDraft(f"{guard_name} intercepts {npc['name']}'s attack.", event_type="combat"))
         drafts += _addressed(_enemy_strike(database, {"id": guard}, npc, encounter, True)[0], guard)
-    # Lingering damage effects tick once per enemy turn, however many enemies act.
-    ticks = mud_effects.tick(database, "character", character["id"])
+    # Lingering effects tick once per enemy turn, however many enemies act.
+    detail = mud_effects.tick_detail(database, "character", character["id"])
+    ticks = detail["damage"]
+    if detail["regen"]:
+        drafts += _regenerate_character(database, user["id"], detail["regen"])
     if ticks:
         character = _character_row(database, user["id"])
         damage = sum(amount for _, amount in ticks)
@@ -3795,14 +3822,15 @@ def _enemy_strike(database, user, npc, encounter, defending=False):
     drafts = [EventDraft(body, event_type="combat")] + practiced
     if health > 0 and damage > 0:
         resistances = _origin_profile(database, character["id"])["resistances"]
-        for spec in _effect_specs(_json_properties(npc["properties_json"]), "on_hit_effects"):
+        for spec in _effect_specs(_json_properties(npc["properties_json"]), "on_hit_effects", database):
             try:
-                resisted = mud_effects.resist(spec, resistances.get(spec.get("key"), 0))
+                name = mud_effects.display_name(database, spec["key"])
+                resisted = mud_effects.resist(spec, resistances.get(mud_effects.resist_key(database, spec["key"]), 0))
                 if resisted is None:
-                    drafts.append(EventDraft(f"You shrug off {spec['key']}.", event_type="combat"))
+                    drafts.append(EventDraft(f"You shrug off {name}.", event_type="combat"))
                     continue
-                key = mud_effects.apply(database, "character", character["id"], resisted, npc["name"])
-                drafts.append(EventDraft(f"{npc['name']} inflicts {key}.", event_type="combat"))
+                mud_effects.apply(database, "character", character["id"], resisted, npc["name"])
+                drafts.append(EventDraft(f"{npc['name']} inflicts {name}.", event_type="combat"))
             except (ValueError, TypeError, AttributeError):
                 continue
     if health == 0:
@@ -4007,9 +4035,13 @@ def _attack_action(database, user, parameters):
         state = _item_state(firearm)
         state["loaded"] = _loaded_rounds(firearm) - 1
         _save_item_state(database, firearm["id"], state)
-    lingering = sum(amount for _, amount in mud_effects.tick(database, "encounter", encounter["id"]))
+    detail = mud_effects.tick_detail(database, "encounter", encounter["id"])
+    lingering = sum(amount for _, amount in detail["damage"])
     damage += lingering
     remaining = max(0, encounter["current_health"] - damage)
+    if remaining:
+        # Regeneration mends a standing enemy, never past its maximum.
+        remaining = min(encounter["maximum_health"], remaining + sum(amount for _, amount in detail["regen"]))
     database.execute(
         "UPDATE mud_combat_encounters SET status=?,current_health=?,"
         "started_at=COALESCE(started_at,CURRENT_TIMESTAMP),updated_at=CURRENT_TIMESTAMP,"
@@ -4048,11 +4080,13 @@ def _attack_action(database, user, parameters):
                     continue
                 if not firearm and mud_firearms.is_firearm(_json_properties(equipped["properties_json"])):
                     continue
-                applications += _effect_specs(_json_properties(equipped["properties_json"]), "on_hit_effects")
+                applications += _effect_specs(_json_properties(equipped["properties_json"]), "on_hit_effects",
+                                              database)
         for spec in applications:
             try:
                 key = mud_effects.apply(database, "encounter", encounter["id"], spec, character["display_name"])
-                drafts.append(EventDraft(f"{display_name} suffers {key}.", event_type="combat"))
+                drafts.append(EventDraft(f"{display_name} suffers {mud_effects.display_name(database, key)}.",
+                                         event_type="combat"))
             except (ValueError, TypeError):
                 continue
     if remaining == 0:
@@ -4196,16 +4230,8 @@ def _combat_action(database, user, parameters):
     return [EventDraft(body, event_type="combat")]
 
 
-SPELLS = {
-    "ember": {"cost": 8, "damage": 9, "effects": [{"key": "burning", "potency": 2, "duration": 3}]},
-    "venom": {"cost": 7, "damage": 5, "effects": [{"key": "poison", "potency": 3, "duration": 3}]},
-    "rend": {"cost": 6, "damage": 7, "effects": [{"key": "bleeding", "potency": 2, "duration": 3}]},
-    "hex": {"cost": 7, "damage": 2, "effects": [{"key": "weakness", "potency": 2, "duration": 3},
-                                                   {"key": "vulnerability", "potency": 2, "duration": 3}]},
-    "mend": {"cost": 7, "heal": 20},
-    "ward": {"cost": 6, "effects": [{"key": "ward", "potency": 3, "duration": 3}]},
-    "might": {"cost": 6, "effects": [{"key": "might", "potency": 3, "duration": 3}]},
-}
+# Built-in spells; installed abilities extend them (see mud_abilities).
+SPELLS = mud_abilities.BUILT_IN
 
 
 def _known_spells(database, character_id):
@@ -4225,8 +4251,9 @@ def _spells_action(database, user, parameters):
         raise ActionError("The spells command does not accept arguments.")
     resource = _require_resource(database, user)
     character = _character_row(database, user["id"])
-    known = _known_spells(database, character["id"])
-    lines = [f"{name}: {SPELLS[name]['cost']} {resource['noun']}" for name in known if name in SPELLS]
+    known = mud_abilities.known(database, _known_spells(database, character["id"]))
+    lines = [(f"{entry['name']}: " if entry["name"] == entry["command"] else f"{entry['name']} ({entry['command']}): ")
+             + f"{entry['cost']} {resource['noun']}" for entry in known]
     return [EventDraft("Known spells:\n" + ("\n".join(lines) or "none"), event_type="character")]
 
 
@@ -4235,15 +4262,18 @@ def _cast_action(database, user, parameters):
     args = parameters.get("arguments") or []
     if not args:
         raise ActionError("Cast which spell? Use /spells to see known spells.")
-    name = args[0].casefold()
     character = _character_row(database, user["id"])
-    if name not in _known_spells(database, character["id"]) or name not in SPELLS:
+    try:
+        spell = mud_abilities.resolve(database, _known_spells(database, character["id"]), args[0])
+    except ValueError as problem:
+        raise ActionError(str(problem)) from problem
+    if spell is None:
         raise ActionError("You do not know that spell.")
-    spell = SPELLS[name]
+    name = spell["name"]
     if character["current_mana"] < spell["cost"]:
         raise ActionError(f"You do not have enough {resource['noun']}.")
     target = " ".join(args[1:])
-    if "damage" in spell:
+    if spell["target"] == "enemy":
         if not target:
             raise ActionError(f"Cast {name} at which enemy?")
         room = _current_room(database, user["id"])
@@ -4259,9 +4289,9 @@ def _cast_action(database, user, parameters):
         "WHERE character_id=? AND track_key=?",
         (spell["cost"], character["id"], character["track_key"]),
     )
-    if "damage" in spell:
+    if spell["target"] == "enemy":
         return _attack_action(database, user, {"arguments": args[1:], "_spell_damage": spell["damage"],
-                                               "_spell_effects": spell.get("effects", [])})
+                                               "_spell_effects": list(spell.get("effects", []))})
     drafts = []
     if "heal" in spell:
         restored = min(spell["heal"] + character["intellect"] // 2
@@ -4275,7 +4305,8 @@ def _cast_action(database, user, parameters):
         drafts += _practice(database, character["id"], "heal_cast")
     for spec in spell.get("effects", []):
         key = mud_effects.apply(database, "character", character["id"], spec, name)
-        drafts.append(EventDraft(f"You cast {name} and gain {key}.", event_type="combat"))
+        drafts.append(EventDraft(f"You cast {name} and gain {mud_effects.display_name(database, key)}.",
+                                 event_type="combat"))
     return drafts + _enemy_turn(database, user)
 
 
@@ -4309,7 +4340,7 @@ def _rest_action(database, user, parameters):
         (health, mana, character["id"], character["track_key"]),
     )
     # Resting lets one turn of lingering effects wear off, harmful ones included.
-    ticks = mud_effects.tick(database, "character", character["id"])
+    ticks = mud_effects.tick_detail(database, "character", character["id"])["damage"]
     harm = min(sum(amount for _, amount in ticks), character["current_health"] + health - 1)
     if harm > 0:
         database.execute(
@@ -4626,7 +4657,8 @@ def _use_item_effect(database, user, item):
             raise ActionError("This item's effects are invalid.")
         character = _character_row(database, user["id"])
         try:
-            keys = [mud_effects.validate(spec)[0] for spec in use_effects]
+            keys = [mud_effects.display_name(database, mud_effects.validate(spec, database)[0])
+                    for spec in use_effects]
         except ValueError as problem:
             raise ActionError(f"This item's effects are invalid: {problem}") from problem
         for spec in use_effects:
@@ -6840,7 +6872,7 @@ def _say_action(database, user, parameters):
     recipients.add(user["id"])
     character = character_state(database, user["id"])
     _set_hidden(database, user["id"], False)
-    source = (f"role:{room['role']}", f"room_template:{room.get('room_template_id')}") if instance_id else (room["id"],)
+    source = _dungeon_room_sources(room) if instance_id else (room["id"],)
     return [EventDraft(
         f"{character['name']}: {body}", event_type="chat",
         audience_type="instance" if instance_id else "room",
@@ -7128,6 +7160,10 @@ def _dungeon_trigger_list(database, instance_id):
                 return f"role:{ref}"
             if kind == "room_template":
                 return f"room_template:{ref}"
+            if kind == "environment":
+                return f"environment:{ref}"
+            if kind == "effect":
+                return dungeons.bundled_effect_key(template, ref)
             return ref
 
         resolved = []
@@ -7162,13 +7198,18 @@ def fire_triggers(database, user, event, source_ids, *, instance_id=None, phrase
     return drafts
 
 
+def _dungeon_room_sources(room):
+    """What a generated room answers to in dungeon trigger sources: its role, template, and environment."""
+    return (f"role:{room['role']}", f"room_template:{room.get('room_template_id')}",
+            f"environment:{room.get('environment_id')}")
+
+
 def _entry_triggers(database, user):
     room = _current_room(database, user["id"])
     if room["id"] in (PORTAL_ROOM_ID, "stationnet:death-summary"):
         return []
     instance_id = room.get("instance_id")
-    sources = ([f"role:{room['role']}", f"room_template:{room.get('room_template_id')}"] if instance_id
-               else [room["id"]])
+    sources = list(_dungeon_room_sources(room)) if instance_id else [room["id"]]
     found = [] if instance_id else _discover_destinations(database, user, room["id"])
     return found + fire_triggers(database, user, "enter_room", sources, instance_id=instance_id)
 
@@ -7332,6 +7373,21 @@ def _trigger_action(database, user, trigger, index, realm, instance_id=None):
                 (amount if kind == "heal" else -amount, character["id"], character["track_key"]))
             return [_private(user_id, f"You recover {amount} health." if kind == "heal" else f"You take {amount} damage.",
                              "combat")]
+        if kind == "apply_effect":
+            character = _character_row(database, user_id)
+            spec = {"key": action["effect"], "potency": action["potency"], "duration": action["duration"]}
+            name = mud_effects.display_name(database, spec["key"])
+            definition = mud_effects.catalog(database).get(spec["key"])
+            if definition is None:
+                return [_private(user_id, "Nothing seems to happen.")]
+            if mud_effects.harmful(definition):
+                resistance = _origin_profile(database, character["id"])["resistances"].get(
+                    mud_effects.resist_key(database, spec["key"]), 0)
+                spec = mud_effects.resist(spec, resistance)
+                if spec is None:
+                    return [_private(user_id, f"You shrug off {name}.", "combat")]
+            mud_effects.apply(database, "character", character["id"], spec, trigger.get("name", ""))
+            return [_private(user_id, f"You are affected by {name}.", "combat")]
         if kind == "set_object_state":
             _store_entity_state(database, realm, "object", action["object"], action["state"])
             return []
@@ -9431,6 +9487,10 @@ def builder():
                        for entry in skill_entries],
         npc_trainers=npc_trainers, item_categories=item_categories,
         resource=resource_settings(database), society=society_settings(database),
+        progression=mud_progression.for_world(database, _world()), progression_bounds=mud_progression.BOUNDS,
+        progression_labels=mud_progression.LABELS,
+        world_definitions=_builder_world_definitions(database),
+        built_in_abilities=mud_abilities.BUILT_IN, built_in_effects=mud_effects.EFFECTS,
         factions=_builder_factions(database), default_ranks=json.dumps(mud_society.validate_ranks(None), indent=1),
         game_time=_game_time(database), **dungeon_context, **trigger_context,
     )
@@ -9494,12 +9554,39 @@ def builder_export_world():
     if active is None:
         abort(404)
     try:
-        payload = mud_worlds.export(database, active["id"])
+        payload = mud_worlds.export(database, active["id"], strict=request.args.get("strict") == "1")
     except mud_worlds.WorldError as error:
         flash(f"World export failed: {error}", "error")
         return redirect(url_for("mud.builder"))
     return send_file(BytesIO(payload), mimetype="application/zip", as_attachment=True,
                      download_name=f"{active['id']}-world.zip")
+
+
+@bp.get("/w/<world_key>/builder/export/check")
+@admin_required
+def builder_check_export():
+    """List what an export would leave out, without downloading it."""
+    from . import mud_worlds
+    database = get_db()
+    active = _world_package(database)
+    if active is None:
+        abort(404)
+    try:
+        _document, report = mud_worlds.export_document(database, active["id"])
+    except mud_worlds.WorldError as error:
+        flash(f"World export failed: {error}", "error")
+        return _builder_redirect()
+    for problem in report.warnings[:10]:
+        flash(problem["message"], "error")
+    if not report.warnings:
+        flash("This world exports completely: everything it uses travels with it.", "success")
+    return _builder_redirect()
+
+
+# Item properties the builder's item form owns; any others survive an edit unchanged.
+ITEM_FORM_PROPERTIES = frozenset({"requirements", "category", "use_message", "attack_bonus", "defense_bonus", "heal",
+                                  "value", "firearm", "ammo_type", "magazine_size", "rounds", "on_use_effects",
+                                  "on_hit_effects", "teaches_destinations"})
 
 
 def _item_definition_fields():
@@ -9563,7 +9650,7 @@ def _item_definition_fields():
             if not isinstance(specs, list) or len(specs) > 10:
                 raise ValueError("Use an array of up to 10 effects.")
             for spec in specs:
-                mud_effects.validate(spec)
+                mud_effects.validate(spec, get_db())
         except (ValueError, json.JSONDecodeError) as problem:
             return None, f"Invalid {field}: {problem}"
         if specs:
@@ -10584,6 +10671,18 @@ def builder_update_item_definition(item_id):
     if _managed_dungeon_definition(database, item_id): abort(404)
     if database.execute("SELECT 1 FROM mud_item_definitions WHERE id=?", (item_id,)).fetchone() is None: abort(404)
     if error: flash(error, "error"); return _builder_redirect()
+    fields = list(fields)
+    # The form edits only its own keys; properties it does not show (from packages or triggers) are kept.
+    stored = _json_properties(database.execute("SELECT properties_json FROM mud_item_definitions WHERE id=?",
+                                               (item_id,)).fetchone()[0])
+    edited = json.loads(fields[3]) if isinstance(fields[3], str) else fields[3]
+    merged = {**{key: value for key, value in stored.items() if key not in ITEM_FORM_PROPERTIES}, **edited}
+    try:
+        from .mud_worlds import WorldError, validate_object_properties
+        validate_object_properties(merged)
+    except WorldError as problem:
+        flash(str(problem), "error"); return _builder_redirect()
+    fields[3] = json.dumps(merged, ensure_ascii=False, separators=(",", ":"))
     database.execute("UPDATE mud_item_definitions SET name=?,description=?,item_type=?,properties_json=?,equipment_slot=?,updated_at=CURRENT_TIMESTAMP WHERE id=?", (*fields, item_id)); database.commit()
     flash("Item definition updated.", "success"); return _builder_redirect()
 
@@ -11092,6 +11191,37 @@ def _dungeon_template_error(problem):
         shown = "; ".join(errors[:6])
         return f"Dungeon template is invalid: {shown}" + (f" (and {len(errors) - 6} more)" if len(errors) > 6 else "")
     return str(problem)
+
+
+def _builder_world_definitions(database):
+    from . import mud_worlds
+    return (mud_worlds.world_definitions(database, _world())
+            if _world_package(database) is not None else {})
+
+
+@bp.post("/w/<world_key>/builder/definitions")
+@builder_required
+def builder_save_definition():
+    """Create or replace one of this world's own races, classes, skills, abilities, or effects."""
+    from . import mud_worlds
+    validate_csrf()
+    kind = request.form.get("kind", "")
+    try:
+        document = json.loads(request.form.get("definition_json", ""))
+    except json.JSONDecodeError as problem:
+        flash(f"Definition JSON is invalid: {problem.msg} (line {problem.lineno}).", "error")
+        return _builder_redirect()
+    database = get_db()
+    try:
+        definition = mud_worlds.save_world_definition(database, _world(), kind, document)
+        database.commit()
+    except (mud_worlds.WorldError, sqlite3.Error) as problem:
+        database.rollback()
+        flash(f"Definition not saved: {problem}", "error")
+    else:
+        flash(f"Saved {definition['name']}. It travels with this world's exports"
+              + (" and is offered to its players." if kind in ("races", "classes", "skills") else "."), "success")
+    return _builder_redirect()
 
 
 @bp.post("/w/<world_key>/builder/dungeons")
@@ -11647,6 +11777,32 @@ def builder_set_resource():
     database.commit()
     flash(f"{resource['name']} is now this world's resource." if resource["enabled"]
           else "This world no longer uses a resource; spells are unavailable here.", "success")
+    return _builder_redirect()
+
+
+@bp.post("/w/<world_key>/builder/progression")
+@admin_required
+def builder_set_progression():
+    validate_csrf()
+    values = {}
+    for key in mud_progression.BOUNDS:
+        raw = request.form.get(key, "").strip()
+        if raw:
+            try:
+                values[key] = int(raw)
+            except ValueError:
+                flash(f"{mud_progression.LABELS[key]} must be a whole number.", "error")
+                return _builder_redirect()
+    try:
+        settings = mud_progression.validate(values)
+    except mud_progression.ProgressionError as error:
+        flash(str(error), "error")
+        return _builder_redirect()
+    database = get_db()
+    database.execute("UPDATE mud_world_packages SET progression_json=? WHERE id=mud_world()",
+                     (json.dumps(mud_progression.changed(settings), separators=(",", ":")),))
+    database.commit()
+    flash("Progression saved. Characters already past a lower level cap keep their level.", "success")
     return _builder_redirect()
 
 

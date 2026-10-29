@@ -1,0 +1,72 @@
+{
+  "mud_world_factions": [
+    {"id": "keepers", "name": "Lantern Keepers", "description": "The guild that tends the harbor lights.",
+     "default_reputation": 0, "public": 1}
+  ],
+  "mud_item_definitions": [
+    {"id": "flare-oil", "name": "Flare Oil", "description": "A vial of oil that burns bright.",
+     "item_type": "consumable", "properties_json": {"heal": 10, "value": 6}},
+    {"id": "searing-hook", "name": "Searing Hook", "description": "A lantern hook that leaves embers in a wound.",
+     "item_type": "equipment", "equipment_slot": "main_hand",
+     "properties_json": {"attack_bonus": 4, "value": 30, "category": "blade",
+                         "on_hit_effects": [{"key": "searing-light", "potency": 1, "duration": 2}]}},
+    {"id": "glass-shard", "name": "Sea Glass", "description": "Wave-smoothed glass the keepers collect.",
+     "item_type": "misc", "properties_json": {"value": 2}}
+  ],
+  "mud_conversations": [{"id": "keeper-talk", "name": "Keeper"}],
+  "mud_dialogue_nodes": [
+    {"id": "keeper-start", "conversation_id": "keeper-talk", "node_key": "start", "is_start": 1,
+     "body": "The cliffs' gull is stealing our sea glass. Bring me a shard and drive it off."}
+  ],
+  "mud_quests": [
+    {"id": "glass-hunt", "name": "Sea Glass", "description": "Recover sea glass for the keeper.",
+     "completion_mode": "turn_in", "turn_in_npc_definition_id": "keeper"}
+  ],
+  "mud_npc_definitions": [
+    {"id": "keeper", "name": "Old Keeper", "description": "A keeper with soot on her sleeves.",
+     "conversation_id": "keeper-talk", "faction_id": "keepers"},
+    {"id": "trader", "name": "Glass Trader", "description": "A trader with a tray of lamp glass."},
+    {"id": "gull", "name": "Storm Gull", "description": "A huge gull with salt-crusted wings.",
+     "behaviors_json": {"aggressive": true},
+     "properties_json": {"on_hit_effects": [{"key": "brine-chill", "potency": 2, "duration": 2}]}}
+  ],
+  "mud_npc_combat_profiles": [
+    {"npc_definition_id": "gull", "maximum_health": 18, "attack": 2, "defense": 0,
+     "experience_reward": 20, "respawn_seconds": 60}
+  ],
+  "mud_npc_combat_rewards": [
+    {"id": "gull-glass", "npc_definition_id": "gull", "reward_type": "item", "target_id": "glass-shard",
+     "amount": 1, "chance_percent": 100}
+  ],
+  "mud_npc_shops": [{"npc_definition_id": "trader", "buys_items": 1, "sell_percent": 40}],
+  "mud_shop_stock": [
+    {"id": "oil-stock", "npc_definition_id": "trader", "item_definition_id": "flare-oil", "price": 5},
+    {"id": "hook-stock", "npc_definition_id": "trader", "item_definition_id": "searing-hook", "price": 25}
+  ],
+  "mud_npc_trainers": [
+    {"id": "wick-lessons", "npc_definition_id": "keeper", "skill_key": "wick-craft", "price": 10, "max_rank": 5}
+  ],
+  "mud_quest_objectives": [
+    {"id": "find-glass", "quest_id": "glass-hunt", "objective_type": "possess_item", "target_id": "glass-shard",
+     "description": "Carry a piece of sea glass", "consume_on_turn_in": 1},
+    {"id": "drive-off-gull", "quest_id": "glass-hunt", "objective_type": "defeat_npc", "target_id": "gull",
+     "description": "Drive off the storm gull"}
+  ],
+  "mud_quest_rewards": [
+    {"id": "glass-coins", "quest_id": "glass-hunt", "reward_type": "coins", "amount": 25},
+    {"id": "glass-standing", "quest_id": "glass-hunt", "reward_type": "reputation", "target_id": "keepers",
+     "amount": 50}
+  ],
+  "mud_quest_givers": [{"quest_id": "glass-hunt", "npc_definition_id": "keeper"}],
+  "mud_dialogue_responses": [
+    {"id": "accept-glass", "node_id": "keeper-start", "response_text": "I'll find your glass.",
+     "accept_quest_id": "glass-hunt"},
+    {"id": "turn-in-glass", "node_id": "keeper-start", "response_text": "Here is the glass.",
+     "turn_in_quest_id": "glass-hunt", "sort_order": 1}
+  ],
+  "mud_npc_instances": [
+    {"id": "keeper-at-harbor", "definition_id": "keeper", "room_id": "harbor"},
+    {"id": "trader-at-market", "definition_id": "trader", "room_id": "market"},
+    {"id": "gull-at-cliffs", "definition_id": "gull", "room_id": "cliffs"}
+  ]
+}

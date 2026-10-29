@@ -1,0 +1,10 @@
+{
+  "effects": [
+    {"key": "searing-light", "name": "Searing Light", "description": "Lantern fire that burns each turn.",
+     "kind": "damage", "resist_as": "burning"},
+    {"key": "tide-blessing", "name": "Tide Blessing", "description": "The sea mends wounds a little each turn.",
+     "kind": "regen"},
+    {"key": "brine-chill", "name": "Brine Chill", "description": "Cold spray slows your guard.",
+     "kind": "defense", "sign": -1, "resist_as": "vulnerability"}
+  ]
+}

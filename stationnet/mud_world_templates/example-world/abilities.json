@@ -1,0 +1,10 @@
+{
+  "abilities": [
+    {"key": "lantern-flare", "name": "Lantern Flare", "command": "flare", "target": "enemy", "cost": 6,
+     "damage": 7, "description": "A burst of lantern fire that keeps burning.",
+     "effects": [{"key": "searing-light", "potency": 2, "duration": 3}]},
+    {"key": "tide-prayer", "name": "Tide Prayer", "command": "prayer", "target": "self", "cost": 5, "heal": 6,
+     "description": "Ask the tide to mend you.",
+     "effects": [{"key": "tide-blessing", "potency": 2, "duration": 3}]}
+  ]
+}

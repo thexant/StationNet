@@ -1,0 +1,8 @@
+[
+  {"id": "harbor-north", "from": "harbor", "to": "market", "name": "market", "direction": "north"},
+  {"from": "market", "to": "harbor", "name": "harbor", "direction": "south"},
+  {"from": "harbor", "to": "shrine", "name": "shrine", "direction": "east"},
+  {"from": "shrine", "to": "harbor", "name": "harbor", "direction": "west"},
+  {"from": "harbor", "to": "cliffs", "name": "cliffs", "direction": "west"},
+  {"from": "cliffs", "to": "harbor", "name": "harbor", "direction": "east"}
+]

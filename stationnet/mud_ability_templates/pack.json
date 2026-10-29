@@ -1,0 +1,17 @@
+{
+  "effects": [
+    {"key": "frostbite", "name": "Frostbite", "description": "Numbing cold that bites each turn.",
+     "kind": "damage", "resist_as": "burning"},
+    {"key": "stoneskin", "name": "Stoneskin", "description": "Skin hard as granite.",
+     "kind": "defense", "sign": 1},
+    {"key": "renewal", "name": "Renewal", "description": "Wounds knit over a few turns.", "kind": "regen"}
+  ],
+  "abilities": [
+    {"key": "frost-lance", "name": "Frost Lance", "command": "lance", "target": "enemy", "cost": 7, "damage": 8,
+     "effects": [{"key": "frostbite", "potency": 2, "duration": 3}]},
+    {"key": "granite-skin", "name": "Granite Skin", "command": "granite", "target": "self", "cost": 6,
+     "effects": [{"key": "stoneskin", "potency": 3, "duration": 4}]},
+    {"key": "renew", "name": "Renew", "target": "self", "cost": 8, "heal": 6,
+     "effects": [{"key": "renewal", "potency": 3, "duration": 3}]}
+  ]
+}

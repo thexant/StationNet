@@ -22,7 +22,25 @@ from .db import get_db
 
 
 GENERATOR_VERSION = "stationnet-dungeon-1"
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
+SCHEMA_VERSIONS = (1, 2)
+# Schema 2 rejects top-level keys outside this list instead of silently ignoring them.
+TOP_LEVEL_KEYS = frozenset({"$schema", "schema_version", "id", "version", "name", "author", "description",
+                            "origins", "skills", "abilities", "effects", "definitions", "generation", "pools",
+                            "triggers", "rewards", "scaling", "bosses"})
+SCHEMA_2_SECTIONS = ("abilities", "effects", "rewards", "scaling", "bosses")
+# Per difficulty step past the offset, enemies gain these; the defaults are the engine's long-standing numbers.
+SCALING_DEFAULTS = {"offset": 2, "per_step": {"maximum_health": 8, "attack": 2, "defense": 0.5, "accuracy": 2,
+                                              "evasion": 1, "experience_reward": 5}}
+SCALING_LIMITS = {"maximum_health": 100, "attack": 20, "defense": 10, "accuracy": 10, "evasion": 10,
+                  "experience_reward": 100}
+BOSS_DEFAULTS = {"health_percent": 200, "attack_percent": 125, "experience_percent": 200}
+BOSS_BOUNDS = {"health_percent": (100, 500), "attack_percent": (100, 300), "experience_percent": (100, 500)}
+RISK_LOOT_TIERS = {
+    1: ("shop:tonic", "treasure:relic", "shop:blade", "shop:coat"),
+    2: ("shop:elixir", "treasure:gem", "shop:sabre", "shop:bulwark"),
+    3: ("treasure:idol", "shop:mail", "shop:elixir"),
+}
 MAX_THEME_BYTES = 1024 * 1024
 SUPPORTED_LAYOUTS = frozenset({"linear", "branching", "maze", "hub"})
 EQUIPMENT_SLOTS = frozenset({
@@ -152,14 +170,51 @@ def bundled_origin_key(theme_id, kind, local_key):
         f"{theme_id}:{kind}:{local_key}".encode("utf-8")).hexdigest()[:32]
 
 
+def bundled_effect_key(template, ref):
+    """An effect named by a theme: its own bundled effect's installed key, else the key as written."""
+    local = {source.get("key") for source in template.get("effects", []) if isinstance(source, dict)}
+    return bundled_origin_key(template["id"], "effects", ref) if ref in local else ref
+
+
+def bundled_ability_key(template, ref):
+    local = {source.get("key") for source in template.get("abilities", []) if isinstance(source, dict)}
+    return bundled_origin_key(template["id"], "abilities", ref) if ref in local else ref
+
+
 def _skill_map(template):
     return {source.get("key"): bundled_origin_key(template["id"], "skills", source.get("key"))
             for source in template.get("skills", []) if isinstance(source, dict)}
 
 
-def install_skills(database, template):
-    """Install bundled skills (initially inactive) before the origins that use them."""
-    from . import character_creation, mud_skills
+def _magic_maps(template):
+    effects = {source.get("key"): bundled_origin_key(template["id"], "effects", source.get("key"))
+               for source in template.get("effects", []) if isinstance(source, dict)}
+    abilities = {source.get("key"): bundled_origin_key(template["id"], "abilities", source.get("key"))
+                 for source in template.get("abilities", []) if isinstance(source, dict)}
+    return effects, abilities
+
+
+def install_magic(database, template, notes=None):
+    """Install a theme's bundled effects, then the abilities that apply them."""
+    from . import mud_abilities, mud_shared_definitions
+    effect_map, ability_map = _magic_maps(template)
+    owner = ("theme", template["id"])
+    known = mud_effects.catalog(database)
+    for source in template.get("effects", []):
+        definition = {**mud_effects.normalize_effect(source), "key": effect_map[source["key"]]}
+        mud_shared_definitions.install_bundled(database, "effects", definition["key"], definition, owner,
+                                               source["key"], notes)
+        known[definition["key"]] = definition
+    for source in template.get("abilities", []):
+        definition = mud_abilities.normalize_ability(
+            mud_abilities.remap_effects({**source, "key": ability_map[source["key"]]}, effect_map), known)
+        mud_shared_definitions.install_bundled(database, "abilities", definition["key"], definition, owner,
+                                               source["key"], notes)
+
+
+def install_skills(database, template, notes=None):
+    """Install bundled skills before the origins that use them."""
+    from . import character_creation, mud_shared_definitions, mud_skills
     mapping = _skill_map(template)
     if any(not isinstance(key, str) or not character_creation.KEY_RE.fullmatch(key) for key in mapping) \
             or len(mapping) != len(template.get("skills", [])):
@@ -178,22 +233,14 @@ def install_skills(database, template):
                 database, check_key=False, extra_skills=mapping.values(), extra_origins=extra_origins)
         except ValueError as error:
             raise ValueError(f"Invalid bundled skill {local_key}: {error}") from error
-        existing = database.execute("SELECT definition_json,installed FROM mud_skill_definitions WHERE key=?",
-                                    (key,)).fetchone()
-        if existing:
-            if not existing["installed"] or json.loads(existing["definition_json"]) != definition:
-                raise ValueError(f"Bundled skill {local_key} conflicts with an installed definition.")
-        else:
-            database.execute(
-                "INSERT INTO mud_skill_definitions(key,definition_json,imported,installed,enabled) VALUES(?,?,1,1,0)",
-                (key, json.dumps(definition, separators=(",", ":"))))
-        database.execute("INSERT INTO mud_dungeon_skills(theme_id,skill_key,local_key) VALUES(?,?,?)",
-                         (template["id"], key, local_key))
+        mud_shared_definitions.install_bundled(database, "skills", key, definition, ("theme", template["id"]),
+                                               local_key, notes)
 
 
-def install_origins(database, template):
-    from . import character_creation, mud_skills
+def install_origins(database, template, notes=None):
+    from . import character_creation, mud_shared_definitions, mud_skills
     skill_map = _skill_map(template)
+    _effect_map, ability_map = _magic_maps(template)
     for kind in character_creation.KINDS:
         seen = set()
         for source in template.get("origins", {}).get(kind, []):
@@ -203,23 +250,194 @@ def install_origins(database, template):
                 raise ValueError(f"Bundled {kind} need distinct valid local keys.")
             seen.add(local_key)
             key = bundled_origin_key(template["id"], kind, local_key)
+            source = {**source, "key": key}
+            if isinstance(source.get("spells"), list):
+                source["spells"] = [ability_map.get(spell, spell) for spell in source["spells"]]
             definition = character_creation.validate_origin(
-                kind, mud_skills.remap({**source, "key": key}, skill_map), database, check_key=False)
-            existing = database.execute(
-                "SELECT definition_json,installed FROM mud_origin_definitions WHERE kind=? AND key=?",
-                (kind, key)).fetchone()
-            if existing:
-                if not existing["installed"] or json.loads(existing["definition_json"]) != definition:
-                    raise ValueError(f"Bundled {kind[:-1]} {local_key} conflicts with an installed definition.")
-            else:
-                database.execute(
-                    "INSERT INTO mud_origin_definitions(kind,key,definition_json,imported,installed,enabled) "
-                    "VALUES(?,?,?,1,1,0)",
-                    (kind, key, json.dumps(definition, separators=(",", ":"))),
-                )
-            database.execute(
-                "INSERT INTO mud_dungeon_origins(theme_id,kind,origin_key,local_key) VALUES(?,?,?,?)",
-                (template["id"], kind, key, local_key))
+                kind, mud_skills.remap(source, skill_map), database, check_key=False,
+                extra_abilities=ability_map.values())
+            mud_shared_definitions.install_bundled(database, kind, key, definition, ("theme", template["id"]),
+                                                   local_key, notes)
+
+
+def install_bundles(database, template, notes=None):
+    """Everything a theme bundles, in dependency order."""
+    install_magic(database, template, notes)
+    install_skills(database, template, notes)
+    install_origins(database, template, notes)
+
+
+def bundled_keys(database, template):
+    """The installed race, class, and skill keys a theme bundles, to offer in the dungeon world."""
+    keys = theme_origin_keys(database, template["id"])
+    return {kind: sorted(keys[kind]) for kind in keys}
+
+
+def shared_definition_ids(template):
+    """Station definition IDs a template names (not embedded, not built in): (items, npcs)."""
+    items, npcs = set(), set()
+    pools = template.get("pools", {})
+    for kind, target in (("items", items), ("npcs", npcs), ("enemies", npcs)):
+        for pool in pools.get(kind, []):
+            for choice in pool.get("choices", []):
+                if choice.get("definition_id"):
+                    target.add(choice["definition_id"])
+    definitions = template.get("definitions", {})
+    for kind in ("npcs", "enemies"):
+        for npc in definitions.get(kind, []):
+            for entry in npc.get("equipment", []) + npc.get("loot", []):
+                if entry.get("item_definition_id"):
+                    items.add(entry["item_definition_id"])
+    for entries in ((template.get("rewards") or {}).get("risk_loot") or {}).get("tiers", {}).values():
+        items.update(entry["item_definition_id"] for entry in entries if entry.get("item_definition_id"))
+    local = {kind: {entry.get("id") for entry in definitions.get(kind, [])} for kind in ("items", "npcs", "enemies")}
+    for trigger in template.get("triggers", []):
+        for kind, ref in mud_triggers.references(mud_triggers.validate_trigger(trigger, dungeon=True)):
+            if kind == "item" and ref not in local["items"]:
+                items.add(ref)
+            elif kind == "npc" and ref not in local["npcs"] | local["enemies"]:
+                npcs.add(ref)
+    return ({ref for ref in items if not ref.startswith("stationnet:")},
+            {ref for ref in npcs if not ref.startswith("stationnet:")})
+
+
+def _local_name(definition_id, taken):
+    base = re.sub(r"[^a-z0-9._-]+", "-", definition_id.rsplit(":", 1)[-1].casefold()).strip("-._") or "shared"
+    base = base[:56]
+    name, number = base, 2
+    while name in taken:
+        name, number = f"{base}-{number}", number + 1
+    taken.add(name)
+    return name
+
+
+def export_theme(database, theme_id, *, embed_shared=False):
+    """An installed theme as a self-contained document.
+
+    Shared station definitions (other than built-in ``stationnet:`` ones) would be
+    missing elsewhere, so they are an error unless ``embed_shared`` copies them in.
+    """
+    installed = discover_templates()
+    if theme_id not in installed:
+        raise ValueError("Select an installed dungeon theme to export.")
+    template = deepcopy(installed[theme_id][1])
+    items, npcs = shared_definition_ids(template)
+    if (items or npcs) and not embed_shared:
+        names = ", ".join(sorted(items | npcs)[:5])
+        raise ValueError(f"This theme uses station definitions other stations will not have ({names}). "
+                         "Export it with shared definitions embedded instead.")
+    if not (items or npcs):
+        return template
+    definitions = template.setdefault("definitions", {})
+    for kind in ("items", "npcs", "enemies"):
+        definitions.setdefault(kind, [])
+    taken = {entry["id"] for kind in ("items", "npcs", "enemies") for entry in definitions[kind]}
+    local_items = {}
+    pending = sorted(items)
+    embedded_npcs = []
+    for definition_id in sorted(npcs):
+        row = database.execute(
+            "SELECT d.name,d.description,d.properties_json,d.behaviors_json,p.maximum_health,p.attack,p.defense,"
+            "p.accuracy,p.evasion,p.experience_reward,p.respawn_seconds FROM mud_npc_definitions d "
+            "LEFT JOIN mud_npc_combat_profiles p ON p.npc_definition_id=d.id WHERE d.id=?",
+            (definition_id,)).fetchone()
+        if row is None:
+            raise ValueError(f"Shared NPC definition {definition_id} no longer exists.")
+        entry = {"id": _local_name(definition_id, taken), "name": row["name"], "description": row["description"],
+                 "properties": json.loads(row["properties_json"] or "{}"),
+                 "behaviors": json.loads(row["behaviors_json"] or "{}")}
+        if row["maximum_health"] is not None:
+            entry["combat"] = {key: row[key] for key in ("maximum_health", "attack", "defense", "experience_reward",
+                                                         "respawn_seconds", "accuracy", "evasion")
+                               if row[key] is not None}
+        entry["equipment"] = [{"slot": gear["equipment_slot"], "item_definition_id": gear["item_definition_id"]}
+                              for gear in database.execute(
+                                  "SELECT equipment_slot,item_definition_id FROM mud_npc_equipment "
+                                  "WHERE npc_definition_id=? ORDER BY equipment_slot", (definition_id,))]
+        entry["loot"] = [{"type": reward["reward_type"], "amount": reward["amount"],
+                          **({"item_definition_id": reward["target_id"]} if reward["reward_type"] == "item" else {})}
+                         for reward in database.execute(
+                             "SELECT reward_type,target_id,amount FROM mud_npc_combat_rewards "
+                             "WHERE npc_definition_id=? AND reward_type IN ('experience','item') ORDER BY id",
+                             (definition_id,))]
+        pending += [ref["item_definition_id"] for ref in entry["equipment"] + entry["loot"]
+                    if ref.get("item_definition_id") and not ref["item_definition_id"].startswith("stationnet:")]
+        kind = "enemies" if "combat" in entry else "npcs"
+        definitions[kind].append(entry)
+        embedded_npcs.append((definition_id, kind, entry["id"]))
+    for definition_id in sorted(set(pending)):
+        row = database.execute("SELECT name,description,item_type,properties_json,behaviors_json,equipment_slot "
+                               "FROM mud_item_definitions WHERE id=?", (definition_id,)).fetchone()
+        if row is None:
+            raise ValueError(f"Shared item definition {definition_id} no longer exists.")
+        local = _local_name(definition_id, taken)
+        local_items[definition_id] = local
+        entry = {"id": local, "name": row["name"], "description": row["description"],
+                 "item_type": row["item_type"], "properties": json.loads(row["properties_json"] or "{}"),
+                 "behaviors": json.loads(row["behaviors_json"] or "{}")}
+        if row["equipment_slot"]:
+            entry["equipment_slot"] = row["equipment_slot"]
+        definitions["items"].append(entry)
+    npc_locals = {definition_id: (kind, local) for definition_id, kind, local in embedded_npcs}
+
+    def item_ref(entry):
+        if entry.get("item_definition_id") in local_items:
+            entry["item_local_id"] = local_items[entry.pop("item_definition_id")]
+
+    for kind in ("npcs", "enemies"):
+        for npc in definitions[kind]:
+            for entry in npc.get("equipment", []) + npc.get("loot", []):
+                item_ref(entry)
+    for entries in ((template.get("rewards") or {}).get("risk_loot") or {}).get("tiers", {}).values():
+        for entry in entries:
+            item_ref(entry)
+    for kind in ("items", "npcs", "enemies"):
+        for pool in template.get("pools", {}).get(kind, []):
+            for choice in pool.get("choices", []):
+                ref = choice.get("definition_id")
+                if ref in local_items and kind == "items":
+                    choice["local_id"] = local_items[choice.pop("definition_id")]
+                elif ref in npc_locals:
+                    target_kind, local = npc_locals[ref]
+                    if target_kind != kind:
+                        # The pool type follows the definition: a fighting NPC belongs to an enemy pool.
+                        raise ValueError(f"Pool {pool['id']} draws {ref}, which embeds as one of the theme's "
+                                         f"{target_kind}; move it to an {target_kind} pool first.")
+                    choice["local_id"] = local
+                    del choice["definition_id"]
+    for trigger in template.get("triggers", []):
+        for action in trigger.get("actions", []):
+            if action.get("item") in local_items:
+                action["item"] = local_items[action["item"]]
+        source = trigger.get("source", {})
+        if source.get("item") in local_items:
+            source["item"] = local_items[source["item"]]
+        if source.get("npc") in npc_locals:
+            source["npc"] = npc_locals[source["npc"]][1]
+    # Custom effects the embedded content applies travel with it.
+    _embed_effects(database, template)
+    errors = validate_template(template, database)
+    if errors:
+        raise TemplateError(errors)
+    return template
+
+
+def _embed_effects(database, template):
+    bundled = {source["key"] for source in template.get("effects", [])}
+    installed = mud_effects.catalog(database, include_removed=True)
+    needed = set()
+    for kind in ("items", "npcs", "enemies"):
+        for entry in template.get("definitions", {}).get(kind, []):
+            for field in ("on_use_effects", "on_hit_effects"):
+                for spec in (entry.get("properties") or {}).get(field, []) or []:
+                    key = spec.get("key") if isinstance(spec, dict) else None
+                    if key and key not in mud_effects.EFFECTS and key not in bundled and key in installed:
+                        needed.add(key)
+    if needed:
+        template["schema_version"] = 2
+        template.setdefault("effects", []).extend(
+            {field: installed[key][field] for field in ("key", "name", "description", "kind", "sign", "resist_as")
+             if field in installed[key]} for key in sorted(needed))
 
 
 def theme_origin_keys(database, theme_id):
@@ -253,6 +471,8 @@ def remove_template(database, theme_id, path, *, remove_origins=False):
     try:
         with database:
             database.execute("BEGIN IMMEDIATE")
+            from . import mud_shared_definitions
+            mud_shared_definitions.remove_unused_abilities_and_effects(database, ("theme", theme_id))
             database.execute("DELETE FROM mud_dungeon_origins WHERE theme_id=?", (theme_id,))
             database.execute("DELETE FROM mud_dungeon_skills WHERE theme_id=?", (theme_id,))
             database.execute("DELETE FROM mud_dungeon_theme_settings WHERE theme_id=?", (theme_id,))
@@ -368,7 +588,97 @@ def _validate_json_object(errors, value, path):
         errors.append(f"{path}: must be an object")
 
 
-def _validate_embedded_definitions(errors, template, database=None):
+def _validate_bundled_magic(errors, template, database, extra_effects):
+    """Check bundled effects and abilities; return every effect key the template may apply."""
+    from . import mud_abilities
+    known = mud_effects.catalog(database)
+    for key in extra_effects:
+        known.setdefault(key, {"key": key, "kind": "damage"})
+    for kind in ("effects", "abilities"):
+        if kind in template and (not isinstance(template[kind], list) or len(template[kind]) > 100):
+            errors.append(f"$.{kind}: must be an array of at most 100 definitions")
+            return set(known)
+    seen = set()
+    for index, source in enumerate(template.get("effects", [])):
+        try:
+            definition = mud_effects.normalize_effect(source)
+        except ValueError as problem:
+            errors.append(f"$.effects[{index}]: {problem}")
+            continue
+        if definition["key"] in mud_effects.EFFECTS:
+            errors.append(f"$.effects[{index}].key: {definition['key']!r} is a built-in effect; "
+                          "choose another key")
+        elif definition["key"] in seen:
+            errors.append(f"$.effects[{index}].key: duplicate effect {definition['key']!r}")
+        seen.add(definition["key"])
+        known[definition["key"]] = definition
+    seen = set()
+    for index, source in enumerate(template.get("abilities", [])):
+        try:
+            definition = mud_abilities.normalize_ability(source, known)
+        except ValueError as problem:
+            errors.append(f"$.abilities[{index}]: {problem}")
+            continue
+        if definition["key"] in mud_abilities.BUILT_IN:
+            errors.append(f"$.abilities[{index}].key: {definition['key']!r} is a built-in ability; "
+                          "choose another key")
+        elif definition["key"] in seen:
+            errors.append(f"$.abilities[{index}].key: duplicate ability {definition['key']!r}")
+        seen.add(definition["key"])
+    return set(known)
+
+
+def _validate_rules(errors, template):
+    """Optional reward, scaling, and boss settings; each stays within fixed bounds."""
+    rewards = template.get("rewards")
+    if rewards is not None:
+        if not isinstance(rewards, dict) or set(rewards) - {"experience_percent", "risk_loot"}:
+            errors.append("$.rewards: may contain experience_percent and risk_loot")
+        else:
+            if not _is_int(rewards.get("experience_percent", 100), 10, 500):
+                errors.append("$.rewards.experience_percent: must be an integer from 10 to 500")
+            risk = rewards.get("risk_loot", {})
+            if not isinstance(risk, dict) or set(risk) - {"enabled", "chance_percent", "tiers"}:
+                errors.append("$.rewards.risk_loot: may contain enabled, chance_percent, and tiers")
+            else:
+                if not isinstance(risk.get("enabled", True), bool):
+                    errors.append("$.rewards.risk_loot.enabled: must be true or false")
+                if not _is_int(risk.get("chance_percent", 100), 0, 200):
+                    errors.append("$.rewards.risk_loot.chance_percent: must be an integer from 0 to 200")
+                tiers = risk.get("tiers", {})
+                if not isinstance(tiers, dict) or set(tiers) - {"1", "2", "3"}:
+                    errors.append("$.rewards.risk_loot.tiers: map tiers 1, 2, and/or 3 to item lists")
+                else:
+                    for tier, entries in tiers.items():
+                        if not isinstance(entries, list) or not 1 <= len(entries) <= 20:
+                            errors.append(f"$.rewards.risk_loot.tiers.{tier}: must list 1 to 20 items")
+    scaling = template.get("scaling")
+    if scaling is not None:
+        if not isinstance(scaling, dict) or set(scaling) - {"offset", "per_step"}:
+            errors.append("$.scaling: may contain offset and per_step")
+        else:
+            if not _is_int(scaling.get("offset", 2), 0, 10):
+                errors.append("$.scaling.offset: must be an integer from 0 to 10")
+            per_step = scaling.get("per_step", {})
+            if not isinstance(per_step, dict) or set(per_step) - set(SCALING_LIMITS):
+                errors.append(f"$.scaling.per_step: may contain {', '.join(SCALING_LIMITS)}")
+            else:
+                for key, value in per_step.items():
+                    if (not isinstance(value, (int, float)) or isinstance(value, bool)
+                            or not 0 <= value <= SCALING_LIMITS[key] or round(value * 10) != value * 10):
+                        errors.append(f"$.scaling.per_step.{key}: must be a number from 0 to "
+                                      f"{SCALING_LIMITS[key]} with at most one decimal place")
+    bosses = template.get("bosses")
+    if bosses is not None:
+        if not isinstance(bosses, dict) or set(bosses) - set(BOSS_BOUNDS):
+            errors.append(f"$.bosses: may contain {', '.join(BOSS_BOUNDS)}")
+        else:
+            for key, (low, high) in BOSS_BOUNDS.items():
+                if not _is_int(bosses.get(key, BOSS_DEFAULTS[key]), low, high):
+                    errors.append(f"$.bosses.{key}: must be an integer from {low} to {high}")
+
+
+def _validate_embedded_definitions(errors, template, database=None, effect_keys=None):
     definitions = template.get("definitions", {})
     if not isinstance(definitions, dict):
         errors.append("$.definitions: must be an object")
@@ -413,7 +723,7 @@ def _validate_embedded_definitions(errors, template, database=None):
                         continue
                     for effect_index, spec in enumerate(specs):
                         try:
-                            mud_effects.validate(spec)
+                            mud_effects.validate(spec, database, extra_keys=effect_keys or ())
                         except ValueError as problem:
                             errors.append(f"{here}.properties.{effect_field}[{effect_index}]: {problem}")
             if kind == "items":
@@ -436,6 +746,8 @@ def _validate_embedded_definitions(errors, template, database=None):
                 if isinstance(local_id, str):
                     item_slots[local_id] = slot
                 continue
+            if "boss" in definition and (kind != "enemies" or not isinstance(definition["boss"], bool)):
+                errors.append(f"{here}.boss: only enemies may set boss, to true or false")
             combat = definition.get("combat")
             if kind == "enemies" and not isinstance(combat, dict):
                 errors.append(f"{here}.combat: enemies require a combat object")
@@ -547,10 +859,20 @@ def _origin_resolver(template):
     return resolve
 
 
+def effect_properties(template, properties):
+    """Item or NPC properties with the theme's local effect keys resolved to installed ones."""
+    properties = dict(properties or {})
+    for field in ("on_use_effects", "on_hit_effects"):
+        if isinstance(properties.get(field), list):
+            properties[field] = [{**spec, "key": bundled_effect_key(template, spec.get("key"))}
+                                 if isinstance(spec, dict) else spec for spec in properties[field]]
+    return properties
+
+
 def _item_properties_json(template, properties):
     """Store item properties with bundled race/class requirement keys resolved."""
     from . import mud_conditions
-    properties = dict(properties or {})
+    properties = effect_properties(template, properties)
     if properties.get("requirements"):
         properties["requirements"] = mud_conditions.remap_item_requirements(
             mud_conditions.validate_item_requirements(properties["requirements"]), _origin_resolver(template))
@@ -621,13 +943,29 @@ def _validate_conversation(errors, value, path, local_items=(), database=None):
                 errors.append(f"{path}.nodes[{index}].responses[{response_index}].next_node_id: unknown node")
 
 
-def validate_template(template, database=None):
-    """Return actionable JSON-path errors; an empty list means valid."""
+def validate_template(template, database=None, extra_effects=()):
+    """Return actionable JSON-path errors; an empty list means valid.
+
+    ``extra_effects`` are effect keys a surrounding package provides (a world's own effects).
+    """
     errors = []
     if not isinstance(template, dict):
         return ["$: template root must be an object"]
-    if template.get("schema_version") != SCHEMA_VERSION:
-        errors.append(f"$.schema_version: must be {SCHEMA_VERSION}")
+    schema = template.get("schema_version")
+    if type(schema) is int and schema > SCHEMA_VERSION:
+        errors.append(f"$.schema_version: this theme needs a newer StationNet (schema {schema}; "
+                      f"this station reads up to {SCHEMA_VERSION})")
+    elif schema not in SCHEMA_VERSIONS or type(schema) is not int:
+        errors.append("$.schema_version: must be 1 or 2")
+    elif schema == 1:
+        for key in SCHEMA_2_SECTIONS:
+            if key in template:
+                errors.append(f"$.{key}: requires schema_version 2")
+    else:
+        for key in sorted(set(template) - TOP_LEVEL_KEYS):
+            errors.append(f"$.{key}: unsupported top-level field")
+    effect_keys = _validate_bundled_magic(errors, template, database, extra_effects)
+    _validate_rules(errors, template)
     for key in ("id", "version"):
         value = template.get(key)
         if not isinstance(value, str) or not ID_RE.fullmatch(value):
@@ -647,7 +985,7 @@ def validate_template(template, database=None):
     skills = template.get("skills", [])
     if not isinstance(skills, list) or len(skills) > 100 or any(not isinstance(item, dict) for item in skills):
         errors.append("$.skills: must contain at most 100 skill definition objects")
-    embedded_ids = _validate_embedded_definitions(errors, template, database)
+    embedded_ids = _validate_embedded_definitions(errors, template, database, effect_keys)
 
     generation = template.get("generation")
     if not isinstance(generation, dict):
@@ -794,11 +1132,22 @@ def validate_template(template, database=None):
                     errors.append(f"{path}.config: must be an object")
     role_names = {"entrance", "exit", "normal"} | ({rule.get("role") for rule in roles if isinstance(rule, dict)}
                                                    if isinstance(roles, list) else set())
-    _validate_triggers(errors, template, embedded_ids, ids_by_kind.get("rooms", set()), role_names, database)
+    _validate_triggers(errors, template, embedded_ids, ids_by_kind.get("rooms", set()), role_names, database,
+                       ids_by_kind.get("environments", set()), effect_keys)
+    risk = (template.get("rewards") or {}).get("risk_loot") if isinstance(template.get("rewards"), dict) else None
+    if isinstance(risk, dict) and isinstance(risk.get("tiers"), dict):
+        for tier, entries in risk["tiers"].items():
+            for index, entry in enumerate(entries if isinstance(entries, list) else []):
+                path = f"$.rewards.risk_loot.tiers.{tier}[{index}]"
+                if not isinstance(entry, dict) or set(entry) - {"item_local_id", "item_definition_id"}:
+                    errors.append(f"{path}: must be an object with item_local_id or item_definition_id")
+                    continue
+                _validate_item_reference(errors, entry, path, embedded_ids.get("items", set()), {}, database)
     return errors
 
 
-def _validate_triggers(errors, template, embedded_ids, room_templates, roles, database=None):
+def _validate_triggers(errors, template, embedded_ids, room_templates, roles, database=None,
+                       environments=(), effect_keys=None):
     """Dungeon triggers name the template's own room roles, room templates, and definitions."""
     if "triggers" not in template:
         return
@@ -815,6 +1164,10 @@ def _validate_triggers(errors, template, embedded_ids, room_templates, roles, da
                 errors.append(f"{path}.source.room_role: unknown room role {ref!r}")
             elif kind == "room_template" and ref not in room_templates:
                 errors.append(f"{path}.source.room_template: unknown room pool {ref!r}")
+            elif kind == "environment" and ref not in environments:
+                errors.append(f"{path}.source.environment: unknown environment pool {ref!r}")
+            elif kind == "effect" and effect_keys is not None and ref not in effect_keys:
+                errors.append(f"{path}: effect {ref!r} is not built in, bundled, or installed")
             elif kind in ("item", "npc") and ref not in (embedded_ids.get("items", set()) if kind == "item" else npcs):
                 table = "mud_item_definitions" if kind == "item" else "mud_npc_definitions"
                 if database is not None and database.execute(
@@ -1046,7 +1399,7 @@ def _embedded_snapshot(template, kind, definition):
         "definition_id": definition_id, "local_id": definition["id"],
         "source": "embedded", "name": definition["name"],
         "description": definition["description"],
-        "properties_json": canonical_json(definition.get("properties", {})),
+        "properties_json": canonical_json(effect_properties(template, definition.get("properties", {}))),
         "behaviors_json": canonical_json(definition.get("behaviors", {})),
     }
     if kind == "item":
@@ -1130,28 +1483,65 @@ def _select_content(template, context, rng, database):
     return result
 
 
-def _risk_loot(context, rng, database):
+def _risk_loot(context, rng, database, template=None):
     """Add a small station supply or treasure cache without requiring theme authors to place it."""
-    if database is None or context["role"] == "entrance":
+    rules = ((template or {}).get("rewards") or {}).get("risk_loot") or {}
+    if database is None or context["role"] == "entrance" or rules.get("enabled", True) is False:
         return []
     depth = context["depth_ratio"]
-    if context["role"] != "exit" and rng.random() > min(.8, .22 + depth * .38):
+    chance = min(.8, .22 + depth * .38)
+    if "chance_percent" in rules:
+        chance = min(1, chance * rules["chance_percent"] / 100)
+    if context["role"] != "exit" and rng.random() > chance:
         return []
     tier = 1
     if context["difficulty"] >= 4 and rng.random() < min(.8, .25 + depth * .4):
         tier = 2
     if context["difficulty"] >= 8 and rng.random() < min(.65, .15 + depth * .35):
         tier = 3
-    choices = {
-        1: ("shop:tonic", "treasure:relic", "shop:blade", "shop:coat"),
-        2: ("shop:elixir", "treasure:gem", "shop:sabre", "shop:bulwark"),
-        3: ("treasure:idol", "shop:mail", "shop:elixir"),
-    }[tier]
-    definition_id = "stationnet:" + rng.choice(choices)
-    snapshot = _definition_snapshot(database, "item", definition_id)
+    custom = (rules.get("tiers") or {}).get(str(tier))
+    if custom:
+        entry = rng.choice(custom)
+        definition_id = _item_reference_id(template, entry)
+        definition = (_embedded_definition(template, "item", entry["item_local_id"])
+                      if entry.get("item_local_id") else None)
+        snapshot = (_embedded_snapshot(template, "item", definition) if definition
+                    else _definition_snapshot(database, "item", definition_id))
+    else:
+        definition_id = "stationnet:" + rng.choice(RISK_LOOT_TIERS[tier])
+        snapshot = _definition_snapshot(database, "item", definition_id)
     return [{"type": "item", "pool_id": "stationnet-risk-loot",
              "definition_id": definition_id, "quantity": 1,
              "snapshot": snapshot, "config": {"rarity": tier}}]
+
+
+def _scale_enemy(template, snapshot, room_difficulty):
+    """Deeper rooms field stronger foes; themes may tune how much, bosses and rewards included."""
+    if snapshot.get("maximum_health") is None:
+        return
+    scaling = template.get("scaling") or {}
+    per_step = {**SCALING_DEFAULTS["per_step"], **scaling.get("per_step", {})}
+    scale = max(0, room_difficulty - scaling.get("offset", SCALING_DEFAULTS["offset"]))
+    # Tenths keep the arithmetic exact, so default themes generate exactly what they always did.
+    step = {key: scale * round(value * 10) // 10 for key, value in per_step.items()}
+    snapshot["maximum_health"] += step["maximum_health"]
+    snapshot["attack"] += step["attack"]
+    snapshot["defense"] += step["defense"]
+    # Deeper foes also aim and move better, so evasive builds stay tested.
+    snapshot["accuracy"] = (snapshot.get("accuracy") or 0) + step["accuracy"]
+    snapshot["evasion"] = (snapshot.get("evasion") or 0) + step["evasion"]
+    snapshot["experience_reward"] += step["experience_reward"]
+    if "bosses" in template and snapshot.get("local_id"):
+        definition = _embedded_definition(template, "enemy", snapshot["local_id"]) or {}
+        if definition.get("boss") is True:
+            bosses = {**BOSS_DEFAULTS, **template["bosses"]}
+            snapshot["boss"] = True
+            snapshot["maximum_health"] = snapshot["maximum_health"] * bosses["health_percent"] // 100
+            snapshot["attack"] = snapshot["attack"] * bosses["attack_percent"] // 100
+            snapshot["experience_reward"] = snapshot["experience_reward"] * bosses["experience_percent"] // 100
+    percent = (template.get("rewards") or {}).get("experience_percent", 100)
+    if percent != 100:
+        snapshot["experience_reward"] = snapshot["experience_reward"] * percent // 100
 
 
 def generate_manifest(template, seed, size=None, layout=None, difficulty=None, database=None):
@@ -1213,19 +1603,10 @@ def generate_manifest(template, seed, size=None, layout=None, difficulty=None, d
             addition = _weighted(rng, environment["descriptions"])["text"]
             description = f"{description}\n\n{addition}"
         content = _select_content(template, context, rng, database)
-        content.extend(_risk_loot(context, rng, database))
+        content.extend(_risk_loot(context, rng, database, template))
         for entry in content:
             if entry["type"] == "enemy":
-                scale = max(0, room_difficulty - 2)
-                snapshot = entry["snapshot"]
-                if snapshot.get("maximum_health") is not None:
-                    snapshot["maximum_health"] += scale * 8
-                    snapshot["attack"] += scale * 2
-                    snapshot["defense"] += scale // 2
-                    # Deeper foes also aim and move better, so evasive builds stay tested.
-                    snapshot["accuracy"] = (snapshot.get("accuracy") or 0) + scale * 2
-                    snapshot["evasion"] = (snapshot.get("evasion") or 0) + scale
-                    snapshot["experience_reward"] += scale * 5
+                _scale_enemy(template, entry["snapshot"], room_difficulty)
         rooms.append({
             "key": f"room-{index:04d}", "ordinal": index, "x": position[0], "y": position[1],
             "role": roles[index], "depth": depths[index], "difficulty": room_difficulty,
@@ -1378,7 +1759,8 @@ def _install_embedded_definitions(database, template):
                 "(id,name,description,conversation_id,properties_json,behaviors_json) "
                 "VALUES(?,?,?,?,?,?)",
                 (definition_id, npc["name"], npc["description"], conversation_id,
-                 canonical_json(npc.get("properties", {})), canonical_json(npc.get("behaviors", {}))),
+                 canonical_json(effect_properties(template, npc.get("properties", {}))),
+                 canonical_json(npc.get("behaviors", {}))),
             )
             combat = npc.get("combat")
             if combat:

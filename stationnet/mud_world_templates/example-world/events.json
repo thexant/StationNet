@@ -1,0 +1,11 @@
+{
+  "triggers": [
+    {"id": "shrine-blessing", "name": "Shrine blessing", "event": "enter_room", "source": {"room": "shrine"},
+     "cooldown_seconds": 60,
+     "actions": [
+       {"type": "message", "text": "Seawater in the basin glows, and warmth settles into your bones."},
+       {"type": "apply_effect", "effect": "tide-blessing", "potency": 3, "duration": 3},
+       {"type": "set_flag", "scope": "player", "key": "blessed", "value": "yes"}
+     ]}
+  ]
+}

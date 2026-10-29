@@ -161,7 +161,7 @@ updated bundled theme.
 
 | Top-level key | Required | Purpose |
 | --- | --- | --- |
-| `schema_version` | yes | Must be `1`. |
+| `schema_version` | yes | `1` or `2`. Schema 2 adds the sections marked "2" below and rejects top-level keys it does not know. |
 | `id` | yes | Unique theme identifier. |
 | `version` | yes | Version string; see [versioning](#determinism-and-versioning). |
 | `name` | yes | Display name. |
@@ -170,6 +170,12 @@ updated bundled theme.
 | `definitions` | no | Items, NPCs, and enemies owned by this theme. |
 | `generation` | yes | Size, difficulty, layout types, and special roles. |
 | `pools` | yes | Weighted text and content used to populate rooms. |
+| `origins`, `skills` | no | Races, classes, and skills the theme bundles (portal themes only). |
+| `effects`, `abilities` | no (2) | Timed effects and castable abilities the theme bundles (portal themes only). See [Bundled abilities and effects](#bundled-abilities-and-effects-schema-2). |
+| `rewards` | no (2) | Experience rate and risk-loot settings. See [Rewards, scaling, and bosses](#rewards-scaling-and-bosses-schema-2). |
+| `scaling` | no (2) | How much enemies strengthen per difficulty step. |
+| `bosses` | no (2) | Multipliers for enemies marked `"boss": true`. |
+| `triggers` | no | Run-scoped [triggers](#triggers-optional). |
 
 **ID format.** Every `id` (theme, version, local definitions, pools, dialogue
 nodes and responses) must match `^[a-z0-9][a-z0-9._-]{0,63}$`: lowercase
@@ -418,7 +424,16 @@ At most one eligible encounter is selected per room. An entry in
 connect any combination of `npc_pool`, `enemy_pool`, and `item_pool` (each the
 `id` of a pool in the matching list), plus `chance` and an open-ended `config`
 object. The selected encounter, its `config`, and the selected content are
-snapshotted into the generated room.
+snapshotted into the generated room. `config` is stored with the run for
+reference only; the engine does not interpret it. Express behavior through
+pools, roles, `bosses`, and triggers instead.
+
+### Environmental features
+
+Environment pools add descriptive text to rooms. A trigger whose source is
+`{"environment": "<environment pool id>"}` fires in rooms that drew that
+environment, so combined with `apply_effect` an environment becomes a hazard
+(a lava floor applying `burning`) or a boon (a spring applying `regeneration`).
 
 The starter demonstrates every supported definition and connection with neutral
 placeholders: an NPC-only encounter, and a combat encounter that draws from an
@@ -450,8 +465,8 @@ run never reach another run, the world, or the next run of the same theme.
 
 | `event` | `source` | Happens when |
 | --- | --- | --- |
-| `enter_room` | `room_role` (`entrance`, `exit`, `normal`, or a special role) or `room_template` (a room pool `id`) | A player enters a matching room, including the entrance on arrival. |
-| `say_phrase` | `room_role` or `room_template`, plus `phrase` | A player says the phrase in a matching room. |
+| `enter_room` | `room_role` (`entrance`, `exit`, `normal`, or a special role), `room_template` (a room pool `id`), or `environment` (an environment pool `id`) | A player enters a matching room, including the entrance on arrival. |
+| `say_phrase` | `room_role`, `room_template`, or `environment`, plus `phrase` | A player says the phrase in a matching room. |
 | `use_object`, `take_item` | `item`: an embedded item `id` or a shared definition ID | A player uses or picks up that kind of item. |
 | `defeat_npc` | `npc`: an embedded NPC or enemy `id`, or a shared definition ID | Fires for each player rewarded for the kill. |
 | `manual` | none | Run by another trigger's `run_trigger`. |
@@ -459,7 +474,9 @@ run never reach another run, the world, or the next run of the same theme.
 Allowed actions are `message` (to `actor` or `room`), `set_flag` and
 `clear_flag` (`scope` `player`, or `world`, which means this run), `give_item`
 and `take_item` (embedded or shared items), `experience`, `coins`,
-`take_coins`, `heal`, `damage` (never below 1 health), and `run_trigger`.
+`take_coins`, `heal`, `damage` (never below 1 health), `apply_effect`
+(`effect`, `potency`, `duration`; a built-in effect or one the theme bundles),
+and `run_trigger`.
 `delay_seconds`, `once`, `scope`, `cooldown_seconds`, `max_fires`,
 `conditions`, and `fail_message` work as in worlds. Conditions may use
 everything except quest, objective, `object_state`, and `in_room`.
@@ -480,15 +497,52 @@ Validation reports unknown roles, room pools, and definitions with their
 JSON path. Triggers are part of the content hash, so bump `version` after
 changing them.
 
+## Bundled abilities and effects (schema 2)
+
+A portal theme may bundle `effects` and `abilities` in the same format as a
+world's `effects.json` and `abilities.json` (see
+`../mud_ability_templates/README_ABILITIES_EFFECTS.md`). Its classes and races
+grant the abilities by local key in `spells`, and its items, enemies, and
+triggers apply its effects by local key. On import they are installed under
+keys derived from the theme ID; the theme's races, classes, and skills are
+offered in the dungeon world. Keys may not reuse a built-in ability or effect.
+World dungeon templates cannot bundle these; they use the world's own.
+
+## Rewards, scaling, and bosses (schema 2)
+
+```json
+"rewards": {"experience_percent": 150,
+            "risk_loot": {"enabled": true, "chance_percent": 50,
+                          "tiers": {"1": [{"item_local_id": "pearl"}], "3": [{"item_definition_id": "stationnet:treasure:idol"}]}}},
+"scaling": {"offset": 2, "per_step": {"maximum_health": 6, "attack": 1, "defense": 0.5}},
+"bosses": {"health_percent": 200, "attack_percent": 125, "experience_percent": 200}
+```
+
+- `rewards.experience_percent` (10–500) scales enemy experience.
+- `rewards.risk_loot` controls the small supply and treasure caches StationNet
+  adds to rooms: `enabled: false` turns them off, `chance_percent` (0–200)
+  makes them rarer or more common, and `tiers` replaces the station's items for
+  tier 1, 2, or 3 with up to 20 of the theme's own or shared items each.
+- `scaling` sets how enemies grow with room difficulty: each step past
+  `offset` (0–10, default 2) adds `per_step` amounts of `maximum_health`
+  (default 8), `attack` (2), `defense` (0.5), `accuracy` (2), `evasion` (1),
+  and `experience_reward` (5). Values allow one decimal place.
+- `bosses` multiplies the health, attack, and experience of embedded enemies
+  that set `"boss": true`, after scaling. A boss's embedded `loot` always drops,
+  so put its guaranteed reward there. Place bosses with a `special_roles` entry
+  and pools limited to that role, as the bundled themes do.
+
+Without these sections a theme generates exactly as it did before they existed.
+
 ## Gameplay rules themes should know about
 
-- Known spells come from the character's class, including imported classes;
-  a theme cannot define new spells. `/spells` lists them, `/cast <spell>
+- Known abilities come from the character's race and class, including imported
+  ones and those a theme bundles. `/spells` lists them, `/cast <ability>
   [enemy]` spends mana, and `/rest` restores mana when no hostile enemy is
-  nearby. The built-in spells are `ember`, `venom`, `rend`, `hex`, `mend`,
+  nearby. The built-in abilities are `ember`, `venom`, `rend`, `hex`, `mend`,
   `ward`, and `might`; see the [race and class guide](../mud_origin_templates/README_RACES_CLASSES.md)
   for costs and targets. Intellect improves mana and spell strength. Theme
-  items and enemies can apply the same timed effect keys via `properties`.
+  items and enemies apply timed effects by key via `properties`.
 - Enemies with `combat` attack when a player enters their room.
 - Combat advances only when a player acts. Waiting or disconnecting never gives
   enemies extra turns.
@@ -531,6 +585,19 @@ changing them.
   a SYSOP enables them again.
 - Launch a run with `/expedition <theme-id> [difficulty] [size]`.
 
+### Export, share, and upgrade
+
+Every installed theme has **EXPORT** and **EXPORT SELF-CONTAINED** links in
+SYSOP Settings. A theme that names station definitions (`definition_id` other
+than built-in `stationnet:` ones) can only be exported self-contained: those
+items and NPCs, with their combat stats, gear, loot, and any custom effects they
+apply, are copied into the file as embedded definitions so it imports on any
+station. NPC dialogue is not copied.
+
+To replace an installed custom theme, raise its `version`, choose the file, and
+tick **Upgrade**. Runs already started keep the version they began with. A file
+with the same version but different content is refused.
+
 `theme-schema.json` is the machine-readable contract. Runtime validation goes
 further, adding range ordering, local/shared reference resolution, definition
 compatibility, duplicate-ID, conversation-graph, pool cross-reference, and
@@ -542,8 +609,8 @@ The same format powers **world dungeons**. World builders can create templates
 in the World Builder's **Dungeons** section, starting from any installed theme,
 and place entrances in their rooms. Those templates belong to the world and
 travel in its ZIP as `dungeons.json`. They take no `id` or `version`, because
-the station assigns them per revision. They also cannot bundle `origins` or
-`skills`. Enabling or disabling themes here does not affect them. See section
+the station assigns them per revision. They also cannot bundle `origins`,
+`skills`, `abilities`, or `effects`; they use the world's own, by local key. Enabling or disabling themes here does not affect them. See section
 5b of `README_CUSTOM_WORLDS.md`.
 
 ## Determinism and versioning

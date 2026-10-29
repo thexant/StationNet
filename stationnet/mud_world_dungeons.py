@@ -53,13 +53,16 @@ def parse_template(text):
     return template
 
 
-def template_errors(template, database=None):
-    """Engine validation, ignoring the author's ID and version, which the world assigns."""
-    errors = [f"$.{key}: world dungeons use the world's races, classes and skills; "
-              f"bundle them in the world's origins.json or skills.json instead"
-              for key in ("origins", "skills") if template.get(key)]
+def template_errors(template, database=None, extra_effects=()):
+    """Engine validation, ignoring the author's ID and version, which the world assigns.
+
+    World templates apply the world's own effects (``extra_effects``) rather than bundling any.
+    """
+    errors = [f"$.{key}: world dungeons use the world's {key}; "
+              f"bundle them in the world's {key}.json instead"
+              for key in ("origins", "skills", "abilities", "effects") if template.get(key)]
     probe = {**template, "id": "w-probe", "version": "1"}
-    return errors + dungeons.validate_template(probe, database)
+    return errors + dungeons.validate_template(probe, database, extra_effects)
 
 
 def stored_template(template):
@@ -68,9 +71,22 @@ def stored_template(template):
     return json.dumps(stored, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
 
 
-def remap_references(template, item_mapper, npc_mapper):
-    """Rename shared item/NPC definition IDs; embedded local_id content is untouched."""
+def remap_references(template, item_mapper, npc_mapper, effect_mapper=None):
+    """Rename shared item/NPC definition IDs and applied effect keys; embedded local_id content is untouched."""
     template = json.loads(json.dumps(template))
+    if effect_mapper is not None:
+        definitions = template.get("definitions") if isinstance(template.get("definitions"), dict) else {}
+        for kind in ("items", "npcs", "enemies"):
+            for entry in definitions.get(kind, []) if isinstance(definitions.get(kind), list) else []:
+                properties = entry.get("properties") if isinstance(entry, dict) else None
+                for field in ("on_use_effects", "on_hit_effects"):
+                    for spec in (properties or {}).get(field, []) or []:
+                        if isinstance(spec, dict) and isinstance(spec.get("key"), str):
+                            spec["key"] = effect_mapper(spec["key"])
+        for trigger in template.get("triggers", []) if isinstance(template.get("triggers"), list) else []:
+            for action in trigger.get("actions", []) if isinstance(trigger, dict) else []:
+                if isinstance(action, dict) and action.get("type") == "apply_effect":
+                    action["effect"] = effect_mapper(action.get("effect"))
     pools = template.get("pools") if isinstance(template.get("pools"), dict) else {}
     for kind, mapper in (("items", item_mapper), ("npcs", npc_mapper), ("enemies", npc_mapper)):
         for pool in pools.get(kind, []) if isinstance(pools.get(kind), list) else []:
@@ -111,13 +127,17 @@ def remap_references(template, item_mapper, npc_mapper):
     return template
 
 
-def shared_references(database, world_id):
-    """Shared item and NPC definitions the world's templates name, for the export closure."""
+def shared_references(database, world_id, effects=None):
+    """Shared item and NPC definitions the world's templates name, for the export closure.
+
+    Effect keys the templates apply are added to ``effects`` when it is given.
+    """
     items, npcs = set(), set()
     for row in world_templates(database, world_id):
         remap_references(json.loads(row["template_json"]),
                          lambda value: items.add(value) or value,
-                         lambda value: npcs.add(value) or value)
+                         lambda value: npcs.add(value) or value,
+                         None if effects is None else (lambda value: effects.add(value) or value))
     # Built-in station content exists everywhere, so it stays a reference.
     return ({value for value in items if not value.startswith("stationnet:")},
             {value for value in npcs if not value.startswith("stationnet:")})
@@ -233,7 +253,7 @@ def entrance_fields(template, values):
 
 # --- World packages -------------------------------------------------------
 
-def read_document(value, room_ids):
+def read_document(value, room_ids, extra_effects=()):
     """Validate dungeons.json shape and references before anything is installed."""
     if value is None:
         return {"templates": [], "entrances": []}
@@ -256,7 +276,7 @@ def read_document(value, room_ids):
         if not isinstance(template, dict):
             raise WorldDungeonError(f"Dungeon template {key!r} must be an object.")
         # Shared definition references are checked at install time, once IDs are remapped.
-        errors = template_errors(template)
+        errors = template_errors(template, extra_effects=extra_effects)
         if errors:
             raise WorldDungeonError(f"Dungeon template {key!r}: " + "; ".join(errors[:5]))
         clean_templates[key] = {"key": key, "name": entry.get("name") or template["name"], "template": template}
@@ -283,7 +303,7 @@ def read_document(value, room_ids):
     return {"templates": list(clean_templates.values()), "entrances": clean_entrances}
 
 
-def install_document(database, world_id, document, room_map, maps, condition_mapper):
+def install_document(database, world_id, document, room_map, maps, condition_mapper, effect_map=None):
     """Insert a package's templates and entrances; content IDs must already exist."""
     def mapper(table):
         return lambda value: maps.get(table, {}).get(value, value)
@@ -291,7 +311,8 @@ def install_document(database, world_id, document, room_map, maps, condition_map
     template_ids = {}
     for entry in document["templates"]:
         template = remap_references(entry["template"], mapper("mud_item_definitions"),
-                                    mapper("mud_npc_definitions"))
+                                    mapper("mud_npc_definitions"),
+                                    lambda key: (effect_map or {}).get(key, key))
         try:
             template_ids[entry["key"]] = save_template(database, world_id, entry["key"],
                                                        entry["name"], template)
@@ -312,7 +333,7 @@ def install_document(database, world_id, document, room_map, maps, condition_map
         )
 
 
-def export_document(database, world_id, room_map, maps, condition_mapper):
+def export_document(database, world_id, room_map, maps, condition_mapper, effect_map=None):
     """Package-local templates and entrances; None when the world has no dungeons."""
     rows = world_templates(database, world_id)
     if not rows:
@@ -324,7 +345,8 @@ def export_document(database, world_id, room_map, maps, condition_mapper):
     keys = {row["id"]: row["local_key"] for row in rows}
     templates = [{"key": row["local_key"], "name": row["name"],
                   "template": remap_references(json.loads(row["template_json"]),
-                                               mapper("mud_item_definitions"), mapper("mud_npc_definitions"))}
+                                               mapper("mud_item_definitions"), mapper("mud_npc_definitions"),
+                                               lambda key: (effect_map or {}).get(key, key))}
                  for row in rows]
     entrances = []
     for row in world_entrances(database, world_id):

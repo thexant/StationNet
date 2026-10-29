@@ -482,11 +482,20 @@
     </div>
     {% set managed = {'races': mud_origins.races, 'classes': mud_origins.classes, 'skills': mud_skill_entries} %}
     <h4>Import a World</h4>
-    <p class="muted">World ZIPs can include rooms, content, trainers, and optional races, classes, and skills. Importing adds a world without changing any other world. World files live in <code>data/mud_worlds/</code>.</p>
-    <p><a href="{{ url_for('station.download_mud_world_template') }}">DOWNLOAD WORLD TEMPLATE ZIP</a></p>
+    <p class="muted">World ZIPs carry everything a world needs: rooms, content, quests, merchants, events, dungeons, progression tuning, and their own races, classes, skills, abilities, and effects. Importing adds a world without changing any other world. Choosing a file checks it completely and lists any problems before you import. A file whose ID matches an installed world is offered as an upgrade that keeps that world's characters. World files live in <code>data/mud_worlds/</code>.</p>
+    <p><a href="{{ url_for('station.download_mud_world_template') }}">DOWNLOAD WORLD TEMPLATE ZIP</a> · <a href="{{ url_for('station.download_mud_world_example') }}">DOWNLOAD EXAMPLE WORLD ZIP</a></p>
     <form method="post" action="{{ url_for('station.import_mud_world') }}" enctype="multipart/form-data" class="form-grid" id="world-import-form" data-preview-url="{{ url_for('station.preview_mud_world') }}">
       <input type="hidden" name="csrf_token" value="{{ session.csrf_token }}">
       <label>World ZIP<input type="file" name="world_file" id="world-import-file" accept=".zip,application/zip" required></label>
+      <div id="world-import-problems" aria-live="polite"></div>
+      <div id="world-import-upgrade" hidden>
+        <input type="hidden" name="mode" value="">
+        <input type="hidden" name="expected_hash" value="">
+        <div class="divider">UPGRADE AN INSTALLED WORLD</div>
+        <div id="world-import-changes"></div>
+        <p class="muted">Upgrading replaces the world's rooms and content, and any World Builder edits made since it was imported. Characters keep their level, gear, and coins; quests, reputation, NPC regard, learned destinations, and event progress carry over wherever the new version keeps the same IDs. Dungeon runs in progress end. The world keeps its enabled state and race, class, and skill selection.</p>
+        <label class="switch"><input type="checkbox" name="reset_world_state"> Also reset world flags and event history</label>
+      </div>
       <label>Races, classes, and skills this world offers<select name="origin_mode" id="world-import-mode">
         <option value="">Automatic: its bundled choices, or the built-ins if it bundles none (default)</option>
         <option value="only">Only this world's bundled choices</option>
@@ -511,7 +520,10 @@
     <form method="post" action="{{ url_for('station.export_mud_world') }}" class="form-grid">
       <input type="hidden" name="csrf_token" value="{{ session.csrf_token }}">
       <label>World to export<select name="world_id" id="world-export-id">{% for world in mud_world_list %}<option value="{{ world.id }}">{{ world.name }} by {{ world.author }}</option>{% endfor %}</select></label>
-      <small>Choose custom races, classes, and skills to include. The world's own definitions and the custom ones it offers are selected by default. Skills that bundled races, classes, or skills depend on are included automatically.</small>
+      <label class="switch"><input type="radio" name="bundle_mode" value="all" checked> Bundle everything the world uses and offers (recommended)</label>
+      <label class="switch"><input type="radio" name="bundle_mode" value="custom"> Bundle the races, classes, and skills selected below</label>
+      <small>Abilities, effects, and skills the bundled races, classes, content, and events use are always included, so the file imports into a clean station.</small>
+      <label class="switch"><input type="checkbox" name="strict"> Refuse to export if any reference outside this world would be left out</label>
       {% for kind in ('races', 'classes', 'skills') %}
       <div class="divider">{{ kind|upper }} TO BUNDLE</div>
       {% for entry in managed[kind] if entry.imported %}
@@ -615,20 +627,54 @@
     </form>
     {% endif %}
   </section>
+  <section id="mud-abilities" aria-labelledby="mud-abilities-heading">
+    <h3 id="mud-abilities-heading">Abilities &amp; Effects</h3>
+    <p class="muted">Abilities are what characters cast with <code>/cast</code>; effects are the timed conditions abilities, items, NPC attacks, and triggers apply. Custom ones are built only from the engine's fixed parts: an ability strikes one enemy (damage plus harmful effects) or acts on its caster (healing plus helpful effects), and an effect deals damage, regenerates health, or raises or lowers attack, defense, accuracy, or evasion each turn. Races and classes grant abilities by key. World packages and dungeon themes can bundle their own.</p>
+    <p><a href="{{ url_for('station.download_mud_ability_template', name='ability.json') }}">DOWNLOAD ABILITY TEMPLATE</a> · <a href="{{ url_for('station.download_mud_ability_template', name='effect.json') }}">DOWNLOAD EFFECT TEMPLATE</a> · <a href="{{ url_for('station.download_mud_ability_template', name='pack.json') }}">DOWNLOAD PACK TEMPLATE</a></p>
+    <form method="post" action="{{ url_for('station.import_mud_abilities') }}" enctype="multipart/form-data" class="form-grid">
+      <input type="hidden" name="csrf_token" value="{{ session.csrf_token }}">
+      <label>Ability, effect, or pack JSON<input type="file" name="definition_file" accept=".json,application/json" required><small>One ability, one effect, or {"effects": [...], "abilities": [...]}. A pack's abilities may apply the pack's own effects. The whole file is rejected if any definition is invalid or reuses an installed key.</small></label>
+      <button>IMPORT</button>
+    </form>
+    <details><summary>{{ mud_ability_entries|length }} abilities</summary>{% for entry in mud_ability_entries %}<p><strong>{{ entry.name }}</strong> <code>{{ entry.command }}</code> · {{ entry.target }} · cost {{ entry.cost }}{% if entry.damage %} · {{ entry.damage }} damage{% endif %}{% if entry.heal %} · heals {{ entry.heal }}{% endif %}{% for spec in entry.effects or [] %} · {{ spec.key }} {{ spec.potency }}×{{ spec.duration }}{% endfor %} · {{ 'imported' if entry.imported else 'built in' }}</p>{% endfor %}</details>
+    <details><summary>{{ mud_effect_entries|length }} effects</summary>{% for entry in mud_effect_entries %}<p><strong>{{ entry.name }}</strong> <code>{{ entry.key }}</code> · {{ entry.kind }}{% if entry.sign %} {{ 'bonus' if entry.sign > 0 else 'penalty' }}{% endif %}{% if entry.resist_as %} · resisted as {{ entry.resist_as }}{% endif %} · {{ 'imported' if entry.imported else 'built in' }}</p>{% endfor %}</details>
+    {% if mud_ability_entries|selectattr('imported')|list or mud_effect_entries|selectattr('imported')|list %}
+    <form method="post" action="{{ url_for('station.remove_mud_abilities') }}" class="form-grid">
+      <input type="hidden" name="csrf_token" value="{{ session.csrf_token }}">
+      <div class="divider">REMOVE IMPORTED ABILITIES AND EFFECTS</div>
+      <p class="muted">An ability a race or class still grants, or an effect still applied by an ability, item, NPC, or trigger, cannot be removed until those are updated. An effect still active on someone is kept for them until it wears off.</p>
+      <fieldset>
+        <legend>ABILITIES</legend>
+        {% for entry in mud_ability_entries if entry.imported %}
+        <label class="switch"><input type="checkbox" name="abilities" value="{{ entry.key }}"> {{ entry.name }}{% if entry.dependents %}<small>granted by {{ entry.dependents|join(', ') }}</small>{% endif %}</label>
+        {% endfor %}
+      </fieldset>
+      <fieldset>
+        <legend>EFFECTS</legend>
+        {% for entry in mud_effect_entries if entry.imported %}
+        <label class="switch"><input type="checkbox" name="effects" value="{{ entry.key }}"> {{ entry.name }}{% if entry.dependents %}<small>used by {{ entry.dependents|join(', ') }}</small>{% endif %}</label>
+        {% endfor %}
+      </fieldset>
+      <label class="deletion-checkbox"><input type="checkbox" name="confirm_remove" required> I confirm removal</label>
+      <button class="danger">REMOVE SELECTED</button>
+    </form>
+    {% endif %}
+  </section>
   <section id="dungeon-themes" aria-labelledby="dungeon-themes-heading">
     <h3 id="dungeon-themes-heading">Dungeon Themes</h3>
     <p class="muted">Copy the template in <code>data/dungeons/</code>, set a unique ID, name, and author, then import the JSON file. New runs can use it immediately.</p>
     <p><a href="{{ url_for('station.download_dungeon_template') }}">DOWNLOAD DUNGEON TEMPLATE</a></p>
     <form method="post" action="{{ url_for('station.import_dungeon') }}" enctype="multipart/form-data" class="form-grid">
       <input type="hidden" name="csrf_token" value="{{ session.csrf_token }}">
-      <label>Dungeon theme file<input type="file" name="dungeon_file" accept=".json,application/json" required></label>
+      <label>Dungeon theme file<input type="file" name="dungeon_file" accept=".json,application/json" required><small>A theme may bundle its own races, classes, skills, abilities, and effects; its races, classes, and skills are offered in the dungeon world.</small></label>
+      <label class="switch"><input type="checkbox" name="upgrade"> Upgrade: replace an installed custom theme with the same ID and a higher version (runs already started keep their version)</label>
       <button>IMPORT DUNGEON</button>
     </form>
     <div class="dungeon-theme-list" aria-label="Installed dungeon themes">
       {% for theme in mud_dungeon_themes %}
       <article class="dungeon-theme-row{% if not theme.enabled %} is-disabled{% endif %}">
         <div><strong>{{ theme.name }}</strong> <span class="dungeon-theme-status">{{ 'ENABLED' if theme.enabled else 'DISABLED' }}</span><br>
-          <small><code>{{ theme.id }}@{{ theme.version }}</code>{% if theme.author %} by {{ theme.author }}{% endif %} · {{ 'CUSTOM' if theme.custom else 'BUILT-IN' }}</small>
+          <small><code>{{ theme.id }}@{{ theme.version }}</code>{% if theme.author %} by {{ theme.author }}{% endif %} · {{ 'CUSTOM' if theme.custom else 'BUILT-IN' }} · <a href="{{ url_for('station.export_dungeon', theme_id=theme.id) }}">EXPORT</a> · <a href="{{ url_for('station.export_dungeon', theme_id=theme.id, embed=1) }}" title="Copy station items and NPCs the theme names into the file">EXPORT SELF-CONTAINED</a></small>
         </div>
         <form method="post" action="{{ url_for('station.set_dungeon_availability') }}">
           <input type="hidden" name="csrf_token" value="{{ session.csrf_token }}">

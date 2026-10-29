@@ -1,12 +1,12 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://stationnet.local/schemas/dungeon-theme-v1.json",
+  "$id": "https://stationnet.local/schemas/dungeon-theme-v2.json",
   "title": "StationNet dungeon theme",
   "type": "object",
   "required": ["schema_version", "id", "version", "name", "generation", "pools"],
   "properties": {
     "$schema": {"type": "string"},
-    "schema_version": {"const": 1},
+    "schema_version": {"enum": [1, 2], "description": "Schema 2 is required for effects, abilities, rewards, scaling, and bosses."},
     "id": {"$ref": "#/$defs/id"},
     "version": {"$ref": "#/$defs/id"},
     "name": {"type": "string", "minLength": 1},
@@ -14,7 +14,7 @@
     "description": {"type": "string"},
     "origins": {
       "type": "object",
-      "description": "Optional races and classes installed with a theme. Definitions are initially inactive.",
+      "description": "Optional races and classes installed with a theme and offered in the dungeon world.",
       "properties": {
         "races": {"type": "array", "maxItems": 100, "items": {"type": "object"}},
         "classes": {"type": "array", "maxItems": 100, "items": {"type": "object"}}
@@ -24,7 +24,7 @@
     "skills": {
       "type": "array",
       "maxItems": 100,
-      "description": "Optional skills installed with a theme. Definitions are initially inactive; bundled races and classes may reference them by local key.",
+      "description": "Optional skills installed with a theme; bundled races and classes may reference them by local key.",
       "items": {"type": "object"}
     },
     "definitions": {
@@ -79,7 +79,80 @@
         "encounters": {"type": "array", "items": {"$ref": "#/$defs/encounterPool"}}
       }
     },
-    "triggers": {"type": "array", "maxItems": 2000, "items": {"$ref": "#/$defs/trigger"}}
+    "triggers": {"type": "array", "maxItems": 2000, "items": {"$ref": "#/$defs/trigger"}},
+    "effects": {
+      "type": "array", "maxItems": 100,
+      "description": "Schema 2. Timed effects bundled with the theme.",
+      "items": {
+        "type": "object", "required": ["key", "name", "kind"], "additionalProperties": false,
+        "properties": {
+          "key": {"type": "string", "pattern": "^[a-z][a-z0-9-]{1,39}$"},
+          "name": {"type": "string", "minLength": 2, "maxLength": 40},
+          "description": {"type": "string", "maxLength": 500},
+          "kind": {"enum": ["damage", "regen", "attack", "defense", "accuracy", "evasion"]},
+          "sign": {"enum": [1, -1]},
+          "resist_as": {"enum": ["physical", "poison", "burning", "bleeding", "weakness", "vulnerability", "blinded", "snared"]}
+        }
+      }
+    },
+    "abilities": {
+      "type": "array", "maxItems": 100,
+      "description": "Schema 2. Castable abilities bundled with the theme; bundled classes and races grant them in spells.",
+      "items": {
+        "type": "object", "required": ["key", "name", "target"], "additionalProperties": false,
+        "properties": {
+          "key": {"type": "string", "pattern": "^[a-z][a-z0-9-]{1,39}$"},
+          "name": {"type": "string", "minLength": 2, "maxLength": 40},
+          "command": {"type": "string", "pattern": "^[a-z][a-z0-9-]{1,39}$"},
+          "description": {"type": "string", "maxLength": 500},
+          "target": {"enum": ["enemy", "self"]},
+          "cost": {"type": "integer", "minimum": 0, "maximum": 100},
+          "damage": {"type": "integer", "minimum": 1, "maximum": 200},
+          "heal": {"type": "integer", "minimum": 1, "maximum": 200},
+          "effects": {"type": "array", "maxItems": 4, "items": {
+            "type": "object", "required": ["key"], "additionalProperties": false,
+            "properties": {"key": {"type": "string"},
+                           "potency": {"type": "integer", "minimum": 1, "maximum": 1000},
+                           "duration": {"type": "integer", "minimum": 1, "maximum": 100}}}}
+        }
+      }
+    },
+    "rewards": {
+      "type": "object", "additionalProperties": false, "description": "Schema 2.",
+      "properties": {
+        "experience_percent": {"type": "integer", "minimum": 10, "maximum": 500},
+        "risk_loot": {
+          "type": "object", "additionalProperties": false,
+          "properties": {
+            "enabled": {"type": "boolean"},
+            "chance_percent": {"type": "integer", "minimum": 0, "maximum": 200},
+            "tiers": {"type": "object", "additionalProperties": false, "patternProperties": {
+              "^[123]$": {"type": "array", "minItems": 1, "maxItems": 20, "items": {"type": "object"}}}}
+          }
+        }
+      }
+    },
+    "scaling": {
+      "type": "object", "additionalProperties": false, "description": "Schema 2.",
+      "properties": {
+        "offset": {"type": "integer", "minimum": 0, "maximum": 10},
+        "per_step": {"type": "object", "additionalProperties": false, "properties": {
+          "maximum_health": {"type": "number", "minimum": 0, "maximum": 100},
+          "attack": {"type": "number", "minimum": 0, "maximum": 20},
+          "defense": {"type": "number", "minimum": 0, "maximum": 10},
+          "accuracy": {"type": "number", "minimum": 0, "maximum": 10},
+          "evasion": {"type": "number", "minimum": 0, "maximum": 10},
+          "experience_reward": {"type": "number", "minimum": 0, "maximum": 100}}}
+      }
+    },
+    "bosses": {
+      "type": "object", "additionalProperties": false, "description": "Schema 2. Applies to embedded enemies with boss: true.",
+      "properties": {
+        "health_percent": {"type": "integer", "minimum": 100, "maximum": 500},
+        "attack_percent": {"type": "integer", "minimum": 100, "maximum": 300},
+        "experience_percent": {"type": "integer", "minimum": 100, "maximum": 500}
+      }
+    }
   },
   "$defs": {
     "id": {"type": "string", "pattern": "^[a-z0-9][a-z0-9._-]{0,63}$"},

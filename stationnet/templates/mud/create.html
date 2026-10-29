@@ -4,7 +4,7 @@
 {% macro origin_features(origin) %}{% set growth = origin.get('progression', {}) %}<ul class="mud-origin-features">
   {% if origin.effects %}<li><b>Bonuses</b> {% for key,value in origin.effects.items() %}{{ '%+d'|format(value) }} {{ config.effect_names.get(key, key|replace('_',' ')) }}{% if not loop.last %} · {% endif %}{% endfor %}</li>{% endif %}
   {% if origin.get('tags') %}<li><b>Traits</b> {{ origin.tags|join(', ') }}</li>{% endif %}
-  {% if origin.get('spells') %}<li><b>Abilities</b> {{ origin.spells|join(', ') }}{% if not config.resource.enabled %} (unavailable in this world){% endif %}</li>{% endif %}
+  {% if origin.get('spells') %}<li><b>Abilities</b> {% for key in origin.spells %}{{ config.ability_names.get(key, key) }}{% if not loop.last %}, {% endif %}{% endfor %}{% if not config.resource.enabled %} (unavailable in this world){% endif %}</li>{% endif %}
   {% set proficient = origin.get('proficiencies', {}) %}{% if proficient.get('weapons') or proficient.get('armor') %}<li><b>Trained with</b> {{ (proficient.get('weapons', []) + proficient.get('armor', []))|join(', ') }} gear</li>{% endif %}
   {% if origin.get('resistances') %}<li><b>Resists</b> {% for key,value in origin.resistances.items() %}{{ key }} {{ value }}%{% if value < 0 %} (vulnerable){% endif %}{% if not loop.last %} · {% endif %}{% endfor %}</li>{% endif %}
   {% if origin.get('skill_affinities') %}<li><b>Learns faster</b> {% for key,value in origin.skill_affinities.items() %}{{ config.skill_names.get(key, key) }} {{ '%+d'|format(value) }}%{% if not loop.last %} · {% endif %}{% endfor %}</li>{% endif %}

@@ -1,0 +1,15 @@
+{
+  "races": [
+    {"key": "islander", "name": "Islander", "description": "Folk raised on salt and lamplight.",
+     "traits": "Sea-hardy", "attributes": {"vitality": 1},
+     "resistances": {"vulnerability": 25}, "tags": ["islander"],
+     "skills": {"wick-craft": 1}}
+  ],
+  "classes": [
+    {"key": "lamplighter", "name": "Lamplighter", "description": "Keepers of the harbor lanterns.",
+     "traits": "Fire and tide", "skill": "wick-craft",
+     "spells": ["lantern-flare", "tide-prayer", "ward"],
+     "equipment": [{"key": "pole", "name": "Lantern Pole", "description": "A hooked brass pole.",
+                    "slot": "main_hand", "attack": 3}]}
+  ]
+}

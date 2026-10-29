@@ -1,0 +1,7 @@
+{
+  "key": "frostbite",
+  "name": "Frostbite",
+  "description": "Numbing cold that bites each turn.",
+  "kind": "damage",
+  "resist_as": "burning"
+}

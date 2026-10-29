@@ -12,7 +12,7 @@ from PIL import Image, ImageOps, UnidentifiedImageError
 from .auth import admin_required, invitation_digest
 from .ansi import available_header_fonts, is_available_header_font, station_banner
 from .db import get_db
-from . import arcade, character_creation, dungeons, header_taglines, mud_scope, mud_skills, mud_worlds
+from . import arcade, character_creation, dungeons, header_taglines, mud_abilities, mud_effects, mud_scope, mud_skills, mud_worlds
 from . import themes
 from .markdown import render_markdown
 from .midi import InvalidMidi, MAX_MIDI_BYTES, inspect_midi
@@ -756,6 +756,63 @@ def remove_mud_skills():
     return redirect(destination)
 
 
+@bp.post("/sysop/settings/mud-abilities/import")
+@admin_required
+def import_mud_abilities():
+    validate_csrf()
+    destination = url_for("station.settings") + "#mud-abilities"
+    uploaded = request.files.get("definition_file")
+    if uploaded is None or not uploaded.filename or not uploaded.filename.lower().endswith(".json"):
+        flash("Choose an ability or effect JSON file to import.", "error")
+        return redirect(destination)
+    database = get_db()
+    try:
+        definitions = mud_abilities.import_pack(database, uploaded.read(mud_abilities.MAX_PACK_BYTES + 1))
+        database.commit()
+    except (ValueError, sqlite3.Error) as error:
+        database.rollback()
+        flash(f"Import failed: {error}", "error")
+    else:
+        flash(f"Imported {', '.join(definition['name'] for definition in definitions)}.", "success")
+    return redirect(destination)
+
+
+@bp.get("/sysop/settings/mud-abilities/template/<name>")
+@admin_required
+def download_mud_ability_template(name):
+    if name not in ("ability.json", "effect.json", "pack.json"):
+        abort(404)
+    return send_file(Path(__file__).with_name("mud_ability_templates") / name, as_attachment=True,
+                     download_name=f"mud-{name.replace('.json', '')}-template.json", mimetype="application/json")
+
+
+@bp.post("/sysop/settings/mud-abilities/remove")
+@admin_required
+def remove_mud_abilities():
+    validate_csrf()
+    destination = url_for("station.settings") + "#mud-abilities"
+    if request.form.get("confirm_remove") != "on":
+        flash("Review the selected abilities and effects and confirm removal.", "error")
+        return redirect(destination)
+    database = get_db()
+    try:
+        removed = []
+        # Abilities go first so the effects they apply are free to leave.
+        if request.form.getlist("abilities"):
+            removed += mud_abilities.remove(database, set(request.form.getlist("abilities")))
+        if request.form.getlist("effects"):
+            removed += mud_effects.remove_effects(database, set(request.form.getlist("effects")))
+        if not removed:
+            raise ValueError("Select at least one imported ability or effect.")
+        database.commit()
+    except (ValueError, sqlite3.Error) as error:
+        database.rollback()
+        flash(f"Removal failed: {error}", "error")
+    else:
+        flash(f"Removed {', '.join(entry['name'] for entry in removed)}.", "success")
+    return redirect(destination)
+
+
 @bp.post("/sysop/settings/mud-worlds/import")
 @admin_required
 def import_mud_world():
@@ -765,11 +822,26 @@ def import_mud_world():
     if uploaded is None or not uploaded.filename or not uploaded.filename.lower().endswith(".zip"):
         flash("Choose a world ZIP file to import.", "error")
         return redirect(destination)
+    payload = uploaded.read(mud_worlds.MAX_ZIP_BYTES + 1)
+    if request.form.get("mode") == "upgrade":
+        try:
+            world, summary = mud_worlds.upgrade(
+                get_db(), payload, request.form.get("expected_hash", ""),
+                reset_world_state=request.form.get("reset_world_state") == "on")
+        except (mud_worlds.WorldError, sqlite3.Error, OSError) as error:
+            flash(f"World upgrade failed: {error}", "error")
+        else:
+            flash(f"Upgraded world {world['name']}. Characters and their progress were kept"
+                  + (f"; {summary['moved_to_start']} standing in removed rooms moved to the start room"
+                     if summary["moved_to_start"] else "") + "."
+                  + "".join(f" {note}" for note in summary["notes"]), "success")
+        return redirect(destination)
     try:
         world = mud_worlds.install(
-            get_db(), uploaded.read(mud_worlds.MAX_ZIP_BYTES + 1),
+            get_db(), payload,
             origin_mode=request.form.get("origin_mode") or None,
-            selected=_world_selection(), enable=request.form.get("enable") == "on")
+            selected=_world_selection() if request.form.get("origin_mode") == "manual" else None,
+            enable=request.form.get("enable") == "on")
     except (mud_worlds.WorldError, sqlite3.Error, OSError) as error:
         flash(f"World import failed: {error}", "error")
     else:
@@ -784,16 +856,29 @@ def import_mud_world():
 def preview_mud_world():
     validate_csrf()
     uploaded = request.files.get("world_file")
+    payload = uploaded.read(mud_worlds.MAX_ZIP_BYTES + 1) if uploaded else b""
+    database = get_db()
+    upgrade = None
     try:
-        document = mud_worlds.read_package(uploaded.read(mud_worlds.MAX_ZIP_BYTES + 1) if uploaded else b"")
+        document = mud_worlds.read_package(payload, database)
+        if database.execute("SELECT 1 FROM mud_world_packages WHERE id=?", (document["id"],)).fetchone():
+            upgrade = mud_worlds.upgrade_preview(database, payload)
+            problems = upgrade["problems"]
+        else:
+            document, report = mud_worlds.validate_install(database, payload)
+            problems = report.as_json()
         origins = {kind: [{"key": mud_worlds.bundled_key(document["id"], kind, item["key"]),
                            "name": item.get("name", item["key"])}
                           for item in (document["origins"].get(kind, []) if kind != "skills"
                                        else document["skills"])]
                    for kind in (*character_creation.KINDS, "skills")}
     except (mud_worlds.WorldError, KeyError, TypeError) as error:
-        return jsonify(error=str(error)), 400
-    return jsonify(world=document["name"], origins=origins)
+        report = getattr(error, "report", None)
+        return jsonify(error=str(error), problems=report.as_json() if report else []), 400
+    return jsonify(world=document["name"], origins=origins, problems=problems,
+                   format_version=document.get("format_version", 1), upgrade=upgrade,
+                   abilities=[item["name"] for item in document.get("abilities", [])],
+                   effects=[item["name"] for item in document.get("effects", [])])
 
 
 @bp.post("/sysop/settings/mud-worlds/export")
@@ -803,9 +888,12 @@ def export_mud_world():
     world_id = request.form.get("world_id", "")
     selected = {(kind, key) for kind in character_creation.KINDS
                 for key in request.form.getlist(kind)}
+    # By default a world travels with everything it uses; a custom selection may add more.
+    custom = request.form.get("bundle_mode") == "custom"
     try:
-        payload = mud_worlds.export(get_db(), world_id, origin_keys=selected,
-                                    skill_keys=set(request.form.getlist("skills")))
+        payload = mud_worlds.export(get_db(), world_id, origin_keys=selected if custom else None,
+                                    skill_keys=set(request.form.getlist("skills")) if custom else None,
+                                    strict=request.form.get("strict") == "on")
     except mud_worlds.WorldError as error:
         flash(f"World export failed: {error}", "error")
         return redirect(url_for("station.settings") + "#mud-worlds")
@@ -818,6 +906,13 @@ def export_mud_world():
 def download_mud_world_template():
     return send_file(BytesIO(mud_worlds.template_bytes()), mimetype="application/zip",
                      as_attachment=True, download_name="mud-world-template.zip")
+
+
+@bp.get("/sysop/settings/mud-worlds/example")
+@admin_required
+def download_mud_world_example():
+    return send_file(BytesIO(mud_worlds.example_bytes()), mimetype="application/zip",
+                     as_attachment=True, download_name="lantern-isles-example-world.zip")
 
 
 @bp.post("/sysop/settings/mud-worlds/enabled")
@@ -971,33 +1066,75 @@ def import_dungeon():
     except dungeons.TemplateError as problem:
         flash(f"Installed dungeon themes need attention: {problem}", "error")
         return redirect(destination)
-    if document["id"] in installed:
-        flash("A dungeon theme with that ID is already installed.", "error")
-        return redirect(destination)
     path = dungeons.custom_themes_directory() / f"{document['id']}.json"
+    upgrade = request.form.get("upgrade") == "on"
+    previous = installed.get(document["id"])
+    if previous is not None:
+        if not upgrade:
+            flash("A dungeon theme with that ID is already installed. To replace it, raise its version and "
+                  "tick Upgrade.", "error")
+            return redirect(destination)
+        if previous[0] != path or path.is_symlink():
+            flash("Built-in dungeon themes cannot be replaced.", "error")
+            return redirect(destination)
+        if previous[1].get("version") == document["version"]:
+            if dungeons.template_hash(previous[1]) != dungeons.template_hash(document):
+                flash("This theme changes content without changing its version; raise its version to upgrade.",
+                      "error")
+            else:
+                flash("That version of the theme is already installed.", "error")
+            return redirect(destination)
+    elif upgrade:
+        upgrade = False
+    staged = path.with_name(f"{path.name}.importing-{secrets.token_hex(4)}")
     try:
-        with path.open("x", encoding="utf-8") as target:
+        with staged.open("x", encoding="utf-8") as target:
             json.dump(document, target, ensure_ascii=False, indent=2)
             target.write("\n")
+        if not upgrade and path.exists():
+            raise FileExistsError
     except FileExistsError:
+        staged.unlink(missing_ok=True)
         flash("A dungeon theme file with that ID already exists.", "error")
         return redirect(destination)
     database = get_db()
+    notes = []
     try:
         with database:
-            dungeons.install_skills(database, document)
-            dungeons.install_origins(database, document)
-            database.execute("DELETE FROM mud_dungeon_theme_settings WHERE theme_id=?", (document["id"],))
-    except (ValueError, sqlite3.Error) as error:
+            dungeons.install_bundles(database, document, notes)
+            # A theme's own races, classes, and skills are offered where its runs happen.
+            for kind, keys in dungeons.bundled_keys(database, document).items():
+                character_creation.offer(database, kind, keys, [mud_scope.PROCEDURAL])
+            if not upgrade:
+                database.execute("DELETE FROM mud_dungeon_theme_settings WHERE theme_id=?", (document["id"],))
+            os.replace(staged, path)
+    except (ValueError, sqlite3.Error, OSError) as error:
         try:
-            path.unlink(missing_ok=True)
+            staged.unlink(missing_ok=True)
             cleanup = ""
         except OSError:
             cleanup = " The imported file could not be cleaned up; remove it manually."
         flash(f"Dungeon theme import failed: {error}.{cleanup}", "error")
         return redirect(destination)
-    flash(f"Imported dungeon theme {document['name']} by {document['author']}.", "success")
+    verb = "Upgraded" if upgrade else "Imported"
+    flash(f"{verb} dungeon theme {document['name']} by {document['author']}."
+          + (" Runs already started keep the version they began with." if upgrade else "")
+          + "".join(f" {note}" for note in notes), "success")
     return redirect(destination)
+
+
+@bp.get("/sysop/settings/dungeons/<theme_id>/export")
+@admin_required
+def export_dungeon(theme_id):
+    """Download an installed theme as a self-contained file another station can import."""
+    try:
+        document = dungeons.export_theme(get_db(), theme_id, embed_shared=request.args.get("embed") == "1")
+    except (dungeons.TemplateError, ValueError) as problem:
+        flash(f"Could not export dungeon theme: {problem}", "error")
+        return redirect(url_for("station.settings") + "#dungeon-themes")
+    payload = (json.dumps(document, ensure_ascii=False, indent=2) + "\n").encode("utf-8")
+    return send_file(BytesIO(payload), mimetype="application/json", as_attachment=True,
+                     download_name=f"{theme_id}-{document['version']}.json")
 
 
 @bp.post("/sysop/settings/dungeons/remove")
@@ -1521,6 +1658,12 @@ def settings():
         entry["holders"] = skill_holders.get(entry["key"], 0)
         entry["dependents"] = mud_skills.dependents(database, entry["key"]) if entry["imported"] else []
         entry["summary"] = mud_skills.describe_effects(entry["definition"])
+    mud_ability_entries = [{**entry, "dependents": mud_abilities.dependents(database, entry["key"])
+                            if entry["imported"] else []}
+                           for entry in mud_abilities.catalog(database).values()]
+    mud_effect_entries = [{**entry, "dependents": mud_effects.dependents(database, entry["key"])
+                           if entry["imported"] else []}
+                          for entry in mud_effects.catalog(database).values()]
     mud_world_origin_keys = {
         world["id"]: {kind: sorted(keys) for kind, keys in mud_worlds.world_origin_keys(
             database, world["id"]).items()}
@@ -1594,6 +1737,7 @@ def settings():
                            mud_world_list=mud_world_list,
                            mud_origins=mud_origins,
                            mud_skill_entries=mud_skill_entries,
+                           mud_ability_entries=mud_ability_entries, mud_effect_entries=mud_effect_entries,
                            mud_skill_groups=mud_skills.GROUPS,
                            mud_starting_skill_choices=mud_skills.starting_choices(),
                            mud_world_origin_keys=mud_world_origin_keys,

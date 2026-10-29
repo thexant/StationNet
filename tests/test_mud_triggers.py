@@ -494,7 +494,8 @@ def test_export_and_reimport_keep_triggers_with_local_ids(game):
         events = {trigger["id"]: trigger for trigger in exported["events"]}
         assert len(events) == len(_document()["events"])
         lever = events["pull-lever"]
-        assert lever["source"]["object"].startswith("placed-item-")
+        # Exports keep the IDs a world was imported with, so repeated exports and upgrades line up.
+        assert lever["source"]["object"] == "lever-1"
         exit_ids = {item["id"] for item in exported["exits"] if "id" in item}
         assert next(action["exit"] for action in lever["actions"] if action["type"] == "set_exit") in exit_ids
         assert any(item.get("hidden") for item in exported["exits"])

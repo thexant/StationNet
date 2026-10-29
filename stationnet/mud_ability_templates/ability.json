@@ -1,0 +1,12 @@
+{
+  "key": "frost-lance",
+  "name": "Frost Lance",
+  "command": "lance",
+  "description": "A spear of ice that leaves the target frostbitten.",
+  "target": "enemy",
+  "cost": 7,
+  "damage": 8,
+  "effects": [
+    {"key": "frostbite", "potency": 2, "duration": 3}
+  ]
+}

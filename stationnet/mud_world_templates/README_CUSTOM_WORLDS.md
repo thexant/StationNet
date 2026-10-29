@@ -7,7 +7,9 @@ a separate character in every world they play. You can build a world with a text
 editor. Put three UTF-8 JSON files at the root of a ZIP archive:
 `manifest.json`, `rooms.json`, and `exits.json`. Add `content.json` for items,
 NPCs, dialogue, quests, professions, trainers, and placements. Add `origins.json` for custom
-races and classes, `skills.json` for custom skills, `dungeons.json` for
+races and classes, `skills.json` for custom skills, `abilities.json` and
+`effects.json` for [custom abilities and timed effects](#abilities-and-effects-abilitiesjson-and-effectsjson),
+`dungeons.json` for
 procedural dungeons, `events.json` for [triggers](#5c-events-and-triggers-eventsjson)
 that make the world react to players, and `wilderness.json` for large
 [wilderness areas built from room presets](#5d-wilderness-and-room-presets-wildernessjson). Triggers are declarative settings: no
@@ -18,9 +20,30 @@ exits. Wilderness rooms do not count toward the room limit; a world may hold up
 to 1,000,000 of them. `content.json` may have up to 5,000 records in each supported array.
 The manifest may also turn on the optional [world life](#5f-world-life)
 systems. The ZIP must contain only those three required files and optional
-`content.json`, `origins.json`, `skills.json`, `dungeons.json`,
-`events.json`, and `wilderness.json`, all at its root. Imports validate references
-and reject duplicate world IDs. Standalone race and class imports remain
+`content.json`, `origins.json`, `skills.json`, `abilities.json`, `effects.json`,
+`dungeons.json`, `events.json`, and `wilderness.json`, all at its root. Imports validate references
+and offer an [upgrade](#upgrade-an-installed-world) when the world ID is already installed.
+
+A world package is meant to be complete: everything it needs to play, from its
+races and classes to the effects its weapons apply, travels inside it, so a
+station that has never seen it can import and play it without creating
+anything by hand. **SYSOP Settings → MUD service → Worlds → DOWNLOAD EXAMPLE
+WORLD ZIP** gives a small world that uses every file; its sources are in
+`stationnet/mud_world_templates/example-world/`.
+
+### What a package can and cannot change
+
+| A package may define or tune | The engine keeps for itself |
+| --- | --- |
+| Rooms, exits, items, equipment, NPCs, merchants, banks, trainers, dialogue, quests, loot, factions, professions, wilderness, destinations | Attributes and their effects, the point-buy rules |
+| Races, classes, skills (within the fixed skill effect types and practice triggers) | Equipment slots, item types, directions |
+| Abilities and timed effects built from the fixed primitives below | Effect kinds, resistance categories, combat formulas |
+| Progression dials within bounds (level cap, experience rate, health and mana per level, starting coins) | The experience curve, the maximum level of 50 |
+| Mana's name or its absence; world life settings | Quest objective and reward types, trigger event and action types |
+| Procedural dungeon templates, their rewards, scaling, and bosses | The dungeon generator and its layouts |
+
+Manifest keys such as `max_level`, `attributes`, or `resistances` are rejected
+as engine rules rather than silently ignored. Standalone race and class imports remain
 available through the [origin guide](../mud_origin_templates/README_RACES_CLASSES.md).
 
 ## 1. Name the world and choose its entry room
@@ -29,6 +52,7 @@ available through the [origin guide](../mud_origin_templates/README_RACES_CLASSE
 
 ```json
 {
+  "format_version": 2,
   "id": "lantern-isles",
   "name": "Lantern Isles",
   "author": "Your name",
@@ -36,6 +60,41 @@ available through the [origin guide](../mud_origin_templates/README_RACES_CLASSE
 }
 ```
 
+`format_version` says which package format the files follow. Packages without
+it are format 1 and still import; checks added in format 2 (unknown manifest
+keys, invalid effects on items and NPCs) are reported to them as warnings
+instead of errors. Format 2 rejects anything it does not understand. A station
+given a newer format than it reads says so instead of guessing. Exports always
+write the newest format.
+
+### Progression
+
+A world may tune character growth within fixed bounds. Leave out any dial to
+keep the engine's default:
+
+```json
+"progression": {"level_cap": 20, "experience_percent": 150, "health_per_level": 12,
+                "mana_per_level": 3, "starting_coins": 50}
+```
+
+| Dial | Range | Default | Effect |
+| --- | --- | --- | --- |
+| `level_cap` | 1–50 | 50 | Characters stop leveling here; anyone already above keeps their level. |
+| `experience_percent` | 10–500 | 100 | Scales every award before Intellect and skill bonuses. |
+| `health_per_level` | 1–30 | 10 | Base health per level; Vitality still adjusts it. |
+| `mana_per_level` | 0–10 | 2 | Base mana per level; Intellect still adjusts it. |
+| `starting_coins` | 0–100000 | 30 | Coins in a new character's purse. |
+
+The World Builder's **Progression** panel edits the same settings. Procedural
+portal dungeons always use the defaults.
+
+### Availability
+
+`"availability": {"races": ["islander"], "classes": ["lamplighter"], "skills": [...]}`
+suggests which races, classes, and skills the world offers. Keys are the
+package's own local keys or built-in keys. The importing sysop's choice still
+wins; leave the list out to offer the world's bundled choices (or the built-ins
+when it bundles none).
 The world ID must be unique on the station. World, room, and content record IDs
 match `^[a-z][a-z0-9-]{0,63}$`: 1 to 64 lowercase letters, digits, and hyphens,
 starting with a letter. `stationnet` is reserved for the original builder
@@ -155,20 +214,58 @@ can use `"on_use_effects"`; equipped weapons and hostile NPCs can use
 {"on_hit_effects": [{"key": "poison", "potency": 2, "duration": 3}]}
 ```
 
-Keys are `poison`, `burning`, `bleeding` (damage each combat turn), `might` and
+Built-in keys are `poison`, `burning`, `bleeding` (damage each combat turn),
+`regeneration` (healing each turn), `might` and
 `weakness` (attack), `ward` and `vulnerability` (defense), `focus` and `blinded`
-(accuracy), or `evasive` and `snared` (evasion). Potency is 1–1000
+(accuracy), or `evasive` and `snared` (evasion). A key may also name one of the
+world's own effects from `effects.json`. Potency is 1–1000
 and duration is 1–100 turns. Reapplying a key keeps its stronger potency and
-longer remaining duration. Classes declare known spells through imported
-class JSON or `character_options.json`; the world ZIP cannot add spell
-implementations. Supported spells are `ember` (8 mana), `venom` (7), `rend`
-(6), `hex` (7), `mend` (7), `ward` (6), and `might` (6). The first four target
-an enemy; the last three target the caster. Players use `/spells`,
+longer remaining duration. Classes and races grant abilities through their
+`spells` list. Built-in abilities are `ember` (8 mana), `venom` (7), `rend`
+(6), `hex` (7), `mend` (7), `ward` (6), and `might` (6); the first four target
+an enemy and the last three the caster. A world adds more in `abilities.json`. Players use `/spells`,
 `/cast <spell> [enemy]`, and `/rest` to recover mana outside combat when no
 hostile enemy is nearby. Intellect improves mana and spell strength. Worlds
 can rename mana or disable it and its spells; see
 [Rename or disable mana](#rename-or-disable-mana). See the
 [race and class guide](../mud_origin_templates/README_RACES_CLASSES.md) for class setup.
+
+### Abilities and effects (`abilities.json` and `effects.json`)
+
+A world can add abilities and effects built only from the engine's fixed
+parts, so they always work in play:
+
+```json
+{"effects": [
+  {"key": "searing-light", "name": "Searing Light", "kind": "damage", "resist_as": "burning"},
+  {"key": "tide-blessing", "name": "Tide Blessing", "kind": "regen"},
+  {"key": "brine-chill", "name": "Brine Chill", "kind": "defense", "sign": -1}
+]}
+```
+
+An effect's `kind` is `damage` or `regen` (each combat turn), or `attack`,
+`defense`, `accuracy`, or `evasion` with `sign` 1 (bonus) or -1 (penalty).
+Harmful effects may name a `resist_as` resistance (`physical`, `poison`,
+`burning`, `bleeding`, `weakness`, `vulnerability`, `blinded`, `snared`) so race
+and class resistances weaken them. Players see the `name`.
+
+```json
+{"abilities": [
+  {"key": "lantern-flare", "name": "Lantern Flare", "command": "flare", "target": "enemy", "cost": 6,
+   "damage": 7, "effects": [{"key": "searing-light", "potency": 2, "duration": 3}]},
+  {"key": "tide-prayer", "name": "Tide Prayer", "target": "self", "cost": 5, "heal": 6,
+   "effects": [{"key": "tide-blessing", "potency": 2, "duration": 3}]}
+]}
+```
+
+An ability strikes one enemy (`damage` 1–200 plus harmful effects) or acts on
+its caster (`heal` 1–200 and/or helpful effects), costs 0–100 of the world's
+resource, and applies up to four effects. Players cast it with
+`/cast <command or name>`. Grant it with a race or class `spells` list, by its
+local key. Keys may not reuse a built-in ability or effect key. Items, NPCs,
+triggers (`apply_effect`), and dungeon templates apply effects by key too.
+The same definitions can be installed station-wide from **SYSOP Settings →
+Abilities & Effects**; see `../mud_ability_templates/README_ABILITIES_EFFECTS.md`.
 
 `content.json` is an object whose keys are authored MUD table names and whose
 values are arrays of records. IDs are **local to the ZIP** and can be short
@@ -907,6 +1004,7 @@ left the world, or the dungeon run, by the time it is due.
 | `reputation` | `faction`, `amount` (-1000 to 1000, not 0) | Changes the player's [standing](#factions-and-reputation) with a faction. |
 | `fine` | `faction`, `amount` (1–100,000) | Fines the player, as a [crime](#crime-and-consequences) would, without changing standing. |
 | `clear_fines` | optional `faction` | Pardons the player's unpaid fines, to that faction or to all. |
+| `apply_effect` | `effect`, optional `potency` (1–1,000, default 1) and `duration` (1–100 turns, default 3) | Puts a timed effect on the player: a built-in key or one of the world's own effects. Harmful effects are weakened by matching resistances. Also allowed in dungeon triggers. |
 
 Exits must have an `"id"` in `exits.json` before a trigger can name them.
 
@@ -1458,7 +1556,7 @@ Compress-Archive -Path manifest.json,rooms.json,exits.json,content.json -Destina
 zip lantern-isles.zip manifest.json rooms.json exits.json content.json
 ```
 
-If you omit `content.json`, `origins.json`, `skills.json`, `dungeons.json`, `events.json`, or `wilderness.json`, omit them from the command too. Confirm the ZIP
+If you omit `content.json`, `origins.json`, `skills.json`, `abilities.json`, `effects.json`, `dungeons.json`, `events.json`, or `wilderness.json`, omit them from the command too. Confirm the ZIP
 lists the JSON files directly, without a containing folder. In **SYSOP Settings → MUD service →
 Worlds**, import the ZIP. Choose whether the world offers only its bundled races,
 classes, and skills, offers them alongside the built-ins, or offers a manual
@@ -1469,15 +1567,67 @@ content and characters. The **WORLD BUILDER** link (or the world switcher at the
 top of the builder) edits that world, enabled or not. The **Export World ZIP**
 button downloads the current map, including builder changes. For a
 station-built world, the exported manifest uses `my-world` as a starter ID;
-change it before importing on the same station. The exporter assigns simple room
-IDs so the files remain easy to edit. In sysop settings, choose any installed
-custom races, classes, and skills to bundle in an export; by default the world's
-own definitions and the custom ones it offers are included.
+change it before importing on the same station. Exports keep the IDs content
+was imported with (content made in the World Builder gets simple IDs such as
+`room-3`), so exporting twice gives the same files.
+
+Exports are self-contained. Every custom race, class, skill, ability, and effect
+the world owns, offers, or uses in its content, events, and dungeons is bundled,
+along with its progression and race/class/skill selection. In sysop settings you
+may instead pick which races, classes, and skills to bundle; anything the
+content still needs is added anyway. References that cannot travel, such as an
+NPC schedule naming a room in another world, are listed as warnings (the
+builder's **CHECK EXPORT** shows them); tick the strict option to refuse such an
+export instead.
+
+### Validation messages
+
+Choosing a ZIP in the import form checks it completely, including a trial
+install that is rolled back, and lists every problem at once with its file and
+JSON path, for example `origins.json $.classes[0].spells[2]`. Each problem has a
+category:
+
+| Category | Meaning |
+| --- | --- |
+| `invalid` | A value is malformed or out of range. |
+| `missing_reference` | Something names a room, item, ability, effect, or other definition that is neither in the package nor installed. |
+| `unsupported` | A field or feature the engine does not have. |
+| `engine_reserved` | An attempt to change an engine rule, or to redefine a built-in ability or effect. |
+| `conflict` | A bundled definition differs from one another installed package also uses, or the world is already installed. |
+| `legacy` | A format 1 package uses something format 2 would reject; it still imports. |
+
+### Shared definitions
+
+Bundled races, classes, skills, abilities, and effects are installed under keys
+derived from the world ID, so two worlds never collide. Importing a definition
+identical to one already installed reuses it. A changed version replaces the old
+one when only this world uses it; when another installed package also uses it
+the import stops with a conflict. A world's bundled races, classes, and skills
+are offered in that world only; other worlds offer them only if a sysop adds
+them.
+
+### Upgrade an installed world
+
+Importing a ZIP whose ID is already installed shows what would change (rooms,
+content, definitions, and how many characters stand in rooms the new version
+removes) and imports it as an upgrade after you confirm. The upgrade runs as
+one transaction: if anything fails, the installed world is left untouched.
+Characters keep their level, gear, and coins. Quests, objectives, reputation,
+NPC regard, learned destinations, held items, and event history carry over to
+content that keeps the same IDs; characters in removed rooms move to the start
+room. Dungeon runs in progress end. The world keeps its enabled state and its
+race, class, and skill selection, plus any new bundled choices. World Builder
+edits made since the last import are replaced, so export first if you want to
+keep them. Optionally reset the world's flags and event history.
 
 To uninstall a custom world, disable it first, then use **Remove World**.
 Removal deletes the world's rooms and content and ends its dungeon runs. Its
 characters are kept, hidden, and return if a world with the same ID is
-installed again. The original Station World cannot be uninstalled.
+installed again. With **Also remove this world's unshared races, classes, and
+skills**, its own abilities and effects go too, unless another package uses them.
+Definitions still held by characters (a class, an effect burning on someone, an
+item a player carries) are kept, hidden from new use, so nothing a player has
+breaks. The original Station World cannot be uninstalled.
 
 The installed ZIP is kept for sharing. Exports are read from the database so
 builder changes are included the next time you export. Removing a

@@ -23,12 +23,13 @@
     <div class="button-row">
       <a class="button secondary" href="{{ url_for('mud.builder_wilderness') }}">WILDERNESS</a>
       <a class="button secondary" href="{{ url_for('mud.builder_export_world') }}">EXPORT WORLD ZIP</a>
+      <a class="button secondary" href="{{ url_for('mud.builder_check_export') }}">CHECK EXPORT</a>
       {% if g.station.mud_enabled and builder_world.enabled %}<a class="button secondary" href="{{ url_for('mud.play') }}">PLAY THIS WORLD</a>{% endif %}
     </div>
   </header>
   {% include 'mud/_builder_world_switch.html' %}
 
-  <nav class="subnav settings-jump-nav" aria-label="World builder sections"><a href="#world-resource-heading">RESOURCE</a><a href="#world-life-heading">WORLD LIFE</a><a href="#create-room-heading">ROOMS</a><a href="#create-item-heading">ITEMS</a><a href="#npc-heading">NPCS</a><a href="#faction-heading">FACTIONS</a><a href="#quest-heading">QUESTS</a><a href="#dungeon-heading">DUNGEONS</a><a href="#events-heading">EVENTS</a><a href="#destinations-heading">DESTINATIONS</a><a href="#builder-rooms">EDIT ROOMS</a><a href="{{ url_for('mud.builder_wilderness') }}">WILDERNESS</a></nav>
+  <nav class="subnav settings-jump-nav" aria-label="World builder sections"><a href="#world-resource-heading">RESOURCE</a><a href="#world-progression-heading">PROGRESSION</a><a href="#world-life-heading">WORLD LIFE</a><a href="#create-room-heading">ROOMS</a><a href="#create-item-heading">ITEMS</a><a href="#npc-heading">NPCS</a><a href="#faction-heading">FACTIONS</a><a href="#quest-heading">QUESTS</a><a href="#definitions-heading">DEFINITIONS</a><a href="#dungeon-heading">DUNGEONS</a><a href="#events-heading">EVENTS</a><a href="#destinations-heading">DESTINATIONS</a><a href="#builder-rooms">EDIT ROOMS</a><a href="{{ url_for('mud.builder_wilderness') }}">WILDERNESS</a></nav>
 
   <section class="terminal-card builder-settings" aria-labelledby="world-resource-heading">
     <p class="eyebrow">WORLD SETTINGS / CHARACTER RESOURCE</p>
@@ -40,6 +41,17 @@
       <label for="resource-name">Resource name</label>
       <input id="resource-name" name="name" maxlength="20" placeholder="Mana" value="{{ resource.name }}">
       <button>SAVE RESOURCE</button>
+    </form>
+  </section>
+
+  <section class="terminal-card builder-settings" aria-labelledby="world-progression-heading">
+    <p class="eyebrow">WORLD SETTINGS / PROGRESSION</p>
+    <h2 id="world-progression-heading">Progression</h2>
+    <p class="muted">Tune how characters grow in this world. The experience curve, attributes, and combat rules belong to the engine; these dials adjust them within fixed bounds. Experience rate scales every award before personal bonuses; health and mana per level are the base before Vitality and Intellect adjust them; starting coins apply to new wallets. Procedural dungeons always use the defaults. Saved in world exports.</p>
+    <form method="post" action="{{ url_for('mud.builder_set_progression') }}" class="form-grid">
+      <input type="hidden" name="csrf_token" value="{{ session.csrf_token }}">
+      {% for key, (low, high) in progression_bounds.items() %}<label>{{ progression_labels[key] }} ({{ low }}–{{ high }})<input type="number" name="{{ key }}" min="{{ low }}" max="{{ high }}" value="{{ progression[key] }}" required></label>{% endfor %}
+      <button>SAVE PROGRESSION</button>
     </form>
   </section>
 
@@ -160,6 +172,19 @@
     <p class="eyebrow">SKILL REFERENCE / SYSOP-MANAGED</p><h2 id="skills-reference-heading">Skills</h2>
     <p class="muted">Skills are installed and enabled by sysops. Use their keys for trainer lessons and item categories for weapon and armor proficiency. Search and lock difficulty use one roll: chance = 50% + the Perception (search) or Lockpicking (lock) bonus + 2 × (Intellect or Agility − 10) − difficulty, kept between 5% and 95%.</p>
     <details class="builder-exits"><summary>{{ skill_entries|selectattr('enabled')|list|length }} enabled skills</summary><div class="builder-child-list">{% for entry in skill_entries %}<p><strong>{{ entry.definition.name }}</strong> <code>{{ entry.key }}</code> · {{ entry.definition.group }}{% if not entry.enabled %} · disabled{% endif %}<br><small>{{ entry.summary }}</small></p>{% endfor %}</div></details>
+  </section>
+
+  <section class="terminal-card builder-create" aria-labelledby="definitions-heading">
+    <p class="eyebrow">WORLD DEFINITIONS / EXPORTED WITH THIS WORLD</p><h2 id="definitions-heading">Races, Classes, Skills, Abilities &amp; Effects</h2>
+    <p class="muted">Define this world's own races, classes, skills, abilities, and effects as JSON (the same format as the package's origins.json, skills.json, abilities.json, and effects.json). Refer to the world's other definitions by their keys here. Saving a key again replaces that definition. Races, classes, and skills are offered to this world's players; every one travels with the world when it is exported. Built-in abilities and effects can be used by key but not redefined.</p>
+    <details class="builder-exits"><summary>Built-in abilities and effects</summary><div class="builder-child-list"><p>{% for key, ability in built_in_abilities.items() %}<code>{{ key }}</code> {{ ability.target }}{{ ' · ' if not loop.last }}{% endfor %}</p><p>{% for key, effect in built_in_effects.items() %}<code>{{ key }}</code> {{ effect.kind }}{% if effect.sign %} {{ 'bonus' if effect.sign > 0 else 'penalty' }}{% endif %}{{ ' · ' if not loop.last }}{% endfor %}</p></div></details>
+    {% for kind, entries in world_definitions.items() %}{% for entry in entries %}<details class="builder-exits"><summary>{{ entry.name }} · {{ kind[:-1] if kind != 'abilities' else 'ability' }} · <code>{{ entry.local_key }}</code></summary><form method="post" action="{{ url_for('mud.builder_save_definition') }}" class="form-grid"><input type="hidden" name="csrf_token" value="{{ session.csrf_token }}"><input type="hidden" name="kind" value="{{ kind }}"><label>Definition JSON<textarea name="definition_json" rows="10" spellcheck="false">{{ entry.json }}</textarea></label><button class="secondary">SAVE</button></form></details>{% endfor %}{% endfor %}
+    <form method="post" action="{{ url_for('mud.builder_save_definition') }}" class="form-grid">
+      <input type="hidden" name="csrf_token" value="{{ session.csrf_token }}">
+      <label>Kind<select name="kind"><option value="effects">Effect</option><option value="abilities">Ability</option><option value="skills">Skill</option><option value="races">Race</option><option value="classes">Class</option></select></label>
+      <label>Definition JSON<textarea name="definition_json" rows="8" spellcheck="false" placeholder='{"key": "frostbite", "name": "Frostbite", "kind": "damage", "resist_as": "burning"}'></textarea></label>
+      <button>ADD DEFINITION</button>
+    </form>
   </section>
 
 {% macro response_fields(conversation, response=None) %}<label>Selectable response<input name="response_text" maxlength="500" required value="{{ response.response_text if response else '' }}"></label><label>Next node<select name="next_node_id"><option value="">End conversation</option>{% for option in nodes_by_conversation[conversation.id] %}<option value="{{ option.id }}" {% if response and response.next_node_id==option.id %}selected{% endif %}>{{ option.node_key }}</option>{% endfor %}</select></label><label>Accept quest<select name="accept_quest_id"><option value="">No quest</option>{% for quest in quests %}<option value="{{ quest.id }}" {% if response and response.accept_quest_id==quest.id %}selected{% endif %}>{{ quest.name }}</option>{% endfor %}</select></label><label>Turn in quest<select name="turn_in_quest_id"><option value="">No turn-in</option>{% for quest in quests if quest.completion_mode=='turn_in' %}<option value="{{ quest.id }}" {% if response and response.turn_in_quest_id==quest.id %}selected{% endif %}>{{ quest.name }}</option>{% endfor %}</select></label><label>Deliver item<select name="deliver_item_id"><option value="">None</option>{% for item in definitions %}<option value="{{ item.id }}" {% if response and response.deliver_item_id==item.id %}selected{% endif %}>{{ item.name }}</option>{% endfor %}</select></label><label>Require state key<input name="required_state_key" maxlength="80" placeholder="introduced" value="{{ response.required_state_key or '' if response else '' }}"></label><label>Require state value<input name="required_state_value" maxlength="500" placeholder="yes" value="{{ response.required_state_value or '' if response else '' }}"></label><label>Set state key<input name="state_key" maxlength="80" placeholder="introduced" value="{{ response.state_key or '' if response else '' }}"></label><label>Set state value<input name="state_value" maxlength="500" placeholder="yes" value="{{ response.state_value or '' if response else '' }}"></label><label>Order<input type="number" name="sort_order" value="{{ response.sort_order if response else 0 }}"></label><label>Conditions (JSON array; all must hold)<textarea name="conditions_json" rows="2" placeholder='[{"type":"level","min":3},{"type":"has_item","item":"ITEM ID","negate":true}]'>{{ response.conditions_json if response else '[]' }}</textarea></label><label>Outcomes (JSON array; granted once per character)<textarea name="outcomes_json" rows="2" placeholder='[{"type":"coins","amount":10},{"type":"give_item","item":"ITEM ID","amount":1}]'>{{ response.outcomes_json if response else '[]' }}</textarea></label>{% endmacro %}

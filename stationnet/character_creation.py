@@ -184,6 +184,8 @@ def options(database=None, *, include_inactive=False, include_removed=False):
                       if include_inactive or entry["enabled"]]
     data["skills"] = [definition for definition in mud_skills.definitions(database).values()
                       if definition["starting"]]
+    from . import mud_abilities
+    data["ability_names"] = mud_abilities.names(database)
     return data
 
 
@@ -193,7 +195,7 @@ def _text(value, label, maximum, minimum=1):
     return value.strip()
 
 
-def validate_origin(kind, document, database, *, check_key=True):
+def validate_origin(kind, document, database, *, check_key=True, extra_abilities=()):
     """Validate an imported JSON definition against supported MUD mechanics."""
     if kind not in KINDS or not isinstance(document, dict):
         raise ValueError("Choose a race or class JSON object.")
@@ -263,7 +265,8 @@ def validate_origin(kind, document, database, *, check_key=True):
         raise ValueError("Granted skills must map installed skill keys to ranks from 1 to 5.")
     if grants:
         definition["skills"] = grants
-    from .mud import EQUIPMENT_SLOTS, SPELLS
+    from . import mud_abilities
+    from .mud import EQUIPMENT_SLOTS
     if kind == "classes":
         skill = document.get("skill")
         if not isinstance(skill, str) or skill not in skills:
@@ -271,10 +274,14 @@ def validate_origin(kind, document, database, *, check_key=True):
         definition["skill"] = skill
     # Races may carry innate abilities and heirloom gear too; classes always list both.
     spells = document.get("spells", [])
-    if (not isinstance(spells, list) or len(spells) > len(SPELLS)
-            or any(not isinstance(spell, str) or spell not in SPELLS for spell in spells)
-            or len(set(spells)) != len(spells)):
-        raise ValueError(f"Spells must be distinct supported spell keys: {', '.join(SPELLS)}.")
+    abilities = set(mud_abilities.catalog(database)) | set(extra_abilities)
+    if (not isinstance(spells, list) or len(spells) > 12
+            or any(not isinstance(spell, str) for spell in spells) or len(set(spells)) != len(spells)):
+        raise ValueError("Spells must be a list of up to 12 distinct ability keys.")
+    missing = [spell for spell in spells if spell not in abilities]
+    if missing:
+        raise ValueError(f"Spells must be installed or bundled abilities; unknown: {', '.join(missing)}. "
+                         f"Built-in abilities are {', '.join(mud_abilities.BUILT_IN)}.")
     if spells or kind == "classes":
         definition["spells"] = spells
     equipment = document.get("equipment", [])

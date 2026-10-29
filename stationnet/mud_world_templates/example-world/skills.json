@@ -1,0 +1,9 @@
+{
+  "skills": [
+    {"key": "wick-craft", "name": "Wick Craft", "group": "magic", "starting": true,
+     "description": "Trimming lantern wicks sharpens spellwork.",
+     "effects": [{"type": "spell_power", "per_rank": 1, "every": 2, "max": 6}],
+     "practice": {"triggers": ["spell_cast"], "rate": 1},
+     "learn": {"cost": 1, "trainer_required": false}}
+  ]
+}

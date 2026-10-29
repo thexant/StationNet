@@ -381,8 +381,9 @@ def test_export_round_trip_keeps_cells_references_and_presets(game):
         assert content["mud_npc_instances"][0]["room_id"] == "@-2,-2,0"
         assert wilderness["cells"] == [{"x": -2, "y": -2, "z": 0, "blocked_dirs": "east"}]
         forest = next(preset for preset in wilderness["presets"] if preset["key"] == "forest")
-        assert forest["encounters"]["creatures"][0]["npc"].startswith("npc-")
-        assert forest["resources"]["items"][0]["item"].startswith("item-")
+        # Shared references use the exported content's own (imported) IDs.
+        assert forest["encounters"]["creatures"][0]["npc"] in {row["id"] for row in content["mud_npc_definitions"]}
+        assert forest["resources"]["items"][0]["item"] in {row["id"] for row in content["mud_item_definitions"]}
         reinstall = BytesIO()
         with zipfile.ZipFile(BytesIO(payload)) as source, zipfile.ZipFile(reinstall, "w") as target:
             for name in source.namelist():

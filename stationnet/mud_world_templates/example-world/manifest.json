@@ -1,0 +1,10 @@
+{
+  "format_version": 2,
+  "id": "lantern-isles",
+  "name": "Lantern Isles",
+  "author": "StationNet",
+  "start_room": "harbor",
+  "resource": {"enabled": true, "name": "Glow"},
+  "progression": {"level_cap": 20, "experience_percent": 150, "starting_coins": 50},
+  "availability": {"races": ["islander"], "classes": ["lamplighter"]}
+}

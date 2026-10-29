@@ -168,10 +168,12 @@ def test_package_round_trip_and_reference_checks():
             with zipfile.ZipFile(BytesIO(payload)) as archive:
                 manifest = json.loads(archive.read("manifest.json"))
                 content = json.loads(archive.read("content.json"))
+                room_ids = {room["id"] for room in json.loads(archive.read("rooms.json"))}
             assert manifest["clock"] == {"enabled": True, "day_minutes": 1440, "start_hour": 0}
             smith = next(row for row in content["mud_npc_definitions"] if row["name"] == "Smith")
             rooms = {row["room"] for row in smith["behaviors_json"]["schedule"]["entries"]}
-            assert rooms <= {f"room-{index}" for index in range(1, 5)}
+            # Schedules name the exported rooms by the IDs the world was imported with.
+            assert rooms and rooms <= room_ids
             reread = mud_worlds.read_package(payload)
             assert reread["society"]["clock"]["enabled"]
     plain = mud_worlds.read_package(mud_worlds.package_bytes(document()))

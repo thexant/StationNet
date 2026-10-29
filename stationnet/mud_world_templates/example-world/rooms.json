@@ -1,0 +1,6 @@
+[
+  {"id": "harbor", "name": "Lantern Harbor", "description": "Lanterns sway above tide-worn steps. A market lies north; a shrine glows to the east."},
+  {"id": "market", "name": "Night Market", "description": "Stalls of oil, wick, and glass crowd the square."},
+  {"id": "shrine", "name": "Tide Shrine", "description": "Warm light pools around a stone basin of seawater."},
+  {"id": "cliffs", "name": "Wind Cliffs", "description": "Gulls wheel over a cave mouth that breathes cold air."}
+]

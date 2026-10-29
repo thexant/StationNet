@@ -95,7 +95,7 @@ or [dungeon theme](../dungeon_templates/README_DUNGEON_THEMES.md).
 | `effects` | optional | optional | Lasting bonuses. Object with any skill effect type (see below); each value is an integer from -100 to 100; `{}` is valid. |
 | `skills` | optional | optional | Object granting starting ranks, such as `{"perception": 1}`. Keys must be installed skills; ranks are 1 to 5. Granted skills do not count toward the player's starting choices. |
 | `skill` | — | required | Favored skill key; any installed skill (default or imported). It starts at rank 2 if the player picks it. |
-| `spells` | optional | optional | Array of distinct supported spell keys; `[]` gives no spells. On a race these are innate abilities, known in addition to the class's spells. |
+| `spells` | optional | optional | Array of up to 12 distinct installed ability keys (built in, imported, or bundled with the same package); `[]` gives no spells. On a race these are innate abilities, known in addition to the class's spells. |
 | `equipment` | optional | optional | Array of up to eight starter items; `[]` gives none. |
 | `tags` | optional | optional | Up to 12 lowercase keys, such as `["darkvision", "undead"]`. Tags mean nothing by themselves; world content, items, and dialogue can require or exclude them. |
 | `proficiencies` | optional | optional | `{"weapons": [...], "armor": [...]}` gear categories this origin is trained with, as if a skill granted them. |
@@ -175,7 +175,7 @@ four damaging spells, and `/cast <spell>` for `mend`, `ward`, or `might`.
 `/rest` restores mana outside combat when no hostile enemy is nearby.
 Intellect raises starting mana, mana gained on level up, and spell strength.
 Spells spend mana from the active traditional or procedural progression track.
-Adding an unknown spell name to JSON cannot create a new spell implementation.
+Spells must name installed abilities. To add a new one, install it from **SYSOP Settings → Abilities & Effects** or bundle it in the world package or dungeon theme; see the [abilities guide](../mud_ability_templates/README_ABILITIES_EFFECTS.md).
 
 A traditional world may rename mana (for example to Energy) or disable it; see
 the [world guide](../mud_world_templates/README_CUSTOM_WORLDS.md#rename-or-disable-mana).
