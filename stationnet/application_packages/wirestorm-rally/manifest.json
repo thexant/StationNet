@@ -1,0 +1,17 @@
+{
+  "package_format": 1,
+  "slug": "wirestorm-rally",
+  "name": "Wirestorm Rally",
+  "description": "Off-road vector rally: 14 tracks, 8 machines, quick races, time-trial ghosts and championship cups.",
+  "author": "StationNet Core",
+  "version": "1.7.0",
+  "category": "Games",
+  "entrypoint": "main.js",
+  "platforms": [
+    "desktop",
+    "touch"
+  ],
+  "required_inputs": [],
+  "preferred_presentation": "standard",
+  "fullscreen_target": "application"
+}

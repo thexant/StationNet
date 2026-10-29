@@ -30,13 +30,15 @@ MAX_PENDING_DELAYS = 20
 TRIGGER_ID_RE = re.compile(r"^[a-z][a-z0-9-]{0,63}$")
 SCOPES = ("character", "world")
 EVENT_TYPES = ("enter_room", "use_object", "take_item", "say_phrase", "defeat_npc",
-               "dialogue_choice", "quest_complete", "timer", "manual", "crime")
+               "dialogue_choice", "quest_complete", "timer", "linger", "manual", "crime")
+# Repeating events: a timer runs once with no player; linger runs for each player in its room.
+INTERVAL_EVENTS = ("timer", "linger")
 # Which source kinds each event accepts. Exactly one source is required,
 # except for manual triggers, which are only run by other triggers.
 EVENT_SOURCES = {
     "enter_room": ("room",), "use_object": ("object", "item"), "take_item": ("object", "item"),
     "say_phrase": ("room",), "defeat_npc": ("npc", "npc_instance"),
-    "dialogue_choice": ("response",), "quest_complete": ("quest",), "timer": ("room",),
+    "dialogue_choice": ("response",), "quest_complete": ("quest",), "timer": ("room",), "linger": ("room",),
     "manual": (), "crime": ("room", "npc", "faction"),
 }
 EVENT_LABELS = {
@@ -44,6 +46,7 @@ EVENT_LABELS = {
     "take_item": "A player picks up an item", "say_phrase": "A player says a phrase in a room",
     "defeat_npc": "A player helps defeat an NPC", "dialogue_choice": "A player picks a dialogue response",
     "quest_complete": "A player completes a quest", "timer": "A repeating timer (no player)",
+    "linger": "Repeatedly, for each player who stays in a room",
     "manual": "Only when another trigger runs it",
     "crime": "A player is seen committing a crime (by room, witness or victim NPC type, or faction)",
 }
@@ -54,14 +57,14 @@ ACTION_TYPES = ("message", "set_flag", "clear_flag", "give_item", "take_item", "
                 "take_coins", "heal", "damage", "set_object_state", "set_exit", "show", "hide",
                 "spawn_npc", "teleport", "start_quest", "complete_objective", "run_trigger",
                 "learn_destination", "forget_destination", "disposition", "reputation", "fine", "clear_fines",
-                "apply_effect")
+                "apply_effect", "cure_effect")
 OUTCOME_ACTIONS = ("give_item", "take_item", "experience", "coins", "take_coins")
 MESSAGE_TARGETS = ("actor", "room", "other_room")
 EXIT_STATES = ("open", "locked", "hidden", "default")
 # Actions that need a player to act on. Timer triggers have no player.
 _ACTOR_ACTIONS = {"give_item", "take_item", "experience", "coins", "take_coins", "heal", "damage",
                   "teleport", "start_quest", "complete_objective", "learn_destination", "forget_destination",
-                  "disposition", "reputation", "fine", "clear_fines", "apply_effect"}
+                  "disposition", "reputation", "fine", "clear_fines", "apply_effect", "cure_effect"}
 # Procedural dungeons are generated fresh for each run, so their triggers only
 # use actions that make sense inside one run.
 DUNGEON_EVENTS = ("enter_room", "use_object", "take_item", "say_phrase", "defeat_npc", "manual")
@@ -70,7 +73,7 @@ DUNGEON_SOURCES = {"enter_room": ("room_role", "room_template", "environment"),
                    "say_phrase": ("room_role", "room_template", "environment"),
                    "use_object": ("item",), "take_item": ("item",), "defeat_npc": ("npc",), "manual": ()}
 DUNGEON_ACTIONS = ("message", "set_flag", "clear_flag", "give_item", "take_item", "experience", "coins",
-                   "take_coins", "heal", "damage", "run_trigger", "apply_effect")
+                   "take_coins", "heal", "damage", "run_trigger", "apply_effect", "cure_effect")
 # Which field of each action names other content, and what kind it is.
 _ACTION_REFERENCES = {
     "give_item": (("item", "item"),), "take_item": (("item", "item"),),
@@ -85,7 +88,7 @@ _ACTION_REFERENCES = {
     "disposition": (("npc", "npc"),),
     "reputation": (("faction", "faction"),),
     "fine": (("faction", "faction"),), "clear_fines": (("faction", "faction"),),
-    "apply_effect": (("effect", "effect"),),
+    "apply_effect": (("effect", "effect"),), "cure_effect": (("effect", "effect"),),
 }
 
 
@@ -234,6 +237,15 @@ def _action(raw, index, dungeon):
             raise ValueError(f"{where}: apply_effect potency must be 1 to 1,000 and duration 1 to 100 turns.")
         result.update(effect=_identifier(raw.get("effect"), f"{where} effect"),
                       potency=raw.get("potency", 1), duration=raw.get("duration", 3))
+    elif kind == "cure_effect":
+        fields |= {"effect", "category", "potency", "turns"}
+        from . import mud_effects
+        cure = {key: raw[key] for key in ("category", "potency", "turns") if key in raw}
+        if "effect" in raw:
+            cure["effect"] = _identifier(raw.get("effect"), f"{where} effect")
+        # Effect keys are checked against the world's effects with its other references.
+        mud_effects.validate_cure(cure, extra_keys=(cure.get("effect"),), label=where)
+        result.update(cure)
     elif kind == "disposition":
         fields |= {"npc", "amount"}
         if not _whole(raw.get("amount"), -100, 100) or raw["amount"] == 0:
@@ -304,12 +316,12 @@ def validate_trigger(raw, *, dungeon=False):
         result["phrase"] = phrase
     elif "phrase" in raw:
         raise ValueError(f"{label}: only say_phrase triggers have a phrase.")
-    if event == "timer":
+    if event in INTERVAL_EVENTS:
         if not _whole(raw.get("interval_seconds"), 30, 86_400):
-            raise ValueError(f"{label}: timer interval_seconds must be 30 to 86,400.")
+            raise ValueError(f"{label}: {event} interval_seconds must be 30 to 86,400.")
         result["interval_seconds"] = raw["interval_seconds"]
     elif "interval_seconds" in raw:
-        raise ValueError(f"{label}: only timer triggers have interval_seconds.")
+        raise ValueError(f"{label}: only timer and linger triggers have interval_seconds.")
     scope = raw.get("scope", "world" if event == "timer" else "character")
     if scope not in SCOPES or (event == "timer" and scope != "world"):
         raise ValueError(f"{label}: scope must be character or world" + (" (timers are world)" if event == "timer" else "") + ".")

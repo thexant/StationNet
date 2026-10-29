@@ -11,6 +11,8 @@ import json
 # What an effect does each turn (damage, regen) or which stat it shifts.
 KINDS = ("damage", "regen", "attack", "defense", "accuracy", "evasion")
 STAT_KINDS = ("attack", "defense", "accuracy", "evasion")
+# Effects marked outside_combat advance one turn this often while their target is out of combat.
+PULSE_SECONDS = 30
 # Built-ins are named by their key so long-standing messages read the same.
 EFFECTS = {
     "poison": {"kind": "damage"},
@@ -40,7 +42,7 @@ def normalize_effect(document):
     from . import character_creation
     if not isinstance(document, dict):
         raise ValueError("An effect must be a JSON object.")
-    unknown = set(document) - {"key", "name", "description", "kind", "sign", "resist_as"}
+    unknown = set(document) - {"key", "name", "description", "kind", "sign", "resist_as", "outside_combat"}
     if unknown:
         raise ValueError(f"Unsupported effect fields: {', '.join(sorted(unknown))}.")
     key = document.get("key")
@@ -65,6 +67,11 @@ def normalize_effect(document):
         if not harmful(definition):
             raise ValueError("Only harmful effects (damage, or a sign of -1) can be resisted.")
         definition["resist_as"] = document["resist_as"]
+    if "outside_combat" in document:
+        if type(document["outside_combat"]) is not bool:
+            raise ValueError("outside_combat must be true or false.")
+        if document["outside_combat"]:
+            definition["outside_combat"] = True
     return definition
 
 
@@ -115,6 +122,79 @@ def resist_key(database, key):
     if definition is None:
         return None
     return definition.get("resist_as") or (key if key in EFFECTS else None)
+
+
+def resistance_for(database, key, resistances):
+    """A character's total resistance to one effect: its own key plus its resistance category.
+
+    Gear may resist a world's effect by key, so a mask can stop one gas without
+    stopping every poison.
+    """
+    category = resist_key(database, key)
+    total = resistances.get(key, 0) + (resistances.get(category, 0) if category and category != key else 0)
+    return max(-100, min(100, total))
+
+
+def validate_resistances(value, database=None, extra_keys=(), label="resistances"):
+    """Item resistances map a resistance category or an effect key to -100..100 percent."""
+    from . import character_creation
+    known = set(character_creation.RESISTANCES) | set(extra_keys) | set(catalog(database))
+    if not isinstance(value, dict) or len(value) > 20 or any(
+            not isinstance(key, str) or key not in known or type(percent) is not int or abs(percent) > 100
+            for key, percent in value.items()):
+        raise ValueError(f"{label} must map up to 20 resistance categories ({', '.join(character_creation.RESISTANCES)}) "
+                         "or effect keys to percentages from -100 to 100.")
+    return value
+
+
+def validate_cure(spec, database=None, extra_keys=(), label="Cure"):
+    """One cure: an effect or a resistance category, optionally only weakened or shortened.
+
+    Without potency or turns the matching effects are removed outright.
+    """
+    from . import character_creation
+    if not isinstance(spec, dict) or set(spec) - {"effect", "category", "potency", "turns"}:
+        raise ValueError(f"{label} must be an object with effect or category, and optional potency and turns.")
+    if ("effect" in spec) == ("category" in spec):
+        raise ValueError(f"{label} needs exactly one of effect or category.")
+    if "effect" in spec and not (spec["effect"] in extra_keys or spec["effect"] in catalog(database)):
+        raise ValueError(f"{label} names unknown effect {spec['effect']!r}.")
+    if "category" in spec and spec["category"] not in character_creation.RESISTANCES:
+        raise ValueError(f"{label} category must be one of: {', '.join(character_creation.RESISTANCES)}.")
+    for field, high in (("potency", 1000), ("turns", 100)):
+        if field in spec and (type(spec[field]) is not int or not 1 <= spec[field] <= high):
+            raise ValueError(f"{label} {field} must be from 1 to {high}.")
+    return spec
+
+
+def validate_cures(value, database=None, extra_keys=(), label="cures"):
+    if not isinstance(value, list) or not 1 <= len(value) <= 10:
+        raise ValueError(f"{label} must be an array of 1 to 10 cures.")
+    return [validate_cure(spec, database, extra_keys, f"{label}[{index}]") for index, spec in enumerate(value)]
+
+
+def reduce(database, target_type, target_id, cure):
+    """Remove, weaken, or shorten matching active effects; return (name, "cured"|"eased") pairs."""
+    result = []
+    for row, definition in _active(database, target_type, target_id):
+        key = row["effect_key"]
+        if "effect" in cure and key != cure["effect"]:
+            continue
+        if "category" in cure and resist_key(database, key) != cure["category"]:
+            continue
+        potency = row["potency"] - cure.get("potency", 0)
+        turns = row["remaining_turns"] - cure.get("turns", 0)
+        whole = "potency" not in cure and "turns" not in cure
+        if whole or potency <= 0 or turns <= 0:
+            database.execute("DELETE FROM mud_active_effects WHERE target_type=? AND target_id=? AND effect_key=?",
+                             (target_type, target_id, key))
+            result.append((definition["name"], "cured"))
+        else:
+            database.execute("UPDATE mud_active_effects SET potency=?,remaining_turns=? "
+                             "WHERE target_type=? AND target_id=? AND effect_key=?",
+                             (potency, turns, target_type, target_id, key))
+            result.append((definition["name"], "eased"))
+    return result
 
 
 def resist(spec, percent):
@@ -171,19 +251,29 @@ def modifier(database, target_type, target_id, kind):
                for row, definition in _active(database, target_type, target_id) if definition["kind"] == kind)
 
 
-def tick_detail(database, target_type, target_id):
-    """Consume one turn; return per-turn damage and regen as (name, amount) pairs."""
+def tick_detail(database, target_type, target_id, outside_combat_only=False):
+    """Consume one turn; return per-turn damage and regen as (name, amount) pairs.
+
+    Outside combat only effects marked ``outside_combat`` advance.
+    """
     detail = {"damage": [], "regen": []}
+    keys = []
     for row, definition in _active(database, target_type, target_id):
+        if outside_combat_only and not definition.get("outside_combat"):
+            continue
+        keys.append(row["effect_key"])
         if definition["kind"] in detail:
             detail[definition["kind"]].append((definition["name"], row["potency"]))
+    if not keys:
+        return detail
+    marks = ",".join("?" * len(keys))
     database.execute(
-        "DELETE FROM mud_active_effects WHERE target_type=? AND target_id=? AND remaining_turns=1",
-        (target_type, target_id),
+        f"DELETE FROM mud_active_effects WHERE target_type=? AND target_id=? AND remaining_turns=1 "
+        f"AND effect_key IN ({marks})", (target_type, target_id, *keys),
     )
     database.execute(
-        "UPDATE mud_active_effects SET remaining_turns=remaining_turns-1 "
-        "WHERE target_type=? AND target_id=?", (target_type, target_id),
+        f"UPDATE mud_active_effects SET remaining_turns=remaining_turns-1 "
+        f"WHERE target_type=? AND target_id=? AND effect_key IN ({marks})", (target_type, target_id, *keys),
     )
     return detail
 
@@ -205,12 +295,78 @@ def store(database, definition):
                      (definition["key"], json.dumps(definition, separators=(",", ":"))))
 
 
+# Fields an effect definition may carry; exports copy exactly these.
+DEFINITION_FIELDS = ("key", "name", "description", "kind", "sign", "resist_as", "outside_combat")
+# Item and NPC properties that apply effects; ``cures`` and ``resistances`` name them too.
+APPLY_FIELDS = ("on_use_effects", "on_hit_effects")
+
+
+def property_effect_keys(properties):
+    """Every effect key that item or NPC properties apply, cure, or resist by key."""
+    from . import character_creation
+    if not isinstance(properties, dict):
+        return set()
+    keys = {spec["key"] for field in APPLY_FIELDS for spec in properties.get(field) or []
+            if isinstance(properties.get(field), list) and isinstance(spec, dict) and isinstance(spec.get("key"), str)}
+    if isinstance(properties.get("cures"), list):
+        keys |= {spec["effect"] for spec in properties["cures"]
+                 if isinstance(spec, dict) and isinstance(spec.get("effect"), str)}
+    if isinstance(properties.get("resistances"), dict):
+        keys |= {key for key in properties["resistances"]
+                 if isinstance(key, str) and key not in character_creation.RESISTANCES}
+    return keys
+
+
+def remap_properties(properties, mapper):
+    """Item or NPC properties with every named effect key renamed by mapper(key)."""
+    from . import character_creation
+    if not isinstance(properties, dict):
+        return properties
+    result = dict(properties)
+    for field in APPLY_FIELDS:
+        if isinstance(result.get(field), list):
+            result[field] = [{**spec, "key": mapper(spec["key"])}
+                             if isinstance(spec, dict) and isinstance(spec.get("key"), str) else spec
+                             for spec in result[field]]
+    if isinstance(result.get("cures"), list):
+        result["cures"] = [{**spec, "effect": mapper(spec["effect"])}
+                           if isinstance(spec, dict) and isinstance(spec.get("effect"), str) else spec
+                           for spec in result["cures"]]
+    if isinstance(result.get("resistances"), dict):
+        result["resistances"] = {key if key in character_creation.RESISTANCES else mapper(key): value
+                                 for key, value in result["resistances"].items()}
+    return result
+
+
+def validate_properties(properties, database=None, extra_keys=()):
+    """Check the effect fields of item or NPC properties; return (field path, problem) pairs."""
+    problems = []
+    if not isinstance(properties, dict):
+        return problems
+    for field in APPLY_FIELDS:
+        specs = properties.get(field)
+        if specs is None:
+            continue
+        if not isinstance(specs, list) or len(specs) > 10:
+            problems.append((field, f"{field} must be an array of up to 10 effects."))
+            continue
+        for index, spec in enumerate(specs):
+            try:
+                validate(spec, database, extra_keys)
+            except ValueError as problem:
+                problems.append((f"{field}[{index}]", str(problem)))
+    for field, check in (("cures", validate_cures), ("resistances", validate_resistances)):
+        if field in properties:
+            try:
+                check(properties[field], database, extra_keys)
+            except ValueError as problem:
+                problems.append((field, str(problem)))
+    return problems
+
+
 def _mentions(value, key):
-    """Whether parsed item or NPC properties apply an effect key."""
-    return isinstance(value, dict) and any(
-        isinstance(spec, dict) and spec.get("key") == key
-        for field in ("on_use_effects", "on_hit_effects") for spec in (value.get(field) or [])
-        if isinstance(value.get(field), list))
+    """Whether parsed item or NPC properties apply, cure, or resist an effect key."""
+    return key in property_effect_keys(value)
 
 
 def dependents(database, key, ignored_abilities=(), *, retired=False):

@@ -594,7 +594,11 @@ def _leg_text(leg, following, destination_name, final=True):
             text += f" of {leg.region}"
         text += f" {_distance(count)}"
     elif leg.kind == "vertical":
-        text = ("climb up" if leg.steps[0].direction == "up" else "go down")
+        step = leg.steps[0]
+        if step.exit_name and step.exit_name != step.direction:
+            text = _move(step)
+        else:
+            text = "climb up" if step.direction == "up" else "go down"
         if last.kind != "wild" and last.name:
             text += f" to {last.name}"
     else:
@@ -623,18 +627,27 @@ def _capital(text):
 
 
 def describe(graph, database, start, steps, destination_name, landmarks=None):
-    """Directions as a few sentences: a summary, then up to MAX_LEGS legs."""
+    """Directions as a few sentences: a summary, then up to MAX_LEGS legs.
+
+    Each layer is its own map, so the telling stops at the first way up or
+    down and the traveller asks again on the other side.
+    """
     route_legs = legs(graph, database, start, steps, landmarks)
+    stop = next((index + 1 for index, leg in enumerate(route_legs[:-1]) if leg.kind == "vertical"), None)
+    shown = route_legs[:stop] if stop else route_legs
     target = graph.position(steps[-1].node) if steps else None
     direction = bearing(graph.position(start), target)
     lines = [f"{destination_name} is {_journey(len(steps))}" + (f" to the {direction}." if direction else ".")]
-    for index, leg in enumerate(route_legs[:MAX_LEGS]):
-        following = route_legs[index + 1] if index + 1 < len(route_legs) else None
-        text = _leg_text(leg, following, destination_name)
-        prefix = "" if index == 0 else ("finally, " if following is None and index > 1 else "then ")
+    for index, leg in enumerate(shown[:MAX_LEGS]):
+        following = shown[index + 1] if index + 1 < len(shown) else None
+        text = _leg_text(leg, following, destination_name, final=stop is None)
+        prefix = "" if index == 0 else ("finally, " if following is None and index > 1 and not stop else "then ")
         lines.append(_capital(prefix + text) + ".")
-    if len(route_legs) > MAX_LEGS:
+    if len(shown) > MAX_LEGS:
         lines.append("Beyond that, ask again once you are closer.")
+    elif stop:
+        way = "up" if shown[-1].steps[0].direction == "up" else "down"
+        lines.append(f"Once you have gone {way}, ask for directions again.")
     return lines
 
 

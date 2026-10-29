@@ -155,8 +155,10 @@ ID. You need at least one room. Names must be 2–80 characters and descriptions
 1–4000 characters.
 
 A room may also stand on the [wilderness grid](#5d-wilderness-and-room-presets-wildernessjson):
-add whole-number `"x"`, `"y"` and `"z"` together. It keeps its own name, text,
-exits and contents, and links automatically to neighbouring grid rooms. Add
+add whole-number `"x"`, `"y"` and `"z"` together. `z` is its
+[map layer](#map-layers-going-up-and-down). It keeps its own name, text,
+exits and contents, and links automatically to neighbouring grid rooms on the
+same layer. Add
 `"grid_link": false` to stop the automatic links, or `"blocked_dirs": "north,east"`
 to wall off particular sides. Two rooms cannot share a position.
 
@@ -202,13 +204,84 @@ Barred exits stay visible and are marked `[barred]` for that player:
  "conditions_message": "The stair vanishes into perfect darkness."}
 ```
 
+### Map layers: going up and down
+
+A world can be built as a stack of separate maps called **layers**. Every room
+with coordinates belongs to the layer named by its `z`: a city on layer `0`,
+its sewers on `-1`, an office tower on `5`. Each layer has its own layout. Build
+it from authored rooms with `x`, `y` and `z`, from squares painted in
+[`wilderness.json`](#5d-wilderness-and-room-presets-wildernessjson), or both.
+Rooms link automatically only to neighbours **on the same layer**. Layers never
+link on their own, even where squares line up one above the other.
+
+To join two layers, add an exit whose `direction` is `up` or `down`. It can lead
+to any room on any other layer, so layers do not need to be stacked in order:
+layer `1` can lead to layer `5`, and layer `10` to layer `-3`. A layer may have
+as many ways up and down as you like. By convention `up` leads to a higher
+number, but nothing enforces it. As with every exit, add the way back
+explicitly.
+
+```json
+[
+  {"from": "manhole", "to": "sewer-junction", "name": "ladder", "direction": "down"},
+  {"from": "sewer-junction", "to": "manhole", "name": "ladder", "direction": "up"},
+  {"from": "lift-lobby", "to": "office-lobby", "name": "elevator", "direction": "up"},
+  {"from": "office-lobby", "to": "lift-lobby", "name": "elevator", "direction": "down"},
+  {"from": "@4,7,0", "to": "@4,7,-1", "name": "storm drain", "direction": "down", "hidden": true}
+]
+```
+
+Rules:
+
+- An exit between two rooms with coordinates on **different** layers must use
+  `up` or `down`. A `north`, `in`, `out` or named exit across layers is
+  rejected on import and in the World Builder.
+- `up` and `down` exits may also join rooms on the same layer, or rooms without
+  coordinates, such as the floors of a tower that has no map.
+- Rooms without coordinates belong to no layer. Exits to and from them are not
+  restricted, and `/map` is unavailable inside them.
+- Walls (`blocked_dirs`) apply only to the eight compass directions, because
+  `up` and `down` are never automatic.
+
+Layers can have names. Add an optional `layers` list to `manifest.json`, with
+each `z` at most once (up to 200 entries, each name 2–80 characters):
+
+```json
+"layers": [{"z": 0, "name": "Old City"}, {"z": -1, "name": "Sewers"},
+           {"z": 5, "name": "Meridian Tower"}]
+```
+
+Names appear in `/map` and in the World Builder, and exports keep them. A layer
+without a name is shown by number.
+
+What players see:
+
+- **`/map`** shows only the layer the player is on, headed with its name and
+  number: `Map around Plaza (0, 0, Old City, layer 0); north is up.` A room with
+  a way up is marked `<`, a way down `>`, and both `&`. Hidden exits stay
+  unmarked until a trigger or discovery reveals them to that player.
+- **`/directions`** describes the route only as far as the first way up or
+  down. It ends with, for example, *Then take the ladder down to Sewer Junction.
+  Once you have gone down, ask for directions again.* On the new layer,
+  `/directions` (or any move, while a destination is chosen) continues from
+  there.
+- **Movement** is ordinary: `/go up`, `up`, or `u`, and `down` or `d`.
+
+In the World Builder, name the layer you are viewing under **Wilderness →
+Map**. The exit forms there and on each room card accept **Or to the room at
+x,y,z** for a destination that is a wilderness square on another layer. The
+builder refuses an exit, or a room move, that would join two layers by any
+direction other than `up` or `down`.
+
 ## 4. Add optional world content
 
 ### Magic, mana, and timed effects
 
 Item and NPC definition `properties_json` may include shared effects. A consumable
 can use `"on_use_effects"`; equipped weapons and hostile NPCs can use
-`"on_hit_effects"`. For example:
+`"on_hit_effects"`. Items can also cure effects (`"cures"`), and equipment can
+resist them (`"resistances"`); see
+[Protective gear, cures, and hazards](#protective-gear-cures-and-hazards). For example:
 
 ```json
 {"on_hit_effects": [{"key": "poison", "potency": 2, "duration": 3}]}
@@ -246,8 +319,12 @@ parts, so they always work in play:
 An effect's `kind` is `damage` or `regen` (each combat turn), or `attack`,
 `defense`, `accuracy`, or `evasion` with `sign` 1 (bonus) or -1 (penalty).
 Harmful effects may name a `resist_as` resistance (`physical`, `poison`,
-`burning`, `bleeding`, `weakness`, `vulnerability`, `blinded`, `snared`) so race
-and class resistances weaken them. Players see the `name`.
+`burning`, `bleeding`, `weakness`, `vulnerability`, `blinded`, `snared`) so race,
+class, and gear resistances weaken them. Equipment can also resist an effect by
+its own key, so a gas mask can stop `radiation` without stopping snake venom.
+Effects normally act only on combat turns (and one turn on `/rest`). Set
+`"outside_combat": true` to make an effect also act every 30 seconds while its
+target is out of combat. Players see the `name`.
 
 ```json
 {"abilities": [
@@ -634,7 +711,9 @@ stays out of sight until a trigger's `show` action reveals it. Item properties c
 `reveal_exit`, `use_message`, equipment bonuses, firearm data, attribute
 `requirements`, and timed effects. Equipment may also set integer `accuracy`
 and `evasion` (each −20 to 20; negative evasion suits heavy armor). A firearm's
-`accuracy` applies only to its own shots.
+`accuracy` applies only to its own shots. Equipment may set `resistances`, and
+any usable item may set `cures`; see
+[Protective gear, cures, and hazards](#protective-gear-cures-and-hazards).
 
 `behaviors_json` controls hostility for combat-capable NPCs:
 - By default, they attack on sight.
@@ -684,6 +763,96 @@ attempt, including a failed roll, depletes the shared source for
 `respawn_seconds` (5–86,400). A success practices the required skill if that
 skill has the `gather` trigger. The `gathering` skill effect adds percentage
 points to success chance, capped at 100%.
+
+### Protective gear, cures, and hazards
+
+These pieces work together to build an environmental danger and the means to
+survive it. Examples include radiation and gas masks, spore clouds and
+filters, frost and furs, or curses and holy charms.
+
+**Equipment resistances.** An equipped item's `resistances` maps a resistance
+category (`physical`, `poison`, `burning`, `bleeding`, `weakness`,
+`vulnerability`, `blinded`, `snared`) or an effect key (built-in or one of the
+world's own) to a percentage from -100 to 100:
+
+```json
+{"resistances": {"radiation": 60, "poison": 25}}
+```
+
+- Gear adds to race and class resistances. The total for each key is kept within -100 to 100.
+- An incoming effect is weakened by its own key's total plus its `resist_as` category's total. 100 or more is immunity: the player shrugs the effect off.
+- Gear counts only while equipped in the current loadout and while the wearer meets its `requirements`.
+- An item with a `category` the wearer is untrained in gives three quarters of its positive resistances. Negative values (drawbacks) always apply in full.
+- `physical` also scales enemy blows, as it does for races.
+- `/character` lists the combined totals. Examining the item shows what it protects against.
+
+**Cures.** Any usable item may list up to 10 `cures`. Each names exactly one
+`effect` (a key) or `category` (every effect that resists as that category).
+Each cure may also set `potency` (1–1,000) to weaken the effect, `turns`
+(1–100) to shorten it, or both. A cure with neither removes the effect outright.
+An effect weakened or shortened to 0 is removed.
+
+```json
+{"cures": [{"effect": "radiation", "potency": 3, "turns": 5}]}
+{"cures": [{"category": "poison"}]}
+```
+
+- On `/use`, cures run first, then `on_use_effects`, then `heal`. A consumable is used up.
+- If an item only cures and the player has nothing it treats, it is not used up.
+- Triggers can cure too, with the `cure_effect` [action](#actions), for example in a decontamination shower, at a shrine, or from a medic's dialogue.
+
+**Lingering hazards.** An `enter_room` trigger fires once, on arrival. A
+`linger` trigger fires every `interval_seconds` (30–86,400) for each player
+still in its room, acting as that player, so their gear, conditions, and
+cooldowns all apply. Use it with `apply_effect` so resistances count. The
+`damage` action ignores resistances. Add a world-flag condition so a lever or
+quest can switch the hazard off.
+
+**Effects outside combat.** An effect marked `"outside_combat": true` deals
+damage, heals, and wears off every 30 seconds for connected players who are not
+in combat. In combat it ticks on combat turns as usual. Outside combat it never
+takes a player below 1 health, just like the `damage` action. Effects without
+the flag keep the classic behaviour: they wait for combat turns or `/rest`.
+
+#### Worked example: a radiation zone
+
+`effects.json`:
+
+```json
+{"effects": [{"key": "radiation", "name": "Radiation", "kind": "damage",
+              "resist_as": "poison", "outside_combat": true}]}
+```
+
+`content.json` items:
+
+```json
+{"id": "gas-mask", "name": "Gas Mask", "description": "Rubber and a fresh filter.",
+ "item_type": "equipment", "equipment_slot": "head",
+ "properties_json": {"resistances": {"radiation": 60}}},
+{"id": "hazmat-suit", "name": "Hazmat Suit", "description": "Heavy, but it seals.",
+ "item_type": "equipment", "equipment_slot": "body",
+ "properties_json": {"category": "hazmat", "resistances": {"radiation": 40}, "evasion": -3}},
+{"id": "anti-rad", "name": "Anti-Rad Pills", "description": "Bitter iodine tablets.",
+ "item_type": "consumable",
+ "properties_json": {"cures": [{"effect": "radiation", "potency": 3, "turns": 5}]}}
+```
+
+`events.json`:
+
+```json
+{"id": "fallout", "event": "linger", "source": {"room": "surface"}, "interval_seconds": 60,
+ "conditions": [{"type": "flag", "scope": "world", "key": "vent.sealed", "negate": true}],
+ "actions": [{"type": "apply_effect", "effect": "radiation", "potency": 4, "duration": 6},
+             {"type": "message", "text": "Your dosimeter clicks faster."}]},
+{"id": "decon", "event": "enter_room", "source": {"room": "airlock"},
+ "actions": [{"type": "cure_effect", "effect": "radiation"},
+             {"type": "message", "text": "Decontamination spray hisses over you."}]}
+```
+
+On the surface, an unprotected player gains Radiation 4 every minute. It keeps
+hurting after they leave, until it runs out or is treated. The mask alone takes
+it down to 1. The mask and suit together (if trained in `hazmat`) make the
+player immune. Pills weaken and shorten it, and the airlock clears it.
 
 ### Professions and repeatable work
 
@@ -776,7 +945,7 @@ For example:
 
 ```json
 {
-  "ambient": {"interval_seconds": 60, "lines": ["Mind the tide.", "Welcome ashore."]},
+  "ambient": {"interval_seconds": 60, "lines": ["Mind the tide.", "Welcome ashore.", "/emote coils a length of rope."]},
   "wander": {"interval_seconds": 120},
   "reactions": {"enter": "Welcome, traveler.", "say": "I hear you.", "get": "Take care with that."}
 }
@@ -787,7 +956,10 @@ For example:
 The directions are attempted in order; a missing exit leaves the NPC in place
 for that turn. Use either `wander` or `patrol`, never both. With the world clock
 on, a [`schedule`](#npc-schedules) moves an NPC by the hour instead. Intervals must be
-5–86400 seconds. `ambient.lines` accepts 1–20 lines of up to 300 characters;
+5–86400 seconds. `ambient.lines` accepts 1–20 lines of up to 300 characters.
+Each tick picks one line at random: a plain line is speech (`Harbormaster says: Mind the tide.`),
+while a line starting with `/emote ` is an action (`Harbormaster coils a length of rope.`),
+so speech and actions can share one pool. An `/emote` line needs text after the prefix.
 `reactions` accepts `enter`, `say`, `emote`, `get`, `drop`, `open`, `close`, and `put` with text up to 300
 characters each. Invalid or unknown behaviour keys are rejected on import.
 The server stores pending ticks in the database and resumes them after a
@@ -960,6 +1132,7 @@ expressions, or loops, and nothing in a package can run code.
 | `quest_complete` | `quest` | A player completes the quest, automatically or by turning it in. |
 | `crime` | `room`, `npc` (a witness or victim of that type), or `faction` (one whose standing the crime cost) | A player is seen committing a [crime](#crime-and-consequences). |
 | `timer` | `room`, plus `interval_seconds` (30–86,400) | Repeatedly while the world is active, whether or not anyone is there. Timers have no player. |
+| `linger` | `room`, plus `interval_seconds` (30–86,400) | Repeatedly, once for **each** player in the room at that moment, as that player. Use it for [hazards](#protective-gear-cures-and-hazards) and boons that last as long as someone stays. Every action and condition is available. |
 | `manual` | none | Only when another trigger runs it with `run_trigger`. Use these to share a set of actions. |
 
 ### Trigger fields
@@ -1004,7 +1177,8 @@ left the world, or the dungeon run, by the time it is due.
 | `reputation` | `faction`, `amount` (-1000 to 1000, not 0) | Changes the player's [standing](#factions-and-reputation) with a faction. |
 | `fine` | `faction`, `amount` (1–100,000) | Fines the player, as a [crime](#crime-and-consequences) would, without changing standing. |
 | `clear_fines` | optional `faction` | Pardons the player's unpaid fines, to that faction or to all. |
-| `apply_effect` | `effect`, optional `potency` (1–1,000, default 1) and `duration` (1–100 turns, default 3) | Puts a timed effect on the player: a built-in key or one of the world's own effects. Harmful effects are weakened by matching resistances. Also allowed in dungeon triggers. |
+| `apply_effect` | `effect`, optional `potency` (1–1,000, default 1) and `duration` (1–100 turns, default 3) | Puts a timed effect on the player: a built-in key or one of the world's own effects. Harmful effects are weakened by matching race, class, and gear resistances. Also allowed in dungeon triggers. |
+| `cure_effect` | exactly one of `effect` (a key) or `category` (a resistance category); optional `potency` (1–1,000) and `turns` (1–100) | Removes the player's matching effects, or with `potency`/`turns` weakens or shortens them. See [cures](#protective-gear-cures-and-hazards). Also allowed in dungeon triggers. |
 
 Exits must have an `"id"` in `exits.json` before a trigger can name them.
 
@@ -1087,14 +1261,16 @@ there, drop items, fight, and find authored landmarks. Nothing about it is
 fast travel.
 
 Coordinates are whole numbers. `x` grows to the east, `y` grows to the **south**,
-and `z` is the layer, which grows upward. Neighbouring squares link automatically:
+and `z` is the [map layer](#map-layers-going-up-and-down). Each layer is a
+separate map. Neighbouring squares on the same layer link automatically:
 
 - `north`, `east`, `south` and `west` link any two neighbours on the same layer.
 - The diagonals link only when **both** rooms allow eight-way links
   (`"links": "8"`). Authored rooms on the grid accept whatever their neighbour
   allows.
-- `up` and `down` link a square to the one directly above or below it on the
-  next layer.
+- Nothing links one layer to another automatically. Add an authored `up` or
+  `down` exit, such as a ladder, stair, lift or cave shaft, to cross between
+  layers.
 - An authored exit in the same direction replaces the automatic link. A road,
   gate, bridge or cave mouth works this way. Walls (`blocked_dirs`) on either
   side of an edge remove the link both ways.
@@ -1128,7 +1304,7 @@ and `z` is the layer, which grows upward. Neighbouring squares link automaticall
 | `key` | Required. 1–32 lowercase letters, digits and hyphens, starting with a letter. |
 | `name` | Required, 2–80 characters. Used as the room name unless `names` is given. |
 | `terrain` | `grassland`, `forest`, `dense-forest`, `hills`, `mountains`, `desert`, `swamp`, `tundra`, `water`, `road` or `custom` (the default). Colours the builder map. |
-| `glyph` | One printable character for maps; not a space, `@`, `*` or `P`. Default `.`. |
+| `glyph` | One printable character for maps; not a space, `@`, `*`, `P`, `<`, `>` or `&`, which `/map` uses for players, landmarks and ways up or down. Default `.`. |
 | `links` | `"4"` (default) or `"8"`. |
 | `names` | Optional list of up to 20 room-name variants (up to 80 characters each). |
 | `descriptions` | Required list of 1–40 descriptions, each up to 4000 characters. A plain string means weight 1. |
@@ -1165,7 +1341,9 @@ put in front of room names.
 
 ### Layers
 
-Painted squares are stored as **run-length encoded rows**, one layer per `z`:
+Painted squares are stored as **run-length encoded rows**, one layer per `z`.
+These are the painted squares of each [map layer](#map-layers-going-up-and-down);
+name layers in `manifest.json`, and join them with `up` and `down` exits:
 
 ```json
 {
@@ -1207,7 +1385,9 @@ Open **World Builder → Wilderness**.
   or as JSON. Presets can be imported and exported as JSON files: one preset, or
   `{"presets": [...]}`. A preset that rooms still use can only be removed after
   its rooms are moved to another preset.
-- **Map.** Pan, change layer and zoom. Choose **Inspect** to open a room,
+- **Map.** Pan, change layer and zoom. The map shows one layer at a time, with
+  `<`, `>` and `&` on rooms that have a way up, down, or both. Name the layer
+  you are viewing with **Name layer**. Choose **Inspect** to open a room,
   **Rectangle** or **Ellipse** to pick two corners, or **Brush** to paint
   individual squares.
 - **Fill.** Choose a preset and, optionally, a region. **Only fill empty
@@ -1219,7 +1399,9 @@ Open **World Builder → Wilderness**.
   lying in them. Players there move to the starting room. Dungeon entrances
   block the removal unless you also choose to remove them.
 - **Room inspector.** Shows a square's text, exits, players, NPCs and items. From
-  here you can place NPCs and items, add exits that reach beyond the grid, add a
+  here you can place NPCs and items, add exits that reach beyond the grid (to an
+  authored room, or to any square by typing its `x,y,z`, such as a way down to
+  another layer), add a
   dungeon entrance, set walls and the region, or **convert it to an authored
   room**. Converting keeps its current text and position and unlocks every World
   Builder tool for it: descriptions, triggers, discoveries and locks. Use this
@@ -1229,9 +1411,10 @@ Open **World Builder → Wilderness**.
   wilderness. A wilderness room already at that spot is absorbed: its NPCs,
   items, entrances and visitors move into the authored room.
 
-Players can type `/map` for a 15 × 9 view of the land around them. `@` marks
-the player, `P` other visible players, `*` authored landmarks, and each preset
-appears as its glyph.
+Players can type `/map` for a 15 × 9 view of the land around them on their
+current layer only. `@` marks the player, `P` other visible players, `*`
+authored landmarks, `<` a way up, `>` a way down, `&` both, and each preset
+appears as its glyph. The heading names the layer.
 
 ## 5e. Wayfinding destinations
 
@@ -1257,6 +1440,18 @@ Head northeast across the grassland some distance until you meet a road.
 Then follow the road north a long way, past the Old Watchtower.
 Then take the gate east to Market Square, where you will find Kessa Gate.
 ```
+
+Each [layer](#map-layers-going-up-and-down) is its own map, so directions stop
+at the first way up or down on the route:
+
+```text
+Sewer Outflow is a short walk away.
+Go east to Ladder Shaft.
+Then take the ladder down to Sewer Junction.
+Once you have gone down, ask for directions again.
+```
+
+Asking again on the new layer describes the next part of the way.
 
 While a destination is chosen, an ordinary move mentions the new heading when
 it changes. Wilderness `/travel` stops where the route turns away from the

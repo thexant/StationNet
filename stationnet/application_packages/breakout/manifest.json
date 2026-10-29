@@ -2,9 +2,11 @@
   "package_format": 1,
   "slug": "breakout",
   "name": "Breakout / Brick Breaker",
-  "description": "Break the block wall without losing your lives and advance through faster levels.",
+  "description": "Clear varied brick walls across increasingly fast classic Breakout levels.",
   "author": "StationNet Core",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "category": "Games",
-  "entrypoint": "main.js"
+  "entrypoint": "main.js",
+  "platforms": ["desktop", "touch"],
+  "fullscreen_target": "application"
 }

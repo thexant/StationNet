@@ -188,9 +188,10 @@ def test_grid_links_follow_preset_link_modes(game):
             "southeast": _cell(1, 1), "southwest": _cell(-1, 1)}
         assert set(_directions(db, _cell(0, -1))) == {"north", "east", "south", "west"}
         desert = _directions(db, _cell(1, 1))
-        assert desert["northwest"] == _town(db) and desert["up"] == _cell(1, 1, 1)
+        assert desert["northwest"] == _town(db) and "up" not in desert
         assert "northeast" not in desert and "southeast" not in desert and desert["east"] == _cell(2, 1)
-        assert _directions(db, _cell(1, 1, 1)) == {"down": _cell(1, 1)}
+        # Layers are separate maps: the square above links to nothing without an authored exit.
+        assert _directions(db, _cell(1, 1, 1)) == {}
 
 
 def test_walls_and_stored_exits_override_grid_links(game):
@@ -276,7 +277,7 @@ def test_map_command_draws_surroundings(game):
         _go(db, two, "north")
         text = mud._map_action(db, _user(db, one), {})[0].body
         lines = text.splitlines()
-        assert lines[0].startswith("Map around Market Town (0, 0)")
+        assert lines[0].startswith("Map around Market Town (0, 0, layer 0)")
         grid = lines[1:-1]
         assert grid[4][7] == "@" and grid[3][7] == "P" and grid[5][7] == ":"
         assert "t Forest" in lines[-1] and ": Desert" in lines[-1]

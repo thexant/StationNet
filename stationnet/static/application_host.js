@@ -1346,7 +1346,7 @@
         const rows = (Array.isArray(component.rows) ? component.rows : []).slice(0, 50);
         const width = Math.min(LIMITS.columns, rows.reduce((largest, row) => Math.max(largest, Array.isArray(row) ? row.length : 0), 0));
         node.style.setProperty("--app-grid-columns", String(Math.max(1, width)));
-        let drawing = false, lastCell = null;
+        let drawing = false, lastCell = null, drawingPointer = null;
         const cursor = component.cursor && typeof component.cursor === "object" ? component.cursor : {};
         const brush = component.brush && typeof component.brush === "object" ? {
           char: Array.from(String(component.brush.char == null ? " " : component.brush.char))[0] || " ",
@@ -1364,7 +1364,21 @@
           x: Number(cell.dataset.x), y: Number(cell.dataset.y), drag: phase === "move", phase
           });
         };
-        const finish = () => { if (!drawing || !lastCell) return; drawing = false; activate(lastCell, "end"); };
+        const cellAt = (event) => {
+          const candidate = document.elementFromPoint?.(event.clientX, event.clientY)?.closest?.(".app-cell");
+          return candidate && node.contains(candidate) ? candidate : null;
+        };
+        const move = (event) => {
+          if (!drawing || event.pointerId !== drawingPointer) return;
+          const cell = cellAt(event);
+          if (cell && cell !== lastCell) activate(cell, "move");
+        };
+        const finish = (event, phase = "end") => {
+          if (!drawing || event.pointerId !== drawingPointer) return;
+          if (phase === "end") move(event);
+          drawing = false; drawingPointer = null;
+          if (lastCell) activate(lastCell, phase);
+        };
         rows.forEach((row, y) => (Array.isArray(row) ? row : []).slice(0, width).forEach((cell, x) => {
           const value = cell && typeof cell === "object" ? cell : {};
           const button = document.createElement("button"); button.type = "button"; button.className = "app-cell";
@@ -1374,14 +1388,22 @@
           if (Number(cursor.x) === x && Number(cursor.y) === y) button.classList.add("app-cell-cursor");
           button.dataset.x = String(x); button.dataset.y = String(y); button.textContent = character;
           button.setAttribute("role", "gridcell"); button.setAttribute("aria-label", `Column ${x + 1}, row ${y + 1}, ${character === " " ? "blank" : character}`);
-          button.addEventListener("pointerdown", (event) => { if (event.button !== 0) return; event.preventDefault(); drawing = true; button.focus(); activate(button, "start"); });
-          button.addEventListener("pointerenter", () => { if (drawing) activate(button, "move"); });
+          button.addEventListener("pointerdown", (event) => {
+            if (event.button !== 0 || drawing) return;
+            event.preventDefault(); drawing = true; drawingPointer = event.pointerId;
+            button.focus(); activate(button, "start");
+            try { node.setPointerCapture(event.pointerId); } catch (_) { /* Pointer capture is optional. */ }
+          });
           button.addEventListener("click", (event) => { if (event.detail === 0) { activate(button, "start"); activate(button, "end"); } });
           node.append(button);
         }));
-        node.addEventListener("pointerup", finish);
-        node.addEventListener("pointercancel", finish);
-        node.addEventListener("pointerleave", finish);
+        node.addEventListener("pointermove", move);
+        node.addEventListener("pointerup", event => finish(event));
+        node.addEventListener("pointercancel", event => finish(event, "cancel"));
+        node.addEventListener("lostpointercapture", event => finish(event, "cancel"));
+        node.addEventListener("pointerleave", event => {
+          if (!node.hasPointerCapture?.(event.pointerId)) finish(event);
+        });
         break;
       }
       case "canvas": {
@@ -1393,8 +1415,13 @@
         let pinch = null;
         const point = (event, phase, extra = {}) => {
           const bounds = canvas.getBoundingClientRect();
-          const x = (event.clientX - bounds.left - canvas.clientLeft) * Number(canvas.dataset.logicalWidth) / Math.max(1, canvas.clientWidth);
-          const y = (event.clientY - bounds.top - canvas.clientTop) * Number(canvas.dataset.logicalHeight) / Math.max(1, canvas.clientHeight);
+          // Pointer coordinates and bounds are viewport pixels, while client/offset
+          // dimensions are layout pixels. Scale the content box too (page zoom
+          // changes the former but not the latter).
+          const scaleX = bounds.width / Math.max(1, canvas.offsetWidth);
+          const scaleY = bounds.height / Math.max(1, canvas.offsetHeight);
+          const x = ((event.clientX - bounds.left) / scaleX - canvas.clientLeft) * Number(canvas.dataset.logicalWidth) / Math.max(1, canvas.clientWidth);
+          const y = ((event.clientY - bounds.top) / scaleY - canvas.clientTop) * Number(canvas.dataset.logicalHeight) / Math.max(1, canvas.clientHeight);
           interact(canvas.dataset.canvasAction, { x, y, phase, pointerId: event.pointerId,
             pointerType: event.pointerType || "mouse", pointers: active.size,
             shiftKey: Boolean(event.shiftKey), ctrlKey: Boolean(event.ctrlKey), metaKey: Boolean(event.metaKey), ...extra });

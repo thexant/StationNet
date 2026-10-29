@@ -4,7 +4,7 @@
   "name": "MIDI Composer",
   "description": "Compose, edit, play, import, and export multi-track General MIDI music.",
   "author": "StationNet Core",
-  "version": "1.0.2",
+  "version": "1.1.0",
   "category": "Creative",
   "entrypoint": "main.js",
   "platforms": ["desktop", "touch"],

@@ -1,0 +1,13 @@
+{
+  "package_format": 1,
+  "slug": "sleep-calculator",
+  "name": "Sleep Calculator",
+  "description": "Find bedtimes or wake-up times using estimated sleep cycles.",
+  "author": "StationNet Core",
+  "version": "1.0.0",
+  "category": "Utilities",
+  "entrypoint": "main.js",
+  "platforms": ["desktop", "touch"],
+  "required_inputs": [],
+  "preferred_presentation": "standard"
+}

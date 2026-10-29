@@ -83,6 +83,14 @@ if (root && form) {
     });
     mark(view.npcs, "#e04040");
     mark(view.players, "#ffffff");
+    // Ways to other layers: < up, > down, & both.
+    (view.vertical || []).forEach(entry => {
+      const left = (entry.x - view.origin[0]) * size, top = (entry.y - view.origin[1]) * size;
+      context.fillStyle = "#101418";
+      context.fillRect(left + 1, top + 1, size - 2, size - 2);
+      context.fillStyle = "#7fd4ff";
+      context.fillText(verticalGlyph(entry), left + size / 2, top + size / 2 + 1);
+    });
     if (selected && selected.z === state.z) {
       context.strokeStyle = ink;
       context.lineWidth = 2;
@@ -105,11 +113,21 @@ if (root && form) {
       if (ticket !== state.request) return;
       if (!response.ok) throw new Error(data.error || "The map could not be loaded.");
       state.view = data;
-      status.textContent = `Centre ${state.x}, ${state.y}, layer ${state.z}. Hover a square for details.`;
+      status.textContent = `Centre ${state.x}, ${state.y}, ${layerLabel()}. Hover a square for details.`;
       draw();
     } catch (problem) {
       status.textContent = problem.message;
     }
+  }
+
+  function verticalGlyph(entry) {
+    const up = entry.directions.includes("up"), down = entry.directions.includes("down");
+    return up && down ? "&" : up ? "<" : ">";
+  }
+
+  function layerLabel() {
+    const name = state.view && state.view.name;
+    return name ? `${name} (layer ${state.z})` : `layer ${state.z}`;
   }
 
   function describe(point) {
@@ -117,7 +135,9 @@ if (root && form) {
     const index = view.grid[point.y - view.origin[1]][point.x - view.origin[0]];
     const landmark = view.authored.find(entry => entry.x === point.x && entry.y === point.y);
     const label = landmark ? landmark.name : index ? view.palette[index].name : "empty";
-    return `${point.x}, ${point.y}, layer ${state.z}: ${label}`;
+    const vertical = (view.vertical || []).find(entry => entry.x === point.x && entry.y === point.y);
+    const ways = vertical ? ` (way ${vertical.directions.join(" and ")})` : "";
+    return `${point.x}, ${point.y}, ${layerLabel()}: ${label}${ways}`;
   }
 
   function setRect(a, b) {

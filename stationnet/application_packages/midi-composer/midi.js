@@ -1,7 +1,13 @@
 export const PPQ = 480;
 export const GM = (`Acoustic Grand Piano|Bright Acoustic Piano|Electric Grand Piano|Honky-tonk Piano|Electric Piano 1|Electric Piano 2|Harpsichord|Clavinet|Celesta|Glockenspiel|Music Box|Vibraphone|Marimba|Xylophone|Tubular Bells|Dulcimer|Drawbar Organ|Percussive Organ|Rock Organ|Church Organ|Reed Organ|Accordion|Harmonica|Tango Accordion|Acoustic Guitar (nylon)|Acoustic Guitar (steel)|Electric Guitar (jazz)|Electric Guitar (clean)|Electric Guitar (muted)|Overdriven Guitar|Distortion Guitar|Guitar Harmonics|Acoustic Bass|Electric Bass (finger)|Electric Bass (pick)|Fretless Bass|Slap Bass 1|Slap Bass 2|Synth Bass 1|Synth Bass 2|Violin|Viola|Cello|Contrabass|Tremolo Strings|Pizzicato Strings|Orchestral Harp|Timpani|String Ensemble 1|String Ensemble 2|SynthStrings 1|SynthStrings 2|Choir Aahs|Voice Oohs|Synth Voice|Orchestra Hit|Trumpet|Trombone|Tuba|Muted Trumpet|French Horn|Brass Section|SynthBrass 1|SynthBrass 2|Soprano Sax|Alto Sax|Tenor Sax|Baritone Sax|Oboe|English Horn|Bassoon|Clarinet|Piccolo|Flute|Recorder|Pan Flute|Blown Bottle|Shakuhachi|Whistle|Ocarina|Lead 1 (square)|Lead 2 (sawtooth)|Lead 3 (calliope)|Lead 4 (chiff)|Lead 5 (charang)|Lead 6 (voice)|Lead 7 (fifths)|Lead 8 (bass + lead)|Pad 1 (new age)|Pad 2 (warm)|Pad 3 (polysynth)|Pad 4 (choir)|Pad 5 (bowed)|Pad 6 (metallic)|Pad 7 (halo)|Pad 8 (sweep)|FX 1 (rain)|FX 2 (soundtrack)|FX 3 (crystal)|FX 4 (atmosphere)|FX 5 (brightness)|FX 6 (goblins)|FX 7 (echoes)|FX 8 (sci-fi)|Sitar|Banjo|Shamisen|Koto|Kalimba|Bag pipe|Fiddle|Shanai|Tinkle Bell|Agogo|Steel Drums|Woodblock|Taiko Drum|Melodic Tom|Synth Drum|Reverse Cymbal|Guitar Fret Noise|Breath Noise|Seashore|Bird Tweet|Telephone Ring|Helicopter|Applause|Gunshot`).split("|");
 let nextId = 1;
-export const uid = () => `n${nextId++}`;
+const usedNoteIds = new Set();
+export function uid() {
+  let id;
+  do { id = `n${nextId++}`; } while (usedNoteIds.has(id));
+  usedNoteIds.add(id);
+  return id;
+}
 export function blank(name = "Untitled composition") {
   return { name, bpm: 120, numerator: 4, denominator: 4, tempo: [{ tick: 0, bpm: 120 }],
     tracks: [{ id: "t1", name: "Piano", instrument: 0, volume: 100, pan: 64, mute: false, solo: false, percussion: false, notes: [] }] };
@@ -9,22 +15,33 @@ export function blank(name = "Untitled composition") {
 export function clone(value) { return JSON.parse(JSON.stringify(value)); }
 export function normalize(raw) {
   if (!raw || !Array.isArray(raw.tracks)) throw new Error("Invalid composition.");
+  if (raw.tracks.length > 32) throw new Error("A composition can contain at most 32 tracks.");
+  if (Array.isArray(raw.tempo) && raw.tempo.length > 1000) throw new Error("A composition can contain at most 1,000 tempo changes.");
   const doc = blank(String(raw.name || "Untitled composition").slice(0, 100));
   doc.numerator = Math.max(1, Math.min(16, Math.trunc(raw.numerator) || 4));
   doc.denominator = [2, 4, 8, 16].includes(raw.denominator) ? raw.denominator : 4;
-  doc.tempo = (Array.isArray(raw.tempo) ? raw.tempo : []).slice(0, 1000).filter(e => e && Number.isFinite(e.tick) && Number.isFinite(e.bpm))
+  doc.tempo = (Array.isArray(raw.tempo) ? raw.tempo : []).filter(e => e && Number.isFinite(e.tick) && Number.isFinite(e.bpm))
     .map(e => ({ tick: Math.max(0, Math.round(e.tick)), bpm: Math.max(20, Math.min(300, Math.round(e.bpm))) })).sort((a,b) => a.tick-b.tick);
   if (!doc.tempo.length || doc.tempo[0].tick !== 0) doc.tempo.unshift({ tick: 0, bpm: Math.max(20, Math.min(300, Math.round(raw.bpm) || 120)) });
   doc.bpm = doc.tempo[0].bpm;
-  doc.tracks = raw.tracks.slice(0, 32).map((t,i) => ({
+  const seenIds = new Set();
+  doc.tracks = raw.tracks.map((t,i) => {
+    if (Array.isArray(t.notes) && t.notes.length > 20000) throw new Error(`Track ${i + 1} has more than 20,000 notes.`);
+    return ({
     id: String(t.id || `t${i+1}`).slice(0,40), name: String(t.name || `Track ${i+1}`).slice(0,80),
     instrument: Math.max(0, Math.min(127, Math.trunc(t.instrument) || 0)),
     volume: Math.max(0, Math.min(127, Math.trunc(t.volume ?? 100))), pan: Math.max(0, Math.min(127, Math.trunc(t.pan ?? 64))),
     mute: Boolean(t.mute), solo: Boolean(t.solo), percussion: Boolean(t.percussion),
-    notes: (Array.isArray(t.notes) ? t.notes : []).slice(0, 20000).filter(n => n && [n.tick,n.duration,n.pitch,n.velocity].every(Number.isFinite))
-      .map(n => ({ id: String(n.id || uid()), tick: Math.max(0, Math.round(n.tick)), duration: Math.max(1, Math.round(n.duration)),
-        pitch: Math.max(0, Math.min(127, Math.round(n.pitch))), velocity: Math.max(1, Math.min(127, Math.round(n.velocity))) }))
-  }));
+    notes: (Array.isArray(t.notes) ? t.notes : []).filter(n => n && [n.tick,n.duration,n.pitch,n.velocity].every(Number.isFinite))
+      .map(n => {
+        const candidate = String(n.id || "").slice(0, 80);
+        const id = candidate && !seenIds.has(candidate) ? candidate : uid();
+        seenIds.add(id);
+        usedNoteIds.add(id);
+        return { id, tick: Math.max(0, Math.round(n.tick)), duration: Math.max(1, Math.round(n.duration)),
+          pitch: Math.max(0, Math.min(127, Math.round(n.pitch))), velocity: Math.max(1, Math.min(127, Math.round(n.velocity))) };
+      })
+  }); });
   if (!doc.tracks.length) doc.tracks = blank().tracks;
   return doc;
 }
@@ -89,7 +106,9 @@ export function writeMidi(input) {
   const header = [77,84,104,100,0,0,0,6,0,1,(tracks.length>>>8)&255,tracks.length&255,1,224];
   return Uint8Array.from([...header,...tracks.flat()]);
 }
-export function readMidi(data) {
+export function readMidi(data) { return readMidiDetailed(data).doc; }
+export function readMidiDetailed(data) {
+  const warnings = new Set();
   const b = data instanceof Uint8Array ? data : Uint8Array.from(data);
   if (b.length < 14 || b.length > 2*1024*1024 || String.fromCharCode(...b.slice(0,4)) !== "MThd") throw new Error("Invalid MIDI header.");
   const u16 = p => (b[p]<<8)|b[p+1]; const u32 = p => (b[p]*16777216+b[p+1]*65536+b[p+2]*256+b[p+3]);
@@ -111,17 +130,29 @@ export function readMidi(data) {
         if(p>=end)throw Error("Truncated meta event."); const type=b[p++],len=variable(); if(p+len>end)throw Error("Truncated meta event.");
         const v=b.slice(p,p+len); p+=len;
         if(type===3)trackName=new TextDecoder().decode(v).slice(0,80);
-        if(type===81 && len===3){const micro=(v[0]<<16)|(v[1]<<8)|v[2]; if(micro)doc.tempo.push({tick:scale(tick),bpm:Math.max(20,Math.min(300,Math.round(60000000/micro)))});}
-        if(type===88 && len>=2 && tick===0){doc.numerator=v[0];doc.denominator=2**v[1];}
+        if([1,2,5,6,7,89].includes(type))warnings.add("Text, lyrics, markers, and key signatures were omitted.");
+        if(type===81 && len===3){const micro=(v[0]<<16)|(v[1]<<8)|v[2]; if(micro){
+          const bpm=Math.round(60000000/micro);
+          if(bpm<20||bpm>300)warnings.add("Tempos outside 20–300 BPM were clamped.");
+          doc.tempo.push({tick:scale(tick),bpm:Math.max(20,Math.min(300,bpm))});
+        }}
+        if(type===88 && len>=2){if(tick===0){doc.numerator=v[0];doc.denominator=2**v[1];
+          if(![2,4,8,16].includes(doc.denominator)||doc.numerator<1||doc.numerator>16)
+            warnings.add("An unsupported time signature was adjusted to the editor's range.");
+        }else warnings.add("Later time-signature changes are not editable and were omitted.");}
         if(type===47)break;
-      } else if(status===240 || status===247) { const len=variable(); p+=len; if(p>end)throw Error("Truncated SysEx."); }
+      } else if(status===240 || status===247) { const len=variable(); p+=len; if(p>end)throw Error("Truncated SysEx."); warnings.add("System Exclusive data was omitted."); }
       else if(status>=128 && status<240) {
         const op=status&240,c=status&15,one=b[p++]; if(one===undefined || one&128)throw Error("Invalid MIDI event.");
         const two=(op===192||op===208)?0:b[p++]; if(two===undefined || two&128)throw Error("Invalid MIDI event.");
         const t=channel(c);
-        if(op===192)t.instrument=one;
+        if(op===192){if(t.notes.length||tick>0)warnings.add("Instrument changes were reduced to one program per track.");t.instrument=one;}
         if(op===176 && one===7)t.volume=two;
         if(op===176 && one===10)t.pan=two;
+        if(op===176 && (one===7||one===10) && tick>0)
+          warnings.add("Volume and pan automation was reduced to one value per track.");
+        if(op===176 && one!==7 && one!==10)warnings.add("Controller changes, including sustain, were omitted.");
+        if(op===160 || op===208 || op===224)warnings.add("Aftertouch and pitch bends were omitted.");
         if(op===144 && two>0){const key=`${c}:${one}`,stack=active.get(key)||[];stack.push({tick:scale(tick),velocity:two});active.set(key,stack);}
         if(op===128 || op===144 && two===0){const stack=active.get(`${c}:${one}`);if(stack?.length){const start=stack.pop();t.notes.push({id:uid(),tick:start.tick,duration:Math.max(1,scale(tick)-start.tick),pitch:one,velocity:start.velocity});}}
       } else throw Error("Unsupported MIDI event.");
@@ -130,5 +161,7 @@ export function readMidi(data) {
   }
   if(p!==b.length)throw Error("Trailing MIDI data.");
   if(!doc.tracks.length)throw Error("MIDI contains no notes.");
-  return normalize(doc);
+  if(doc.tracks.filter(t=>!t.percussion).length>15)throw Error("This MIDI contains more than 15 melodic tracks; import would not be exportable.");
+  if(doc.tracks.filter(t=>t.percussion).length>1)warnings.add("Several drum tracks share MIDI channel 10; their mix settings may overlap on export.");
+  return {doc:normalize(doc),warnings:[...warnings]};
 }

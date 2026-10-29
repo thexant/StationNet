@@ -2,12 +2,13 @@
   "package_format": 1,
   "slug": "void-trader",
   "name": "Void Trader",
-  "description": "A wireframe space trading sim with mouse flight controls, pirate combat, freight contracts and hyperspace routes.",
+  "description": "A wireframe space trading sim: a seeded 24-system galaxy with a living economy, freight, passenger and bounty contracts, ship upgrades, pirate combat with missiles and ECM, and mouse, keyboard, gamepad or touch flight.",
   "author": "StationNet",
-  "version": "1.2.2",
+  "version": "2.0.0",
   "category": "Games",
   "entrypoint": "main.js",
-  "platforms": ["desktop"],
-  "required_inputs": ["keyboard"],
-  "preferred_presentation": "standard"
+  "platforms": ["desktop", "touch"],
+  "required_inputs": [],
+  "preferred_presentation": "standard",
+  "fullscreen_target": "application"
 }

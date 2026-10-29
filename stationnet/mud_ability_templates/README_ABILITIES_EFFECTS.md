@@ -26,7 +26,8 @@ ability, one effect, or a pack), bundle them in a world package
 | `description` | no | Up to 500 characters. |
 | `kind` | yes | What it does each combat turn. See below. |
 | `sign` | stat kinds only | `1` for a bonus, `-1` for a penalty. |
-| `resist_as` | no | A resistance that weakens it: `physical`, `poison`, `burning`, `bleeding`, `weakness`, `vulnerability`, `blinded`, or `snared`. Only harmful effects can be resisted. |
+| `resist_as` | no | A resistance that weakens it: `physical`, `poison`, `burning`, `bleeding`, `weakness`, `vulnerability`, `blinded`, or `snared`. Only harmful effects can be resisted. Equipment may also resist an effect by its own key. |
+| `outside_combat` | no | `true` makes it also act, and wear off, every 30 seconds while its target is out of combat. It never takes a player below 1 health there. Default `false`: it acts only on combat turns and `/rest`. |
 
 | `kind` | Each turn |
 | --- | --- |

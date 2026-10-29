@@ -428,15 +428,13 @@ def _embed_effects(database, template):
     needed = set()
     for kind in ("items", "npcs", "enemies"):
         for entry in template.get("definitions", {}).get(kind, []):
-            for field in ("on_use_effects", "on_hit_effects"):
-                for spec in (entry.get("properties") or {}).get(field, []) or []:
-                    key = spec.get("key") if isinstance(spec, dict) else None
-                    if key and key not in mud_effects.EFFECTS and key not in bundled and key in installed:
-                        needed.add(key)
+            for key in mud_effects.property_effect_keys(entry.get("properties")):
+                if key not in mud_effects.EFFECTS and key not in bundled and key in installed:
+                    needed.add(key)
     if needed:
         template["schema_version"] = 2
         template.setdefault("effects", []).extend(
-            {field: installed[key][field] for field in ("key", "name", "description", "kind", "sign", "resist_as")
+            {field: installed[key][field] for field in mud_effects.DEFINITION_FIELDS
              if field in installed[key]} for key in sorted(needed))
 
 
@@ -713,19 +711,8 @@ def _validate_embedded_definitions(errors, template, database=None, effect_keys=
             _validate_json_object(errors, definition.get("properties"), f"{here}.properties")
             _validate_json_object(errors, definition.get("behaviors"), f"{here}.behaviors")
             properties = definition.get("properties")
-            if isinstance(properties, dict):
-                for effect_field in ("on_use_effects", "on_hit_effects"):
-                    if effect_field not in properties:
-                        continue
-                    specs = properties[effect_field]
-                    if not isinstance(specs, list):
-                        errors.append(f"{here}.properties.{effect_field}: must be an array")
-                        continue
-                    for effect_index, spec in enumerate(specs):
-                        try:
-                            mud_effects.validate(spec, database, extra_keys=effect_keys or ())
-                        except ValueError as problem:
-                            errors.append(f"{here}.properties.{effect_field}[{effect_index}]: {problem}")
+            for effect_field, problem in mud_effects.validate_properties(properties, database, effect_keys or ()):
+                errors.append(f"{here}.properties.{effect_field}: {problem}")
             if kind == "items":
                 item_type = definition.get("item_type", "misc")
                 if item_type not in {"misc", "equipment", "container", "consumable", "key"}:
@@ -861,12 +848,7 @@ def _origin_resolver(template):
 
 def effect_properties(template, properties):
     """Item or NPC properties with the theme's local effect keys resolved to installed ones."""
-    properties = dict(properties or {})
-    for field in ("on_use_effects", "on_hit_effects"):
-        if isinstance(properties.get(field), list):
-            properties[field] = [{**spec, "key": bundled_effect_key(template, spec.get("key"))}
-                                 if isinstance(spec, dict) else spec for spec in properties[field]]
-    return properties
+    return mud_effects.remap_properties(dict(properties or {}), lambda key: bundled_effect_key(template, key))
 
 
 def _item_properties_json(template, properties):

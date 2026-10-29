@@ -1,0 +1,13 @@
+{
+  "package_format": 1,
+  "slug": "echo-choir",
+  "name": "ECHO CHOIR: REMIX",
+  "description": "Nineteen musical time-loop puzzles with guided hints, exact-beat previews, saved timelines, and station scores.",
+  "author": "StationNet Community",
+  "version": "2.1.0",
+  "category": "Games",
+  "entrypoint": "main.js",
+  "platforms": ["desktop", "touch"],
+  "required_inputs": [],
+  "preferred_presentation": "standard"
+}

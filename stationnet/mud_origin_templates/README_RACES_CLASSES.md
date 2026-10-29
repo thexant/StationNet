@@ -118,7 +118,9 @@ through `skills`.
 - **Resistances.** `physical` scales the damage of enemy blows that land
   after armor; any resistance below 100 still lets at least 1 point through.
   Effect resistances scale the potency and duration of hostile effects
-  enemies inflict. An effect reduced to nothing is shrugged off.
+  enemies inflict. An effect reduced to nothing is shrugged off. Equipped
+  gear can add [resistances](../mud_world_templates/README_CUSTOM_WORLDS.md#protective-gear-cures-and-hazards) of its own,
+  and the totals stay within -100 to 100.
 - **Skill affinities.** A skill's own key takes priority over its group. An
   affinity of 50 makes practice count 50% more; -50 halves it, but an action
   that teaches a skill always teaches at least one point.

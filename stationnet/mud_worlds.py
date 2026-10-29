@@ -32,7 +32,7 @@ OPTIONAL_FILES = {CONTENT_FILE, ORIGINS_FILE, SKILLS_FILE, DUNGEONS_FILE, EVENTS
 # availability, and rejects manifest keys it does not know instead of ignoring them.
 PACKAGE_FORMAT = 2
 MANIFEST_KEYS = {"id", "name", "author", "start_room", "format_version", "resource", "progression",
-                 "availability", *mud_society.SOCIETY_KEYS}
+                 "availability", "layers", *mud_society.SOCIETY_KEYS}
 # Manifest keys authors might try that name engine rules; packages may not redefine them.
 ENGINE_RESERVED = {"max_level", "level_cap", "experience_curve", "xp_curve", "attributes", "attribute_cap",
                    "effect_kinds", "resistances", "equipment_slots", "directions", "skill_effect_types",
@@ -241,6 +241,11 @@ def read_package(payload, database=None, report=None):
     author = _label(manifest.get("author"), "World author", 1, 80)
     resource = validate_resource(manifest.get("resource"))
     try:
+        layers = mud_wilderness.validate_layer_names(manifest.get("layers"))
+    except mud_wilderness.WildernessError as problem:
+        report.error("manifest.json", "$.layers", str(problem))
+        layers = {}
+    try:
         society = mud_society.validate_settings({key: manifest[key] for key in mud_society.SOCIETY_KEYS
                                                  if key in manifest})
     except mud_society.SocietyError as problem:
@@ -292,6 +297,13 @@ def read_package(payload, database=None, report=None):
     room_ids = mud_wilderness.RoomReferences(
         {local_id: local_id for local_id in authored_ids},
         lambda key: key if mud_wilderness.lookup(wilderness, key) else None)
+    # Each placed room's layer; layers meet only through up and down exits.
+    room_layers = {local_id: position[2] for position, local_id in positions.items()}
+
+    def layer_of(reference):
+        position = mud_wilderness.parse_reference(reference)
+        return position[2] if position else room_layers.get(reference)
+
     clean_exits = []
     exit_names = set()
     exit_directions = set()
@@ -308,6 +320,9 @@ def read_package(payload, database=None, report=None):
                 from .mud import DIRECTIONS
                 if direction not in DIRECTIONS:
                     raise WorldError("Exit direction is not supported by the MUD.")
+            crossing = mud_wilderness.layer_problem(direction, layer_of(source), layer_of(target))
+            if crossing:
+                raise WorldError(f"Exit {label} from {source} to {target}: {crossing}")
             name_key = (source, label.casefold())
             direction_key = (source, direction)
             if name_key in exit_names or (direction and direction_key in exit_directions):
@@ -613,6 +628,7 @@ def read_package(payload, database=None, report=None):
     return {"id": world_id, "name": name, "author": author, "start_room": start, "resource": resource,
             "society": society, "format_version": format_version, "progression": progression,
             "availability": availability, "effects": list(local_effects.values()),
+            "layers": [{"z": z, "name": layer_name} for z, layer_name in sorted(layers.items())],
             "abilities": list(local_abilities.values()),
             "rooms": clean_rooms, "exits": clean_exits, "content": content, "origins": origins,
             "skills": skills["skills"], "dungeons": world_dungeons, "events": triggers,
@@ -661,26 +677,14 @@ def _read_magic(docs, report):
 
 
 def _check_effect_lists(properties, known_effects, report, severity, path):
-    """Item and NPC properties may apply effects on use or on hit; each must exist."""
+    """Item and NPC properties may apply, cure, or resist effects; each must exist."""
     if isinstance(properties, str):
         try:
             properties = json.loads(properties)
         except json.JSONDecodeError:
             return
-    if not isinstance(properties, dict):
-        return
-    for field in ("on_use_effects", "on_hit_effects"):
-        specs = properties.get(field)
-        if specs is None:
-            continue
-        if not isinstance(specs, list) or len(specs) > 10:
-            report.add(severity, CONTENT_FILE, f"{path}.{field}", f"{field} must be an array of up to 10 effects.")
-            continue
-        for index, spec in enumerate(specs):
-            try:
-                mud_effects.validate(spec, extra_keys=known_effects)
-            except ValueError as problem:
-                report.add(severity, CONTENT_FILE, f"{path}.{field}[{index}]", str(problem))
+    for field, problem in mud_effects.validate_properties(properties, extra_keys=known_effects):
+        report.add(severity, CONTENT_FILE, f"{path}.{field}", problem)
 
 
 def _room_grid(room, local_id, positions):
@@ -732,6 +736,8 @@ def package_bytes(document):
             manifest["progression"] = progression
         if document.get("availability"):
             manifest["availability"] = document["availability"]
+        if document.get("layers"):
+            manifest["layers"] = document["layers"]
         try:
             manifest.update(mud_society.changed_settings(mud_society.validate_settings(document.get("society"))))
         except mud_society.SocietyError as problem:
@@ -861,16 +867,8 @@ def _remap_item_properties(value, mapper):
 
 
 def _remap_effect_lists(properties, mapper):
-    """Rename effect keys applied on use or on hit with mapper("effect", key)."""
-    if not isinstance(properties, dict):
-        return properties
-    result = dict(properties)
-    for field in ("on_use_effects", "on_hit_effects"):
-        if isinstance(result.get(field), list):
-            result[field] = [{**spec, "key": mapper("effect", spec["key"])}
-                             if isinstance(spec, dict) and isinstance(spec.get("key"), str) else spec
-                             for spec in result[field]]
-    return result
+    """Rename effect keys applied, cured, or resisted with mapper("effect", key)."""
+    return mud_effects.remap_properties(properties, lambda key: mapper("effect", key))
 
 
 def _insert_content(database, document, installation_key, skill_map=None, effect_map=None):
@@ -1437,6 +1435,8 @@ def _install_rows(database, document, payload, *, origin_mode=None, selected=Non
                          "VALUES(?,?,?,?,?,?,?,?,?,?)",
                          (prefix + room["id"], room["name"], room["description"], world_id, x, y, z,
                           int(room.get("grid_link", True)), room.get("blocked_dirs", ""), int(room["bank"])))
+    mud_wilderness.install_layer_names(database, world_id,
+                                       {entry["z"]: entry["name"] for entry in document.get("layers", [])})
     try:
         preset_ids, region_ids = mud_wilderness.install_cells(database, world_id, installation_key,
                                                               document["wild"])
@@ -2144,7 +2144,8 @@ def export_document(database, world_id, *, origin_keys=None, skill_keys=None):
                            **({"bank": True} if room["banking_enabled"] else {}),
                            **({"x": room["x"], "y": room["y"], "z": room["z"]} if room["x"] is not None else {}),
                            **({"grid_link": False} if room["x"] is not None and not room["grid_link"] else {}),
-                           **({"blocked_dirs": room["blocked_dirs"]} if room["x"] is not None and room["blocked_dirs"] else {})}
+                           **({"blocked_dirs": mud_wilderness.export_blocked(room["blocked_dirs"])}
+                              if room["x"] is not None and mud_wilderness.export_blocked(room["blocked_dirs"]) else {})}
                           for room in rooms],
                 "exits": [{**({"id": exit_ids[row["id"]]} if row["id"] in exit_ids else {}),
                            "from": ids[row["from_room_id"]], "to": ids[row["to_room_id"]],
@@ -2158,6 +2159,7 @@ def export_document(database, world_id, *, origin_keys=None, skill_keys=None):
                            **({"conditions_message": row["conditions_message"]} if row["conditions_message"] else {})}
                           for row in exits if row["to_room_id"] in ids],
                 "content": content,
+                "layers": mud_wilderness.export_layer_names(database, world_id),
                 "progression": mud_progression.stored(world["progression_json"])}
     from . import character_creation
     entries = character_creation.catalog(database, world="")
@@ -2279,11 +2281,7 @@ def _magic_closure(database, world_id, content, triggers, origin_definitions, do
     wanted_effects, wanted_abilities = set(linked_effects), set(linked_abilities)
     for table in ("mud_item_definitions", "mud_npc_definitions"):
         for row in content.get(table, []):
-            properties = row.get("properties_json")
-            for field in ("on_use_effects", "on_hit_effects"):
-                for spec in (properties or {}).get(field, []) if isinstance(properties, dict) else []:
-                    if isinstance(spec, dict) and isinstance(spec.get("key"), str):
-                        wanted_effects.add(spec["key"])
+            wanted_effects |= mud_effects.property_effect_keys(row.get("properties_json"))
     for trigger in triggers:
         wanted_effects.update(ref for kind, ref in mud_triggers.references(trigger) if kind == "effect")
     mud_world_dungeons.shared_references(database, world_id, wanted_effects)
@@ -2318,7 +2316,7 @@ def _magic_closure(database, world_id, content, triggers, origin_definitions, do
             local = f"{local[:36]}-x"
         taken.add(local)
         ability_local[key] = local
-    fields = ("key", "name", "description", "kind", "sign", "resist_as")
+    fields = mud_effects.DEFINITION_FIELDS
     exported_effects = [{**{field: effects[key][field] for field in fields if field in effects[key]},
                          "key": local} for key, local in effect_local.items()]
     exported_abilities = []

@@ -1,0 +1,16 @@
+{
+  "package_format": 1,
+  "slug": "cybercrawler",
+  "name": "Cybercrawler",
+  "description": "A turn-based cyberpunk grid crawler with four classes, procedural sectors, and terminal combat.",
+  "author": "StationNet Core",
+  "version": "1.2.0",
+  "category": "Games",
+  "entrypoint": "main.js",
+  "platforms": [
+    "desktop",
+    "touch"
+  ],
+  "required_inputs": [],
+  "preferred_presentation": "standard"
+}

@@ -407,6 +407,8 @@ def character_state(database, user_id, track_key=None):
         "maximum_mana": row["maximum_mana"],
         "resource": resource_settings(database, user_id),
         "effects": mud_effects.list_effects(database, "character", row["id"]),
+        # Race, class, and equipped gear together; the origin summary lists race and class alone.
+        "resistances": {key: value for key, value in _character_resistances(database, row["id"]).items() if value},
         "attributes": {
             "strength": row["strength"],
             "agility": row["agility"],
@@ -509,6 +511,23 @@ def _origin_options(database, character_id):
 
 def _origin_profile(database, character_id):
     return character_creation.origin_profile(*_origin_options(database, character_id))
+
+
+def _character_resistances(database, character_id, gear=None):
+    """Race, class, and equipped gear resistances added together, each within -100 to 100."""
+    if gear is None:
+        gear = _equipment_combat_totals(database, character_id=character_id)
+    totals = dict(_origin_profile(database, character_id)["resistances"])
+    for key, percent in gear["resistances"].items():
+        totals[key] = totals.get(key, 0) + percent
+    return {key: max(-100, min(100, value)) for key, value in totals.items()}
+
+
+def _resist_effect(database, character_id, spec, resistances=None):
+    """An incoming harmful effect after the character's resistances, or None when shrugged off."""
+    if resistances is None:
+        resistances = _character_resistances(database, character_id)
+    return mud_effects.resist(spec, mud_effects.resistance_for(database, spec["key"], resistances))
 
 
 def _proficiencies(database, character_id):
@@ -675,6 +694,9 @@ def _character_action(database, user, parameters):
         f"it hits you {combat['chance_to_be_hit']}%)",
         f"Defense: mitigation {combat['mitigation']} · flee {combat['flee_chance']}% · "
         f"stealth {combat['stealth_chance']}% · experience +{combat['experience_bonus']}%",
+        *(["Resistances with gear: " + " · ".join(
+            f"{mud_effects.display_name(database, key)} {value}%" for key, value in character["resistances"].items())]
+          if character["resistances"] else []),
         *([f"Skills: search +{combat['search_bonus']} · lockpicking +{combat['lockpick_bonus']} · "
            f"merchant discount {combat['shop_discount']}%"]
           if combat["search_bonus"] or combat["lockpick_bonus"] or combat["shop_discount"] else []),
@@ -1596,7 +1618,7 @@ def _equipment_combat_totals(database, character_id=None, npc_definition_id=None
             "WHERE e.npc_definition_id=?", (npc_definition_id,),
         ).fetchall()
     attack = defense = accuracy = firearm_accuracy = evasion = 0
-    categories, unproficient = set(), []
+    categories, unproficient, resistances = set(), [], {}
     known = _proficiencies(database, character_id) if character_id is not None else set()
     limit = mud_combat.ITEM_EVASION_LIMIT
     for row in rows:
@@ -1612,6 +1634,12 @@ def _equipment_combat_totals(database, character_id=None, npc_definition_id=None
             if category not in known:
                 unproficient.append(row["name"])
                 item_attack, item_defense = _untrained(item_attack), _untrained(item_defense)
+        trained = character_id is None or not category or category in known
+        item_resistances = properties.get("resistances")
+        for key, percent in (item_resistances.items() if isinstance(item_resistances, dict) else ()):
+            if isinstance(key, str) and type(percent) is int:
+                # Untrained gear protects only three quarters as well; its drawbacks stay whole.
+                resistances[key] = resistances.get(key, 0) + (percent if trained or percent < 0 else _untrained(percent))
         # Heavy gear may carry a negative evasion; a firearm's accuracy only helps its own shots.
         evasion += max(-limit, min(limit, _integer_property(properties, "evasion")))
         if character_id is None or not mud_firearms.is_firearm(properties):
@@ -1622,7 +1650,7 @@ def _equipment_combat_totals(database, character_id=None, npc_definition_id=None
         defense += item_defense
     return {"attack": attack, "defense": defense, "accuracy": accuracy,
             "firearm_accuracy": firearm_accuracy, "evasion": evasion,
-            "categories": categories, "unproficient": unproficient}
+            "categories": categories, "unproficient": unproficient, "resistances": resistances}
 
 
 def _item_category(properties):
@@ -3026,6 +3054,14 @@ def _describe_item(database, row, user_id=None):
             requirements = {}
         if requirements:
             body += "\nRequires: " + mud_conditions.describe_item_requirements(requirements)
+    properties = _json_properties(row["properties_json"])
+    if row["definition_slot"] and isinstance(properties.get("resistances"), dict) and properties["resistances"]:
+        body += "\nProtects: " + " · ".join(f"{mud_effects.display_name(database, key)} {value}%"
+                                            for key, value in properties["resistances"].items())
+    if isinstance(properties.get("cures"), list) and properties["cures"]:
+        body += "\nTreats: " + ", ".join(
+            mud_effects.display_name(database, cure["effect"]) if "effect" in cure else f"any {cure.get('category')}"
+            for cure in properties["cures"] if isinstance(cure, dict))
     if _is_container(row):
         contents = _container_rows(database, row["id"], user_id)
         if row["is_open"]:
@@ -3302,8 +3338,9 @@ def validate_npc_behaviors(value):
         if type(interval) is not int or not 5 <= interval <= 86400:
             raise ValueError(f"{key} interval_seconds must be 5 to 86400.")
         if key == "ambient" and (not isinstance(spec["lines"], list) or not 1 <= len(spec["lines"]) <= 20 or
-                                  any(not isinstance(line, str) or not 1 <= len(line.strip()) <= 300 for line in spec["lines"])):
-            raise ValueError("ambient lines must contain 1 to 20 short strings.")
+                                  any(not isinstance(line, str) or not 1 <= len(line.strip()) <= 300 or
+                                      line.strip() == "/emote" for line in spec["lines"])):
+            raise ValueError("ambient lines must contain 1 to 20 short strings (an /emote line needs an action).")
         if key == "patrol" and (not isinstance(spec["directions"], list) or not 1 <= len(spec["directions"]) <= 20 or
                                  any(direction not in DIRECTIONS for direction in spec["directions"])):
             raise ValueError("patrol directions must be supported exit directions.")
@@ -3794,7 +3831,7 @@ def _enemy_strike(database, user, npc, encounter, defending=False):
         damage = max(1, npc["combat_attack"] + (2 if npc_firearm else 0) + enemy_gear["attack"]
                      + mud_effects.modifier(database, "encounter", encounter["id"], "attack")
                      - _player_mitigation(character, player_gear, effects))
-        damage = _resisted(damage, _origin_profile(database, character["id"])["resistances"].get("physical", 0))
+        damage = _resisted(damage, _character_resistances(database, character["id"], player_gear).get("physical", 0))
         if defending:
             damage = max(0, (damage - max(0, (character["vitality"] - 10) // 2)) // 3)
     # Only real blows teach defense; dodging teaches evasion. Reloads and misses teach neither.
@@ -3821,11 +3858,11 @@ def _enemy_strike(database, user, npc, encounter, defending=False):
     }[outcome]
     drafts = [EventDraft(body, event_type="combat")] + practiced
     if health > 0 and damage > 0:
-        resistances = _origin_profile(database, character["id"])["resistances"]
+        resistances = _character_resistances(database, character["id"], player_gear)
         for spec in _effect_specs(_json_properties(npc["properties_json"]), "on_hit_effects", database):
             try:
                 name = mud_effects.display_name(database, spec["key"])
-                resisted = mud_effects.resist(spec, resistances.get(mud_effects.resist_key(database, spec["key"]), 0))
+                resisted = _resist_effect(database, character["id"], spec, resistances)
                 if resisted is None:
                     drafts.append(EventDraft(f"You shrug off {name}.", event_type="combat"))
                     continue
@@ -4374,7 +4411,7 @@ MAP_HEIGHT = 9
 
 
 def _map_action(database, user, parameters):
-    """An ASCII view of the surrounding grid; it shows the land but never moves anyone."""
+    """An ASCII view of the current layer around the player; other layers never show."""
     room = _current_room(database, user["id"])
     if room.get("instance_id") or room.get("system_managed") or room.get("x") is None:
         return [EventDraft("No map is available here.", event_type="room")]
@@ -4382,14 +4419,25 @@ def _map_action(database, user, parameters):
                                        MAP_WIDTH, MAP_HEIGHT, hide_users=(user["id"],))
     x1, y1 = window["origin"]
     lines = [[window["palette"][index]["glyph"] for index in row] for row in window["grid"]]
+    # Ways to other layers show only while this player can see the exit.
+    marks = set()
+    for entry in window["vertical"]:
+        visible = tuple(direction for direction in mud_wilderness.VERTICAL if direction in {
+            (row["direction"] or "").casefold() for row in _room_exits(database, entry["room_id"], None, user["id"])})
+        if visible:
+            glyph = mud_wilderness.VERTICAL_GLYPHS[visible]
+            lines[entry["y"] - y1][entry["x"] - x1] = glyph
+            marks.add(glyph)
     for x, y in window["players"]:
         lines[y - y1][x - x1] = "P"
     lines[room["y"] - y1][room["x"] - x1] = "@"
     shown = sorted({index for row in window["grid"] for index in row if index > 1})
     legend = ["@ you", "P another player"] + (["* landmark"] if any(1 in row for row in window["grid"]) else [])
+    legend += [label for glyph, label in (("<", "< way up"), (">", "> way down"), ("&", "& ways up and down"))
+               if glyph in marks]
     legend += [f"{window['palette'][index]['glyph']} {window['palette'][index]['name']}" for index in shown]
-    layer = f", layer {room['z']}" if room["z"] else ""
-    text = (f"Map around {room['name']} ({room['x']}, {room['y']}{layer}); north is up.\n"
+    layer = f"{window['name']}, layer {room['z']}" if window["name"] else f"layer {room['z']}"
+    text = (f"Map around {room['name']} ({room['x']}, {room['y']}, {layer}); north is up.\n"
             + "\n".join("".join(line).rstrip() for line in lines) + "\n" + " · ".join(legend))
     return [EventDraft(text, event_type="map")]
 
@@ -4652,15 +4700,22 @@ def _use_action(database, user, parameters):
 def _use_item_effect(database, user, item):
     properties = _json_properties(item["properties_json"])
     use_effects = properties.get("on_use_effects", [])
-    if use_effects:
+    cures = properties.get("cures", [])
+    if use_effects or cures:
         if not isinstance(use_effects, list):
             raise ActionError("This item's effects are invalid.")
         character = _character_row(database, user["id"])
         try:
             keys = [mud_effects.display_name(database, mud_effects.validate(spec, database)[0])
                     for spec in use_effects]
+            if cures:
+                mud_effects.validate_cures(cures, database)
         except ValueError as problem:
             raise ActionError(f"This item's effects are invalid: {problem}") from problem
+        # Cures come first so an item may clear an ailment and then protect against it.
+        treated = [pair for cure in cures for pair in mud_effects.reduce(database, "character", character["id"], cure)]
+        if cures and not treated and not use_effects and not properties.get("heal"):
+            raise ActionError(f"You have nothing that {item['name']} would treat.")
         for spec in use_effects:
             mud_effects.apply(database, "character", character["id"], spec, item["name"])
         restored = 0
@@ -4675,9 +4730,13 @@ def _use_item_effect(database, user, item):
                 )
         if item["item_type"] == "consumable":
             database.execute("DELETE FROM mud_item_instances WHERE id=?", (item["id"],))
-        message = f"You use {item['name']} and gain {', '.join(keys)}"
-        if restored:
-            message += f", restoring {restored} health"
+        cured = [name for name, outcome in treated if outcome == "cured"]
+        eased = [name for name, outcome in treated if outcome == "eased"]
+        parts = ([f"curing {', '.join(cured)}"] if cured else []) + ([f"easing {', '.join(eased)}"] if eased else [])
+        parts += [f"gaining {', '.join(keys)}"] if keys else []
+        parts += [f"restoring {restored} health"] if restored else []
+        message = f"You use {item['name']}" + (", " + ", ".join(parts) if parts else
+                                                ", but it has no further effect")
         return [EventDraft(message + ".", event_type="item")] + _enemy_turn(database, user)
     heal = properties.get("heal")
     if not isinstance(heal, int) or isinstance(heal, bool) or heal <= 0:
@@ -7381,13 +7440,17 @@ def _trigger_action(database, user, trigger, index, realm, instance_id=None):
             if definition is None:
                 return [_private(user_id, "Nothing seems to happen.")]
             if mud_effects.harmful(definition):
-                resistance = _origin_profile(database, character["id"])["resistances"].get(
-                    mud_effects.resist_key(database, spec["key"]), 0)
-                spec = mud_effects.resist(spec, resistance)
+                spec = _resist_effect(database, character["id"], spec)
                 if spec is None:
                     return [_private(user_id, f"You shrug off {name}.", "combat")]
             mud_effects.apply(database, "character", character["id"], spec, trigger.get("name", ""))
             return [_private(user_id, f"You are affected by {name}.", "combat")]
+        if kind == "cure_effect":
+            character = _character_row(database, user_id)
+            cure = {key: action[key] for key in ("effect", "category", "potency", "turns") if key in action}
+            treated = mud_effects.reduce(database, "character", character["id"], cure)
+            return [_private(user_id, f"Your {name} {'fades' if outcome == 'cured' else 'eases'}.", "combat")
+                    for name, outcome in treated]
         if kind == "set_object_state":
             _store_entity_state(database, realm, "object", action["object"], action["state"])
             return []
@@ -7487,8 +7550,16 @@ def _trigger_teleport(database, user, room_id):
 def _process_trigger_event(database, event):
     """Run a delayed trigger action or a repeating timer; returns drafts to deliver."""
     if event["event_kind"] == "trigger_timer":
-        triggers = _world_triggers(database, "timer", trigger_id=event["entity_id"])
-        return [draft for trigger in triggers for draft in _run_trigger(database, None, trigger)]
+        drafts = [draft for trigger in _world_triggers(database, "timer", trigger_id=event["entity_id"])
+                  for draft in _run_trigger(database, None, trigger)]
+        # A linger trigger runs as each player still in its room, so their gear and conditions count.
+        for trigger in _world_triggers(database, "linger", trigger_id=event["entity_id"]):
+            room = _world_room(database, trigger["source"].get("room"))
+            for user_id in (_occupant_ids(database, room["id"]) if room else ()):
+                occupant = database.execute("SELECT * FROM users WHERE id=?", (user_id,)).fetchone()
+                if occupant is not None:
+                    drafts += _run_trigger(database, occupant, trigger)
+        return drafts
     database.execute("DELETE FROM mud_scheduled_events WHERE id=?", (event["id"],))
     payload = _json_properties(event["payload_json"])
     trigger, index = payload.get("trigger"), payload.get("index")
@@ -7516,7 +7587,7 @@ def sync_trigger_schedule(database, now=None):
     active = {}
     for trigger in _load_triggers(database.execute(
             "SELECT t.id,t.definition_json FROM mud_world_triggers AS t JOIN mud_world_packages AS w "
-            "ON w.id=t.world_id WHERE w.enabled=1 AND t.event='timer' AND t.enabled=1")):
+            "ON w.id=t.world_id WHERE w.enabled=1 AND t.event IN ('timer','linger') AND t.enabled=1")):
         interval = trigger.get("interval_seconds")
         if type(interval) is not int or interval < 30:
             continue
@@ -7531,6 +7602,58 @@ def sync_trigger_schedule(database, now=None):
         if row["entity_id"] not in active:
             database.execute("DELETE FROM mud_scheduled_events WHERE event_kind='trigger_timer' AND entity_id=?",
                              (row["entity_id"],))
+
+
+def sync_effect_pulse(database, now=None):
+    """Keep one effect pulse per playable world while any effect works outside combat."""
+    wanted = set()
+    if database.execute("SELECT 1 FROM mud_effect_definitions WHERE definition_json LIKE "
+                        "'%\"outside_combat\":true%' LIMIT 1").fetchone():
+        wanted = _enabled_world_keys(database) | {mud_scope.PROCEDURAL}
+    due = _scheduled_now((now or datetime.now(timezone.utc)) + timedelta(seconds=mud_effects.PULSE_SECONDS))
+    for world in wanted:
+        database.execute(
+            "INSERT INTO mud_scheduled_events(event_kind,entity_id,due_at,interval_seconds) "
+            "VALUES('effect_pulse',?,?,?) ON CONFLICT(event_kind,entity_id) DO NOTHING",
+            (world, due, mud_effects.PULSE_SECONDS))
+    for row in database.execute("SELECT entity_id FROM mud_scheduled_events WHERE event_kind='effect_pulse'").fetchall():
+        if row["entity_id"] not in wanted:
+            database.execute("DELETE FROM mud_scheduled_events WHERE event_kind='effect_pulse' AND entity_id=?",
+                             (row["entity_id"],))
+
+
+def _effect_pulse(database):
+    """Advance outside_combat effects one turn for connected players of this world who are not fighting.
+
+    Lingering harm never drops anyone below 1 health; only combat can defeat a player.
+    """
+    users = [row["user_id"] for row in database.execute(
+        "SELECT DISTINCT c.user_id FROM mud_active_effects AS e JOIN mud_characters AS c ON c.id=e.target_id "
+        "JOIN mud_presence AS p ON p.user_id=c.user_id AND p.world_key=c.world_key "
+        "WHERE e.target_type='character' AND c.world_key=? AND p.disconnected_at IS NULL", (_world(),))]
+    drafts = []
+    for user_id in users:
+        try:
+            room = _current_room(database, user_id)
+        except ActionError:
+            continue
+        if room["id"] in (PORTAL_ROOM_ID, "stationnet:death-summary") or _active_hostiles(database, room, user_id):
+            continue
+        character = _character_row(database, user_id)
+        detail = mud_effects.tick_detail(database, "character", character["id"], outside_combat_only=True)
+        if detail["regen"]:
+            drafts += _addressed(_regenerate_character(database, user_id, detail["regen"]), user_id)
+        if detail["damage"]:
+            character = _character_row(database, user_id)
+            harm = min(sum(amount for _, amount in detail["damage"]), character["current_health"] - 1)
+            if harm > 0:
+                database.execute(
+                    "UPDATE mud_character_progression SET current_health=current_health-?,updated_at=CURRENT_TIMESTAMP "
+                    "WHERE character_id=? AND track_key=?", (harm, character["id"], character["track_key"]))
+                drafts.append(_private(user_id, (
+                    f"You suffer {harm} damage from {', '.join(name for name, _ in detail['damage'])} "
+                    f"({character['current_health'] - harm}/{character['maximum_health']} health)."), "combat"))
+    return drafts
 
 
 def _despawn_npc(database, event, now=None):
@@ -8041,7 +8164,7 @@ actions.register(ActionDefinition(
 ))
 actions.register(ActionDefinition(
     key="map", label="MAP",
-    description="Show a map of the wilderness around you.",
+    description="Show a map of the layer you are on, with its ways up and down.",
     commands=("map",), handler=_map_action,
     group="SURROUNDINGS",
 ))
@@ -8435,6 +8558,8 @@ def _scheduled_event_world(database, event):
                                (_json_properties(event["payload_json"]).get("room_id"),)).fetchone()
     elif kind == "trigger_timer":
         row = database.execute("SELECT world_id FROM mud_world_triggers WHERE id=?", (event["entity_id"],)).fetchone()
+    elif kind == "effect_pulse":
+        return event["entity_id"]
     else:
         realm = _json_properties(event["payload_json"]).get("realm")
         row = database.execute(
@@ -8454,13 +8579,14 @@ def process_scheduled_events(database, now=None, limit=50):
     rows = database.execute(
         "SELECT * FROM mud_scheduled_events WHERE due_at<=? "
         "AND event_kind IN ('ambient','wander','patrol','schedule','room_message','item_respawn',"
-        "'trigger_action','trigger_timer','npc_despawn') ORDER BY due_at,id LIMIT ?",
+        "'trigger_action','trigger_timer','npc_despawn','effect_pulse') ORDER BY due_at,id LIMIT ?",
         (stamp, min(50, max(1, limit))),
     ).fetchall()
     enabled = _enabled_world_keys(database)
     for event in rows:
         world = _scheduled_event_world(database, event)
-        if world is not None and world not in enabled:
+        # The procedural dungeon world is always open; only authored worlds can be disabled.
+        if world is not None and world not in enabled and world != mud_scope.PROCEDURAL:
             database.execute("UPDATE mud_scheduled_events SET due_at=? WHERE id=?",
                              (_scheduled_now((now or datetime.now(timezone.utc)) + timedelta(seconds=60)),
                               event["id"]))
@@ -8474,6 +8600,12 @@ def process_scheduled_events(database, now=None, limit=50):
 def _process_scheduled_event(database, event, now):
     if event["event_kind"] == "npc_despawn":
         _despawn_npc(database, event, now)
+        return
+    if event["event_kind"] == "effect_pulse":
+        next_due = _scheduled_now((now or datetime.now(timezone.utc)) + timedelta(seconds=event["interval_seconds"]))
+        database.execute("UPDATE mud_scheduled_events SET due_at=? WHERE id=?", (next_due, event["id"]))
+        for draft in _effect_pulse(database):
+            _insert_event(database, draft)
         return
     if event["event_kind"] in ("trigger_action", "trigger_timer"):
         if event["event_kind"] == "trigger_timer":
@@ -8548,10 +8680,12 @@ def _process_scheduled_event(database, event, now):
         _schedule_step(database, npc, spec, now)
         return
     if event["event_kind"] == "ambient":
-        line = random.choice(spec["lines"])
+        line = random.choice(spec["lines"]).strip()
+        # A line starting with "/emote " is an action, rendered like a player's /emote.
+        body = f"{npc['name']} {line[7:].strip()}" if line.startswith("/emote ") else f"{npc['name']} says: {line}"
         recipients = _occupant_ids(database, room_id)
         if recipients:
-            _insert_event(database, EventDraft(f"{npc['name']} says: {line}", "npc", "room", room_id, recipients))
+            _insert_event(database, EventDraft(body, "npc", "room", room_id, recipients))
         return
     state = _json_properties(npc["state_json"])
     exits = _room_exits(database, room_id)
@@ -8654,6 +8788,7 @@ def run_scheduled_tick(app, now=None):
             database.execute("BEGIN IMMEDIATE")
             sync_npc_schedule(database, now)
             sync_trigger_schedule(database, now)
+            sync_effect_pulse(database, now)
             count = process_scheduled_events(database, now)
             count += process_travel(database, now)
             database.commit()
@@ -9268,22 +9403,34 @@ def _valid_room_fields():
 def _valid_exit_fields(database, exit_id=None):
     from_room_id = request.form.get("from_room_id", "").strip()
     to_room_id = request.form.get("to_room_id", "").strip()
+    to_cell = request.form.get("to_cell", "").replace(" ", "")
+    if to_cell:
+        # A destination typed as x,y,z: any room at that spot, wilderness or authored.
+        position = mud_wilderness.parse_reference("@" + to_cell)
+        row = database.execute("SELECT id FROM mud_world_rooms WHERE world_id=mud_world() AND x=? AND y=? AND z=?",
+                               position).fetchone() if position else None
+        if row is None:
+            return None, "No room stands at that x,y,z position."
+        to_room_id = row["id"]
     name = " ".join(request.form.get("name", "").split())
     direction = request.form.get("direction", "").strip().casefold() or None
     key_item_id = request.form.get("key_item_id", "").strip() or None
     pick_raw = request.form.get("pick_difficulty", "").strip()
-    room_ids = {
-        row["id"] for row in database.execute(
-            "SELECT id FROM mud_world_rooms WHERE id IN (?,?) AND world_id=mud_world()",
+    layers = {
+        row["id"]: row["z"] if row["x"] is not None else None for row in database.execute(
+            "SELECT id,x,z FROM mud_world_rooms WHERE id IN (?,?) AND world_id=mud_world()",
             (from_room_id, to_room_id)
         )
     }
-    if from_room_id not in room_ids or to_room_id not in room_ids:
+    if from_room_id not in layers or to_room_id not in layers:
         return None, "Choose existing source and destination rooms."
     if not 1 <= len(name) <= 80:
         return None, "Exit names must be between 1 and 80 characters."
     if direction is not None and direction not in DIRECTIONS:
         return None, "Choose a supported direction or leave direction blank for a named exit."
+    crossing = mud_wilderness.layer_problem(direction, layers[from_room_id], layers[to_room_id])
+    if crossing:
+        return None, crossing
     if key_item_id and database.execute("SELECT 1 FROM mud_item_definitions WHERE id=? AND item_type='key'",
                                         (key_item_id,)).fetchone() is None:
         return None, "Choose an existing key item."
@@ -9362,6 +9509,8 @@ def builder():
         item["value"] = properties.get("value", 0)
         item["on_use_effects_json"] = json.dumps(properties.get("on_use_effects", []))
         item["on_hit_effects_json"] = json.dumps(properties.get("on_hit_effects", []))
+        item["cures_json"] = json.dumps(properties.get("cures", []))
+        item["resistances_json"] = json.dumps(properties.get("resistances", {}))
         item["requirements_json"] = json.dumps(properties.get("requirements", {}))
         item["category"] = _item_category(properties) or ""
         item["teaches_destinations"] = mud_wayfinding.teaches(properties)
@@ -9586,7 +9735,7 @@ def builder_check_export():
 # Item properties the builder's item form owns; any others survive an edit unchanged.
 ITEM_FORM_PROPERTIES = frozenset({"requirements", "category", "use_message", "attack_bonus", "defense_bonus", "heal",
                                   "value", "firearm", "ammo_type", "magazine_size", "rounds", "on_use_effects",
-                                  "on_hit_effects", "teaches_destinations"})
+                                  "on_hit_effects", "cures", "resistances", "teaches_destinations"})
 
 
 def _item_definition_fields():
@@ -9655,6 +9804,18 @@ def _item_definition_fields():
             return None, f"Invalid {field}: {problem}"
         if specs:
             properties[field] = specs
+    try:
+        cures = json.loads(request.form.get("cures", "[]") or "[]")
+        if cures:
+            mud_effects.validate_cures(cures, get_db())
+            properties["cures"] = cures
+        resistances = json.loads(request.form.get("resistances", "{}") or "{}")
+        if resistances:
+            if item_type != "equipment":
+                return None, "Resistances apply only to equipment."
+            properties["resistances"] = mud_effects.validate_resistances(resistances, get_db())
+    except (ValueError, json.JSONDecodeError) as problem:
+        return None, f"Invalid cures or resistances: {problem}"
     try:
         taught = mud_wayfinding.validate_teaches(request.form.getlist("teaches_destinations"))
     except mud_wayfinding.WayfindingError as problem:
@@ -10979,6 +11140,10 @@ def _builder_room_grid(database, room_id, name):
         mud_wilderness.place_authored(database, room_id, position, request.form.get("grid_link") == "1", blocked)
     except mud_wilderness.WildernessError as problem:
         return str(problem)
+    crossing = mud_wilderness.crossing_exit(database, room_id)
+    if crossing:
+        return (f"The exit {crossing['name']} would join layers {crossing['from_z']} and {crossing['to_z']}; "
+                "rooms on different layers connect only by an up or down exit.")
     return None
 
 
@@ -11489,7 +11654,7 @@ def _builder_trigger_fields(database, world_id, trigger_id):
     if event == "say_phrase":
         raw["phrase"] = form.get("phrase", "")
     numbers = {"cooldown_seconds": "cooldown_seconds", "max_fires": "max_fires"}
-    if event == "timer":
+    if event in mud_triggers.INTERVAL_EVENTS:
         numbers["interval_seconds"] = "interval_seconds"
     for key in numbers:
         value = form.get(key, "").strip()
@@ -11511,7 +11676,8 @@ def _builder_trigger_fields(database, world_id, trigger_id):
     origins = character_creation.catalog(database)
     known = {"race": {entry["key"] for entry in origins["races"]},
              "class": {entry["key"] for entry in origins["classes"]},
-             "skill": {entry["key"] for entry in mud_skills.catalog(database)}}
+             "skill": {entry["key"] for entry in mud_skills.catalog(database)},
+             "effect": set(mud_effects.catalog(database))}
     for kind, ref in mud_triggers.references(trigger):
         if kind in known:
             missing = ref not in known[kind]
@@ -12115,6 +12281,7 @@ def builder_wilderness():
         bundled=sorted(mud_wilderness.bundled_presets().values(), key=lambda preset: preset["name"].casefold()),
         terrains=mud_wilderness.TERRAINS, lights=mud_wilderness.LIGHTS, exposures=mud_wilderness.EXPOSURES,
         directions=tuple(mud_wilderness.DELTAS), all_directions=DIRECTIONS,
+        layer_names=mud_wilderness.layer_names(database, world_id),
         destination_categories=mud_wayfinding.CATEGORIES,
         dungeon_templates=database.execute("SELECT id,name FROM mud_world_dungeon_templates WHERE world_id=? "
                                            "ORDER BY name COLLATE NOCASE", (world_id,)).fetchall(),
@@ -12140,6 +12307,29 @@ def builder_wilderness_map():
     if any(abs(value) > limit for value in (x, y, z)):
         return jsonify(error="Map coordinates are out of range."), 400
     return jsonify(mud_wilderness.map_window(database, world_id, x, y, z, width, height))
+
+
+@bp.post("/w/<world_key>/builder/wilderness/layers")
+@builder_required
+def builder_wilderness_layer_name():
+    validate_csrf()
+    database = get_db()
+    world_id = _active_world_id(database)
+    try:
+        z = int(request.form.get("z", ""))
+        if abs(z) > mud_wilderness.COORDINATE_LIMIT:
+            raise ValueError
+    except ValueError:
+        flash("Layer must be a whole number in range.", "error")
+        return _wilderness_redirect("map-heading")
+    try:
+        name = mud_wilderness.save_layer_name(database, world_id, z, request.form.get("name"))
+    except mud_wilderness.WildernessError as problem:
+        flash(str(problem), "error")
+        return _wilderness_redirect("map-heading", z=z)
+    database.commit()
+    flash(f"Layer {z} is now named {name}." if name else f"Layer {z} no longer has a name.", "success")
+    return _wilderness_redirect("map-heading", z=z)
 
 
 @bp.post("/w/<world_key>/builder/room-presets")

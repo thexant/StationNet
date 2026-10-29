@@ -1819,6 +1819,11 @@ def _migrate_mud_wilderness(database):
       created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
       updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
       UNIQUE(world_id,local_key));
+    CREATE TABLE IF NOT EXISTS mud_world_layers (
+      world_id TEXT NOT NULL REFERENCES mud_world_packages(id) ON DELETE CASCADE,
+      z INTEGER NOT NULL,
+      name TEXT NOT NULL,
+      PRIMARY KEY(world_id,z));
     """)
     additions = {
         "kind": "TEXT NOT NULL DEFAULT 'authored' CHECK(kind IN ('authored','wild'))",

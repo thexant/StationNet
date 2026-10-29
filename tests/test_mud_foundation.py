@@ -146,14 +146,21 @@ def test_npc_schedule_recovers_once_and_validates_packages(game):
         db = get_db()
         assert db.execute("SELECT COUNT(*) FROM mud_scheduled_events WHERE event_kind='room_message'").fetchone()[0] == 0
         assert mud._events_for_user(db, uid)[-1]["body"] == "A bell rings."
+        config["ambient"]["lines"] = ["/emote tends to the oven."]
+        db.execute("UPDATE mud_npc_definitions SET behaviors_json=? WHERE id='keeper'", (json.dumps(config),))
+        db.commit()
     restarted = create_app({"TESTING": True, "DATA_DIR": app.config["DATA_DIR"]})
     assert mud.run_scheduled_tick(restarted, now + timedelta(days=1)) == 1
     assert mud.run_scheduled_tick(restarted, now + timedelta(days=1)) == 0
+    with restarted.app_context():
+        assert mud._events_for_user(get_db(), uid)[-1]["body"] == "Keeper tends to the oven."
     restarted_coordinator = restarted.extensions["broadcast_coordinator"]
     restarted_coordinator._closed = True
     restarted_coordinator._timer.cancel()
     with pytest.raises(ValueError):
         mud.validate_npc_behaviors({"ambient": {"interval_seconds": 5, "lines": []}})
+    with pytest.raises(ValueError):
+        mud.validate_npc_behaviors({"ambient": {"interval_seconds": 5, "lines": ["/emote "]}})
     with pytest.raises(mud_worlds.WorldError):
         mud_worlds.read_package(mud_worlds.package_bytes({
             "id": "badworld", "name": "Bad World", "author": "Tester", "start_room": "room",

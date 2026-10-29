@@ -2,9 +2,13 @@
   "package_format": 1,
   "slug": "snake",
   "name": "Snake",
-  "description": "Guide the snake, collect food, and climb the station leaderboard.",
+  "description": "Play Classic, Sprint, and Maze Snake with touch controls, personal records, and a station leaderboard.",
   "author": "StationNet Core",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "category": "Games",
-  "entrypoint": "main.js"
+  "entrypoint": "main.js",
+  "platforms": ["desktop", "touch"],
+  "required_inputs": [],
+  "preferred_presentation": "standard",
+  "fullscreen_target": "application"
 }

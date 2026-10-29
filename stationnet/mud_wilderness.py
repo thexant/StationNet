@@ -3,10 +3,12 @@
 A wild room is a slim row in mud_world_rooms holding only its coordinates,
 preset and region; its name and text are chosen from the preset by a hash of
 its position, so a room reads the same on every visit while neighbours vary.
-Exits between grid neighbours are computed rather than stored, and a stored
-exit in the same direction always wins, so roads, gates and caves keep their
-authored behaviour. Every cell is still a real room with its own occupants,
-contents and persistent changes.
+Exits between grid neighbours on one layer are computed rather than stored,
+and a stored exit in the same direction always wins, so roads, gates and caves
+keep their authored behaviour. Layers (z) are separate maps: nothing links them
+automatically, and only authored up and down exits cross from one to another.
+Every cell is still a real room with its own occupants, contents and
+persistent changes.
 """
 from datetime import datetime, timezone
 import hashlib
@@ -36,8 +38,13 @@ COORDINATE_LIMIT = 100_000
 MAP_LIMIT = 101
 CHUNK = 5000
 DELTAS = {"north": (0, -1, 0), "northeast": (1, -1, 0), "east": (1, 0, 0), "southeast": (1, 1, 0),
-          "south": (0, 1, 0), "southwest": (-1, 1, 0), "west": (-1, 0, 0), "northwest": (-1, -1, 0),
-          "up": (0, 0, 1), "down": (0, 0, -1)}
+          "south": (0, 1, 0), "southwest": (-1, 1, 0), "west": (-1, 0, 0), "northwest": (-1, -1, 0)}
+# Map marks: you, other players, landmarks, and rooms with a way up, down, or both.
+RESERVED_GLYPHS = " @*P<>&"
+VERTICAL_GLYPHS = {("up",): "<", ("down",): ">", ("up", "down"): "&"}
+# The only exit directions that may join rooms on different layers.
+VERTICAL = ("up", "down")
+MAX_LAYER_NAMES = 200
 DIAGONALS = {"northeast", "southeast", "southwest", "northwest"}
 OPPOSITE = {"north": "south", "south": "north", "east": "west", "west": "east",
             "northeast": "southwest", "southwest": "northeast", "northwest": "southeast",
@@ -145,8 +152,8 @@ def validate_preset(value):
     if terrain not in TERRAINS:
         raise WildernessError(f"Preset terrain must be one of: {', '.join(TERRAINS)}.")
     glyph = preset.get("glyph", ".")
-    if not isinstance(glyph, str) or len(glyph) != 1 or not glyph.isprintable() or glyph in " @*P":
-        raise WildernessError("Preset glyph must be one printable character other than a space, @, * or P.")
+    if not isinstance(glyph, str) or len(glyph) != 1 or not glyph.isprintable() or glyph in RESERVED_GLYPHS:
+        raise WildernessError("Preset glyph must be one printable character other than a space, @, *, P, <, > or &.")
     links = str(preset.get("links", "4"))
     if links not in ("4", "8"):
         raise WildernessError('Preset links must be "4" (north, east, south, west) or "8" (adds diagonals).')
@@ -489,7 +496,7 @@ def grid_linked(direction, own_blocked, own_links, other_grid_link, other_blocke
 
 
 def grid_exits(database, room_id, taken_directions=()):
-    """Computed exits to grid neighbours, shaped like stored exit rows.
+    """Computed exits to grid neighbours on the same layer, shaped like stored exit rows.
 
     A link exists only when both rooms are grid-linked, neither walls off the
     shared edge, and, for diagonals, both rooms allow eight-way links. A stored
@@ -499,10 +506,10 @@ def grid_exits(database, room_id, taken_directions=()):
     if room is None or room["x"] is None or not room["grid_link"]:
         return []
     x, y, z = room["x"], room["y"], room["z"]
-    neighbours = {(row["x"] - x, row["y"] - y, row["z"] - z): row for row in database.execute(
-        f"SELECT {ROOM_COLUMNS} FROM mud_world_rooms WHERE world_id=? AND z BETWEEN ? AND ? "
+    neighbours = {(row["x"] - x, row["y"] - y, 0): row for row in database.execute(
+        f"SELECT {ROOM_COLUMNS} FROM mud_world_rooms WHERE world_id=? AND z=? "
         "AND y BETWEEN ? AND ? AND x BETWEEN ? AND ? AND id<>?",
-        (room["world_id"], z - 1, z + 1, y - 1, y + 1, x - 1, x + 1, room_id),
+        (room["world_id"], z, y - 1, y + 1, x - 1, x + 1, room_id),
     )}
     own_blocked = _blocked(room)
     own_links = _links(database, room)
@@ -716,6 +723,73 @@ def place_authored(database, room_id, position, grid_link=True, blocked_dirs="")
     return absorbed
 
 
+# --- Layers -----------------------------------------------------------------
+
+def layer_problem(direction, from_z, to_z):
+    """Why an exit may not join these layers, or None. Off-grid rooms belong to no layer."""
+    if from_z is None or to_z is None or from_z == to_z or direction in VERTICAL:
+        return None
+    return f"Rooms on different layers ({from_z} and {to_z}) connect only by an up or down exit."
+
+
+def crossing_exit(database, room_id):
+    """A stored exit to or from a room that joins two layers without going up or down, or None."""
+    return database.execute(
+        "SELECT e.name,e.direction,a.z AS from_z,b.z AS to_z FROM mud_world_exits e "
+        "JOIN mud_world_rooms a ON a.id=e.from_room_id JOIN mud_world_rooms b ON b.id=e.to_room_id "
+        "WHERE (e.from_room_id=? OR e.to_room_id=?) AND a.x IS NOT NULL AND b.x IS NOT NULL AND a.z<>b.z "
+        "AND COALESCE(e.direction,'') NOT IN ('up','down') LIMIT 1", (room_id, room_id)).fetchone()
+
+
+def validate_layer_names(value):
+    """manifest.json layers: [{"z": -1, "name": "Sewers"}, ...] as {z: name}."""
+    if value is None:
+        return {}
+    if not isinstance(value, list) or len(value) > MAX_LAYER_NAMES:
+        raise WildernessError(f"layers must be a list of at most {MAX_LAYER_NAMES} named layers.")
+    names = {}
+    for entry in value:
+        entry = _object(entry, "Layer", ("z", "name"))
+        z = _whole(entry.get("z"), "Layer z", -COORDINATE_LIMIT, COORDINATE_LIMIT)
+        if z in names:
+            raise WildernessError(f"Layer {z} is named more than once.")
+        names[z] = _text(entry.get("name"), "Layer name", 2, 80)
+    return names
+
+
+def layer_names(database, world_id):
+    return {row["z"]: row["name"] for row in database.execute(
+        "SELECT z,name FROM mud_world_layers WHERE world_id=? ORDER BY z", (world_id,))}
+
+
+def layer_label(database, world_id, z):
+    """How players and builders see a layer: its name and number, or the number alone."""
+    row = database.execute("SELECT name FROM mud_world_layers WHERE world_id=? AND z=?", (world_id, z)).fetchone()
+    return f"{row['name']} (layer {z})" if row else f"layer {z}"
+
+
+def save_layer_name(database, world_id, z, name):
+    """Name a layer; a blank name removes it."""
+    name = " ".join(str(name or "").split())
+    if not name:
+        database.execute("DELETE FROM mud_world_layers WHERE world_id=? AND z=?", (world_id, z))
+        return None
+    name = _text(name, "Layer name", 2, 80)
+    database.execute("INSERT INTO mud_world_layers(world_id,z,name) VALUES(?,?,?) "
+                     "ON CONFLICT(world_id,z) DO UPDATE SET name=excluded.name", (world_id, z, name))
+    return name
+
+
+def install_layer_names(database, world_id, names):
+    database.execute("DELETE FROM mud_world_layers WHERE world_id=?", (world_id,))
+    database.executemany("INSERT INTO mud_world_layers(world_id,z,name) VALUES(?,?,?)",
+                         [(world_id, z, name) for z, name in sorted(names.items())])
+
+
+def export_layer_names(database, world_id):
+    return [{"z": z, "name": name} for z, name in layer_names(database, world_id).items()]
+
+
 def map_window(database, world_id, x, y, z, width, height, *, hide_users=()):
     """A rectangle of one layer: palette indices per cell plus landmark and player markers.
 
@@ -755,8 +829,17 @@ def map_window(database, world_id, x, y, z, width, height, *, hide_users=()):
     npcs = [[row["x"], row["y"]] for row in database.execute(
         "SELECT DISTINCT r.x,r.y FROM mud_npc_instances n JOIN mud_world_rooms r ON r.id=n.room_id "
         "WHERE r.world_id=? AND r.z=? AND r.x BETWEEN ? AND ? AND r.y BETWEEN ? AND ?", bounds)]
-    return {"origin": [x1, y1], "z": z, "width": width, "height": height, "palette": palette,
-            "grid": grid, "authored": authored, "players": players, "npcs": npcs}
+    # Rooms with stored up or down exits, hidden ones included; /map filters them per player.
+    vertical = {}
+    for row in database.execute(
+        "SELECT r.id,r.x,r.y,e.direction,e.hidden FROM mud_world_exits e JOIN mud_world_rooms r ON r.id=e.from_room_id "
+        "WHERE r.world_id=? AND r.z=? AND r.x BETWEEN ? AND ? AND r.y BETWEEN ? AND ? AND e.direction IN ('up','down') "
+        "ORDER BY r.id,e.direction DESC", bounds):
+        entry = vertical.setdefault(row["id"], {"x": row["x"], "y": row["y"], "room_id": row["id"], "directions": []})
+        entry["directions"].append(row["direction"])
+    return {"origin": [x1, y1], "z": z, "name": layer_names(database, world_id).get(z), "width": width,
+            "height": height, "palette": palette, "grid": grid, "authored": authored, "players": players,
+            "npcs": npcs, "vertical": list(vertical.values())}
 
 
 # --- Runtime ----------------------------------------------------------------
@@ -1022,6 +1105,12 @@ def validate_blocked(value):
     return ",".join(direction for direction in DELTAS if direction in parts)
 
 
+def export_blocked(value):
+    """Stored walls as a package writes them; walls from before layers stopped linking are dropped."""
+    parts = set((value or "").split(","))
+    return ",".join(direction for direction in DELTAS if direction in parts)
+
+
 def lookup(document, reference):
     """(x, y, z, preset key, region key) for a filled '@x,y,z' reference, else None."""
     position = parse_reference(reference)
@@ -1138,12 +1227,13 @@ def export_document(database, world_id, npc_mapper, item_mapper):
                 indices[entry] = len(palette)
                 palette.append(entry)
             cells_in_row.append((row["x"], indices[entry]))
-            if not row["grid_link"] or row["blocked_dirs"]:
+            walls = export_blocked(row["blocked_dirs"])
+            if not row["grid_link"] or walls:
                 cell = {"x": row["x"], "y": row["y"], "z": bounds["z"]}
                 if not row["grid_link"]:
                     cell["grid_link"] = False
-                if row["blocked_dirs"]:
-                    cell["blocked_dirs"] = row["blocked_dirs"]
+                if walls:
+                    cell["blocked_dirs"] = walls
                 cells.append(cell)
         rows.append(_encode_row(cells_in_row, bounds["x1"]))
         while rows and rows[-1] == "":

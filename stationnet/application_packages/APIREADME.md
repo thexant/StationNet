@@ -888,9 +888,12 @@ Colored cell grids can be exported as a controlled PNG with
 
 ### Animation performance demo and limits
 
-The built-in Breakout package is the reference sustained-animation demo. It
-uses `ui.animate`, time-based movement, and one in-place canvas update per frame;
-on capable foreground browsers it is designed to run smoothly in the 30–60 FPS
+The built-in Breakout package is the reference sustained-animation demo. Its
+pure `engine.js` module advances ball physics with `ui.fixedStep(60)`, while
+`ui.animate` sends one in-place canvas update per display frame. It also shows
+held touch controls, optional gamepad input, generated sound, private settings,
+immersive presentation, and station scores with retry. On capable foreground
+browsers it is designed to run smoothly in the 30–60 FPS
 range. Frame rate remains dependent on the browser, hardware, other page work,
 and the complexity of the application's command list.
 

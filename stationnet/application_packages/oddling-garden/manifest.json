@@ -1,0 +1,17 @@
+{
+  "package_format": 1,
+  "slug": "oddling-garden",
+  "name": "Oddling Garden",
+  "description": "Raise pixel-art virtual pets, care for them, and remember their lives.",
+  "author": "StationNet Core",
+  "version": "1.5.0",
+  "category": "Games",
+  "entrypoint": "main.js",
+  "platforms": [
+    "desktop",
+    "touch"
+  ],
+  "required_inputs": [],
+  "preferred_presentation": "standard",
+  "fullscreen_target": "application"
+}

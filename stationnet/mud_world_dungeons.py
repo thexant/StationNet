@@ -10,7 +10,7 @@ import re
 import secrets
 import uuid
 
-from . import dungeons, mud_conditions
+from . import dungeons, mud_conditions, mud_effects
 
 
 KEY_RE = re.compile(r"^[a-z][a-z0-9-]{0,31}$")
@@ -78,14 +78,12 @@ def remap_references(template, item_mapper, npc_mapper, effect_mapper=None):
         definitions = template.get("definitions") if isinstance(template.get("definitions"), dict) else {}
         for kind in ("items", "npcs", "enemies"):
             for entry in definitions.get(kind, []) if isinstance(definitions.get(kind), list) else []:
-                properties = entry.get("properties") if isinstance(entry, dict) else None
-                for field in ("on_use_effects", "on_hit_effects"):
-                    for spec in (properties or {}).get(field, []) or []:
-                        if isinstance(spec, dict) and isinstance(spec.get("key"), str):
-                            spec["key"] = effect_mapper(spec["key"])
+                if isinstance(entry, dict) and isinstance(entry.get("properties"), dict):
+                    entry["properties"] = mud_effects.remap_properties(entry["properties"], effect_mapper)
         for trigger in template.get("triggers", []) if isinstance(template.get("triggers"), list) else []:
             for action in trigger.get("actions", []) if isinstance(trigger, dict) else []:
-                if isinstance(action, dict) and action.get("type") == "apply_effect":
+                if (isinstance(action, dict) and action.get("type") in ("apply_effect", "cure_effect")
+                        and "effect" in action):
                     action["effect"] = effect_mapper(action.get("effect"))
     pools = template.get("pools") if isinstance(template.get("pools"), dict) else {}
     for kind, mapper in (("items", item_mapper), ("npcs", npc_mapper), ("enemies", npc_mapper)):

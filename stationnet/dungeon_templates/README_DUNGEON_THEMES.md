@@ -302,7 +302,10 @@ Notes:
   on equipment or enemies apply timed effects. Each entry has `key`, `potency`
   (1 to 1,000), and `duration` (1 to 100 combat turns). Supported keys are
   `poison`, `burning`, `bleeding`, `might`, `weakness`, `ward`,
-  `vulnerability`, `focus`, `blinded`, `evasive`, and `snared`.
+  `vulnerability`, `focus`, `blinded`, `evasive`, and `snared`, plus any
+  effect the theme bundles. Items may also carry `cures`, and equipment
+  `resistances`, as in worlds; see
+  [Protective gear, cures, and hazards](../mud_world_templates/README_CUSTOM_WORLDS.md#protective-gear-cures-and-hazards).
 - Older bundled recovery items carrying the former "standard recovery rules"
   message still heal, for compatibility. New themes should use `heal`.
 
@@ -434,6 +437,8 @@ Environment pools add descriptive text to rooms. A trigger whose source is
 `{"environment": "<environment pool id>"}` fires in rooms that drew that
 environment, so combined with `apply_effect` an environment becomes a hazard
 (a lava floor applying `burning`) or a boon (a spring applying `regeneration`).
+`cure_effect` makes a cleansing environment, such as a clean spring that
+removes `poison`.
 
 The starter demonstrates every supported definition and connection with neutral
 placeholders: an NPC-only encounter, and a combat encounter that draws from an
@@ -476,7 +481,9 @@ Allowed actions are `message` (to `actor` or `room`), `set_flag` and
 and `take_item` (embedded or shared items), `experience`, `coins`,
 `take_coins`, `heal`, `damage` (never below 1 health), `apply_effect`
 (`effect`, `potency`, `duration`; a built-in effect or one the theme bundles),
-and `run_trigger`.
+`cure_effect` (`effect` or `category`, optional `potency` and `turns`), and
+`run_trigger`. Dungeon themes have no `linger` event; use `enter_room` on an
+environment for a hazard.
 `delay_seconds`, `once`, `scope`, `cooldown_seconds`, `max_fires`,
 `conditions`, and `fail_message` work as in worlds. Conditions may use
 everything except quest, objective, `object_state`, and `in_room`.

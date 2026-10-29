@@ -1,0 +1,52 @@
+{
+  "$schema": "./theme-schema.json",
+  "schema_version": 1,
+  "id": "replace-with-theme-id",
+  "version": "1.0.0",
+  "name": "[Theme name]",
+  "author": "[Your name]",
+  "description": "[Author-facing notes.]",
+  "definitions": {
+    "items": [
+      {"id": "equipment-placeholder", "name": "[Equipment name]", "description": "[Equipment description.]", "item_type": "equipment", "equipment_slot": "main_hand", "properties": {"damage": 1, "value": 20}, "behaviors": {}},
+      {"id": "item-placeholder", "name": "[Treasure name]", "description": "[Treasure description.]", "item_type": "misc", "properties": {"value": 30}, "behaviors": {}},
+      {"id": "healing-placeholder", "name": "[Healing supply name]", "description": "[Healing supply description.]", "item_type": "consumable", "properties": {"heal": 25, "value": 20}, "behaviors": {"consumable": true}}
+    ],
+    "npcs": [
+      {
+        "id": "npc-placeholder", "name": "[NPC name]", "description": "[NPC description.]", "properties": {}, "behaviors": {},
+        "conversation": {"name": "[Conversation name]", "nodes": [{"id": "start", "body": "[Opening dialogue.]", "start": true, "responses": [{"id": "finish", "text": "[Response text.]", "state_key": "example", "state_value": "complete"}]}]}
+      }
+    ],
+    "enemies": [
+      {
+        "id": "enemy-placeholder", "name": "[Enemy name]", "description": "[Enemy description.]", "properties": {}, "behaviors": {},
+        "combat": {"maximum_health": 30, "attack": 6, "defense": 2, "experience_reward": 10, "respawn_seconds": 60},
+        "equipment": [{"slot": "main_hand", "item_local_id": "equipment-placeholder"}],
+        "loot": [{"type": "experience", "amount": 5}, {"type": "item", "item_local_id": "item-placeholder", "amount": 1}, {"type": "item", "item_local_id": "healing-placeholder", "amount": 1}]
+      }
+    ]
+  },
+  "generation": {
+    "size": {"minimum": 5, "default": 10, "maximum": 30},
+    "difficulty": {"minimum": 1, "default": 1, "maximum": 100},
+    "layouts": [{"type": "linear", "weight": 1}, {"type": "branching", "weight": 3}, {"type": "maze", "weight": 3}, {"type": "hub", "weight": 1}],
+    "special_roles": [{"role": "special", "count": 1, "min_depth_ratio": 0.25, "max_depth_ratio": 0.85, "prefer_dead_ends": true}]
+  },
+  "pools": {
+    "rooms": [
+      {"id": "entrance-room", "conditions": {"roles": ["entrance"]}, "names": [{"text": "[Entrance room name]"}], "descriptions": [{"text": "[Entrance room description.]"}]},
+      {"id": "exit-room", "conditions": {"roles": ["exit"]}, "names": [{"text": "[Exit room name]"}], "descriptions": [{"text": "[Exit room description.]"}]},
+      {"id": "special-room", "conditions": {"roles": ["special"]}, "names": [{"text": "[Special room name]"}], "descriptions": [{"text": "[Special room description.]"}]},
+      {"id": "general-room", "conditions": {"roles": ["normal"]}, "names": [{"text": "[Common room name A]", "weight": 3}, {"text": "[Uncommon room name B]", "weight": 1}], "descriptions": [{"text": "[General room description.]"}]}
+    ],
+    "environments": [{"id": "general-environment", "conditions": {"roles": ["normal", "special"]}, "descriptions": [{"text": "[Environmental variation.]"}]}],
+    "npcs": [{"id": "general-npcs", "chance": 1.0, "count": {"minimum": 1, "maximum": 1}, "choices": [{"local_id": "npc-placeholder"}]}],
+    "enemies": [{"id": "general-enemies", "chance": 1.0, "count": {"minimum": 1, "maximum": 2}, "choices": [{"local_id": "enemy-placeholder"}]}],
+    "items": [{"id": "general-items", "chance": 0.5, "count": {"minimum": 0, "maximum": 1}, "choices": [{"local_id": "item-placeholder", "weight": 2}, {"local_id": "healing-placeholder", "weight": 1}]}],
+    "encounters": [
+      {"id": "npc-encounter", "weight": 1, "chance": 0.5, "conditions": {"roles": ["normal", "special"]}, "npc_pool": "general-npcs", "config": {}},
+      {"id": "combat-encounter", "weight": 2, "chance": 0.75, "conditions": {"roles": ["normal", "special"], "min_depth_ratio": 0.2}, "enemy_pool": "general-enemies", "item_pool": "general-items", "config": {}}
+    ]
+  }
+}

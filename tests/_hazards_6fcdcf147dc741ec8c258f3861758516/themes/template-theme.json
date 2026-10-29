@@ -1,0 +1,39 @@
+{
+  "id": "your-theme-id",
+  "name": "Your Theme Name",
+  "author": "Your Name",
+  "site": {
+    "_comment_green": "Main body text, navigation links, and primary borders.",
+    "green": "#00ed45",
+    "_comment_green-bright": "Page headings, emphasized text, and text in form controls.",
+    "green-bright": "#71ff8a",
+    "_comment_green-dim": "Subtle borders, dividers, and heading shadows.",
+    "green-dim": "#008d31",
+    "_comment_cyan": "Links, focus outlines, and accent labels or borders.",
+    "cyan": "#00d8cf",
+    "_comment_magenta": "Hovered links and occasional secondary accents.",
+    "magenta": "#d829be",
+    "_comment_amber": "Warnings, badges, and highlighted details.",
+    "amber": "#e6a431",
+    "_comment_red": "Error or danger text and status indicators.",
+    "red": "#ff3237",
+    "_comment_red-dim": "Muted danger borders and shadows.",
+    "red-dim": "#7b1118",
+    "_comment_grey": "Muted text, captions, and metadata.",
+    "grey": "#8b8b86",
+    "_comment_white": "Secondary body text and text on emphasized surfaces.",
+    "white": "#d8d8cf",
+    "_comment_black": "Main page and dark panel background.",
+    "black": "#000000",
+    "_comment_field": "Background of text inputs, textareas, and select controls.",
+    "field": "#030703",
+    "_comment_button": "Background of buttons and button-like links.",
+    "button": "#001b08"
+  },
+  "masthead": {
+    "_comment_masthead": "Colour of the large text logo at the top of the station.",
+    "masthead": "#00d8cf",
+    "_comment_masthead-shadow": "Offset shadow behind the large text logo.",
+    "masthead-shadow": "#d829be"
+  }
+}

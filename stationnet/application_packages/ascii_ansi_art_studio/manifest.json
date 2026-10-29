@@ -2,9 +2,9 @@
   "package_format": 1,
   "slug": "ascii-ansi-art-studio",
   "name": "ASCII/ANSI Art Studio",
-  "description": "Draw colored character art, save projects, and import or export plain text and ANSI files.",
+  "description": "Draw colored character art, recover drafts, and import or export text, ANSI, PNG, and portable projects.",
   "author": "StationNet Core",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "category": "Creative",
   "entrypoint": "main.js"
 }
