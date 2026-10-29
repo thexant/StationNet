@@ -20,6 +20,7 @@ def _secret(data_dir):
     return value
 
 def create_app(test_config=None):
+    """Build the app; ``test_config`` also carries instance.Station.app_config()."""
     app = Flask(__name__, instance_relative_config=True)
     data_dir = Path((test_config or {}).get("DATA_DIR") or os.environ.get("STATIONNET_DATA", Path.cwd() / "data"))
     data_dir.mkdir(parents=True, exist_ok=True)
@@ -27,6 +28,8 @@ def create_app(test_config=None):
         DATABASE=str(data_dir / "station.db"), DATA_DIR=str(data_dir), SECRET_KEY=_secret(data_dir),
         APPLICATIONS_DIR=str(data_dir / "applications"),
         KIWIX_DATA_DIR=str(data_dir / "kiwix_data"),
+        # Pre-stations installs kept archives in <root>/kiwix_data beside data/.
+        KIWIX_LEGACY_DIR=str(data_dir.parent / "kiwix_data"),
         KIWIX_SERVE_EXECUTABLE=os.environ.get("STATIONNET_KIWIX_SERVE"),
         SESSION_COOKIE_HTTPONLY=True, SESSION_COOKIE_SAMESITE="Lax",
         PERMANENT_SESSION_LIFETIME=timedelta(days=3650),

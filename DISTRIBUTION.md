@@ -51,7 +51,7 @@ release keystore for future APK upgrades.
 Each build uses the current checkout. Builds stage into a temporary directory;
 only successful artifacts replace prior downloads. Unavailable and failed
 platforms retain their last working packages. The script does not copy or
-modify the station's `data/` directory. Distribution ZIPs and APKs stay outside
+modify any station folder under `stations/`. Distribution ZIPs and APKs stay outside
 application package inputs. Run this manually when a new distribution is
 needed; it does not publish to a remote service.
 
@@ -75,7 +75,7 @@ archive includes `install.bat`, `install.sh`, both uninstallers, and the run
 scripts, so it can be installed directly after extraction. Source installation
 downloads the Kiwix reader along with Python dependencies; build the Windows
 or Linux packages to provide an offline installation. The uninstallers
-preserve `data/kiwix_data/` with the rest of station data when moving stations.
+preserve each station's `kiwix_data/` with the rest of its data when moving stations.
 The downloads page also exposes its local README and this guide. If a `LICENSE` file is added to
 the StationNet checkout, it is exposed there and included in source archives.
 
@@ -91,15 +91,20 @@ python packaging/build.py windows
 The ZIP in `dist/` contains the embedded Python executable, dependencies, Kiwix reader, app
 assets, `start.bat`, and `install.ps1`. On the destination computer, unzip it
 and double-click `install.bat` (or run `start.bat` directly for a portable
-copy). The installer writes `%LOCALAPPDATA%\StationNet\app` and
-`%LOCALAPPDATA%\StationNet\start.bat`; start with the latter. No Python or pip
-is needed on that computer. It writes all persistent data to the sibling
-`data` directory. A portable copy writes data beside its `start.bat`.
+copy). The installer writes the shared core to `%LOCALAPPDATA%\StationNet\core`
+and `%LOCALAPPDATA%\StationNet\start.bat`; start with the latter. No Python or
+pip is needed on that computer. Each station's persistent data lives in its own
+folder under the sibling `stations` directory (`stations\default` unless
+`--station ID` is passed to `start.bat`). A portable copy keeps `stations`
+beside its `start.bat`.
 
 To upgrade, stop StationNet, unzip a newly built ZIP and run its `install.bat`
-again. It stages the new `app` folder, swaps it into place, and leaves `data`
-alone. Keep a backup of `data` before upgrades. If a portable copy is used,
-replace only `app` and `start.bat`, never `data`.
+again. It stages the new `core` folder, swaps it into place, and leaves
+`stations` alone. Keep a backup of `stations` before upgrades. If a portable
+copy is used, replace only `core` and `start.bat`, never `stations`.
+Installations from before the stations layout used `app` and `data`: the
+installer replaces `app` with `core`, and the first start migrates `data` into
+`stations\default` (see the README's *Station layout* section).
 
 ## Linux and Raspberry Pi
 
@@ -122,16 +127,18 @@ sh install.sh
 ```
 
 The destination needs a matching Python 3.11+ with venv; package installation
-uses `--no-index` and needs no network. The installer puts replaceable code in
-`~/.local/share/stationnet/app`, the virtual environment in `venv`, and all
-persistent data in `data`. Set `STATIONNET_INSTALL_DIR` to another absolute
+uses `--no-index` and needs no network. The installer puts the replaceable
+shared core in `~/.local/share/stationnet/core`, the virtual environment in
+`venv`, and each station's persistent data in `stations/<id>`. Set `STATIONNET_INSTALL_DIR` to another absolute
 path if needed. The normal Python installation can itself be provided by the
 OS image or local OS packages when installing on an air-gapped host.
 
 To upgrade, stop the process, build a new archive on the target platform,
 extract it, and run its `install.sh`. It installs dependencies from the bundled
-wheels before swapping the app folder and preserves `data`. Back up `data`
-first. Run a single StationNet process per data directory.
+wheels before swapping the core folder and preserves `stations`. Back up
+`stations` first. Run a single StationNet process per station folder. An older
+`app` folder is replaced by `core`, and an older `data` folder is migrated into
+`stations/default` on first start.
 
 ## Android APK
 

@@ -23,16 +23,20 @@ if [[ ! -t 0 ]]; then
     exit 1
 fi
 
-if [[ -d "$INSTALL_DIR/data" ]]; then
-    read -r -p 'Back up the station database and data first? [Y/n]: ' backup_data
+if [[ -d "$INSTALL_DIR/stations" || -d "$INSTALL_DIR/data" ]]; then
+    read -r -p 'Back up the station databases and data first? [Y/n]: ' backup_data
     if [[ ! "$backup_data" =~ ^[Nn]$ ]]; then
         stamp="$(date +%Y%m%d-%H%M%S)"
         backup_dir="$PARENT_DIR/StationNet-data-backup-$stamp-$$"
         printf '\nBacking up station data to:\n  %s\n' "$backup_dir"
-        if ! cp -a -- "$INSTALL_DIR/data" "$backup_dir"; then
-            printf 'ERROR: The backup failed. Nothing has been removed.\n' >&2
-            exit 1
-        fi
+        mkdir -p -- "$backup_dir"
+        # stations/ holds one folder per station; data/ is the pre-stations layout.
+        for tree in stations data; do
+            if [[ -d "$INSTALL_DIR/$tree" ]] && ! cp -a -- "$INSTALL_DIR/$tree" "$backup_dir/$tree"; then
+                printf 'ERROR: The backup failed. Nothing has been removed.\n' >&2
+                exit 1
+            fi
+        done
         printf 'Backup completed successfully.\n'
     fi
 else
@@ -46,7 +50,7 @@ if [[ ! "$confirm_reset" =~ ^[Yy]$ ]]; then
 fi
 
 printf '\nRemoving generated StationNet files...\n'
-rm -rf -- "$INSTALL_DIR/.venv" "$INSTALL_DIR/data" "$INSTALL_DIR/instance" \
+rm -rf -- "$INSTALL_DIR/.venv" "$INSTALL_DIR/stations" "$INSTALL_DIR/data" "$INSTALL_DIR/instance" \
     "$INSTALL_DIR/.pytest_cache" "$INSTALL_DIR/.pytest-tmp" "$INSTALL_DIR/.test-data" \
     "$INSTALL_DIR/__pycache__" "$INSTALL_DIR/.coverage"
 

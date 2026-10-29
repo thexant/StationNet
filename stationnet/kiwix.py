@@ -179,10 +179,10 @@ class KiwixServer:
 
 def init_app(app):
     default_dir = Path(app.config["DATA_DIR"]) / "kiwix_data"
+    legacy_dir = app.config.get("KIWIX_LEGACY_DIR")
     app.extensions["kiwix"] = KiwixServer(
         app.config["KIWIX_DATA_DIR"], app.config["KIWIX_SERVE_EXECUTABLE"],
-        default_dir.parent.parent / "kiwix_data"
-        if Path(app.config["KIWIX_DATA_DIR"]) == default_dir else None,
+        legacy_dir if legacy_dir and Path(app.config["KIWIX_DATA_DIR"]) == default_dir else None,
     )
 
 

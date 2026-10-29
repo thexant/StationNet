@@ -28,9 +28,11 @@ if not exist "%INSTALL_DIR%\requirements.txt" goto :invalid_copy
 if not exist "%INSTALL_DIR%\stationnet\__init__.py" goto :invalid_copy
 if not exist "%INSTALL_DIR%\uninstall.bat" goto :invalid_copy
 
+if exist "%INSTALL_DIR%\stations" goto :has_data
 if not exist "%INSTALL_DIR%\data" goto :no_data
 
-choice /C YN /N /M "Back up the station database and data first? [Y/N]: "
+:has_data
+choice /C YN /N /M "Back up the station databases and data first? [Y/N]: "
 if errorlevel 2 goto :confirm_reset
 
 for /f "usebackq delims=" %%I in (`powershell.exe -NoProfile -Command "Get-Date -Format yyyyMMdd-HHmmss"`) do set "STAMP=%%I"
@@ -40,12 +42,12 @@ set "BACKUP_DIR=%PARENT_DIR%\StationNet-data-backup-%STAMP%-%RANDOM%"
 echo.
 echo Backing up station data to:
 echo   %BACKUP_DIR%
-robocopy "%INSTALL_DIR%\data" "%BACKUP_DIR%" /E /COPY:DAT /DCOPY:DAT /R:2 /W:1 >nul
-if errorlevel 8 (
-    echo ERROR: The backup failed. Nothing has been removed.
-    echo Any partial backup remains at the path above for inspection.
-    pause
-    exit /b 1
+rem stations\ holds one folder per station; data\ is the pre-stations layout.
+for %%T in (stations data) do (
+    if exist "%INSTALL_DIR%\%%T" (
+        robocopy "%INSTALL_DIR%\%%T" "%BACKUP_DIR%\%%T" /E /COPY:DAT /DCOPY:DAT /R:2 /W:1 >nul
+        if errorlevel 8 goto :backup_failed
+    )
 )
 echo Backup completed successfully.
 goto :confirm_reset
@@ -66,6 +68,7 @@ echo.
 echo Removing generated StationNet files...
 
 call :remove_directory "%INSTALL_DIR%\.venv"
+call :remove_directory "%INSTALL_DIR%\stations"
 call :remove_directory "%INSTALL_DIR%\data"
 call :remove_directory "%INSTALL_DIR%\instance"
 call :remove_directory "%INSTALL_DIR%\.pytest_cache"
@@ -115,6 +118,12 @@ exit /b 0
 if exist "%~1" del /F /Q "%~1"
 if exist "%~1" set "REMOVE_FAILED=1"
 exit /b 0
+
+:backup_failed
+echo ERROR: The backup failed. Nothing has been removed.
+echo Any partial backup remains at the path above for inspection.
+pause
+exit /b 1
 
 :invalid_copy
 echo ERROR: This does not appear to be a complete StationNet source folder.

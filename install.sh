@@ -44,11 +44,14 @@ printf '[2/4] Installing StationNet dependencies...\n'
 printf '[3/4] Installing the WIKI reader...\n'
 "$VENV_PYTHON" "$INSTALL_DIR/packaging/kiwix_tools.py" "$INSTALL_DIR/kiwix_tools"
 
-printf '[4/4] Preparing the data directory...\n'
-mkdir -p "$INSTALL_DIR/data"
+printf '[4/4] Preparing the stations directory...\n'
+mkdir -p "$INSTALL_DIR/stations"
 
 printf '\nStationNet is installed successfully.\n'
-printf 'Station data will be stored in "%s/data".\n' "$INSTALL_DIR"
+printf 'Station data will be stored in "%s/stations/default".\n' "$INSTALL_DIR"
+if [[ -f "$INSTALL_DIR/data/station.db" ]]; then
+    printf 'The existing station in "%s/data" will be migrated there on first start.\n' "$INSTALL_DIR"
+fi
 printf 'Use ./run.sh to start StationNet later.\n'
 
 if [[ -t 0 ]]; then

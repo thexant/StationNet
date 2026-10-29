@@ -45,8 +45,8 @@ echo [3/5] Installing the bundled WIKI reader...
 "%VENV_PYTHON%" "%INSTALL_DIR%\packaging\kiwix_tools.py" "%INSTALL_DIR%\kiwix_tools"
 if errorlevel 1 goto :failed
 
-echo [4/5] Preparing the data directory...
-if not exist "%INSTALL_DIR%\data" mkdir "%INSTALL_DIR%\data"
+echo [4/5] Preparing the stations directory...
+if not exist "%INSTALL_DIR%\stations" mkdir "%INSTALL_DIR%\stations"
 if errorlevel 1 goto :failed
 
 echo [5/5] Creating run.bat...
@@ -70,7 +70,8 @@ if errorlevel 1 goto :failed
 
 echo.
 echo StationNet is installed successfully.
-echo Station data will be stored in "%INSTALL_DIR%\data".
+echo Station data will be stored in "%INSTALL_DIR%\stations\default".
+if exist "%INSTALL_DIR%\data\station.db" echo The existing station in "%INSTALL_DIR%\data" will be migrated there on first start.
 echo Use run.bat to start StationNet later.
 echo.
 choice /C YN /N /M "Start StationNet now? [Y/N]: "

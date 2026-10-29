@@ -60,8 +60,8 @@ def build_posix():
         raise SystemExit("Build POSIX wheel bundles on the target Linux or Raspberry Pi platform.")
     with build_workspace() as temp:
         package = temp / "StationNet"
-        copy_app(package / "app")
-        install_kiwix_tools(package / "app" / "kiwix_tools")
+        copy_app(package / "core")
+        install_kiwix_tools(package / "core" / "kiwix_tools")
         wheels = package / "wheels"
         wheels.mkdir(parents=True)
         subprocess.run([sys.executable, "-m", "pip", "wheel", "--wheel-dir", str(wheels),
@@ -83,8 +83,8 @@ def build_windows():
                         "--distpath", str(workspace / "frozen"), "--workpath", str(workspace / "build"),
                         "--specpath", str(workspace), str(ROOT / "run.py")], cwd=ROOT, check=True)
         package = workspace / "StationNet"
-        shutil.copytree(workspace / "frozen" / "StationNet", package / "app")
-        install_kiwix_tools(package / "app" / "kiwix_tools")
+        shutil.copytree(workspace / "frozen" / "StationNet", package / "core")
+        install_kiwix_tools(package / "core" / "kiwix_tools")
         shutil.copy2(ROOT / "packaging" / "windows-start.bat", package / "start.bat")
         shutil.copy2(ROOT / "packaging" / "windows-install.bat", package / "install.bat")
         shutil.copy2(ROOT / "packaging" / "windows-install.ps1", package / "install.ps1")

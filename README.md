@@ -47,7 +47,7 @@ Windows (easy setup):
 2. Use the generated `run.bat` to start StationNet at any time.
 3. Open `http://127.0.0.1:8080` and complete first-run setup.
 
-To reset an installed copy, double-click `uninstall.bat`. It optionally backs up station data, including `data/kiwix_data/`, then removes only the generated environment, data, `run.bat`, and cache files. The StationNet directory and application source remain intact, ready for `install.bat` to be run again.
+To reset an installed copy, double-click `uninstall.bat`. It optionally backs up station data (the `stations/` folder, plus any pre-stations `data/` folder), including WIKI archives, then removes only the generated environment, station data, `run.bat`, and cache files. The StationNet directory and application source remain intact, ready for `install.bat` to be run again.
 
 ### Linux, macOS, and Unix
 
@@ -59,7 +59,7 @@ chmod +x install.sh run.sh uninstall.sh
 ./run.sh
 ```
 
-`install.sh` requires Python 3.11 or newer and creates `.venv` in the StationNet folder. Run `./uninstall.sh` to optionally back up `data`, including its `kiwix_data/` collection, and remove only generated runtime files, leaving the source copy intact. Android hosting uses the standalone APK described in the distribution guide.
+`install.sh` requires Python 3.11 or newer and creates `.venv` in the StationNet folder. Run `./uninstall.sh` to optionally back up `stations/` (and any pre-stations `data/`), including WIKI archives, and remove only generated runtime files, leaving the source copy intact. Android hosting uses the standalone APK described in the distribution guide.
 
 Windows PowerShell (manual setup):
 
@@ -85,14 +85,34 @@ Open `http://127.0.0.1:8080` and complete first-run setup. By default the statio
 
 | Variable | Default | Purpose |
 | --- | --- | --- |
-| `STATIONNET_HOST` | `0.0.0.0` | Listening interface; use `127.0.0.1` for local-only. |
-| `STATIONNET_PORT` | `8080` | Listening port. |
-| `STATIONNET_DATA` | `./data` | Directory for `station.db` and `secret.key`. |
-| `STATIONNET_HTTPS` | unset | Set to `1` only when HTTPS is terminated in front of the app. |
+| `STATIONNET_HOST` | `0.0.0.0` | Listening interface; use `127.0.0.1` for local-only. Overrides `host` in `station.json`. |
+| `STATIONNET_PORT` | `8080` | Listening port. Overrides `port` in `station.json`. |
+| `STATIONNET_STATION` | `default` | Station to run from `stations/<id>/`; `run.py --station ID` does the same. |
+| `STATIONNET_HOME` | folder containing `run.py` | Install root holding the core and `stations/`. Packaged launchers set it. |
+| `STATIONNET_STATIONS_DIR` | `<home>/stations` | Alternative location of the stations directory. |
+| `STATIONNET_DATA` | unset | Standalone mode: use exactly this directory as the station, bypassing the stations layout and migration (used by Android). |
+| `STATIONNET_HTTPS` | unset | Set to `1` only when HTTPS is terminated in front of the app. Overrides `https` in `station.json`. |
 | `STATIONNET_DISTRIBUTION_DIR` | `./dist` | Local ZIP/source package directory served on **Get Your Own Station**. |
 | `STATIONNET_ANDROID_APK_DIR` | Android release APK output | Local directory scanned for signed StationNet Android releases. |
 
-Back up the data directory to preserve station identity, accounts, messages, mail, announcements, the `uploads/` file archive, and sysop-installed games and apps in `applications/`. Bundled games and apps remain in StationNet's program files. Never publish the data directory's files.
+### Station layout
+
+StationNet separates the shared core from station data:
+
+```text
+StationNet/
+  run.py, stationnet/, .venv/, kiwix_tools/   shared core (packaged builds: core/)
+  stations/
+    default/                                  one self-contained folder per station
+      station.json                            station settings: id, host, port, https, kiwix_serve
+      station.db, secret.key, uploads/, applications/, themes/, mud_worlds/, kiwix_data/, ...
+```
+
+Every database, upload, installed program, theme, world, and WIKI archive a station writes stays inside its folder; the core is never written to. `station.json` is created on first start, and the environment variables above take precedence over its values.
+
+**Upgrading from a `data/` folder.** When `stations/default/` does not exist yet and a pre-stations `data/` folder holds a station, the first start migrates it. Run `python run.py --migrate-only --dry-run` to preview, or `--migrate-only` to migrate without starting. Stop StationNet first; the migration refuses to run while the database or port is in use. It copies everything except ZIM archives into a staging folder, verifies each file's SHA-256 hash plus the database's integrity and row counts, and only then renames the staging folder to `stations/default/`. It then deletes the verified originals from `data/`, leaving the ZIM archives and a `MIGRATED.txt` note listing them; move those archives into `stations/default/kiwix_data/` by hand. If anything fails before the rename, `data/` is left untouched. Migration never overwrites an existing station folder; if both exist, StationNet refuses to start until one is moved aside.
+
+Back up a station's folder to preserve station identity, accounts, messages, mail, announcements, the `uploads/` file archive, and sysop-installed games and apps in `applications/`. Bundled games and apps remain in StationNet's program files. Never publish a station folder's files.
 
 ### Optional imageboard
 
