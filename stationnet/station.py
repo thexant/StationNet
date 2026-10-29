@@ -12,6 +12,7 @@ from PIL import Image, ImageOps, UnidentifiedImageError
 from .auth import admin_required, invitation_digest
 from .ansi import available_header_fonts, is_available_header_font, station_banner
 from .db import get_db
+from .instance import sync_name
 from . import arcade, character_creation, dungeons, header_taglines, mud_abilities, mud_effects, mud_scope, mud_skills, mud_worlds
 from . import themes
 from .markdown import render_markdown
@@ -1601,6 +1602,10 @@ def settings():
                     (json.dumps(current, ensure_ascii=False),),
                 )
             database.commit(); flash("Station parameters updated.", "success")
+            if name != g.station["name"] and current_app.config.get("STATION_CONFIG"):
+                # The launcher renames the station's folder at its next stop or restart.
+                sync_name(current_app.config["STATION_CONFIG"], name)
+                flash("The station folder will be renamed to match at the next restart.", "success")
             return redirect(url_for("station.settings"))
     database = get_db()
     header_fonts = available_header_fonts()

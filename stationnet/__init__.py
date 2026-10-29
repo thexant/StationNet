@@ -77,6 +77,10 @@ def create_app(test_config=None):
     app.register_blueprint(programs.bp)
     with app.app_context():
         db.init_db()
+        station_row = db.get_station()
+        if station_row is not None:
+            from .instance import sync_name
+            sync_name(app.config.get("STATION_CONFIG"), station_row["name"])
     broadcast.restore_resumable_broadcasts(app)
     app.extensions["broadcast_coordinator"] = programs.BroadcastCoordinator(
         app, app.extensions["hosted_broadcasts"]

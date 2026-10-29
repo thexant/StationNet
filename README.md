@@ -89,7 +89,7 @@ Open `http://127.0.0.1:8080` and complete first-run setup. By default the statio
 | --- | --- | --- |
 | `STATIONNET_HOST` | `0.0.0.0` | Listening interface; use `127.0.0.1` for local-only. Overrides `host` in `station.json`. |
 | `STATIONNET_PORT` | `8080` | Listening port. Overrides `port` in `station.json`. |
-| `STATIONNET_STATION` | `default` | Station to run from `stations/<id>/`; `run.py --station ID` does the same. |
+| `STATIONNET_STATION` | `default` | Id of the station to run from `stations/`; `run.py --station ID` does the same. |
 | `STATIONNET_HOME` | folder containing `run.py` | Install root holding the core and `stations/`. Packaged launchers set it. |
 | `STATIONNET_STATIONS_DIR` | `<home>/stations` | Alternative location of the stations directory. |
 | `STATIONNET_DATA` | unset | Standalone mode: use exactly this directory as the station, bypassing the stations layout and migration (used by Android). |
@@ -119,7 +119,9 @@ Back up a station's folder to preserve station identity, accounts, messages, mai
 
 ### Station Manager
 
-`manager.bat` (Windows), `./manager.sh` (Linux/macOS), or `manager.bat`/`manager.sh` in a packaged install opens a desktop window listing every station under `stations/`, with its name, status, port, and addresses. **+ New Station** asks for a name, id, port (the next free one is suggested), and whether other devices on the network may connect, then creates `stations/<id>/station.json`. Each station can be started, stopped, restarted, opened in the browser, or have its log opened.
+`manager.bat` (Windows), `./manager.sh` (Linux/macOS), or `manager.bat`/`manager.sh` in a packaged install opens a desktop window listing every station under `stations/`, with its name, status, port, and addresses. **+ New Station** asks for an optional name, a port (the next free one is suggested), and whether other devices on the network may connect, then creates the station in a temporary folder such as `stations/station-a7f92c/`. Each station can be started, stopped, restarted, opened in the browser, or have its log opened.
+
+A station's id (the `id` in its `station.json`, also what `run.py --station` takes) never changes. Its folder follows its name instead: once a station is named, in the manager, at first-run setup, or later in Sysop settings, its folder is renamed to a file-safe form of the name (`Night Owl BBS` → `stations/night-owl-bbs/`). Stations with the same name get `-2`, `-3`, … folders, and names with no usable letters or digits keep their current folder. A running station's folder is never renamed: the manager shows the pending name and applies it when the station is stopped or restarted (starting with `run.py` applies it too). A rename is a single in-place move, so if it fails, for example because another program has a file open, the folder and its data stay exactly as they were, the error is shown, and the rename is tried again later.
 
 Each station runs as its own process with only its own folder and `station.json`; environment overrides such as `STATIONNET_PORT` are not passed on. Stations started from the manager are detached from it, so closing the window leaves them running, and reopening it finds them again. Status comes from the station itself: while running it holds an OS lock on `run/station.lock` and describes itself in `run/status.json`, so a crashed or killed station is reported as **CRASHED** and its last log line is shown. **Stop** asks the station to shut down gracefully through `run/stop.request`. A station that has not stopped after 20 seconds offers **Force Stop**, which ends only that station's own process. Starting a station that is already running, including from `run.py` or `start.bat`, is refused. Tkinter is required; on Debian or Raspberry Pi OS install `python3-tk`.
 

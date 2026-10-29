@@ -9,7 +9,7 @@ from tkinter import font as tkfont
 from tkinter import messagebox
 
 from . import instance
-from .station_manager import StationManager, clean_environment, slugify
+from .station_manager import StationManager, clean_environment
 
 REFRESH_MS = 1000
 BG = "#0f1519"
@@ -92,6 +92,7 @@ class StationCard(tk.Frame):
         self.summary = tk.Label(self, font=fonts.body, bg=CARD, fg=MUTED, anchor="w", justify="left")
         self.summary.pack(fill="x", pady=(6, 0))
         self.address = tk.Label(self, font=fonts.body, bg=CARD, fg=TEXT, anchor="w", justify="left")
+        self.folder_note = tk.Label(self, font=fonts.small, bg=CARD, fg=MUTED, anchor="w", justify="left")
         self.detail = tk.Label(self, font=fonts.small, bg=CARD, fg=ERROR, anchor="w", justify="left")
         self.buttons = tk.Frame(self, bg=CARD)
         self.buttons.pack(fill="x", pady=(8, 0))
@@ -102,6 +103,7 @@ class StationCard(tk.Frame):
         width = max(200, event.width - 30)
         self.detail.configure(wraplength=width)
         self.address.configure(wraplength=width)
+        self.folder_note.configure(wraplength=width)
 
     def update_info(self, info):
         state = info.state
@@ -115,9 +117,13 @@ class StationCard(tk.Frame):
             self.summary.configure(text=f"Station id: {info.id}")
         else:
             access = "Local network" if info.lan else "Local only"
-            self.summary.configure(text=f"Port {info.port} · {access} · id {info.id}")
+            self.summary.configure(text=f"Port {info.port} · {access} · folder {info.folder}")
         self._show(self.address, "  ·  ".join(info.addresses), before=self.buttons)
-        detail = info.error or (info.detail if state in ("crashed", "stopped") else None)
+        note = None
+        if info.pending_folder and not info.rename_error:
+            note = f"Folder will be renamed to {info.pending_folder} when the station stops or restarts."
+        self._show(self.folder_note, note, before=self.buttons)
+        detail = info.error or (info.detail if state in ("crashed", "stopped") else None) or info.rename_error
         self._show(self.detail, detail, before=self.buttons)
         key = (state, info.can_force_stop, bool(info.error))
         if key != self.button_key:
@@ -164,11 +170,9 @@ class NewStationDialog(tk.Toplevel):
         self.resizable(False, False)
         self.transient(app.root)
         self.name = tk.StringVar()
-        self.station_id = tk.StringVar()
         self.port = tk.StringVar()
         self.lan = tk.BooleanVar(value=False)
         self.start_now = tk.BooleanVar(value=True)
-        self.id_edited = False
         try:
             self.port.set(str(app.manager.suggest_port()))
         except ValueError:
@@ -176,7 +180,8 @@ class NewStationDialog(tk.Toplevel):
         tk.Label(self, text="NEW STATION", font=fonts.heading, bg=BG, fg=TEXT).grid(
             row=0, column=0, columnspan=2, sticky="w", pady=(0, 12))
         name_entry = self._field(1, "Name", self.name)
-        id_entry = self._field(2, "Station id", self.station_id)
+        tk.Label(self, text="Optional. Leave blank to name it during setup.", font=fonts.small, bg=BG,
+                 fg=MUTED).grid(row=2, column=1, sticky="w")
         self._field(3, "Port", self.port, width=8)
         tk.Label(self, text="Access", font=fonts.body, bg=BG, fg=MUTED).grid(row=4, column=0, sticky="nw", pady=4)
         access = tk.Frame(self, bg=BG)
@@ -194,8 +199,6 @@ class NewStationDialog(tk.Toplevel):
         row.grid(row=7, column=0, columnspan=2, sticky="e", pady=(10, 0))
         make_button(row, fonts, "Cancel", self.destroy).pack(side="right")
         make_button(row, fonts, "Create Station", self.create, primary=True).pack(side="right", padx=(0, 8))
-        self.name.trace_add("write", self._name_changed)
-        id_entry.bind("<Key>", lambda _event: setattr(self, "id_edited", True))
         self.bind("<Return>", lambda _event: self.create())
         self.bind("<Escape>", lambda _event: self.destroy())
         name_entry.focus_set()
@@ -214,15 +217,10 @@ class NewStationDialog(tk.Toplevel):
         entry.grid(row=row, column=1, sticky="w", pady=4, ipady=3)
         return entry
 
-    def _name_changed(self, *_args):
-        if not self.id_edited:
-            self.station_id.set(slugify(self.name.get()) if self.name.get().strip() else "")
-
     def create(self):
         manager = self.app.manager
         try:
-            info = manager.create_station(self.name.get(), self.station_id.get().strip(),
-                                          self.port.get().strip(), lan=self.lan.get())
+            info = manager.create_station(self.name.get(), self.port.get().strip(), lan=self.lan.get())
         except (ValueError, OSError) as exc:
             self.error.configure(text=str(exc))
             return

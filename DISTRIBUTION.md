@@ -135,7 +135,7 @@ OS's Tkinter package (`python3-tk` on Debian and Raspberry Pi OS).
 The destination needs a matching Python 3.11+ with venv; package installation
 uses `--no-index` and needs no network. The installer puts the replaceable
 shared core in `~/.local/share/stationnet/core`, the virtual environment in
-`venv`, and each station's persistent data in `stations/<id>`. Set `STATIONNET_INSTALL_DIR` to another absolute
+`venv`, and each station's persistent data in its own folder under `stations/`. Set `STATIONNET_INSTALL_DIR` to another absolute
 path if needed. The normal Python installation can itself be provided by the
 OS image or local OS packages when installing on an air-gapped host.
 

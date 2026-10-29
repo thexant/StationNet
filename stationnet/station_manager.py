@@ -6,7 +6,6 @@ exactly what is running. Stations are started as detached processes and keep
 running after the launcher exits.
 """
 import os
-import re
 import signal
 import socket
 import subprocess
@@ -15,7 +14,7 @@ import time
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from . import instance
+from . import instance, station_dirs
 from .station_runtime import StationRuntime
 
 # Settings a station takes from station.json; inherited values would make
@@ -28,6 +27,7 @@ LAUNCH_GRACE = 15
 LOCAL_HOST = "127.0.0.1"
 LAN_HOST = "0.0.0.0"
 ACTIVE = ("starting", "running", "stopping")
+RENAME_RETRY = 30
 
 
 @dataclass
@@ -42,6 +42,12 @@ class StationInfo:
     error: str | None = None
     addresses: list = field(default_factory=list)
     can_force_stop: bool = False
+    pending_folder: str | None = None
+    rename_error: str | None = None
+
+    @property
+    def folder(self):
+        return self.data_dir.name
 
     @property
     def lan(self):
@@ -56,11 +62,6 @@ def clean_environment():
     """Drop per-station overrides from this process (call once at startup)."""
     for name in STATION_ENV:
         os.environ.pop(name, None)
-
-
-def slugify(name):
-    slug = re.sub(r"[^a-z0-9]+", "-", name.lower()).strip("-_")[:64].strip("-_")
-    return slug or "station"
 
 
 def port_in_use(port, host=LAN_HOST):
@@ -110,26 +111,34 @@ class StationManager:
         self._launches = {}
         self._exits = {}
         self._restarts = set()
+        self._rename_failures = {}
 
     @property
     def stations_dir(self):
         return instance.stations_root(self.root)
 
     def _station_ids(self):
-        if not self.stations_dir.is_dir():
-            return []
-        ids = []
-        for path in self.stations_dir.iterdir():
-            if not path.is_dir() or path.name.startswith("."):
-                continue
-            try:
-                ids.append(instance.validate_station_id(path.name))
-            except ValueError:
-                continue
-        return ids
+        found = instance.scan_stations(self.stations_dir)
+        for station_id, folders in found.items():
+            # Write the id into configs that predate ids, so their folder can
+            # later be renamed without the station losing track of itself.
+            if len(folders) == 1 and folders[0].name == station_id:
+                try:
+                    config = instance.load_config(folders[0])
+                    if config and "id" not in config:
+                        instance.update_config(folders[0], id=station_id)
+                except (OSError, ValueError):
+                    pass
+        return list(found)
+
+    def _data_dir(self, station_id):
+        try:
+            return instance.find_station_dir(self.stations_dir, station_id)
+        except ValueError:
+            return self.stations_dir / station_id
 
     def _load(self, station_id):
-        data_dir = self.stations_dir / station_id
+        data_dir = self._data_dir(station_id)
         info = StationInfo(id=station_id, name=station_id.replace("-", " ").title(), data_dir=data_dir)
         try:
             station = instance.resolve(self.root, station_id)
@@ -173,7 +182,32 @@ class StationManager:
             info.detail = _last_log_line(runtime.log_path) or "The station stopped unexpectedly."
         if info.state in ACTIVE:
             info.addresses = self.addresses(info)
+        try:
+            name = instance.load_config(info.data_dir).get("name")
+        except ValueError:
+            name = None
+        info.pending_folder = station_dirs.pending_folder(info.data_dir, name)
+        failure = self._rename_failures.get(station_id)
+        if failure and info.pending_folder:
+            info.rename_error = failure[0]
         return info
+
+    def rename_folder(self, station_id, force=False):
+        """Rename a stopped station's folder after its name; returns the folder.
+
+        A failed rename is retried after RENAME_RETRY seconds, or right away
+        with ``force`` (before a start).
+        """
+        data_dir = self._data_dir(station_id)
+        failure = self._rename_failures.get(station_id)
+        if failure and not force and time.monotonic() < failure[1]:
+            return data_dir
+        data_dir, error = station_dirs.rename_if_needed(data_dir, station_id)
+        if error:
+            self._rename_failures[station_id] = (error, time.monotonic() + RENAME_RETRY)
+        else:
+            self._rename_failures.pop(station_id, None)
+        return data_dir
 
     def addresses(self, info):
         result = [f"http://{LOCAL_HOST}:{info.port}"]
@@ -196,35 +230,41 @@ class StationManager:
                 return port
         raise ValueError("No free port is available.")
 
-    def create_station(self, name, station_id, port, lan=False):
+    def create_station(self, name, port, lan=False):
+        """Create a stopped station in a temporary ``station-xxxxxx`` folder.
+
+        A named station's folder is renamed after it by the next poll().
+        """
         name = (name or "").strip()
-        if not name:
-            raise ValueError("Enter a station name.")
-        if len(name) > 80:
-            raise ValueError("Station names are limited to 80 characters.")
-        instance.validate_station_id(station_id)
+        if name and not 2 <= len(name) <= 80:
+            raise ValueError("Station names must be between 2 and 80 characters.")
         try:
             port = int(port)
         except (TypeError, ValueError):
             raise ValueError("The port must be a number.") from None
         if not 1024 <= port <= 65535:
             raise ValueError("Choose a port between 1024 and 65535.")
-        data_dir = self.stations_dir / station_id
-        if data_dir.exists():
-            raise ValueError(f"A station with the id '{station_id}' already exists.")
         if port in self.configured_ports():
             raise ValueError(f"Port {port} is already assigned to another station.")
         host = LAN_HOST if lan else LOCAL_HOST
         if port_in_use(port, host):
             raise ValueError(f"Port {port} is in use by another program.")
         self.stations_dir.mkdir(parents=True, exist_ok=True)
+        for _attempt in range(10):
+            station_id = instance.new_station_id(self.stations_dir)
+            data_dir = self.stations_dir / station_id
+            try:
+                data_dir.mkdir()
+                break
+            except FileExistsError:
+                continue
+        else:
+            raise ValueError("Could not create a station folder.")
+        values = instance.new_config(station_id, host=host, port=port)
+        if name:
+            values["name"] = name
         try:
-            data_dir.mkdir()
-        except FileExistsError:
-            raise ValueError(f"A station with the id '{station_id}' already exists.") from None
-        try:
-            instance.write_config_if_missing(
-                data_dir, instance.new_config(station_id, name=name, host=host, port=port))
+            instance.write_config_if_missing(data_dir, values)
         except OSError:
             data_dir.rmdir()
             raise
@@ -256,7 +296,8 @@ class StationManager:
                 raise ValueError(f"Port {info.port} is used by {other.name}, which is {other.state}.")
         if port_in_use(info.port, info.host):
             raise ValueError(f"Port {info.port} is in use by another program.")
-        runtime = StationRuntime(info.data_dir)
+        # A stopped station is where a pending folder rename can happen.
+        runtime = StationRuntime(self.rename_folder(station_id, force=True))
         runtime.folder.mkdir(parents=True, exist_ok=True)
         runtime.clear_stop()
         runtime.clear_status()
@@ -282,7 +323,7 @@ class StationManager:
 
     def stop(self, station_id):
         self._restarts.discard(station_id)
-        runtime = StationRuntime(self.stations_dir / station_id)
+        runtime = StationRuntime(self._data_dir(station_id))
         if runtime.is_locked():
             runtime.request_stop()
 
@@ -292,7 +333,7 @@ class StationManager:
 
     def force_stop(self, station_id):
         """Kill a station that ignored a stop request. Last resort only."""
-        runtime = StationRuntime(self.stations_dir / station_id)
+        runtime = StationRuntime(self._data_dir(station_id))
         status = runtime.read_status()
         # The pid is trustworthy only while its process still holds the lock.
         if not runtime.is_locked() or not status or not isinstance(status.get("pid"), int):
@@ -304,18 +345,23 @@ class StationManager:
         return True
 
     def poll(self):
-        """Refresh every station and carry out pending restarts."""
+        """Refresh every station and carry out pending renames and restarts."""
         stations = self.list_stations()
-        for info in stations:
-            if info.id in self._restarts and info.state in ("stopped", "crashed"):
+        for index, info in enumerate(stations):
+            if info.error or info.state not in ("stopped", "crashed"):
+                continue
+            if info.id in self._restarts:
                 self._restarts.discard(info.id)
                 try:
-                    self.start(info.id)
+                    self.start(info.id)  # renames the folder first
                 except (ValueError, OSError) as exc:
+                    info = stations[index] = self.station(info.id)
                     info.detail = f"Restart failed: {exc}"
-                    continue
-                info.state = "starting"
-                info.addresses = self.addresses(info)
+                else:
+                    stations[index] = self.station(info.id)
+            elif info.pending_folder and info.id not in self._launches:
+                self.rename_folder(info.id)
+                stations[index] = self.station(info.id)
         return stations
 
     def restarting(self, station_id):

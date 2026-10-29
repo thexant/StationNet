@@ -9,7 +9,9 @@ custom deployments rely on this).
 import json
 import os
 import re
+import secrets
 import sys
+import time
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -84,9 +86,119 @@ def write_config_if_missing(data_dir, values):
     return True
 
 
+def update_config(data_dir, **changes):
+    """Merge ``changes`` into an existing station.json, replacing it atomically."""
+    path = Path(data_dir) / CONFIG_NAME
+    values = load_config(data_dir)
+    if not path.is_file():
+        raise ValueError(f"{path} does not exist")
+    values.update(changes)
+    temp = path.with_name(f".{CONFIG_NAME}.{os.getpid()}.tmp")
+    temp.write_text(json.dumps(values, indent=2) + "\n", encoding="utf-8")
+    try:
+        # Windows refuses the replace while a reader has the file open.
+        for attempt in range(20):
+            try:
+                os.replace(temp, path)
+                break
+            except PermissionError:
+                if attempt == 19:
+                    raise
+                time.sleep(0.05)
+    finally:
+        temp.unlink(missing_ok=True)
+    return values
+
+
+def sync_name(config_path, name):
+    """Record the station's display name in station.json for the launcher.
+
+    Best effort: the database stays authoritative, and the next start or
+    settings save retries. Returns True when station.json holds ``name``.
+    """
+    if not config_path or not name:
+        return False
+    data_dir = Path(config_path).parent
+    try:
+        if load_config(data_dir).get("name") != name:
+            update_config(data_dir, name=name)
+    except (OSError, ValueError):
+        return False
+    return True
+
+
 def new_config(station_id, **extra):
     return {"format": CONFIG_FORMAT, "id": station_id,
             "created_at": datetime.now(timezone.utc).isoformat(timespec="seconds"), **extra}
+
+
+def config_id(data_dir):
+    """The permanent id in a folder's station.json, or None if it has none."""
+    value = load_config(data_dir).get("id")
+    return value if isinstance(value, str) and _STATION_ID.fullmatch(value) else None
+
+
+def scan_stations(stations_dir):
+    """Map each station id to its folders (more than one means a conflict).
+
+    The id comes from station.json; a folder without one (or without an id
+    in it) is identified by its own name, as before ids and folders differed.
+    Unreadable configs map to their folder name too, so they still show up.
+    """
+    found = {}
+    stations_dir = Path(stations_dir)
+    if not stations_dir.is_dir():
+        return found
+    for path in sorted(stations_dir.iterdir()):
+        if not path.is_dir() or path.name.startswith("."):
+            continue
+        try:
+            station_id = config_id(path)
+        except ValueError:
+            station_id = None
+        if station_id is None:
+            if not _STATION_ID.fullmatch(path.name):
+                continue
+            station_id = path.name
+        found.setdefault(station_id, []).append(path)
+    return found
+
+
+def find_station_dir(stations_dir, station_id):
+    """The folder holding ``station_id``; ``stations_dir/station_id`` if none does."""
+    stations_dir = Path(stations_dir)
+    direct = stations_dir / station_id
+    try:
+        direct_id = config_id(direct) if direct.is_dir() else None
+    except ValueError:
+        direct_id = None
+    if direct.is_dir() and direct_id in (None, station_id):
+        others = [path for path in scan_stations(stations_dir).get(station_id, []) if path != direct]
+    else:
+        matches = scan_stations(stations_dir).get(station_id, [])
+        if not matches:
+            if direct.exists():
+                raise ValueError(f"No station has the id '{station_id}'; the folder {direct.name} "
+                                 "belongs to another station.")
+            return direct
+        direct, others = matches[0], matches[1:]
+    if others:
+        names = ", ".join(path.name for path in [direct, *others])
+        raise ValueError(f"Station id '{station_id}' is used by more than one folder ({names}). "
+                         "Give each copy its own id in station.json.")
+    return direct
+
+
+def new_station_id(stations_dir):
+    """A fresh ``station-xxxxxx`` id that is not an existing id or folder name."""
+    stations_dir = Path(stations_dir)
+    taken = set(scan_stations(stations_dir))
+    if stations_dir.is_dir():
+        taken |= {path.name.lower() for path in stations_dir.iterdir()}
+    while True:
+        station_id = f"station-{secrets.token_hex(3)}"
+        if station_id not in taken:
+            return station_id
 
 
 @dataclass
@@ -121,6 +233,8 @@ class Station:
             return {"DATA_DIR": str(self.data_dir)}
         return {
             "DATA_DIR": str(self.data_dir),
+            # The station keeps its display name here for the launcher.
+            "STATION_CONFIG": str(self.data_dir / CONFIG_NAME),
             "SESSION_COOKIE_SECURE": self.https,
             "KIWIX_SERVE_EXECUTABLE": self._setting("STATIONNET_KIWIX_SERVE", "kiwix_serve"),
             # Stations never adopt archives from outside their own folder.
@@ -138,6 +252,6 @@ def resolve(source_root=None, station_id=None):
     if station_id is None:
         station_id = os.environ.get("STATIONNET_STATION") or DEFAULT_STATION
     validate_station_id(station_id)
-    data_dir = stations_root(root) / station_id
+    data_dir = find_station_dir(stations_root(root), station_id)
     return Station(id=station_id, data_dir=data_dir, standalone=False,
                    root=root, config=load_config(data_dir))

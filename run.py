@@ -25,7 +25,8 @@ def _report(result):
 
 def main(argv=None):
     parser = argparse.ArgumentParser(description="Run a StationNet station.")
-    parser.add_argument("--station", help="station id under stations/ (default: STATIONNET_STATION or 'default')")
+    parser.add_argument("--station", help="id of a station under stations/, as in its station.json "
+                                          "(default: STATIONNET_STATION or 'default')")
     parser.add_argument("--migrate-only", action="store_true",
                         help="migrate a legacy data/ folder into stations/default/ and exit")
     parser.add_argument("--dry-run", action="store_true", help="with --migrate-only, report without changing anything")
@@ -38,7 +39,9 @@ def main(argv=None):
     except ValueError as exc:
         raise SystemExit(f"ERROR: {exc}")
 
-    if not station.standalone and station.id == instance.DEFAULT_STATION:
+    # A renamed default station has migrated already.
+    if (not station.standalone and station.id == instance.DEFAULT_STATION
+            and station.data_dir.name == instance.DEFAULT_STATION):
         legacy = station.root / "data"
         if station_migration.needs_migration(legacy) and not args.dry_run and _port_in_use(station.port):
             raise SystemExit(f"ERROR: Port {station.port} is in use. Stop StationNet before migrating {legacy}.")
@@ -51,22 +54,55 @@ def main(argv=None):
     if args.migrate_only:
         return
 
-    if not station.standalone:
-        station.data_dir.mkdir(parents=True, exist_ok=True)
-        instance.write_config_if_missing(station.data_dir, instance.new_config(station.id))
-        station.config = instance.load_config(station.data_dir)
-
-    from stationnet.station_runtime import AlreadyRunning, StationRuntime
-    runtime = StationRuntime(station.data_dir)
+    from stationnet.station_runtime import AlreadyRunning
     try:
-        runtime.acquire()
+        station, runtime = _claim(station)
     except AlreadyRunning as exc:
+        raise SystemExit(f"ERROR: {exc}")
+    except ValueError as exc:
         raise SystemExit(f"ERROR: {exc}")
     try:
         _serve(station, runtime)
     finally:
         runtime.release()
         runtime.clear_stop()
+
+
+def _claim(station):
+    """Take the station lock, first renaming its folder if its name changed.
+
+    Returns the (possibly re-resolved) station and its locked runtime.
+    """
+    from stationnet import instance, station_dirs
+    from stationnet.station_runtime import StationRuntime
+    if station.standalone:
+        runtime = StationRuntime(station.data_dir)
+        runtime.acquire()
+        return station, runtime
+    for attempt in range(2):
+        station.data_dir.mkdir(parents=True, exist_ok=True)
+        instance.write_config_if_missing(station.data_dir, instance.new_config(station.id))
+        # Starting is a safe moment to apply a pending folder rename; a
+        # failure only means the station runs from its current folder.
+        _moved, error = station_dirs.rename_if_needed(station.data_dir, station.id)
+        if error:
+            print(f"Note: {error}", flush=True)
+        station = instance.resolve(Path(__file__).resolve().parent, station.id)
+        runtime = StationRuntime(station.data_dir)
+        runtime.acquire()
+        config = station.data_dir / instance.CONFIG_NAME
+        if config.is_file() and instance.config_id(station.data_dir) in (station.id, None):
+            return station, runtime
+        # Another process renamed the folder before the lock was ours; take
+        # away the empty run/ folder the lock left at the old path.
+        runtime.release()
+        for path in (runtime.lock_path, runtime.folder, station.data_dir):
+            try:
+                path.unlink() if path.is_file() else path.rmdir()
+            except OSError:
+                break
+        station = instance.resolve(Path(__file__).resolve().parent, station.id)
+    raise ValueError(f"The folder for station '{station.id}' keeps moving; try again.")
 
 
 def _interrupted(signum, frame):

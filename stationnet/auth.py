@@ -3,10 +3,12 @@ import hashlib
 import hmac
 import secrets
 import sqlite3
+from pathlib import Path
 from datetime import datetime, timedelta, timezone
 from functools import wraps
 from flask import Blueprint, current_app, flash, g, redirect, render_template, request, session, url_for
 from .db import get_db, get_station
+from .instance import load_config, sync_name
 from .security import check_password, generate_station_callsign, generate_user_callsign, hash_password, valid_username, validate_csrf, validate_password
 from .realtime import ONLINE_SECONDS, utc_now
 
@@ -177,6 +179,7 @@ def setup():
                     (cursor.lastrowid,),
                 )
                 database.commit(); session.clear(); session["user_id"] = cursor.lastrowid; establish_connection(cursor.lastrowid)
+                sync_name(current_app.config.get("STATION_CONFIG"), name)
                 flash(
                     f"Station initialized. Operator: {username} - [{user_callsign}]",
                     "success",
@@ -184,7 +187,19 @@ def setup():
                 return redirect(url_for("station.terminal"))
             except sqlite3.IntegrityError:
                 database.rollback(); flash("Station setup could not be saved. Please retry.", "error")
-    return render_template("setup.html")
+    return render_template("setup.html", suggested_name=_configured_name())
+
+
+def _configured_name():
+    """The name the launcher gave this station, to pre-fill setup."""
+    path = current_app.config.get("STATION_CONFIG")
+    if not path:
+        return ""
+    try:
+        name = load_config(Path(path).parent).get("name")
+    except ValueError:
+        return ""
+    return name if isinstance(name, str) else ""
 
 @bp.route("/register", methods=("GET", "POST"))
 def register():
