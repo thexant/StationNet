@@ -2,12 +2,13 @@
 import os
 import subprocess
 import sys
+import threading
 import tkinter as tk
 import webbrowser
 from datetime import datetime
 from pathlib import Path
 from tkinter import font as tkfont
-from tkinter import messagebox
+from tkinter import filedialog, messagebox
 
 from . import autostart, instance, station_hours, themes
 from . import tray as tray_module
@@ -260,6 +261,7 @@ class StationCard(tk.Frame):
             actions += [("Settings", lambda: app.open_settings(station_id)),
                         ("Hours", lambda: app.open_hours(station_id)),
                         ("Logs", lambda: app.open_log(station_id))]
+        actions.append(("Delete", lambda: app.open_delete(station_id)))
         for text, command, *primary in actions:
             make_button(self.buttons, app.fonts, text, command, primary=bool(primary and primary[0]),
                         colors=self.colors).pack(side="left", padx=(0, 8))
@@ -642,6 +644,130 @@ class OptionsDialog(Dialog):
         app.minimize_to_tray = self.tray.get()
 
 
+class DeleteDialog(Dialog):
+    """Stop a station, optionally back it up, and delete its folder."""
+
+    POLL_MS = 500
+
+    def __init__(self, app, info):
+        super().__init__(app, "Delete Station")
+        self.info = info
+        self.busy = False
+        self.force_offered = False
+        self.backup_path = None
+        self.result = None
+        self._label(f"This permanently deletes {info.name}: its accounts, messages, files, programs, and "
+                    f"settings in folder {info.folder}.", fg=ERROR, pady=(0, 8))
+        if info.state in ACTIVE:
+            self._label("It is running and will be stopped first.", fg=STATES["starting"][1], pady=(0, 8))
+        self.backup = tk.BooleanVar(value=True)
+        self.confirm = tk.StringVar()
+        self.backup_check = self._check("Back up the station first", self.backup)
+        self._hint("Saves a .zip of its folder. WIKI (.zim) archives are not included.")
+        self.confirm_entry = self.focus_widget = self._field("Confirm", self.confirm)
+        self._hint(f'Type "{info.name}" to delete it.')
+        self.status = self._label("", font=app.fonts.small, fg=MUTED, pady=(8, 0))
+        self._finish([("Delete Station", self.delete, True)])
+        self.protocol("WM_DELETE_WINDOW", self.destroy)
+
+    def destroy(self):
+        if self.busy:
+            self.app.manager.cancel_delete(self.info.id)
+        super().destroy()
+
+    def _set_busy(self, busy, status=""):
+        self.busy = busy
+        state = "disabled" if busy else "normal"
+        self.backup_check.configure(state=state)
+        self.confirm_entry.configure(state=state)
+        self.status.configure(text=status)
+
+    def _fail(self, message):
+        self.app.manager.cancel_delete(self.info.id)
+        self._set_busy(False)
+        self.error.configure(text=message)
+
+    def delete(self):
+        if self.busy:
+            return
+        info = self.info
+        if self.confirm.get().strip() != info.name:
+            self.error.configure(text="Type the station's name exactly to confirm.")
+            return
+        self.error.configure(text="")
+        self.backup_path = None
+        if self.backup.get():
+            path = filedialog.asksaveasfilename(
+                parent=self, title="Save station backup", defaultextension=".zip",
+                filetypes=[("Zip archive", "*.zip")], initialdir=str(Path.home()),
+                initialfile=f"{info.folder}-{datetime.now():%Y-%m-%d}.zip")
+            if not path:
+                return
+            self.backup_path = Path(path)
+        manager = self.app.manager
+        manager.begin_delete(info.id)
+        self._set_busy(True, "Stopping…")
+        try:
+            manager.stop(info.id)
+        except OSError as exc:
+            self._fail(str(exc))
+            return
+        self._wait_stopped()
+
+    def _wait_stopped(self):
+        if not self.busy or not self.winfo_exists():
+            return
+        info = self.app.manager.station(self.info.id)
+        if info.state in ACTIVE:
+            if info.can_force_stop and not self.force_offered:
+                self.force_offered = True
+                self.app.force_stop(info.id)
+            self.after(self.POLL_MS, self._wait_stopped)
+        elif self.backup_path is not None:
+            self._set_busy(True, f"Backing up to {self.backup_path}…")
+            threading.Thread(target=self._back_up, daemon=True).start()
+            self.after(self.POLL_MS, self._wait_backup)
+        else:
+            self._remove()
+
+    def _back_up(self):
+        try:
+            self.result = self.app.manager.backup_station(self.info.id, self.backup_path)
+        except Exception as exc:  # noqa: BLE001 - any failure must reach the dialog, or it waits forever
+            self.result = exc
+
+    def _wait_backup(self):
+        if not self.busy or not self.winfo_exists():
+            return
+        if self.result is None:
+            self.after(self.POLL_MS, self._wait_backup)
+        elif isinstance(self.result, Exception):
+            self._fail(f"The backup failed, so nothing was deleted: {self.result}")
+        else:
+            self._remove()
+
+    def _remove(self):
+        info, app = self.info, self.app
+        self.status.configure(text="Deleting…")
+        try:
+            app.manager.delete_station(info.id)
+        except (ValueError, OSError) as exc:
+            self._fail(str(exc))
+            app.refresh(reschedule=False)
+            return
+        self.busy = False
+        self.destroy()
+        app.refresh(reschedule=False)
+        message = f"Deleted {info.name}."
+        if isinstance(self.result, tuple):
+            path, skipped = self.result
+            message += f"\n\nBackup saved to {path}"
+            if skipped:
+                noun = "archive was" if skipped == 1 else "archives were"
+                message += f"\n{skipped} WIKI {noun} not included."
+        messagebox.showinfo("StationNet Manager", message, parent=app.root)
+
+
 class ManagerApp:
     def __init__(self, root, manager, icon=None):
         self.root = root
@@ -939,6 +1065,9 @@ class ManagerApp:
             messagebox.showerror("StationNet Manager", info.error, parent=self.root)
             return
         HoursDialog(self, info)
+
+    def open_delete(self, station_id):
+        DeleteDialog(self, self.manager.station(station_id))
 
     def open_log(self, station_id):
         path = self.manager.station(station_id).log_path

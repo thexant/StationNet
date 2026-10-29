@@ -3,6 +3,7 @@ import os
 import re
 import socket
 import time
+import zipfile
 from datetime import datetime
 import urllib.error
 import urllib.request
@@ -494,3 +495,76 @@ def test_update_hours_and_extension(manager):
     assert info.hours is None and info.extended_until is None
     with pytest.raises(ValueError, match="must differ"):
         manager.update_hours(info.id, {"enabled": True, "open": "9pm", "close": "21:00"})
+
+
+def test_backup_station_zips_the_folder_without_wiki_archives(manager, tmp_path):
+    info = manager.create_station("Alpha", _free_port())
+    (info.data_dir / "kiwix_data").mkdir()
+    (info.data_dir / "kiwix_data" / "wiki.ZIM").write_bytes(b"zim")
+    (info.data_dir / "uploads").mkdir()
+    (info.data_dir / "uploads" / "note.txt").write_text("hello", encoding="utf-8")
+    destination = tmp_path / "backups" / "alpha.zip"
+    destination.parent.mkdir()
+    path, skipped = manager.backup_station(info.id, destination)
+    assert (path, skipped) == (destination, 1)
+    with zipfile.ZipFile(destination) as archive:
+        names = set(archive.namelist())
+        assert archive.read(f"{info.folder}/uploads/note.txt") == b"hello"
+    assert f"{info.folder}/station.json" in names
+    assert not any(name.lower().endswith(".zim") for name in names)
+    assert list(destination.parent.iterdir()) == [destination]
+
+
+def test_backup_station_refuses_a_running_station_or_its_own_folder(manager, tmp_path):
+    info = manager.create_station("Alpha", _free_port())
+    with pytest.raises(ValueError, match="outside"):
+        manager.backup_station(info.id, info.data_dir / "backup.zip")
+    runtime = StationRuntime(info.data_dir)
+    runtime.acquire()
+    try:
+        with pytest.raises(ValueError, match="Stop the station"):
+            manager.backup_station(info.id, tmp_path / "alpha.zip")
+    finally:
+        runtime.release()
+    assert not (tmp_path / "alpha.zip").exists()
+
+
+def test_delete_station_removes_its_folder(manager):
+    alpha = manager.create_station("Alpha", _free_port())
+    beta = manager.create_station("Beta", _free_port())
+    (alpha.data_dir / "uploads").mkdir()
+    readonly = alpha.data_dir / "uploads" / "locked.txt"
+    readonly.write_text("x", encoding="utf-8")
+    readonly.chmod(0o444)
+    manager.begin_delete(alpha.id)
+    manager.delete_station(alpha.id)
+    assert not alpha.data_dir.exists()
+    assert [path.name for path in manager.stations_dir.iterdir()] == [beta.folder]
+    assert [station.id for station in manager.list_stations()] == [beta.id]
+    assert alpha.id not in manager._deleting and alpha.id not in manager._themes
+
+
+def test_delete_station_refuses_a_running_or_missing_station(manager):
+    info = manager.create_station("Alpha", _free_port())
+    runtime = StationRuntime(info.data_dir)
+    runtime.acquire()
+    try:
+        with pytest.raises(ValueError, match="Stop the station"):
+            manager.delete_station(info.id)
+    finally:
+        runtime.release()
+    assert (info.data_dir / "station.json").is_file()
+    with pytest.raises(ValueError, match="No station folder"):
+        manager.delete_station("station-000000")
+
+
+def test_a_station_being_deleted_cannot_start_or_be_renamed(manager):
+    info = manager.create_station("Alpha", _free_port())
+    manager.begin_delete(info.id)
+    with pytest.raises(ValueError, match="being deleted"):
+        manager.start(info.id)
+    manager.poll()
+    assert manager.station(info.id).folder == info.folder  # the pending rename waits
+    manager.cancel_delete(info.id)
+    manager.poll()
+    assert manager.station(info.id).folder == "alpha"

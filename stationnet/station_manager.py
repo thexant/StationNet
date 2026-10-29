@@ -8,12 +8,15 @@ running after the launcher exits.
 import ipaddress
 import json
 import os
+import shutil
 import signal
 import socket
 import sqlite3
+import stat
 import subprocess
 import sys
 import time
+import zipfile
 from contextlib import closing
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -35,6 +38,10 @@ ACTIVE = ("starting", "running", "stopping")
 RENAME_RETRY = 30
 REGISTRATION_MODES = ("open", "private", "disabled")
 DEFAULT_THEME = "cyan"
+# WIKI archives can be many gigabytes; backups before a delete leave them out.
+BACKUP_SKIP_SUFFIXES = (".zim",)
+# A station folder is renamed to this (hidden from scans) before it is removed.
+DELETING_PREFIX = ".deleting-"
 
 
 @dataclass
@@ -190,6 +197,7 @@ class StationManager:
         self._restarts = set()
         self._rename_failures = {}
         self._themes = {}
+        self._deleting = set()
 
     @property
     def stations_dir(self):
@@ -330,6 +338,8 @@ class StationManager:
         with ``force`` (before a start).
         """
         data_dir = self._data_dir(station_id)
+        if station_id in self._deleting:
+            return data_dir
         failure = self._rename_failures.get(station_id)
         if failure and not force and time.monotonic() < failure[1]:
             return data_dir
@@ -504,6 +514,8 @@ class StationManager:
             raise ValueError(info.error)
         if info.state not in ("stopped", "crashed"):
             raise ValueError(f"{info.name} is already {info.state}.")
+        if station_id in self._deleting:
+            raise ValueError(f"{info.name} is being deleted.")
         for other in self.list_stations():
             if other.id != station_id and other.port == info.port and other.state in ACTIVE:
                 raise ValueError(f"Port {info.port} is used by {other.name}, which is {other.state}.")
@@ -557,11 +569,91 @@ class StationManager:
         os.kill(pid, signal.SIGTERM if sys.platform == "win32" else signal.SIGKILL)
         return True
 
+    def begin_delete(self, station_id):
+        """Keep a station from being started (by hours, restarts, or the user)
+        while it is stopped, backed up, and deleted."""
+        self._deleting.add(station_id)
+        self._restarts.discard(station_id)
+
+    def cancel_delete(self, station_id):
+        self._deleting.discard(station_id)
+
+    def backup_station(self, station_id, destination):
+        """Zip a stopped station's folder to ``destination``, without WIKI archives.
+
+        Entries sit under the folder's name, so unzipping into ``stations/``
+        restores the station. Returns the path and how many archives were left out.
+        """
+        data_dir = self._data_dir(station_id)
+        if StationRuntime(data_dir).is_locked():
+            raise ValueError("Stop the station before backing it up.")
+        if not data_dir.is_dir():
+            raise ValueError(f"The station folder {data_dir} does not exist.")
+        destination = Path(destination)
+        if destination.resolve().is_relative_to(data_dir.resolve()):
+            raise ValueError("Save the backup outside the station's own folder.")
+        partial =destination.with_name(destination.name + ".partial")
+        skipped = 0
+        try:
+            with zipfile.ZipFile(partial, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+                for path in sorted(data_dir.rglob("*")):
+                    if not path.is_file():
+                        continue
+                    if path.suffix.lower() in BACKUP_SKIP_SUFFIXES:
+                        skipped += 1
+                        continue
+                    archive.write(path, f"{data_dir.name}/{path.relative_to(data_dir).as_posix()}")
+            os.replace(partial, destination)
+        except BaseException:
+            partial.unlink(missing_ok=True)
+            raise
+        return destination, skipped
+
+    def delete_station(self, station_id):
+        """Permanently remove a stopped station's folder."""
+        data_dir = self._data_dir(station_id)
+        stations_dir = self.stations_dir
+        if not data_dir.is_dir() or data_dir.resolve().parent != stations_dir.resolve():
+            raise ValueError(f"No station folder for '{station_id}' was found in {stations_dir}.")
+        launch = self._launches.get(station_id)
+        if StationRuntime(data_dir).is_locked() or (launch and launch[0].poll() is None):
+            raise ValueError("Stop the station before deleting it.")
+        # One move takes the station out of the list at once; if it fails,
+        # nothing has been removed yet.
+        doomed = stations_dir / f"{DELETING_PREFIX}{station_id}"
+        if doomed.exists():
+            shutil.rmtree(doomed, ignore_errors=True)
+        try:
+            data_dir.rename(doomed)
+        except OSError as exc:
+            raise ValueError(f"Could not delete {data_dir.name}: {exc}. Close any program using its files "
+                             "and try again.") from None
+
+        def writable_retry(function, path, *_error):
+            # Windows refuses to delete read-only files.
+            os.chmod(path, stat.S_IWRITE)
+            function(path)
+
+        try:
+            if sys.version_info >= (3, 12):
+                shutil.rmtree(doomed, onexc=writable_retry)
+            else:
+                shutil.rmtree(doomed, onerror=writable_retry)
+        except OSError as exc:
+            raise ValueError(f"The station was removed from the list, but some of its files could not be "
+                             f"deleted ({exc}). Delete the folder {doomed} by hand.") from None
+        finally:
+            for record in (self._launches, self._exits, self._rename_failures, self._themes):
+                record.pop(station_id, None)
+            self._restarts.discard(station_id)
+            self._deleting.discard(station_id)
+
     def poll(self):
         """Refresh every station and carry out pending renames and restarts."""
         stations = self.list_stations()
         for index, info in enumerate(stations):
-            if info.error or info.state not in ("stopped", "crashed"):
+            # A station being deleted keeps its folder in place for the backup.
+            if info.error or info.state not in ("stopped", "crashed") or info.id in self._deleting:
                 continue
             if info.id in self._restarts:
                 self._restarts.discard(info.id)
