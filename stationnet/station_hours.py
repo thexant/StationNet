@@ -9,8 +9,9 @@ import json
 import os
 import re
 from dataclasses import dataclass
-from datetime import datetime, time as clock_time, timedelta
+from datetime import datetime, time as clock_time, timedelta, timezone
 from pathlib import Path
+from typing import NamedTuple
 
 from . import instance
 from .station_runtime import _retry
@@ -148,12 +149,30 @@ def is_extended(config, now):
     return until is not None and until > now
 
 
+class HeaderHours(NamedTuple):
+    """The line under the station's sub header. ``opens`` and ``closes`` are the
+    current or next opening and closing as UTC ISO times, for pages to show in
+    each visitor's own time zone; None while the hours are extended."""
+    label: str
+    value: str
+    opens: str | None = None
+    closes: str | None = None
+    clock: str = "12h"
+
+
+def _utc(moment):
+    # A naive time here is this computer's local time.
+    return moment.astimezone().astimezone(timezone.utc).isoformat(timespec="seconds")
+
+
 def header_text(config, now):
-    """``(label, value)`` for the line under the station's sub header, or None."""
     hours = Hours.from_config(config)
     if hours is None:
         return None
-    return LABEL, hours.adjusted_message if is_extended(config, now) else hours.text
+    if is_extended(config, now):
+        return HeaderHours(LABEL, hours.adjusted_message, clock=hours.clock)
+    opens = previous_time(hours.open, now) if is_open(hours, now) else next_time(hours.open, now)
+    return HeaderHours(LABEL, hours.text, _utc(opens), _utc(next_time(hours.close, opens)), hours.clock)
 
 
 _configs = {}

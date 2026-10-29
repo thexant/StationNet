@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import datetime, timezone
 
 import pytest
 
@@ -63,13 +63,24 @@ def test_times_and_overnight_hours():
     assert crossed("00:00", datetime(2026, 10, 28, 23, 59), datetime(2026, 10, 29, 0, 0, 1))
 
 
+def _utc(moment):
+    return moment.astimezone().astimezone(timezone.utc).isoformat(timespec="seconds")
+
+
 def test_header_text():
     config = {"hours": {"enabled": True, "open": "08:00", "close": "21:00", "adjusted_message": "OPEN LATE"}}
     now = datetime(2026, 10, 28, 20, 0)
-    assert header_text(config, now) == ("STATION HOURS:", "8:00AM - 9:00PM")
+    header = header_text(config, now)
+    assert (header.label, header.value, header.clock) == ("STATION HOURS:", "8:00AM - 9:00PM", "12h")
+    # The open window's moments, for visitors' own time zones.
+    assert (header.opens, header.closes) == (_utc(datetime(2026, 10, 28, 8)), _utc(datetime(2026, 10, 28, 21)))
+    closed = header_text(config, datetime(2026, 10, 28, 22, 0))
+    assert (closed.opens, closed.closes) == (_utc(datetime(2026, 10, 29, 8)), _utc(datetime(2026, 10, 29, 21)))
+    night = header_text({"hours": {"enabled": True, "open": "20:00", "close": "02:00"}}, datetime(2026, 10, 29, 1))
+    assert (night.opens, night.closes) == (_utc(datetime(2026, 10, 28, 20)), _utc(datetime(2026, 10, 29, 2)))
     extended = {**config, "hours_extended_until": "2026-10-29T08:00"}
-    assert header_text(extended, now) == ("STATION HOURS:", "OPEN LATE")
-    assert header_text(extended, datetime(2026, 10, 29, 8, 0)) == ("STATION HOURS:", "8:00AM - 9:00PM")
+    assert header_text(extended, now)[:3] == ("STATION HOURS:", "OPEN LATE", None)
+    assert header_text(extended, datetime(2026, 10, 29, 8, 0)).value == "8:00AM - 9:00PM"
     assert header_text({}, now) is None
 
 

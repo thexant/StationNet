@@ -1,5 +1,6 @@
 import hashlib
 import json
+import re
 import sqlite3
 from pathlib import Path
 
@@ -386,10 +387,13 @@ def test_station_hours_line_follows_station_json(tmp_path):
         client = app.test_client()
         page = client.get("/login").get_data(as_text=True)
         assert 'class="node-line station-hours-line"' in page
-        assert 'STATION HOURS: <b class="station-hours-value">8:00AM - 9:00PM</b>' in page
+        assert re.search(r'STATION HOURS: <b class="station-hours-value" data-station-hours '
+                         r'data-opens="[^"]+\+00:00" data-closes="[^"]+\+00:00" '
+                         r'data-clock-format="12h">8:00AM - 9:00PM</b>', page)
         # The manager's changes show without restarting the station.
         instance.update_config(folder, hours={**hours, "clock": "24h"}, hours_extended_until="2999-01-01T08:00")
-        assert "OPEN LATE TONIGHT" in client.get("/login").get_data(as_text=True)
+        page = client.get("/login").get_data(as_text=True)
+        assert "OPEN LATE TONIGHT" in page and "data-opens" not in page
         instance.update_config(folder, remove=("hours_extended_until",))
         assert "08:00 - 21:00" in client.get("/login").get_data(as_text=True)
         instance.update_config(folder, hours={**hours, "enabled": False})

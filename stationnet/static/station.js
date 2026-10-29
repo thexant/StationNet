@@ -266,6 +266,14 @@ if(directNotificationsUrl){
 
 const clock=document.querySelector("[data-clock]");
 const dateReadout=document.querySelector("[data-date]");
+const stationHours=document.querySelector("[data-station-hours]");
+if(stationHours){
+  // Station hours arrive as UTC moments; show them in this visitor's time zone.
+  const twelve=stationHours.dataset.clockFormat!=="24h";
+  const local=value=>{const moment=new Date(value);if(Number.isNaN(moment.getTime()))return null;const hour=moment.getHours(),minute=String(moment.getMinutes()).padStart(2,"0");return twelve?`${hour%12||12}:${minute}${hour<12?"AM":"PM"}`:`${String(hour).padStart(2,"0")}:${minute}`};
+  const opens=local(stationHours.dataset.opens),closes=local(stationHours.dataset.closes);
+  if(opens&&closes){const original=stationHours.textContent;const shown=`${opens} - ${closes}`;stationHours.textContent=shown;if(shown!==original)stationHours.title=`Your local time. Station time: ${original}`}
+}
 if(clock){const tick=()=>{const now=new Date();clock.textContent=now.toLocaleTimeString([],{hour12:false});if(dateReadout)dateReadout.textContent=now.toLocaleDateString([],{weekday:"short",month:"short",day:"2-digit",year:"numeric"}).toUpperCase()};tick();setInterval(tick,1000)}
 const localTimestamp=value=>{
   if(!value)return "";
