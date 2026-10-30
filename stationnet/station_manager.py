@@ -478,6 +478,14 @@ class StationManager:
         else:
             instance.update_config(data_dir, **{station_hours.EXTENDED_KEY: until.isoformat(timespec="minutes")})
 
+    def _end_extension(self, station_id):
+        try:
+            config = instance.load_config(self._data_dir(station_id))
+        except ValueError:
+            return
+        if station_hours.EXTENDED_KEY in config:
+            self.set_extended(station_id, None)
+
     @staticmethod
     def _rename_prepared_setup(data_dir, name):
         path = data_dir / instance.SETUP_NAME
@@ -546,14 +554,16 @@ class StationManager:
         self._exits.pop(station_id, None)
         return process
 
-    def stop(self, station_id):
+    def stop(self, station_id, *, clear_extension=True):
         self._restarts.discard(station_id)
         runtime = StationRuntime(self._data_dir(station_id))
         if runtime.is_locked():
             runtime.request_stop()
+        if clear_extension:
+            self._end_extension(station_id)
 
     def restart(self, station_id):
-        self.stop(station_id)
+        self.stop(station_id, clear_extension=False)
         self._restarts.add(station_id)
 
     def force_stop(self, station_id):
@@ -567,6 +577,7 @@ class StationManager:
         if pid == os.getpid():
             return False
         os.kill(pid, signal.SIGTERM if sys.platform == "win32" else signal.SIGKILL)
+        self._end_extension(station_id)
         return True
 
     def begin_delete(self, station_id):

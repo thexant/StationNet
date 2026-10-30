@@ -90,6 +90,59 @@ def _document():
     }
 
 
+def test_npc_service_labels_use_existing_roles_without_changing_targets(game):
+    app, (one, _two) = game
+    with app.app_context():
+        db = get_db()
+        mud_worlds.install(db, mud_worlds.package_bytes(_document()))
+        activate_world(db, "authored")
+        square = db.execute("SELECT start_room_id FROM mud_world_packages WHERE id='authored'").fetchone()[0]
+        trader_id = db.execute("SELECT id FROM mud_npc_definitions WHERE name='Trader'").fetchone()[0]
+        mud._set_player_location(db, one, "traditional", "world_room", square)
+        db.execute("INSERT INTO mud_npc_banks(npc_definition_id) VALUES(?)", (trader_id,))
+        db.execute("INSERT INTO mud_npc_trainers(id,npc_definition_id,skill_key) VALUES('test:trainer',?,'lore')",
+                   (trader_id,))
+        db.execute("INSERT INTO mud_professions(id,world_id,name,description,recruiter_npc_definition_id) "
+                   "VALUES('test:profession','authored','Courier','Deliver things.',?)", (trader_id,))
+        db.execute("INSERT INTO mud_work_activities(id,profession_id,name,description,kind,provider_npc_definition_id) "
+                   "VALUES('test:work','test:profession','Deliveries','Run deliveries.','immediate',?)",
+                   (trader_id,))
+        db.execute("INSERT INTO mud_npc_definitions(id,name,description) "
+                   "VALUES('test:banker','Banker Only','Keeps the accounts.')")
+        db.execute("INSERT INTO mud_npc_instances(id,definition_id,room_id) "
+                   "VALUES('test:banker-here','test:banker',?)", (square,))
+        db.execute("INSERT INTO mud_npc_banks(npc_definition_id) VALUES('test:banker')")
+        db.execute("INSERT INTO mud_npc_definitions(id,name,description) "
+                   "VALUES('test:plain','Plain NPC','No services.')")
+        db.execute("INSERT INTO mud_npc_instances(id,definition_id,room_id) "
+                   "VALUES('test:plain-here','test:plain',?)", (square,))
+        db.commit()
+
+        user = db.execute("SELECT * FROM users WHERE id=?", (one,)).fetchone()
+        state = mud._room_state(db, one)
+        by_name = {npc["name"]: npc for npc in state["npcs"]}
+        assert by_name["Trader"]["display_name"] == "Trader"
+        assert by_name["Trader"]["service_labels"] == [
+            "Merchant", "Banker", "Trainer", "Quest Giver", "Recruiter", "Work Provider"]
+        assert by_name["Banker Only"]["service_labels"] == ["Banker"]
+        assert by_name["Plain NPC"]["service_labels"] == []
+        listing = mud._look_action(db, user, {})[0].body
+        assert "Trader [Merchant] [Banker] [Trainer] [Quest Giver] [Recruiter] [Work Provider]" in listing
+        assert "Banker Only [Banker]" in listing
+        assert "Plain NPC [" not in listing
+        assert mud._look_action(db, user, {"arguments": ["Trader"]})[0].body.startswith(
+            "Trader [Merchant] [Banker] [Trainer] [Quest Giver] [Recruiter] [Work Provider]\n")
+        assert mud._look_action(db, user, {"arguments": ["Banker", "Only"]})[0].body.startswith(
+            "Banker Only [Banker]\n")
+
+    client = app.test_client()
+    with client.session_transaction() as state:
+        state["user_id"] = one
+    page = client.get("/mud/w/authored")
+    assert page.status_code == 200
+    assert b"Trader [Merchant] [Banker] [Trainer] [Quest Giver] [Recruiter] [Work Provider]" in page.data
+
+
 def test_search_reveals_objects_and_exits_per_character_after_conditions(game):
     app, users = game
     document = _document()

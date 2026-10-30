@@ -184,6 +184,48 @@ def test_agenda_calendar_and_shared_unlock(tmp_path):
                 assert page.locator("#document-confirm-row").is_hidden()
                 page.goto(base + "/office/agenda")
                 page.locator("#agenda-workspace").wait_for(state="visible", timeout=15000)
+                page.locator('[data-view="tasks"]').click()
+                dialogs = []
+                page.on("dialog", lambda dialog: (dialogs.append(dialog.message), dialog.dismiss()))
+                prepare = page.locator("#agenda-content .agenda-task-row").filter(has_text="Prepare brief")
+                assert prepare.locator("[data-clear-task]").count() == 0
+                assert page.locator("#agenda-content [data-clear-task]").count() == 0
+                prepare.locator("[data-task-done]").check()
+                assert prepare.locator("[data-clear-task]").count() == 1
+                prepare.locator("[data-task-done]").uncheck()
+                assert prepare.locator("[data-clear-task]").count() == 0
+                prepare.locator("[data-task-done]").check()
+                prepare.locator("[data-clear-task]").click()
+                assert prepare.count() == 0
+                assert page.locator("#agenda-content .agenda-task-row").filter(has_text="Internal checklist").count() == 1
+                assert page.locator("#agenda-content .agenda-section-head h2").inner_text() == "1 OPEN TASKS"
+                assert not page.locator("#agenda-task-dialog").is_visible()
+                assert not dialogs
+                page.locator("#agenda-status").get_by_text("SAVED", exact=True).wait_for(timeout=15000)
+                page.reload()
+                page.locator("#agenda-workspace").wait_for(state="visible", timeout=15000)
+                page.locator('[data-view="tasks"]').click()
+                assert page.locator("#agenda-content .agenda-task-row").filter(has_text="Prepare brief").count() == 0
+                assert page.locator("#agenda-content .agenda-task-row").filter(has_text="Internal checklist").count() == 1
+
+                page.locator("#agenda-add-task").click()
+                page.locator('#agenda-task-form [name="title"]').fill("Undated cleanup")
+                page.locator('#agenda-task-form button[type="submit"]').click()
+                undated = page.locator("#agenda-content .agenda-task-row").filter(has_text="Undated cleanup")
+                assert undated.locator("[data-clear-task]").count() == 0
+                undated.locator("[data-task-done]").check()
+                assert undated.locator("[data-clear-task]").count() == 1
+                page.set_viewport_size({"width": 390, "height": 844})
+                assert page.locator("#agenda-content").evaluate("element => element.scrollWidth <= element.clientWidth + 2")
+                undated.locator("[data-clear-task]").click()
+                assert undated.count() == 0
+                assert not dialogs
+                page.locator("#agenda-status").get_by_text("SAVED", exact=True).wait_for(timeout=15000)
+                page.reload()
+                page.locator("#agenda-workspace").wait_for(state="visible", timeout=15000)
+                page.locator('[data-view="tasks"]').click()
+                assert page.locator("#agenda-content .agenda-task-row").filter(has_text="Undated cleanup").count() == 0
+                assert page.locator("#agenda-content .agenda-task-row").filter(has_text="Internal checklist").count() == 1
                 assert not errors
             finally:
                 browser.close()

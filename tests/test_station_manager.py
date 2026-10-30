@@ -490,6 +490,12 @@ def test_update_hours_and_extension(manager):
     manager.set_extended(info.id, until)
     assert manager.station(info.id).extended_until == until
     assert instance.load_config(info.data_dir)["hours_extended_until"] == "2026-10-29T08:00"
+    # Restart preserves Stay Online; an explicit Stop ends it for a later early start.
+    manager.restart(info.id)
+    assert manager.station(info.id).extended_until == until
+    manager.stop(info.id)
+    assert manager.station(info.id).extended_until is None
+    manager.set_extended(info.id, until)
     # Saving hours again ends a running extension.
     info = manager.update_hours(info.id, {"enabled": False, "open": "8am", "close": "21:00"})
     assert info.hours is None and info.extended_until is None

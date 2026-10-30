@@ -230,7 +230,15 @@ function initialize() {
     check.type = 'checkbox'; check.checked = !!task.done; check.dataset.taskDone = task.id; check.setAttribute('aria-label', `Complete ${task.title}`);
     row.append(check);
     const main = el('button', 'agenda-task-main', task.title); main.type = 'button'; main.dataset.kind = 'task'; main.dataset.id = task.id; row.append(main);
-    const meta = el('span', `agenda-task-meta priority-${task.priority || 'normal'}`, [task.priority === 'high' ? 'HIGH' : task.priority === 'low' ? 'LOW' : '', task.dueDate ? fmt(task.dueDate) : ''].filter(Boolean).join(' · ')); row.append(meta);
+    const side = el('div', 'agenda-task-side');
+    if (!brief && task.done) {
+      const clear = el('button', 'agenda-task-clear', 'CLEAR');
+      clear.type = 'button'; clear.dataset.clearTask = task.id; clear.setAttribute('aria-label', `Clear completed task ${task.title}`);
+      side.append(clear);
+    }
+    const metaText = [task.priority === 'high' ? 'HIGH' : task.priority === 'low' ? 'LOW' : '', task.dueDate ? fmt(task.dueDate) : ''].filter(Boolean).join(' · ');
+    if (metaText) side.append(el('span', `agenda-task-meta priority-${task.priority || 'normal'}`, metaText));
+    row.append(side);
     if (!brief && (task.eventId || task.contactId)) {
       const linkedEvent = data.events.find(item => item.id === task.eventId), contact = data.contacts.find(item => item.id === task.contactId);
       const links = [linkedEvent?.title, contact?.name].filter(Boolean);
@@ -405,6 +413,12 @@ function initialize() {
   app.addEventListener('click', event => {
     const viewButton = event.target.closest('[data-view]'); if (viewButton) { view = viewButton.dataset.view; if (view === 'today') selected = today(); render(); return; }
     const date = event.target.closest('[data-date]'); if (date) { selected = date.dataset.date; view = 'day'; render(); return; }
+    const clear = event.target.closest('[data-clear-task]');
+    if (clear) {
+      const task = data.tasks.find(value => value.id === clear.dataset.clearTask);
+      if (task?.done) { data.tasks = data.tasks.filter(value => value.id !== task.id); changed(); }
+      return;
+    }
     const action = event.target.closest('[data-action]'); if (action) { openEditor(action.dataset.action === 'add-task' ? 'task' : 'event'); return; }
     const item = event.target.closest('[data-kind][data-id]'); if (item) { openEditor(item.dataset.kind, item.dataset.id); return; }
     const close = event.target.closest('[data-close]'); if (close) close.closest('dialog').close();

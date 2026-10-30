@@ -25,7 +25,7 @@
             <span class="collapsible-panel-chevron" aria-hidden="true"></span>
           </button>
           <div class="mud-game-place">
-            <span class="mud-game-location" data-mud-room-name>{{ room.name }}</span>
+            <span class="mud-game-location" data-mud-room-name>{{ room.name }}{% if room.is_dungeon_exit %} [EXIT]{% endif %}</span>
             <span class="mud-game-preview" data-mud-room-preview>{{ room.description }}</span>
             <span class="mud-game-travel" data-mud-travel {% if not room.travel %}hidden{% endif %}>{% if room.travel %}TRAVELLING {{ room.travel.direction|upper }} · {{ room.travel.steps }} ROOM{{ '' if room.travel.steps == 1 else 'S' }} · /stop{% endif %}</span>
             <span class="mud-game-travel" data-mud-wayfinding {% if not room.wayfinding %}hidden{% endif %}>{% if room.wayfinding %}TOWARD {{ room.wayfinding.destination|upper }}{% if room.wayfinding.direction %} · {{ room.wayfinding.direction|upper }}{% endif %} · /directions{% endif %}</span>
@@ -39,13 +39,13 @@
         <div class="mud-game-content" id="mud-game-content" data-panel-content>
         <div class="mud-scene-view" id="mud-room-view" data-mud-room-view hidden>
           <article class="mud-scene" data-mud-room aria-label="Current room" aria-live="polite">
-            <div class="mud-scene-heading"><span>YOU ARE HERE</span><h2 data-mud-scene-name>{{ room.name }}</h2></div>
+            <div class="mud-scene-heading"><span>YOU ARE HERE</span><h2 data-mud-scene-name>{{ room.name }}{% if room.is_dungeon_exit %} [EXIT]{% endif %}</h2></div>
             <p class="mud-scene-description" data-mud-room-description>{{ room.description }}</p>
             <p class="mud-scene-instructions" data-mud-room-instructions {% if not room.instructions %}hidden{% endif %}>{{ room.instructions }}</p>
             <dl class="mud-scene-facts" aria-label="Location details">
               <div><dt>EXITS</dt><dd data-mud-room-exits>{% if room.exits %}{% for exit in room.exits %}{{ exit.direction or exit.name }}{% if not loop.last %}, {% endif %}{% endfor %}{% else %}none{% endif %}</dd></div>
               <div><dt>ITEMS</dt><dd data-mud-room-items>{% if room['items'] %}{% for item in room['items'] %}{{ item.display_name }}{% if not loop.last %}, {% endif %}{% endfor %}{% else %}none{% endif %}</dd></div>
-              <div><dt>NPCS</dt><dd data-mud-room-npcs>{% if room.npcs %}{% for npc in room.npcs %}{{ npc.display_name }}{% if not loop.last %}, {% endif %}{% endfor %}{% else %}none{% endif %}</dd></div>
+              <div><dt>NPCS</dt><dd data-mud-room-npcs>{% if room.npcs %}{% for npc in room.npcs %}{{ npc.display_name }}{% for label in npc.service_labels %} [{{ label }}]{% endfor %}{% if not loop.last %}, {% endif %}{% endfor %}{% else %}none{% endif %}</dd></div>
               <div><dt>GATHERING</dt><dd data-mud-room-gathering>{% if room.gathering %}{% for node in room.gathering %}{{ node.display_name }} ({{ node.activity }}{% if not node.available %}, replenishing{% endif %}){% if not loop.last %}, {% endif %}{% endfor %}{% else %}none{% endif %}</dd></div>
             </dl>
             <div class="mud-combat-status" data-mud-combat aria-label="Nearby enemies">

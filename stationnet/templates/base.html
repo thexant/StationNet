@@ -13,7 +13,7 @@
   {% set header_tagline = station_header_tagline() if g.station else none %}
   {% if header_tagline and header_tagline.color %}<style nonce="{{ g.style_nonce }}">.brand-tag-current { color: {{ header_tagline.color }}; --tagline-ink: {{ header_tagline.color }}; }</style>{% endif %}
   {% block extra_styles %}{% endblock %}
-  <script src="{{ url_for('static',filename='station.js',v='fullscreen-1') }}" defer></script>
+  <script src="{{ url_for('static',filename='station.js',v='early-hours-1') }}" defer></script>
   <script src="{{ url_for('static',filename='account-deletion.js',v='1') }}" defer></script>
   <script src="{{ url_for('static',filename='pwa.js',v='1') }}" defer></script>
   <script src="{{ url_for('static',filename='feeds.js',v='1') }}" defer></script>
@@ -47,7 +47,7 @@
       </div>
       {% if g.station_hours %}
       <div class="node-line station-hours-line">
-        <span>{{ g.station_hours.label }} <b class="station-hours-value"{% if g.station_hours.opens %} data-station-hours data-opens="{{ g.station_hours.opens }}" data-closes="{{ g.station_hours.closes }}" data-clock-format="{{ g.station_hours.clock }}"{% endif %}>{{ g.station_hours.value }}</b></span>
+        <span>{{ g.station_hours.label }} <b class="station-hours-value"{% if g.station_hours.opens %} data-station-hours data-opens="{{ g.station_hours.opens }}" data-closes="{{ g.station_hours.closes }}" data-clock-format="{{ g.station_hours.clock }}"{% if g.station_hours.early %} data-early-open data-regular-hours="{{ g.station_hours.regular_value }}"{% endif %}{% endif %}>{{ g.station_hours.value }}</b></span>
       </div>
       {% endif %}
       {% if g.user or g.station.guest_access %}

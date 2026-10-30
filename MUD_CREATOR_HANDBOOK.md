@@ -41,7 +41,7 @@ The package format supports complete content, but the engine owns the core
 rules. The following reference lists what can be authored and what is fixed.
 Do not invent unsupported JSON fields or script hooks.
 
-## Contents
+## Contents/
 
 - [World package reference](#world-package-reference): manifest, rooms, exits,
   content, quests, triggers, wilderness, world life, packaging and upgrades

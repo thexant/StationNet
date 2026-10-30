@@ -19,6 +19,7 @@ from .station_runtime import _retry
 HOST_NAME = "manager.json"
 LABEL = "STATION HOURS:"
 DEFAULT_MESSAGE = "HOURS TEMPORARILY EXTENDED"
+DEFAULT_EARLY_MESSAGE = "OPEN EARLY"
 DEFAULT_WARNING = 5
 CLOCKS = ("12h", "24h")
 HOST_DEFAULTS = {"sleep_countdown_minutes": 5, "wake_lead_minutes": 5, "registered_wake": None,
@@ -77,12 +78,15 @@ def check(values):
     message = " ".join(str(values.get("adjusted_message") or "").split()) or DEFAULT_MESSAGE
     if len(message) > 80:
         raise ValueError("The adjusted hours message cannot exceed 80 characters.")
+    early_message = " ".join(str(values.get("early_message") or "").split()) or DEFAULT_EARLY_MESSAGE
+    if len(early_message) > 80:
+        raise ValueError("The early open message cannot exceed 80 characters.")
     label = " ".join(str(values.get("label") or "").split()) or LABEL
     if len(label) > 40:
         raise ValueError("The hours label cannot exceed 40 characters.")
     result.update(clock=clock, sleep=bool(values.get("sleep")),
                   warning_minutes=_minutes(values.get("warning_minutes", DEFAULT_WARNING), "closing warning"),
-                  adjusted_message=message, label=label)
+                  adjusted_message=message, early_message=early_message, label=label)
     return result
 
 
@@ -94,6 +98,7 @@ class Hours:
     sleep: bool = False
     warning_minutes: int = DEFAULT_WARNING
     adjusted_message: str = DEFAULT_MESSAGE
+    early_message: str = DEFAULT_EARLY_MESSAGE
     label: str = LABEL
 
     @classmethod
@@ -156,12 +161,15 @@ def is_extended(config, now):
 class HeaderHours(NamedTuple):
     """The line under the station's sub header. ``opens`` and ``closes`` are the
     current or next opening and closing as UTC ISO times, for pages to show in
-    each visitor's own time zone; None while the hours are extended."""
+    each visitor's own time zone; None while the hours are extended. An early
+    opening includes the normal hours so an open page can change at opening."""
     label: str
     value: str
     opens: str | None = None
     closes: str | None = None
     clock: str = "12h"
+    early: bool = False
+    regular_value: str | None = None
 
 
 def _utc(moment):
@@ -175,8 +183,13 @@ def header_text(config, now):
         return None
     if is_extended(config, now):
         return HeaderHours(hours.label, hours.adjusted_message, clock=hours.clock)
-    opens = previous_time(hours.open, now) if is_open(hours, now) else next_time(hours.open, now)
-    return HeaderHours(hours.label, hours.text, _utc(opens), _utc(next_time(hours.close, opens)), hours.clock)
+    open_now = is_open(hours, now)
+    opens = previous_time(hours.open, now) if open_now else next_time(hours.open, now)
+    closes = next_time(hours.close, opens)
+    if not open_now:
+        return HeaderHours(hours.label, hours.early_message, _utc(opens), _utc(closes),
+                           hours.clock, True, hours.text)
+    return HeaderHours(hours.label, hours.text, _utc(opens), _utc(closes), hours.clock)
 
 
 _configs = {}

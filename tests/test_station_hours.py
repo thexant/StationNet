@@ -30,15 +30,21 @@ def test_format_both_clocks():
 def test_check_validates_and_normalizes():
     values = station_hours.check({"enabled": True, "open": "8am", "close": "9:00 pm", "sleep": 1,
                                   "warning_minutes": "10", "adjusted_message": "  OPEN   LATE ",
+                                  "early_message": "  OPEN   EARLY ",
                                   "label": "  BBS   HOURS: "})
     assert values == {"enabled": True, "open": "08:00", "close": "21:00", "clock": "12h", "sleep": True,
-                      "warning_minutes": 10, "adjusted_message": "OPEN LATE", "label": "BBS HOURS:"}
+                      "warning_minutes": 10, "adjusted_message": "OPEN LATE", "early_message": "OPEN EARLY",
+                      "label": "BBS HOURS:"}
     assert station_hours.check({"enabled": False})["adjusted_message"] == station_hours.DEFAULT_MESSAGE
+    assert station_hours.check({"enabled": False})["early_message"] == station_hours.DEFAULT_EARLY_MESSAGE
+    assert station_hours.check({"enabled": True, "open": "8:00", "close": "21:00",
+                                "early_message": "  "})["early_message"] == station_hours.DEFAULT_EARLY_MESSAGE
     assert station_hours.check({"enabled": False, "label": "  "})["label"] == station_hours.LABEL
     for bad in ({"enabled": True, "close": "21:00"}, {"enabled": True, "open": "8:00", "close": "08:00"},
                 {"enabled": True, "open": "8:00", "close": "9:00", "warning_minutes": 0},
                 {"enabled": True, "open": "8:00", "close": "9:00", "clock": "36h"},
                 {"enabled": True, "open": "8:00", "close": "9:00", "adjusted_message": "x" * 81},
+                {"enabled": True, "open": "8:00", "close": "9:00", "early_message": "x" * 81},
                 {"enabled": True, "open": "8:00", "close": "9:00", "label": "x" * 41}):
         with pytest.raises(ValueError):
             station_hours.check(bad)
@@ -48,7 +54,8 @@ def test_from_config_needs_enabled_usable_hours():
     assert Hours.from_config({}) is None
     assert Hours.from_config({"hours": {"enabled": False, "open": "08:00", "close": "21:00"}}) is None
     assert Hours.from_config({"hours": {"enabled": True, "open": "bad", "close": "21:00"}}) is None
-    assert Hours.from_config({"hours": {"enabled": True, "open": "08:00", "close": "21:00"}}).close == "21:00"
+    older = Hours.from_config({"hours": {"enabled": True, "open": "08:00", "close": "21:00"}})
+    assert older.close == "21:00" and older.early_message == station_hours.DEFAULT_EARLY_MESSAGE
 
 
 def test_times_and_overnight_hours():
@@ -71,23 +78,43 @@ def _utc(moment):
 
 
 def test_header_text():
-    config = {"hours": {"enabled": True, "open": "08:00", "close": "21:00", "adjusted_message": "OPEN LATE"}}
+    config = {"hours": {"enabled": True, "open": "08:00", "close": "21:00",
+                        "adjusted_message": "OPEN LATE", "early_message": "OPEN EARLY TODAY"}}
     now = datetime(2026, 10, 28, 20, 0)
     header = header_text(config, now)
     assert (header.label, header.value, header.clock) == ("STATION HOURS:", "8:00AM - 9:00PM", "12h")
     # The open window's moments, for visitors' own time zones.
     assert (header.opens, header.closes) == (_utc(datetime(2026, 10, 28, 8)), _utc(datetime(2026, 10, 28, 21)))
     closed = header_text(config, datetime(2026, 10, 28, 22, 0))
+    assert (closed.value, closed.early, closed.regular_value) == ("OPEN EARLY TODAY", True, "8:00AM - 9:00PM")
     assert (closed.opens, closed.closes) == (_utc(datetime(2026, 10, 29, 8)), _utc(datetime(2026, 10, 29, 21)))
+    assert header_text(config, datetime(2026, 10, 28, 21)).value == "OPEN EARLY TODAY"
+    assert header_text(config, datetime(2026, 10, 29, 7, 59, 59)).value == "OPEN EARLY TODAY"
+    assert header_text(config, datetime(2026, 10, 29, 8)).value == "8:00AM - 9:00PM"
     night = header_text({"hours": {"enabled": True, "open": "20:00", "close": "02:00"}}, datetime(2026, 10, 29, 1))
     assert (night.opens, night.closes) == (_utc(datetime(2026, 10, 28, 20)), _utc(datetime(2026, 10, 29, 2)))
+    night_early = header_text({"hours": {"enabled": True, "open": "20:00", "close": "02:00"}},
+                              datetime(2026, 10, 29, 4, 30))
+    assert (night_early.value, night_early.opens) == ("OPEN EARLY", _utc(datetime(2026, 10, 29, 20)))
+    assert header_text({"hours": {"enabled": True, "open": "20:00", "close": "02:00"}},
+                       datetime(2026, 10, 29, 20)).value == "8:00PM - 2:00AM"
     extended = {**config, "hours_extended_until": "2026-10-29T08:00"}
     assert header_text(extended, now)[:3] == ("STATION HOURS:", "OPEN LATE", None)
+    assert header_text(extended, datetime(2026, 10, 29, 4, 30)).value == "OPEN LATE"
     assert header_text(extended, datetime(2026, 10, 29, 8, 0)).value == "8:00AM - 9:00PM"
     assert header_text({}, now) is None
     labelled = {"hours": {**config["hours"], "label": "OPEN:"}}
     assert header_text(labelled, now).label == "OPEN:"
     assert header_text({**labelled, "hours_extended_until": "2026-10-29T08:00"}, now).label == "OPEN:"
+
+
+def test_early_open_from_four_thirty_until_six():
+    config = {"hours": {"enabled": True, "open": "06:00", "close": "20:00",
+                        "early_message": "WELCOME EARLY BIRDS"}}
+    early = header_text(config, datetime(2026, 10, 29, 4, 30))
+    assert early.value == "WELCOME EARLY BIRDS"
+    assert early.opens == _utc(datetime(2026, 10, 29, 6))
+    assert header_text(config, datetime(2026, 10, 29, 6)).value == "6:00AM - 8:00PM"
 
 
 def test_host_settings_round_trip(tmp_path):

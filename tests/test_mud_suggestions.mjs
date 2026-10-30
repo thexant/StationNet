@@ -33,6 +33,12 @@ const twoRats = {...oneRat,room:{...state.room,npcs:[
 assert.deepEqual(values("/att",twoRats), ["/attack Rat 1", "/attack"]);
 assert.deepEqual(values("/attack rat",twoRats), ["/attack Rat 1"]);
 
+const serviceNpc = {...state,room:{...state.room,npcs:[
+  {name:"Arkady Rudenko",display_name:"Arkady Rudenko",service_labels:["Merchant","Banker"],hostile:false},
+]}};
+assert.deepEqual(values("/talk Ark",serviceNpc), ["/talk Arkady Rudenko"]);
+assert.deepEqual(values("/look Ark",serviceNpc), ["/look Arkady Rudenko"]);
+
 const portal = {...state,room:{...state.room,id:"stationnet:portal",mode:"procedural"},
   hub:{shop:[{name:"Health Potion"}],storage:[]}};
 assert.deepEqual(values("/exp",portal), ["/expeditions", "/expedition"]);

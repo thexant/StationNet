@@ -321,8 +321,20 @@ if(stationHours){
   // Station hours arrive as UTC moments; show them in this visitor's time zone.
   const twelve=stationHours.dataset.clockFormat!=="24h";
   const local=value=>{const moment=new Date(value);if(Number.isNaN(moment.getTime()))return null;const hour=moment.getHours(),minute=String(moment.getMinutes()).padStart(2,"0");return twelve?`${hour%12||12}:${minute}${hour<12?"AM":"PM"}`:`${String(hour).padStart(2,"0")}:${minute}`};
-  const opens=local(stationHours.dataset.opens),closes=local(stationHours.dataset.closes);
-  if(opens&&closes){const original=stationHours.textContent;const shown=`${opens} - ${closes}`;stationHours.textContent=shown;if(shown!==original)stationHours.title=`Your local time. Station time: ${original}`}
+  const regular=stationHours.dataset.regularHours||stationHours.textContent;
+  const showRegular=()=>{
+    const opens=local(stationHours.dataset.opens),closes=local(stationHours.dataset.closes);
+    const shown=opens&&closes?`${opens} - ${closes}`:regular;
+    stationHours.textContent=shown;
+    if(shown!==regular)stationHours.title=`Your local time. Station time: ${regular}`;
+    else stationHours.removeAttribute("title");
+  };
+  if(stationHours.hasAttribute("data-early-open")){
+    const opening=new Date(stationHours.dataset.opens).getTime();
+    const switchAtOpening=()=>{if(!Number.isFinite(opening)||Date.now()>=opening){clearInterval(timer);showRegular()}};
+    const timer=setInterval(switchAtOpening,1000);
+    switchAtOpening();
+  }else showRegular();
 }
 if(clock){const tick=()=>{const now=new Date();clock.textContent=now.toLocaleTimeString([],{hour12:false});if(dateReadout)dateReadout.textContent=now.toLocaleDateString([],{weekday:"short",month:"short",day:"2-digit",year:"numeric"}).toUpperCase()};tick();setInterval(tick,1000)}
 const localTimestamp=value=>{

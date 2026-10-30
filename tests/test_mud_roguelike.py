@@ -64,6 +64,40 @@ def _owned(db, user_id):
     ).fetchall()}
 
 
+def test_standalone_exit_indicator_appears_only_in_exit_room(game):
+    app, user_id = game
+    with app.app_context():
+        db = get_db()
+        user = db.execute("SELECT * FROM users WHERE id=?", (user_id,)).fetchone()
+        run_id = _launch(db, user)
+        entrance = mud._room_state(db, user_id)
+        assert entrance["is_dungeon_exit"] is False
+        assert "[EXIT]" not in mud._look_action(db, user, {})[0].body
+        assert "/complete" not in entrance["instructions"]
+
+        exit_room = db.execute("SELECT room_key FROM mud_dungeon_rooms WHERE instance_id=? AND role='exit'",
+                               (run_id,)).fetchone()[0]
+        mud._set_player_location(db, user_id, "procedural", "dungeon_instance", exit_room, run_id)
+        mud._record_expedition_visit(db, run_id, user_id, exit_room)
+        room = mud._room_state(db, user_id)
+        assert room["name"] == mud._current_room(db, user_id)["name"]
+        assert room["is_dungeon_exit"] is True
+        assert "use /complete to finish" in room["instructions"]
+        look = mud._look_action(db, user, {})[0].body
+        assert look.startswith(f"{room['name']} [EXIT]\n")
+        assert "use /complete to finish" in look
+        db.commit()
+
+    client = app.test_client()
+    with client.session_transaction() as state:
+        state["user_id"] = user_id
+    page = client.get("/mud/w/stationnet:procedural")
+    assert page.status_code == 200
+    assert b'data-mud-room-name>' in page.data and b' [EXIT]</span>' in page.data
+    assert b'data-mud-scene-name>' in page.data and b' [EXIT]</h2>' in page.data
+    assert b"use /complete to finish" in page.data
+
+
 def test_shop_storage_completion_death_and_completion(game):
     app, user_id = game
     with app.app_context():

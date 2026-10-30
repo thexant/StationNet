@@ -1534,6 +1534,33 @@ def _numbered_npcs(rows):
         yield row, f"{row['name']} ({positions[key]})" if counts[key] > 1 else row["name"]
 
 
+def _npc_service_labels(database, definition_ids):
+    """Player-facing roles supplied by existing NPC service records."""
+    ids = tuple(dict.fromkeys(npc_id for npc_id in definition_ids if npc_id))
+    labels = {npc_id: [] for npc_id in ids}
+    if not ids:
+        return labels
+    placeholders = ",".join("?" for _ in ids)
+    roles = (
+        ("mud_npc_shops", "npc_definition_id", "Merchant"),
+        ("mud_npc_banks", "npc_definition_id", "Banker"),
+        ("mud_npc_trainers", "npc_definition_id", "Trainer"),
+        ("mud_quest_givers", "npc_definition_id", "Quest Giver"),
+        ("mud_professions", "recruiter_npc_definition_id", "Recruiter"),
+        ("mud_work_activities", "provider_npc_definition_id", "Work Provider"),
+    )
+    for table, column, label in roles:
+        for row in database.execute(
+            f"SELECT DISTINCT {column} FROM {table} WHERE {column} IN ({placeholders})", ids
+        ):
+            labels[row[0]].append(label)
+    return labels
+
+
+def _npc_service_suffix(labels):
+    return "".join(f" [{label}]" for label in labels)
+
+
 def _json_properties(raw):
     try:
         value = json.loads(raw or "{}")
@@ -1775,6 +1802,9 @@ def _leave_combat(database, user_id, scope_type="room", scope_key=None, defeated
             )
 
 
+DUNGEON_EXIT_HINT = "This is the expedition exit. Once it is clear, use /complete to finish."
+
+
 def _room_state(database, user_id):
     death = _death_summary(database, user_id)
     if death is not None:
@@ -1808,10 +1838,13 @@ def _room_state(database, user_id):
         )
         dialogue_responses = [{"number": index, "text": response["response_text"]}
                               for index, response in enumerate(responses, 1)]
+    numbered_npcs = list(_numbered_npcs(_room_npc_rows(database, room["id"], instance_id)))
+    service_labels = _npc_service_labels(database, (npc["definition_id"] for npc, _ in numbered_npcs))
     npcs = []
-    for npc, display_name in _numbered_npcs(_room_npc_rows(database, room["id"], instance_id)):
+    for npc, display_name in numbered_npcs:
         entry = {"id": npc["id"], "definition_id": npc["definition_id"],
                  "name": npc["name"], "display_name": display_name,
+                 "service_labels": service_labels.get(npc["definition_id"], []),
                  "description": npc["description"],
                  "hostile": _npc_stance(database, npc, user_id) == "Hostile"}
         if npc["combat_maximum_health"] is not None:
@@ -1833,12 +1866,17 @@ def _room_state(database, user_id):
         exits += [{"id": entrance["id"], "name": f"enter {entrance['name']}", "direction": None,
                    "destination_id": None, "destination_name": entrance["name"], "dungeon": True}
                   for entrance in _room_entrances(database, room["id"])]
+    is_dungeon_exit = bool(instance_id and room.get("role") == "exit")
+    instructions = (room["instructions"] if portal else
+                    _expedition_status_text(database, user_id) if instance_id else "")
+    if is_dungeon_exit:
+        instructions += " " + DUNGEON_EXIT_HINT
     return {
         "id": room["id"],
         "name": room["name"],
         "description": room["description"],
-        "instructions": (room["instructions"] if portal else
-                         _expedition_status_text(database, user_id) if instance_id else ""),
+        "instructions": instructions,
+        "is_dungeon_exit": is_dungeon_exit,
         "system_managed": portal,
         "mode": "procedural" if portal else room.get("mode", "traditional"),
         "exits": exits,
@@ -1867,6 +1905,7 @@ def _room_state(database, user_id):
 
 def _describe_room(database, room, viewer_id=None):
     instance_id = room.get("instance_id") if isinstance(room, dict) else None
+    is_dungeon_exit = bool(instance_id and room.get("role") == "exit")
     exits = _room_exits(database, room["id"], instance_id, viewer_id)
     routes = ", ".join(_player_exit_label(database, viewer_id, item) if viewer_id else _exit_label(item)
                        for item in exits) if exits else "none"
@@ -1874,14 +1913,18 @@ def _describe_room(database, room, viewer_id=None):
     people = ", ".join(item["display_name"] for item in occupants) if occupants else "none"
     items = ", ".join(label for _, label in _numbered_items(
         _room_item_rows(database, room["id"], instance_id, viewer_id))) or "none"
-    npcs = ", ".join(label for _, label in _numbered_npcs(
-        _room_npc_rows(database, room["id"], instance_id))) or "none"
+    numbered_npcs = list(_numbered_npcs(_room_npc_rows(database, room["id"], instance_id)))
+    service_labels = _npc_service_labels(database, (npc["definition_id"] for npc, _ in numbered_npcs))
+    npcs = ", ".join(label + _npc_service_suffix(service_labels.get(npc["definition_id"], ()))
+                     for npc, label in numbered_npcs) or "none"
     gathering = ", ".join(f"{label} ({row['activity']})" for row, label in _numbered_items(database.execute(
         "SELECT id,name,activity FROM mud_gathering_nodes WHERE room_id=? ORDER BY name,id", (room["id"],)))) if not instance_id else ""
     instructions = (
         f"\n\n{room['instructions']}"
         if room["id"] == PORTAL_ROOM_ID else ""
     )
+    if is_dungeon_exit:
+        instructions = f"\n\n{DUNGEON_EXIT_HINT}"
     if room["id"] != PORTAL_ROOM_ID and not instance_id:
         delves = [f"ENTER {entrance['name']}" + ("" if not viewer_id or _exit_open_to(database, viewer_id, entrance)
                                                 else " [barred]")
@@ -1891,7 +1934,8 @@ def _describe_room(database, room, viewer_id=None):
     states = " ".join(text for text in (_object_state_text(database, item) for item in
                                         _room_item_rows(database, room["id"], instance_id, viewer_id)) if text)
     return (
-        f"{room['name']}\n{room['description']}" + (f"\n\n{states}" if states else "") + f"{instructions}\n\n"
+        f"{room['name']}{' [EXIT]' if is_dungeon_exit else ''}\n{room['description']}"
+        + (f"\n\n{states}" if states else "") + f"{instructions}\n\n"
         f"Exits: {routes}\nOther players: {people}\nNPCs: {npcs}\nItems: {items}"
         + (f"\nGathering: {gathering} (use /gather <name>)" if gathering else "")
     )
@@ -3099,7 +3143,8 @@ def _examine_npc(_database, _user, room, target):
                " ".join(npc["name"].casefold().split()) in {key, name_key} for npc in rows):
         return None
     npc = _npc_match(rows, target)
-    body = f"{npc['name']}\n{npc['description']}"
+    labels = _npc_service_labels(_database, (npc["definition_id"],)).get(npc["definition_id"], ())
+    body = f"{npc['name']}{_npc_service_suffix(labels)}\n{npc['description']}"
     if npc["combat_maximum_health"] is not None:
         encounter = _encounter_row(_database, npc)
         body += (f"\n{_npc_stance(_database, npc, _user['id'] if _user else None)} · "

@@ -2,12 +2,13 @@ import hashlib
 import json
 import re
 import sqlite3
+from datetime import datetime
 from pathlib import Path
 
 import pytest
 
 import run
-from stationnet import create_app, instance, station_migration
+from stationnet import create_app, instance, station_hours, station_migration
 from stationnet.db import get_db
 
 
@@ -375,9 +376,18 @@ def test_pending_name_reaches_the_database(tmp_path):
     assert config["name"] == "New Name" and "pending_name" not in config
 
 
-def test_station_hours_line_follows_station_json(tmp_path):
+def test_station_hours_line_follows_station_json(tmp_path, monkeypatch):
     from stationnet.security import hash_password
-    hours = {"enabled": True, "open": "08:00", "close": "21:00", "adjusted_message": "OPEN LATE TONIGHT"}
+    clock = {"now": datetime(2026, 10, 28, 12)}
+
+    class StationTime(datetime):
+        @classmethod
+        def now(cls):
+            return clock["now"]
+
+    monkeypatch.setattr(station_hours, "datetime", StationTime)
+    hours = {"enabled": True, "open": "08:00", "close": "21:00",
+             "adjusted_message": "OPEN LATE TONIGHT", "early_message": "OPEN EARLY TODAY"}
     folder, station = _manager_station(tmp_path, name="Night Owl", hours=hours)
     (folder / instance.SETUP_NAME).write_text(json.dumps({
         "name": "Night Owl", "description": "", "username": "owl", "registration_mode": "open",
@@ -391,10 +401,16 @@ def test_station_hours_line_follows_station_json(tmp_path):
                          r'data-opens="[^"]+\+00:00" data-closes="[^"]+\+00:00" '
                          r'data-clock-format="12h">8:00AM - 9:00PM</b>', page)
         # The manager's changes show without restarting the station.
+        clock["now"] = datetime(2026, 10, 29, 4, 30)
+        page = client.get("/login").get_data(as_text=True)
+        assert 'data-early-open data-regular-hours="8:00AM - 9:00PM">OPEN EARLY TODAY</b>' in page
+        instance.update_config(folder, hours={**hours, "early_message": "EARLY BIRDS"})
+        assert "EARLY BIRDS" in client.get("/login").get_data(as_text=True)
         instance.update_config(folder, hours={**hours, "clock": "24h"}, hours_extended_until="2999-01-01T08:00")
         page = client.get("/login").get_data(as_text=True)
         assert "OPEN LATE TONIGHT" in page and "data-opens" not in page
         instance.update_config(folder, remove=("hours_extended_until",))
+        clock["now"] = datetime(2026, 10, 29, 8)
         assert "08:00 - 21:00" in client.get("/login").get_data(as_text=True)
         instance.update_config(folder, hours={**hours, "enabled": False})
         assert "station-hours-line" not in client.get("/login").get_data(as_text=True)

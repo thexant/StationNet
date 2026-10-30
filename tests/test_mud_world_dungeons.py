@@ -130,6 +130,37 @@ def test_each_entry_generates_a_separate_instance(world):
 
 # Transitions and progression ----------------------------------------------
 
+def test_authored_world_dungeon_exit_indicator_is_local_to_exit_room(world):
+    app, (_sysop, ana, _bo, _cy), _template_id = world
+    with app.app_context():
+        db = get_db()
+        run, _ = _enter(db, ana)
+        user = _user(db, ana)
+        entrance = mud._room_state(db, ana)
+        assert entrance["mode"] == "traditional"
+        assert entrance["is_dungeon_exit"] is False
+        assert "/complete" not in entrance["instructions"]
+        assert "[EXIT]" not in mud._look_action(db, user, {})[0].body
+
+        exit_room = db.execute("SELECT room_key FROM mud_dungeon_rooms WHERE instance_id=? AND role='exit'",
+                               (run["id"],)).fetchone()[0]
+        mud._set_player_location(db, ana, "traditional", "dungeon_instance", exit_room, run["id"])
+        mud._record_expedition_visit(db, run["id"], ana, exit_room)
+        room = mud._room_state(db, ana)
+        assert room["mode"] == "traditional"
+        assert room["is_dungeon_exit"] is True
+        assert "use /complete to finish" in room["instructions"]
+        look = mud._look_action(db, user, {})[0].body
+        assert look.startswith(f"{room['name']} [EXIT]\n")
+        assert "use /complete to finish" in look
+        db.commit()
+
+    page = _client(app, ana).get("/mud/w/stationnet")
+    assert page.status_code == 200
+    assert b'data-mud-room-name>' in page.data and b' [EXIT]</span>' in page.data
+    assert b'data-mud-scene-name>' in page.data and b' [EXIT]</h2>' in page.data
+
+
 def test_completion_returns_to_configured_room_on_the_world_track(world):
     app, (_sysop, ana, _bo, _cy), _template_id = world
     with app.app_context():

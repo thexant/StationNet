@@ -159,7 +159,8 @@ for(const mud of document.querySelectorAll("[data-mud]")){
     if(!room)return;
     const death=room.id==="stationnet:death-summary";
     if(death!==showingDeath){showingDeath=death;showRoom(death)}
-    roomName.textContent=room.name||"Unknown Location";
+    const displayRoomName=`${room.name||"Unknown Location"}${room.is_dungeon_exit?" [EXIT]":""}`;
+    roomName.textContent=displayRoomName;
     roomPreview.textContent=room.description||"";
     if(travelStatus){
       travelStatus.hidden=!room.travel;
@@ -171,12 +172,12 @@ for(const mud of document.querySelectorAll("[data-mud]")){
       wayfindingStatus.textContent=way?`TOWARD ${way.destination.toUpperCase()}${way.direction?` · ${way.direction.toUpperCase()}`:""} · /directions`:"";
       wayfindingStatus.title=way?.heading||"";
     }
-    sceneName.textContent=room.name||"Unknown Location";
+    sceneName.textContent=displayRoomName;
     roomDescription.textContent=room.description||"";
     if(roomInstructions){roomInstructions.textContent=room.instructions||"";roomInstructions.hidden=!room.instructions}
     roomExits.textContent=(room.exits||[]).map(exit=>exit.direction||exit.name).join(", ")||"none";
     if(roomItems)roomItems.textContent=(room.items||[]).map(item=>item.display_name||item.name).join(", ")||"none";
-    if(roomNpcs)roomNpcs.textContent=(room.npcs||[]).map(npc=>npc.display_name||npc.name).join(", ")||"none";
+    if(roomNpcs)roomNpcs.textContent=(room.npcs||[]).map(npc=>`${npc.display_name||npc.name}${(npc.service_labels||[]).map(label=>` [${label}]`).join("")}`).join(", ")||"none";
     if(roomGathering)roomGathering.textContent=(room.gathering||[]).map(node=>`${node.display_name||node.name} (${node.activity}${node.available?"":", replenishing"})`).join(", ")||"none";
     occupants.replaceChildren();
     if(!room.occupants?.length){

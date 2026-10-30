@@ -509,6 +509,7 @@ class HoursDialog(Dialog):
         self.warning = tk.StringVar(value=str(saved.get("warning_minutes") or station_hours.DEFAULT_WARNING))
         self.sleep = tk.BooleanVar(value=bool(saved.get("sleep")))
         self.message = tk.StringVar(value=saved.get("adjusted_message") or station_hours.DEFAULT_MESSAGE)
+        self.early_message = tk.StringVar(value=saved.get("early_message") or station_hours.DEFAULT_EARLY_MESSAGE)
         self.label = tk.StringVar(value=saved.get("label") or station_hours.LABEL)
         self._label(f"{info.name}: shown under the station's header while it runs. The station closes at its "
                     "closing time and is started at its opening time while this manager is open.",
@@ -534,6 +535,8 @@ class HoursDialog(Dialog):
                    "opening (see Power for this computer's wake settings).")
         self.widgets.append(self._field("Extended", self.message))
         self._hint("Shown in place of the hours after Stay Online, until the next opening.")
+        self.widgets.append(self._field("Early Open", self.early_message))
+        self._hint("Shown in place of the hours when the station starts before its next opening.")
         self.focus_widget = self.widgets[1]
         self._enabled_changed()
         self._finish([("Save", self.save, True)])
@@ -546,7 +549,8 @@ class HoursDialog(Dialog):
     def save(self):
         values = {"enabled": self.enabled.get(), "open": self.open.get(), "close": self.close.get(),
                   "clock": self.clock.get(), "warning_minutes": self.warning.get(), "sleep": self.sleep.get(),
-                  "adjusted_message": self.message.get(), "label": self.label.get()}
+                  "adjusted_message": self.message.get(), "early_message": self.early_message.get(),
+                  "label": self.label.get()}
         try:
             self.app.manager.update_hours(self.station_id, values)
         except (ValueError, OSError) as exc:
