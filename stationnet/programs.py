@@ -10,6 +10,7 @@ from time import monotonic
 from flask import (Blueprint, abort, current_app, flash, g, jsonify, redirect,
                    render_template, request, send_file, session, url_for)
 
+from . import auto_removal
 from .auth import admin_required, login_required
 from .db import get_db
 from .radio import (can_manage_broadcasts, effective_access, find_band,
@@ -147,6 +148,12 @@ class BroadcastCoordinator:
     def _tick(self):
         try:
             with self.app.app_context():
+                try:
+                    # The first tick follows startup, clearing anything that
+                    # came due while the station was offline.
+                    auto_removal.purge_expired(get_db())
+                except Exception:
+                    self.app.logger.exception("Auto-removal failed")
                 self.expire_leases()
                 database = get_db()
                 now = datetime.now(timezone.utc)

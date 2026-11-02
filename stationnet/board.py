@@ -1,5 +1,6 @@
 """Initial bulletin board service."""
 from flask import Blueprint, abort, flash, g, redirect, render_template, request, url_for
+from . import auto_removal, polls
 from .auth import login_required
 from .db import get_db
 from .security import validate_csrf
@@ -17,7 +18,8 @@ def index():
     denied = _allowed()
     if denied: return denied
     posts = get_db().execute("""SELECT p.id,p.title,p.body,p.created_at,u.username,u.callsign,
-      (SELECT COUNT(*) FROM posts r WHERE r.parent_id=p.id) reply_count
+      (SELECT COUNT(*) FROM posts r WHERE r.parent_id=p.id) reply_count,
+      EXISTS(SELECT 1 FROM polls l WHERE l.post_id=p.id) has_poll
       FROM posts p JOIN users u ON u.id=p.author_id WHERE p.parent_id IS NULL ORDER BY p.created_at DESC,p.id DESC""").fetchall()
     return render_template("board/index.html", posts=posts)
 
@@ -29,8 +31,13 @@ def create():
         if not 3 <= len(title) <= 120: flash("Subject must be between 3 and 120 characters.", "error")
         elif not 1 <= len(body) <= 5000: flash("Message must be between 1 and 5000 characters.", "error")
         else:
-            database=get_db(); cursor=database.execute("INSERT INTO posts(author_id,title,body) VALUES(?,?,?)", (g.user["id"],title,body)); database.commit()
-            flash("Bulletin transmitted.", "success"); return redirect(url_for("board.thread", post_id=cursor.lastrowid))
+            poll,error=polls.parse_form(request.form); expires_at,_,removal_error=auto_removal.parse_form(request.form)
+            if error or removal_error: flash(error or removal_error, "error")
+            else:
+                database=get_db(); cursor=database.execute("INSERT INTO posts(author_id,title,body,expires_at) VALUES(?,?,?,?)", (g.user["id"],title,body,expires_at))
+                if poll: polls.create(database,g.user["id"],poll,post_id=cursor.lastrowid)
+                database.commit()
+                flash("Bulletin transmitted.", "success"); return redirect(url_for("board.thread", post_id=cursor.lastrowid))
     return render_template("board/new.html")
 
 @bp.route("/<int:post_id>", methods=("GET", "POST"))
@@ -48,7 +55,7 @@ def thread(post_id):
             database.execute("INSERT INTO posts(author_id,parent_id,body) VALUES(?,?,?)", (g.user["id"],post_id,body)); database.commit()
             flash("Reply transmitted.", "success"); return redirect(url_for("board.thread", post_id=post_id))
     replies=database.execute("SELECT p.*,u.username,u.callsign FROM posts p JOIN users u ON u.id=p.author_id WHERE p.parent_id=? ORDER BY p.created_at,p.id", (post_id,)).fetchall()
-    return render_template("board/thread.html", post=post, replies=replies)
+    return render_template("board/thread.html", post=post, replies=replies, poll=polls.view_for_post(post_id))
 
 @bp.post("/<int:post_id>/delete")
 @login_required

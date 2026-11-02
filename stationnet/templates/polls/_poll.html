@@ -1,0 +1,11 @@
+{% macro poll_rows(poll) %}{% for option in poll.options %}<div class="poll-option{% if option.selected %} selected{% endif %}">
+  {% if poll.can_vote %}<label class="radio"><input type="{{ 'checkbox' if poll.allow_multiple else 'radio' }}" name="option_id" value="{{ option.id }}"{% if option.selected %} checked{% endif %}>{{ option.label }}</label>{% else %}<span>{{ option.label }}{% if option.selected %} (YOUR VOTE){% endif %}</span>{% endif %}
+  {% if poll.show_results %}<small>{{ option.votes }} {{ 'VOTE' if option.votes==1 else 'VOTES' }}</small><progress value="{{ option.votes }}" max="{{ poll.voters or 1 }}"></progress>{% endif %}
+</div>{% endfor %}{% endmacro %}
+<section class="poll" id="poll-{{ poll.id }}">
+  <p class="eyebrow">POLL{% if poll.closed %} / CLOSED{% elif poll.allow_multiple %} / MULTIPLE VOTES ALLOWED{% endif %}</p>
+  <p class="poll-question">{{ poll.question }}</p>
+  {% if poll.can_vote %}<form method="post" action="{{ url_for('polls.vote',poll_id=poll.id) }}"><input type="hidden" name="csrf_token" value="{{ session.csrf_token }}">{{ poll_rows(poll) }}<div class="button-row"><button>{{ 'CHANGE VOTE' if poll.voted else 'VOTE' }}</button>{% if poll.voted %}<button class="secondary" name="action" value="clear">CLEAR VOTE</button>{% endif %}</div></form>{% else %}{{ poll_rows(poll) }}{% endif %}
+  {% if poll.show_results %}<p class="muted">{{ poll.voters }} {{ 'USER HAS' if poll.voters==1 else 'USERS HAVE' }} VOTED</p>{% elif g.user %}<p class="muted">Results appear after you vote.</p>{% else %}<p class="muted"><a href="{{ url_for('auth.login',next=request.path) }}">Sign in to vote.</a> Results appear when the poll closes.</p>{% endif %}
+  {% if poll.can_manage and not poll.closed %}<form method="post" action="{{ url_for('polls.close',poll_id=poll.id) }}" data-confirm="Close this poll? No further votes can be cast."><input type="hidden" name="csrf_token" value="{{ session.csrf_token }}"><button class="danger">CLOSE POLL</button></form>{% endif %}
+</section>

@@ -120,6 +120,7 @@ def delete_account(user_id):
         database.execute("DELETE FROM arcade_games WHERE uploader_id=?", (user_id,))
         database.execute("DELETE FROM archive_files WHERE uploader_id=?", (user_id,))
         database.execute("DELETE FROM user_feed_comments WHERE author_id=?", (user_id,))
+        database.execute("DELETE FROM poll_votes WHERE user_id=?", (user_id,))
         database.execute("DELETE FROM posts WHERE author_id=?", (user_id,))
         database.execute("DELETE FROM announcements WHERE author_id=?", (user_id,))
         database.execute("DELETE FROM imageboard_replies WHERE author_id=?", (user_id,))

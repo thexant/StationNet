@@ -4,7 +4,7 @@ import secrets
 from datetime import timedelta
 from pathlib import Path
 from flask import Flask, abort, g, jsonify, redirect, render_template, request, url_for
-from . import announcements, applications, arcade, archive, auth, board, broadcast, chat, db, downloads, dungeons, events, feeds, header_taglines, imageboard, kiwix, library, mail, moderation, mud, mud_worlds, office, programs, pwa, radio, station, station_hours, themes, users, videos
+from . import announcements, applications, arcade, archive, auth, auto_removal, board, broadcast, chat, db, downloads, dungeons, events, feeds, header_taglines, imageboard, kiwix, library, mail, moderation, mud, mud_worlds, office, polls, programs, pwa, radio, station, station_hours, themes, users, videos
 from .ansi import station_banner
 from .realtime import DirectChatStore
 from .radio import RadioStore
@@ -83,6 +83,7 @@ def create_app(test_config=None):
     app.register_blueprint(users.bp)
     app.register_blueprint(feeds.bp)
     app.register_blueprint(announcements.bp)
+    app.register_blueprint(polls.bp)
     app.register_blueprint(events.bp)
     app.register_blueprint(applications.bp)
     app.register_blueprint(applications.admin_bp)
@@ -112,6 +113,8 @@ def create_app(test_config=None):
         purge_pending_files()
         auth.load_logged_in_user()
         g.station = db.get_station()
+        if request.endpoint != "static":
+            auto_removal.purge_expired(db.get_db())
         g.station_hours = station_hours.header_for(app.config.get("STATION_CONFIG")) if g.station else None
         g.station_icon_exists = (data_dir / "station_icon.png").is_file()
         midi_path = data_dir / "station_theme.mid"

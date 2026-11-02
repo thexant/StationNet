@@ -32,7 +32,7 @@ def can_create():
     ).fetchone() is not None
 
 
-def _parse_time(date, time, zone_name):
+def parse_local_time(date, time, zone_name):
     try:
         zone = ZoneInfo(zone_name)
         naive = datetime.fromisoformat(f"{date}T{time}")
@@ -43,7 +43,7 @@ def _parse_time(date, time, zone_name):
         if utc.astimezone(zone).replace(tzinfo=None) != naive:
             raise ValueError
         return utc.replace(microsecond=0).isoformat().replace("+00:00", "Z")
-    except (ValueError, ZoneInfoNotFoundError, TypeError, KeyError):
+    except (ValueError, ZoneInfoNotFoundError, TypeError, KeyError, OSError):
         return None
 
 
@@ -69,12 +69,12 @@ def _form_data():
             valid_url = False
         if not valid_url:
             return None, "Enter an HTTP or HTTPS event URL."
-    start = _parse_time(data["start_date"], data["start_time"], data["timezone"])
+    start = parse_local_time(data["start_date"], data["start_time"], data["timezone"])
     if not start:
         return None, "Enter a valid start date, time, and IANA timezone."
     if bool(data["end_date"]) != bool(data["end_time"]):
         return None, "Provide both an end date and end time."
-    end = _parse_time(data["end_date"], data["end_time"], data["timezone"]) if data["end_date"] else None
+    end = parse_local_time(data["end_date"], data["end_time"], data["timezone"]) if data["end_date"] else None
     if data["end_date"] and not end:
         return None, "Enter a valid end date and time."
     if end and end <= start:

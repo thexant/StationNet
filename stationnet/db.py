@@ -329,6 +329,27 @@ CREATE TABLE IF NOT EXISTS announcements (
  title TEXT NOT NULL, body TEXT NOT NULL,
  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);
+CREATE TABLE IF NOT EXISTS polls (
+ id INTEGER PRIMARY KEY AUTOINCREMENT,
+ post_id INTEGER UNIQUE REFERENCES posts(id) ON DELETE CASCADE,
+ announcement_id INTEGER UNIQUE REFERENCES announcements(id) ON DELETE CASCADE,
+ owner_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+ question TEXT NOT NULL,
+ allow_multiple INTEGER NOT NULL DEFAULT 0 CHECK(allow_multiple IN (0,1)),
+ closed_at TEXT,
+ created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+ CHECK((post_id IS NULL)<>(announcement_id IS NULL)));
+CREATE TABLE IF NOT EXISTS poll_options (
+ id INTEGER PRIMARY KEY AUTOINCREMENT,
+ poll_id INTEGER NOT NULL REFERENCES polls(id) ON DELETE CASCADE,
+ position INTEGER NOT NULL, label TEXT NOT NULL);
+CREATE INDEX IF NOT EXISTS idx_poll_options_poll ON poll_options(poll_id,position);
+CREATE TABLE IF NOT EXISTS poll_votes (
+ option_id INTEGER NOT NULL REFERENCES poll_options(id) ON DELETE CASCADE,
+ user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+ created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+ PRIMARY KEY(option_id,user_id));
+CREATE INDEX IF NOT EXISTS idx_poll_votes_user ON poll_votes(user_id);
 CREATE TABLE IF NOT EXISTS radio_bands (
  id INTEGER PRIMARY KEY, name TEXT NOT NULL,
  start_khz INTEGER NOT NULL, end_khz INTEGER NOT NULL,
@@ -1243,6 +1264,17 @@ def close_db(_error=None):
     if connection is not None:
         connection.close()
 
+def _migrate_post_options(database):
+    """Add auto-removal times; the indexes need the columns on older databases."""
+    for table, additions in (("posts", ("expires_at",)), ("announcements", ("expires_at", "expires_timezone"))):
+        columns = {row["name"] for row in database.execute(f"PRAGMA table_info({table})")}
+        for column in additions:
+            if column not in columns:
+                database.execute(f"ALTER TABLE {table} ADD COLUMN {column} TEXT")
+        database.execute(f"CREATE INDEX IF NOT EXISTS idx_{table}_expires ON {table}(expires_at) "
+                         "WHERE expires_at IS NOT NULL")
+
+
 def _migrate_events(database):
     columns = {row["name"] for row in database.execute("PRAGMA table_info(station)")}
     if "events_enabled" not in columns:
@@ -1431,6 +1463,7 @@ def init_db():
     if "description" not in {row["name"] for row in database.execute("PRAGMA table_info(mud_characters)")}:
         database.execute("ALTER TABLE mud_characters ADD COLUMN description TEXT NOT NULL DEFAULT ''")
     _migrate_events(database)
+    _migrate_post_options(database)
     _migrate_office(database)
     _migrate_mud_dungeon_content_types(database)
     _migrate_station_customization(database)

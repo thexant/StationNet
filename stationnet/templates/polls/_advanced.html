@@ -1,0 +1,23 @@
+{% set poll_options = request.form.getlist('poll_option') %}
+{% set can_add_poll = not announcement %}
+<details class="advanced-options" data-post-options{% if request.form.get('poll_enabled') or request.form.get('expires_date') or request.form.get('expires_time') or removal %} open{% endif %}>
+  <summary>ADVANCED</summary>
+  <div class="form-grid">
+    {% if can_add_poll %}<fieldset>
+      <legend>POLL</legend>
+      <label class="switch"><input type="checkbox" name="poll_enabled" value="1" data-poll-toggle{% if request.form.get('poll_enabled') %} checked{% endif %}>Add a poll</label>
+      <div class="form-grid poll-fields" data-poll-fields>
+        <label>Question<input name="poll_question" maxlength="200" value="{{ request.form.get('poll_question','') }}"></label>
+        {% for index in range(10) %}<label data-poll-option>Response {{ index + 1 }}<input name="poll_option" maxlength="100" value="{{ poll_options[index] if index < poll_options|length else '' }}"></label>{% endfor %}
+        <button type="button" class="secondary" data-poll-add hidden>ADD RESPONSE</button>
+        <label class="switch"><input type="checkbox" name="poll_multiple" value="1"{% if request.form.get('poll_multiple') %} checked{% endif %}>Allow multiple votes</label>
+      </div>
+    </fieldset>{% else %}<p class="muted">Polls can only be added when publishing.</p>{% endif %}
+    <fieldset>
+      <legend>AUTO-REMOVAL</legend>
+      <div class="event-fields"><label>Remove on<input type="date" name="expires_date" value="{{ request.form.get('expires_date',removal.date if removal else '') }}"></label><label>At<input type="time" name="expires_time" value="{{ request.form.get('expires_time',removal.time if removal else '') }}"></label></div>
+      <label>Timezone<input name="expires_timezone" maxlength="80" value="{{ request.form.get('expires_timezone',removal.timezone if removal else '') }}" placeholder="America/Edmonton" data-expires-timezone><small>IANA timezone. Defaults to your device timezone. Leave the date and time empty to keep this indefinitely.</small></label>
+    </fieldset>
+  </div>
+</details>
+<script src="{{ url_for('static',filename='post-options.js',v='1') }}" defer></script>

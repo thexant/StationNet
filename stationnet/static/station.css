@@ -1531,3 +1531,20 @@ details[open] > summary { margin-bottom: .6rem; }
   .application-surface { padding: .75rem; }
   .statusbar span:nth-child(2) { display: inline; overflow-wrap: anywhere; }
 }
+
+/* Bulletin and announcement extras */
+.advanced-options > summary { display: inline-flex; align-items: center; min-height: 2.5rem; padding: .65rem .9rem; border: 1px solid var(--cyan); color: var(--cyan); background: var(--black); font-size: .7rem; font-weight: 700; letter-spacing: .06em; list-style: none; cursor: pointer; }
+.advanced-options > summary::-webkit-details-marker { display: none; }
+.advanced-options > summary::marker { content: ''; }
+.poll-fields [hidden], .poll-fields[hidden] { display: none; }
+.poll { display: grid; gap: .6rem; margin: 1rem 0; padding: .8rem; border: 1px dotted var(--green-dim); }
+.poll form { display: grid; gap: .6rem; margin: 0; }
+.poll .eyebrow, .poll .muted { margin: 0; }
+.poll-question { margin: 0; color: var(--green-bright); overflow-wrap: anywhere; }
+.poll-option { display: grid; grid-template-columns: 1fr auto; gap: .2rem .8rem; align-items: center; overflow-wrap: anywhere; }
+.poll-option .radio { margin: 0; }
+.poll-option small { color: var(--grey); font-size: var(--text-xs); }
+.poll-option progress { grid-column: 1 / -1; width: 100%; height: .4rem; accent-color: var(--green); }
+.poll-option.selected > span { color: var(--cyan); }
+.poll-tag { padding: .05rem .3rem; border: 1px solid var(--magenta); color: var(--magenta); font-size: var(--text-xs); vertical-align: middle; }
+.auto-removal-note { margin: .6rem 0 0; font-size: var(--text-xs); }
