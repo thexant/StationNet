@@ -4,7 +4,7 @@ import secrets
 from datetime import timedelta
 from pathlib import Path
 from flask import Flask, abort, g, jsonify, redirect, render_template, request, url_for
-from . import announcements, applications, arcade, archive, auth, auto_removal, board, broadcast, chat, db, downloads, dungeons, events, feeds, header_taglines, imageboard, kiwix, library, mail, moderation, mud, mud_worlds, office, polls, programs, pwa, radio, station, station_hours, themes, users, videos
+from . import announcements, applications, arcade, archive, auth, auto_removal, board, broadcast, chat, db, downloads, dungeons, events, feeds, header_taglines, imageboard, kiwix, library, mail, moderation, mud, mud_worlds, office, polls, programs, pwa, radio, station, station_hours, themes, tv, users, videos
 from .ansi import station_banner
 from .realtime import DirectChatStore
 from .radio import RadioStore
@@ -80,6 +80,8 @@ def create_app(test_config=None):
     app.register_blueprint(videos.bp)
     app.register_blueprint(library.bp)
     app.register_blueprint(arcade.bp)
+    app.register_blueprint(tv.bp)
+    app.register_blueprint(tv.admin_bp)
     app.register_blueprint(users.bp)
     app.register_blueprint(feeds.bp)
     app.register_blueprint(announcements.bp)
@@ -173,7 +175,7 @@ def create_app(test_config=None):
             abort(404)
         if (g.station is not None and g.user is None and not g.station["guest_access"]
                 and (endpoint == "station.terminal"
-                     or request.blueprint in {"board", "announcements", "kiwix", "videos", "library", "arcade"})):
+                     or request.blueprint in {"board", "announcements", "kiwix", "videos", "library", "arcade", "tv"})):
             return redirect(url_for("auth.login", next=request.path))
 
     @app.context_processor

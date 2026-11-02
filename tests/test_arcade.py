@@ -227,6 +227,8 @@ def test_psp_pages_are_cross_origin_isolated_and_threaded(tmp_path):
     assert b'EJS_core = "ppsspp"' in player.data
     assert b"window.EJS_threads = true;" in player.data
     assert b"ejs_threads: 'enabled'" in player.data
+    # Debug mode makes PPSSPP log verbosely and disables caching.
+    assert b"EJS_DEBUG_XX" not in player.data and b"window.EJS_sourceFiles = true;" in player.data
     for name in ("ppsspp-thread-wasm.data", "ppsspp-assets.zip", "reports/ppsspp.json"):
         assert client.get("/arcade/emulatorjs/data/cores/" + name).status_code == 200
     assert client.get("/arcade/emulatorjs/data/cores/ppsspp-wasm.data").status_code == 404
@@ -236,6 +238,7 @@ def test_psp_pages_are_cross_origin_isolated_and_threaded(tmp_path):
     gb_player = client.get("/arcade/2/player")
     assert "Cross-Origin-Embedder-Policy" not in gb_player.headers
     assert b"EJS_threads" not in gb_player.data and b"ejs_threads: 'disabled'" in gb_player.data
+    assert b"EJS_DEBUG_XX" not in gb_player.data and b"window.EJS_sourceFiles = true;" in gb_player.data
 
 
 def test_psp_upload_limit_is_configurable_and_zip_checked(tmp_path):

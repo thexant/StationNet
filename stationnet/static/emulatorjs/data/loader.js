@@ -69,7 +69,8 @@
         }
     }
 
-    if (("undefined" != typeof EJS_DEBUG_XX && true === EJS_DEBUG_XX)) {
+    // StationNet: EJS_sourceFiles loads src/ without enabling runtime debug mode.
+    if (("undefined" != typeof EJS_DEBUG_XX && true === EJS_DEBUG_XX) || true === window.EJS_sourceFiles) {
         for (let i = 0; i < scripts.length; i++) {
             await loadScript(scripts[i]);
         }

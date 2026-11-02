@@ -1,0 +1,227 @@
+{% extends "base.html" %}
+{% block title %}TV Management{% endblock %}
+{% block extra_styles %}<link rel="stylesheet" href="{{ url_for('static',filename='tv-admin.css',v='1') }}">{% endblock %}
+{% block content %}
+<section class="tv-admin" data-tv-admin data-api="{{ url_for('tv_admin.manage') }}/api" data-csrf="{{ session.csrf_token }}">
+  <div class="board-head">
+    <div><p class="eyebrow">SYSOP CONTROL / TV</p><h1>Television management</h1></div>
+    <div class="button-row">
+      <a class="button secondary" href="{{ url_for('station.settings') }}#tv-service">TV SETTINGS</a>
+      {% if g.station.tv_enabled %}<a class="button secondary" href="{{ url_for('tv.index') }}">WATCH TV</a>{% endif %}
+    </div>
+  </div>
+  {% if not g.station.tv_enabled %}<p class="flash warning">SYS:// TV is disabled. You can prepare channels and schedules now; enable TV in TV SETTINGS to put them on air.</p>{% endif %}
+
+  <nav class="tv-admin-tabs" aria-label="TV management sections">
+    <button type="button" data-tab="schedule" aria-current="page">SCHEDULE</button>
+    <button type="button" data-tab="channels">CHANNELS</button>
+    <button type="button" data-tab="library">PROGRAMMING LIBRARY</button>
+  </nav>
+  <p class="tv-admin-status" data-status role="status" aria-live="polite"></p>
+
+  <!-- Schedule -->
+  <section data-panel="schedule" class="tv-admin-panel">
+    <div class="tv-admin-toolbar">
+      <label>Channel<select data-schedule-channel></select></label>
+      <label>Day<input type="date" data-schedule-date></label>
+      <span class="button-row">
+        <button type="button" class="secondary" data-day-step="-1" aria-label="Previous day">&#x25C4;</button>
+        <button type="button" class="secondary" data-day-today>TODAY</button>
+        <button type="button" class="secondary" data-day-step="1" aria-label="Next day">&#x25BA;</button>
+      </span>
+      <span class="tv-admin-zone">TIMES IN <b data-zone></b></span>
+    </div>
+    <div class="button-row">
+      <button type="button" data-add-block>+ ADD PROGRAMMING BLOCK</button>
+      <button type="button" class="secondary" data-copy-day>COPY THIS DAY&hellip;</button>
+    </div>
+    <div data-conflicts></div>
+    <h2 class="tv-admin-heading">On air this day</h2>
+    <div class="app-table-wrap"><table class="tv-admin-table">
+      <thead><tr><th>TIME</th><th>PROGRAMME</th><th>LENGTH</th><th>BLOCK</th></tr></thead>
+      <tbody data-day-airings></tbody>
+    </table></div>
+    <h2 class="tv-admin-heading">Programming blocks on this channel</h2>
+    <p class="muted">A block starts at a fixed time and airs its programmes back to back. One-off blocks override weekly blocks; a block overrides any earlier block for its own time span, and the earlier block resumes afterwards.</p>
+    <div class="app-table-wrap"><table class="tv-admin-table">
+      <thead><tr><th>BLOCK</th><th>AIRS</th><th>START</th><th>RUNS</th><th>PROGRAMMES</th><th></th></tr></thead>
+      <tbody data-blocks></tbody>
+    </table></div>
+  </section>
+
+  <!-- Channels -->
+  <section data-panel="channels" class="tv-admin-panel" hidden>
+    <div class="button-row"><button type="button" data-add-channel>+ NEW CHANNEL</button></div>
+    <div class="app-table-wrap"><table class="tv-admin-table">
+      <thead><tr><th>ORDER</th><th>NO.</th><th>CHANNEL</th><th>STATUS</th><th>GAPS</th><th></th></tr></thead>
+      <tbody data-channels></tbody>
+    </table></div>
+  </section>
+
+  <!-- Library -->
+  <section data-panel="library" class="tv-admin-panel" hidden>
+    <div class="tv-admin-split">
+      <section class="terminal-card">
+        <p class="eyebrow">UPLOAD PROGRAMMING</p>
+        <div class="tv-dropzone" data-dropzone tabindex="0">
+          <strong>DROP VIDEO FILES OR FOLDERS HERE</strong>
+          <span class="muted">Formats: <span data-formats></span>. Large files upload in resumable chunks; re-adding an interrupted file resumes it.</span>
+          <span class="button-row">
+            <label class="button secondary">CHOOSE FILES<input type="file" multiple accept="video/mp4,video/webm,video/ogg,.mp4,.m4v,.webm,.ogv" data-file-input hidden></label>
+            <label class="button secondary">CHOOSE FOLDER<input type="file" webkitdirectory multiple data-folder-input hidden></label>
+          </span>
+        </div>
+        <div class="tv-queue-summary" data-queue-summary hidden>
+          <div class="tv-progress"><i data-queue-progress></i></div>
+          <span data-queue-text></span>
+        </div>
+        <ol class="tv-queue" data-queue></ol>
+      </section>
+      <section class="terminal-card">
+        <p class="eyebrow">IMPORT FROM SERVER FOLDER</p>
+        <p class="muted">Copy or move videos into this folder on the station computer, keeping any sub-folders, then scan. Files stay where they are and are referenced in place; deleting them from the library never deletes the originals.</p>
+        <code class="tv-import-path" data-import-path></code>
+        <div class="button-row"><button type="button" data-import-scan>SCAN IMPORT FOLDER</button></div>
+        <div class="tv-queue-summary" data-import-summary hidden>
+          <div class="tv-progress"><i data-import-progress></i></div>
+          <span data-import-text></span>
+        </div>
+        <ol class="tv-queue" data-import-log></ol>
+      </section>
+    </div>
+    <div class="tv-admin-toolbar">
+      <label>Search<input type="search" data-library-search placeholder="Title or folder"></label>
+      <label>Folder<select data-library-folder><option value="">All folders</option></select></label>
+      <label>Type<select data-library-kind><option value="">All types</option><option value="program">Programmes</option><option value="ident">Idents</option><option value="bumper">Bumpers</option><option value="offair">Off-air</option></select></label>
+      <button type="button" class="secondary" data-recheck>RECHECK FILES</button>
+    </div>
+    <div class="app-table-wrap"><table class="tv-admin-table">
+      <thead><tr><th>TITLE</th><th>FOLDER</th><th>TYPE</th><th>LENGTH</th><th>SIZE</th><th>SOURCE</th><th>USED</th><th></th></tr></thead>
+      <tbody data-library></tbody>
+    </table></div>
+    <video data-probe preload="metadata" muted hidden></video>
+  </section>
+
+  <!-- Channel dialog -->
+  <dialog class="app-dialog tv-dialog" data-channel-dialog>
+    <form method="dialog" class="app-dialog-body form-grid" data-channel-form>
+      <h2 data-channel-dialog-title>Channel</h2>
+      <div class="tv-form-row">
+        <label>Number<input type="number" name="number" min="1" max="9999" required></label>
+        <label class="tv-grow">Name<input name="name" maxlength="60" required></label>
+      </div>
+      <label>Description<textarea name="description" maxlength="500" rows="2"></textarea></label>
+      <label class="check"><input type="checkbox" name="enabled" checked> On air (visible to viewers)</label>
+      <label>When nothing is scheduled<select name="gap_mode"><option value="offair">Show the off-air screen</option><option value="filler">Loop filler clips (idents and bumpers)</option></select></label>
+      <label>Custom off-air video<select name="offair_media_id" data-media-select="offair"></select><small>Loops on the off-air screen instead of the test card.</small></label>
+      <fieldset>
+        <legend>Filler clips</legend>
+        <ol class="tv-pick-list" data-filler-list></ol>
+        <div class="tv-form-row"><select class="tv-grow" data-filler-select></select><button type="button" class="secondary" data-filler-add>ADD</button></div>
+      </fieldset>
+      <fieldset>
+        <legend>Channel logo</legend>
+        <img class="tv-logo-preview" data-logo-preview alt="" hidden>
+        <input type="file" accept="image/*" data-logo-input>
+        <label class="check"><input type="checkbox" data-logo-remove> Remove current logo</label>
+      </fieldset>
+      <div class="app-dialog-actions button-row">
+        <button type="button" class="secondary" data-close>CANCEL</button>
+        <button value="save">SAVE CHANNEL</button>
+      </div>
+    </form>
+  </dialog>
+
+  <!-- Media dialog -->
+  <dialog class="app-dialog tv-dialog" data-media-dialog>
+    <form method="dialog" class="app-dialog-body form-grid" data-media-form>
+      <h2>Programme details</h2>
+      <label>Title<input name="title" maxlength="150" required></label>
+      <label>Description<textarea name="description" maxlength="5000" rows="4"></textarea><small>Shown in the guide and the INFO banner.</small></label>
+      <div class="tv-form-row">
+        <label class="tv-grow">Folder<input name="folder" maxlength="300" list="tv-folder-list"></label>
+        <label>Type<select name="kind"><option value="program">Programme</option><option value="ident">Station ident</option><option value="bumper">Bumper / intermission</option><option value="offair">Off-air loop</option></select></label>
+      </div>
+      <datalist id="tv-folder-list" data-folder-list></datalist>
+      <p class="muted" data-media-facts></p>
+      <video class="tv-preview" data-media-preview controls preload="none"></video>
+      <div class="app-dialog-actions button-row">
+        <button type="button" class="secondary" data-close>CANCEL</button>
+        <button value="save">SAVE</button>
+      </div>
+    </form>
+  </dialog>
+
+  <!-- Block dialog -->
+  <dialog class="app-dialog tv-dialog tv-block-dialog" data-block-dialog>
+    <form method="dialog" class="app-dialog-body form-grid" data-block-form>
+      <h2 data-block-dialog-title>Programming block</h2>
+      <div class="tv-form-row">
+        <label class="tv-grow">Block title<input name="title" maxlength="150" placeholder="Defaults to the first programme"></label>
+        <label class="check"><input type="checkbox" name="enabled" checked> Enabled</label>
+      </div>
+      <label>Description<textarea name="description" maxlength="2000" rows="2"></textarea></label>
+      <fieldset class="tv-when">
+        <legend>When</legend>
+        <div class="tv-form-row">
+          <label class="radio"><input type="radio" name="kind" value="once" checked> One-off</label>
+          <label class="radio"><input type="radio" name="kind" value="weekly"> Every week</label>
+        </div>
+        <label data-when="once">Air date<input type="date" name="start_date"></label>
+        <div class="tv-weekdays" data-when="weekly">{% for day in ['MON','TUE','WED','THU','FRI','SAT','SUN'] %}<label class="check"><input type="checkbox" name="weekday" value="{{ loop.index0 }}"> {{ day }}</label>{% endfor %}</div>
+        <div class="tv-form-row" data-when="weekly">
+          <label>Valid from<input type="date" name="valid_from"></label>
+          <label>Valid until<input type="date" name="valid_until"></label>
+        </div>
+        <div class="tv-form-row">
+          <label>Start time<input type="time" name="start_time" required step="60"></label>
+          <button type="button" class="secondary" data-start-after>START AFTER PREVIOUS BLOCK</button>
+        </div>
+        <div class="tv-form-row">
+          <label class="check"><input type="checkbox" name="loop"> Repeat the programmes until</label>
+          <input type="time" name="loop_until" step="60" aria-label="Repeat until">
+        </div>
+      </fieldset>
+      <fieldset>
+        <legend>Programmes (air back to back)</legend>
+        <div class="app-table-wrap"><table class="tv-admin-table tv-items">
+          <thead><tr><th>AIRS</th><th>PROGRAMME</th><th>LENGTH</th><th></th></tr></thead>
+          <tbody data-items></tbody>
+        </table></div>
+        <p class="tv-block-total" data-block-total></p>
+        <div class="tv-form-row">
+          <input type="search" data-item-search placeholder="Search library" aria-label="Search library">
+          <select class="tv-grow" data-item-select aria-label="Library programme"></select>
+          <button type="button" class="secondary" data-item-add>ADD</button>
+        </div>
+        <div class="tv-form-row">
+          <select class="tv-grow" data-item-folder aria-label="Library folder"></select>
+          <button type="button" class="secondary" data-item-add-folder>ADD WHOLE FOLDER</button>
+        </div>
+      </fieldset>
+      <div class="app-dialog-actions button-row">
+        <button type="button" class="danger" data-block-delete>DELETE BLOCK</button>
+        <button type="button" class="secondary" data-close>CANCEL</button>
+        <button value="save">SAVE BLOCK</button>
+      </div>
+    </form>
+  </dialog>
+
+  <!-- Copy day dialog -->
+  <dialog class="app-dialog tv-dialog" data-copy-dialog>
+    <form method="dialog" class="app-dialog-body form-grid" data-copy-form>
+      <h2>Copy one-off blocks</h2>
+      <p class="muted">Copies this day&rsquo;s one-off blocks on this channel to every day in the range. Weekly blocks already repeat by themselves.</p>
+      <div class="tv-form-row">
+        <label>First day<input type="date" name="from" required></label>
+        <label>Last day<input type="date" name="to" required></label>
+      </div>
+      <div class="app-dialog-actions button-row">
+        <button type="button" class="secondary" data-close>CANCEL</button>
+        <button value="save">COPY</button>
+      </div>
+    </form>
+  </dialog>
+</section>
+<script src="{{ url_for('static',filename='tv-admin.js',v='1') }}" defer></script>
+{% endblock %}

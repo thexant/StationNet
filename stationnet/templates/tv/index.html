@@ -1,0 +1,78 @@
+{% extends "base.html" %}
+{% block title %}TV{% endblock %}
+{% block extra_styles %}<link rel="stylesheet" href="{{ url_for('static',filename='tv.css',v='1') }}">{% endblock %}
+{% block content %}
+<section class="tv-set" data-tv data-now-url="{{ url_for('tv.now_playing') }}" data-guide-url="{{ url_for('tv.guide') }}"
+         data-channels='{{ channels|tojson }}' data-default-channel="{{ default_channel_id or '' }}"
+         {% if request.args.get('guide') %}data-open-guide{% endif %}>
+  <div class="tv-cabinet">
+    <div class="tv-screen" data-tv-screen tabindex="0" aria-label="Television screen. Press G for the guide.">
+      <video class="tv-video" data-tv-video playsinline preload="auto" disablepictureinpicture disableremoteplayback></video>
+      <canvas class="tv-static" data-tv-static width="160" height="90" hidden></canvas>
+
+      <div class="tv-card tv-testcard" data-tv-offair hidden>
+        <div class="tv-bars" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i><i></i><i></i></div>
+        <div class="tv-bars-low" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i><i></i><i></i></div>
+        <div class="tv-card-caption"><strong data-tv-offair-channel></strong><span>OFF AIR</span><small data-tv-offair-resume></small></div>
+      </div>
+      <div class="tv-card tv-standby" data-tv-standby hidden>
+        <strong>PLEASE STAND BY</strong><span data-tv-standby-text>WE ARE EXPERIENCING TECHNICAL DIFFICULTIES</span>
+      </div>
+      <div class="tv-card tv-poweroff" data-tv-poweroff>
+        <button type="button" class="tv-power-big" data-tv-power-on>&#x23FB; POWER</button>
+        <span>PRESS POWER TO TUNE IN</span>
+      </div>
+      {% if not channels %}
+      <div class="tv-card tv-nochannels"><strong>NO SIGNAL</strong><span>NO CHANNELS ARE BROADCASTING</span></div>
+      {% endif %}
+
+      <div class="tv-osd-number" data-tv-osd-number aria-live="polite" hidden></div>
+      <div class="tv-osd-hint" data-tv-hint hidden></div>
+      <div class="tv-osd-volume" data-tv-osd-volume hidden><span data-tv-volume-label>VOLUME</span><b data-tv-volume-bar></b></div>
+      <div class="tv-osd" data-tv-osd hidden>
+        <div class="tv-osd-head"><img data-tv-osd-logo alt="" hidden><span class="tv-osd-channel" data-tv-osd-channel></span><span class="tv-osd-clock" data-tv-osd-clock></span></div>
+        <div class="tv-osd-now"><span class="tv-osd-tag">NOW</span><strong data-tv-osd-title></strong><span class="tv-osd-time" data-tv-osd-time></span></div>
+        <div class="tv-osd-progress"><i data-tv-osd-progress></i></div>
+        <p class="tv-osd-description" data-tv-osd-description hidden></p>
+        <div class="tv-osd-next"><span class="tv-osd-tag">NEXT</span><span data-tv-osd-next></span></div>
+      </div>
+
+      <div class="tv-guide" data-tv-guide hidden role="dialog" aria-label="TV guide">
+        <header class="tv-guide-head">
+          <span class="tv-guide-brand">TV<br>GUIDE</span>
+          <span class="tv-guide-clock" data-guide-clock></span>
+          <strong class="tv-guide-title">ALL CHANNELS</strong>
+        </header>
+        <div class="tv-guide-times" data-guide-times></div>
+        <div class="tv-guide-rows" data-guide-rows role="grid"></div>
+        <div class="tv-guide-info" data-guide-info aria-live="polite"></div>
+        <footer class="tv-guide-legend">
+          <button type="button" data-guide-action="page-up"><i class="key-red"></i>Page Up</button>
+          <button type="button" data-guide-action="page-down"><i class="key-green"></i>Page Down</button>
+          <button type="button" data-guide-action="day-forward"><i class="key-amber"></i>+24 Hours</button>
+          <button type="button" data-guide-action="day-back"><i class="key-cyan"></i>&minus;24 Hours</button>
+          <span class="tv-guide-select">Press <b>SELECT</b> to view</span>
+        </footer>
+      </div>
+    </div>
+
+    <div class="tv-receiver" aria-label="Receiver controls">
+      <div class="tv-vfd" aria-live="polite">
+        <span class="tv-vfd-number" data-tv-number>---</span>
+        <span class="tv-vfd-name" data-tv-name>STANDBY</span>
+        <span class="tv-vfd-clock" data-tv-clock>--:--</span>
+        <span class="tv-vfd-line" data-tv-nowline></span>
+      </div>
+      <div class="tv-controls">
+        <div class="tv-control-group"><button type="button" class="tv-key tv-key-power" data-tv-power aria-label="Power">&#x23FB;</button></div>
+        <div class="tv-control-group"><span class="tv-control-label">CH</span><button type="button" class="tv-key" data-tv-channel-up aria-label="Channel up">&#x25B2;</button><button type="button" class="tv-key" data-tv-channel-down aria-label="Channel down">&#x25BC;</button></div>
+        <div class="tv-control-group"><span class="tv-control-label">VOL</span><button type="button" class="tv-key" data-tv-volume-down aria-label="Volume down">&minus;</button><button type="button" class="tv-key" data-tv-volume-up aria-label="Volume up">+</button><button type="button" class="tv-key" data-tv-mute aria-label="Mute" aria-pressed="false">MUTE</button></div>
+        <div class="tv-control-group"><button type="button" class="tv-key" data-tv-guide-toggle>GUIDE</button><button type="button" class="tv-key" data-tv-info>INFO</button><button type="button" class="tv-key" data-tv-fullscreen aria-label="Fullscreen">&#x26F6;</button></div>
+        <div class="tv-control-group tv-keypad" aria-label="Channel number keypad">{% for digit in '1234567890' %}<button type="button" class="tv-key tv-key-digit" data-tv-digit="{{ digit }}">{{ digit }}</button>{% endfor %}</div>
+      </div>
+    </div>
+  </div>
+  <p class="muted tv-help">KEYS: 0&ndash;9 CHANNEL &middot; &uarr;&darr;/PGUP PGDN CHANNEL &middot; [ ] VOLUME &middot; M MUTE &middot; G GUIDE &middot; I INFO &middot; F FULLSCREEN &middot; ESC CLOSE</p>
+</section>
+<script src="{{ url_for('static',filename='tv.js',v='1') }}" defer></script>
+{% endblock %}

@@ -1481,6 +1481,7 @@ def init_db():
     _migrate_imageboard(database)
     _migrate_library(database)
     _migrate_arcade(database)
+    _migrate_tv(database)
     _migrate_registration_policy(database)
     _migrate_community_fields(database)
     _migrate_mail_threads(database)
@@ -2390,6 +2391,62 @@ def _migrate_arcade(database):
      CREATE INDEX IF NOT EXISTS idx_arcade_games_title ON arcade_games(title COLLATE NOCASE);
      CREATE TABLE IF NOT EXISTS arcade_core_preferences (
      platform TEXT PRIMARY KEY, core TEXT NOT NULL);""")
+
+
+def _migrate_tv(database):
+    columns = {row["name"] for row in database.execute("PRAGMA table_info(station)")}
+    for name, definition in (("tv_enabled", "INTEGER NOT NULL DEFAULT 0 CHECK(tv_enabled IN (0,1))"),
+                             ("tv_max_upload_mb", "INTEGER NOT NULL DEFAULT 8192"),
+                             ("tv_timezone", "TEXT NOT NULL DEFAULT 'UTC'"),
+                             ("tv_default_channel_id", "INTEGER")):
+        if name not in columns:
+            database.execute(f"ALTER TABLE station ADD COLUMN {name} {definition}")
+    database.executescript("""CREATE TABLE IF NOT EXISTS tv_state (
+     id INTEGER PRIMARY KEY CHECK(id=1), version INTEGER NOT NULL DEFAULT 1);
+     INSERT OR IGNORE INTO tv_state(id,version) VALUES(1,1);
+     CREATE TABLE IF NOT EXISTS tv_media (
+     id INTEGER PRIMARY KEY AUTOINCREMENT,
+     title TEXT NOT NULL, description TEXT NOT NULL DEFAULT '', folder TEXT NOT NULL DEFAULT '',
+     source TEXT NOT NULL CHECK(source IN ('upload','import')),
+     rel_path TEXT NOT NULL UNIQUE, original_name TEXT NOT NULL DEFAULT '',
+     mime_type TEXT NOT NULL, size_bytes INTEGER NOT NULL DEFAULT 0,
+     duration_s REAL, width INTEGER, height INTEGER, fingerprint TEXT NOT NULL DEFAULT '',
+     kind TEXT NOT NULL DEFAULT 'program' CHECK(kind IN ('program','ident','bumper','offair')),
+     missing INTEGER NOT NULL DEFAULT 0 CHECK(missing IN (0,1)),
+     created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);
+     CREATE INDEX IF NOT EXISTS idx_tv_media_fingerprint ON tv_media(fingerprint);
+     CREATE TABLE IF NOT EXISTS tv_channels (
+     id INTEGER PRIMARY KEY AUTOINCREMENT,
+     number INTEGER NOT NULL UNIQUE CHECK(number BETWEEN 1 AND 9999),
+     name TEXT NOT NULL, description TEXT NOT NULL DEFAULT '', logo_stored TEXT,
+     enabled INTEGER NOT NULL DEFAULT 1 CHECK(enabled IN (0,1)),
+     sort_order INTEGER NOT NULL DEFAULT 0,
+     gap_mode TEXT NOT NULL DEFAULT 'offair' CHECK(gap_mode IN ('offair','filler')),
+     offair_media_id INTEGER REFERENCES tv_media(id) ON DELETE SET NULL,
+     created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);
+     CREATE TABLE IF NOT EXISTS tv_channel_filler (
+     channel_id INTEGER NOT NULL REFERENCES tv_channels(id) ON DELETE CASCADE,
+     position INTEGER NOT NULL,
+     media_id INTEGER NOT NULL REFERENCES tv_media(id) ON DELETE CASCADE,
+     PRIMARY KEY(channel_id, position));
+     CREATE TABLE IF NOT EXISTS tv_blocks (
+     id INTEGER PRIMARY KEY AUTOINCREMENT,
+     channel_id INTEGER NOT NULL REFERENCES tv_channels(id) ON DELETE CASCADE,
+     title TEXT NOT NULL, description TEXT NOT NULL DEFAULT '',
+     kind TEXT NOT NULL CHECK(kind IN ('once','weekly')),
+     start_date TEXT, weekdays INTEGER NOT NULL DEFAULT 0, start_time TEXT NOT NULL,
+     loop_until TEXT, valid_from TEXT, valid_until TEXT,
+     enabled INTEGER NOT NULL DEFAULT 1 CHECK(enabled IN (0,1)),
+     created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);
+     CREATE INDEX IF NOT EXISTS idx_tv_blocks_channel ON tv_blocks(channel_id);
+     CREATE TABLE IF NOT EXISTS tv_block_items (
+     id INTEGER PRIMARY KEY AUTOINCREMENT,
+     block_id INTEGER NOT NULL REFERENCES tv_blocks(id) ON DELETE CASCADE,
+     position INTEGER NOT NULL,
+     media_id INTEGER NOT NULL REFERENCES tv_media(id) ON DELETE RESTRICT,
+     title_override TEXT, description TEXT NOT NULL DEFAULT '');
+     CREATE INDEX IF NOT EXISTS idx_tv_block_items_block ON tv_block_items(block_id, position);
+     CREATE INDEX IF NOT EXISTS idx_tv_block_items_media ON tv_block_items(media_id);""")
 
 
 def _migrate_library(database):

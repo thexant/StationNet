@@ -74,7 +74,7 @@ def test_module_switches_hide_navigation_and_block_routes(tmp_path):
     assert client.get("/terminal").status_code == 200
     assert client.get("/sysop/moderation").status_code == 200
     for path in ("/board", "/announcements", "/events", "/wiki/",
-                 "/videos", "/library", "/arcade/", "/chat/messages",
+                 "/videos", "/library", "/arcade/", "/tv", "/chat/messages",
                  "/mail/notifications", "/radio/state", "/files", "/users/presence",
                  "/office", "/games-apps", "/mud/w/stationnet/builder"):
         assert client.get(path).status_code == 404, path

@@ -1,0 +1,61 @@
+/* StationNet TV management; colours come from the active theme. */
+.tv-admin [hidden] { display: none !important; }
+.tv-admin { display: grid; gap: .8rem; }
+.tv-admin-tabs { display: flex; flex-wrap: wrap; gap: .4rem; border-bottom: 1px solid var(--green-dim); padding-bottom: .4rem; }
+.tv-admin-tabs button { color: var(--green); background: var(--surface-button); border-color: var(--green-dim); }
+.tv-admin-tabs [aria-current=page] { color: var(--cyan); background: var(--surface-selected); border-color: var(--cyan); }
+.tv-admin-status { min-height: 1.2em; margin: 0; color: var(--green-bright); font-size: .85rem; }
+.tv-admin-status.is-error { color: var(--red); }
+.tv-admin-panel { display: grid; gap: .8rem; }
+.tv-admin-heading { margin: .4rem 0 0; font-size: 1rem; color: var(--green-bright); }
+.tv-admin-toolbar { display: flex; flex-wrap: wrap; gap: .6rem 1rem; align-items: end; }
+.tv-admin-toolbar label { min-width: 11rem; }
+.tv-admin-zone { font-size: var(--text-xs); color: var(--grey); }
+.tv-admin-zone b { color: var(--amber); }
+.tv-admin-table { width: 100%; border-collapse: collapse; font-size: .85rem; }
+.tv-admin-table td { vertical-align: middle; }
+.tv-admin-table tr.is-offair td { color: var(--grey); }
+.tv-admin-table tr.is-filler td { color: var(--green-dim); }
+.tv-admin-table tr.is-standby td { color: var(--red); }
+.tv-admin-table tr.is-today td:first-child { box-shadow: inset 3px 0 0 var(--amber); }
+.tv-actions { white-space: nowrap; text-align: right; }
+.tv-actions button { padding: .2rem .45rem; font-size: .75rem; margin-left: .2rem; }
+.tv-badge { display: inline-block; margin-left: .3rem; padding: 0 .35rem; font-size: var(--text-xs); color: var(--theme-ink); background: var(--amber); }
+.tv-badge.is-error { color: #fff; background: var(--red-dim); }
+.tv-logo-thumb { height: 1.4rem; width: auto; vertical-align: middle; }
+.tv-logo-preview { display: block; max-height: 4rem; margin-bottom: .4rem; }
+.tv-admin-split { display: grid; grid-template-columns: repeat(auto-fit, minmax(20rem, 1fr)); gap: .8rem; }
+.tv-dropzone { display: grid; gap: .5rem; justify-items: center; padding: 1.2rem; text-align: center;
+  border: 2px dashed var(--green-dim); background: var(--surface-field); }
+.tv-dropzone.is-over { border-color: var(--cyan); background: var(--surface-selected); }
+.tv-dropzone label.button { cursor: pointer; }
+.tv-import-path { display: block; padding: .4rem .6rem; overflow-wrap: anywhere; color: var(--amber); background: var(--surface-field);
+  border: 1px solid var(--border-soft); }
+.tv-progress { height: .45rem; background: var(--surface-selected); border: 1px solid var(--green-dim); }
+.tv-progress i { display: block; height: 100%; width: 0; background: var(--green); transition: width .2s; }
+.tv-queue-summary { display: grid; gap: .3rem; font-size: .8rem; color: var(--green-bright); }
+.tv-queue { display: grid; gap: .35rem; max-height: 18rem; overflow: auto; margin: 0; padding: 0; list-style: none; font-size: .78rem; }
+.tv-queue li { display: grid; grid-template-columns: 1fr auto; gap: .15rem .6rem; padding: .3rem .4rem; border-left: 3px solid var(--green-dim);
+  background: var(--surface-soft); }
+.tv-queue li .tv-progress { grid-column: 1 / -1; }
+.tv-queue li[data-state=ok] { border-left-color: var(--green); }
+.tv-queue li[data-state=skip] { border-left-color: var(--amber); }
+.tv-queue li[data-state=error] { border-left-color: var(--red); }
+.tv-queue li[data-state=error] .tv-queue-state { color: var(--red); }
+.tv-queue li[data-state=skip] .tv-queue-state { color: var(--amber); }
+.tv-queue-name { overflow-wrap: anywhere; }
+.tv-queue-state { color: var(--grey); text-align: right; }
+.tv-dialog { width: min(46rem, calc(100vw - 2rem)); }
+.tv-block-dialog { width: min(60rem, calc(100vw - 2rem)); }
+.tv-form-row { display: flex; flex-wrap: wrap; gap: .6rem; align-items: end; }
+.tv-form-row > label:not(.check):not(.radio) { min-width: 8rem; }
+.tv-grow { flex: 1 1 14rem; }
+.tv-weekdays { display: flex; flex-wrap: wrap; gap: .3rem 1rem; }
+.tv-pick-list { display: grid; gap: .25rem; margin: 0 0 .4rem; padding-left: 1.4rem; font-size: .85rem; }
+.tv-pick-list li { display: flex; justify-content: space-between; gap: .5rem; align-items: center; }
+.tv-pick-list button { padding: .1rem .4rem; }
+.tv-items input { width: 100%; }
+.tv-airs { white-space: nowrap; color: var(--amber); }
+.tv-block-total { margin: .2rem 0; color: var(--green-bright); font-size: .85rem; }
+.tv-block-total.is-error { color: var(--red); }
+.tv-preview { width: 100%; max-height: 14rem; background: #000; }

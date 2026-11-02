@@ -28,6 +28,9 @@
   {% if g.station.arcade_enabled %}
     {% set services = services + [('arcade.index', 'ARCADE', 'PLAY STATION GAMES OFFLINE')] %}
   {% endif %}
+  {% if g.station.tv_enabled %}
+    {% set services = services + [('tv.index', 'TV', 'TUNE IN TO STATION TELEVISION')] %}
+  {% endif %}
   {% if g.user %}
     {% set services = services + [
       ('chat.station_chat', 'STATION CHAT', 'LIVE STATION CHAT'),

@@ -13,5 +13,7 @@ browsers expose `SharedArrayBuffer` only over HTTPS or on localhost.
 StationNet uses the source player files because the npm package does not
 contain the minified distribution. Its local copy of `src/emulator.js` omits
 the upstream update probe and CDN core fallback so gameplay makes no network
-requests. Sysops can install other compatible 4.2.3 cores from official npm packages
+requests. Its local `data/loader.js` also accepts `EJS_sourceFiles`, which loads
+those source files without `EJS_DEBUG_XX`; debug mode makes cores log verbosely
+and disables core/ROM caching, which badly slows PPSSPP. Sysops can install other compatible 4.2.3 cores from official npm packages
 using the Arcade settings panel. Those core files live in station data.

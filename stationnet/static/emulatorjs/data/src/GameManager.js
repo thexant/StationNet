@@ -154,7 +154,6 @@ class EJS_GameManager {
         if (this.EJS.retroarchOpts && Array.isArray(this.EJS.retroarchOpts)) {
             this.EJS.retroarchOpts.forEach(option => {
                 let selected = this.EJS.preGetSetting(option.name);
-                console.log(selected);
                 if (!selected) {
                     selected = option.default;
                 }

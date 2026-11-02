@@ -13,7 +13,7 @@ from .auth import admin_required, invitation_digest
 from .ansi import available_header_fonts, is_available_header_font, station_banner
 from .db import get_db
 from .instance import sync_name
-from . import arcade, character_creation, dungeons, header_taglines, mud_abilities, mud_effects, mud_scope, mud_skills, mud_worlds
+from . import arcade, character_creation, dungeons, header_taglines, mud_abilities, mud_effects, mud_scope, mud_skills, mud_worlds, tv
 from . import themes
 from .markdown import render_markdown
 from .midi import InvalidMidi, MAX_MIDI_BYTES, inspect_midi
@@ -1514,6 +1514,26 @@ def settings():
                 database.commit()
                 flash("Arcade settings updated.", "success")
             return redirect(url_for("station.settings") + "#arcade-service")
+        if request.form.get("settings_section") == "tv":
+            max_upload = request.form.get("tv_max_upload_mb", type=int)
+            zone = request.form.get("tv_timezone", "").strip()
+            default_channel = request.form.get("tv_default_channel_id", type=int)
+            database = get_db()
+            if max_upload is None or not 1 <= max_upload <= tv.MAX_UPLOAD_MB_LIMIT:
+                flash(f"Max TV upload size must be between 1 and {tv.MAX_UPLOAD_MB_LIMIT} MB.", "error")
+            elif not tv.valid_timezone(zone):
+                flash("Enter a valid IANA time zone such as Europe/London.", "error")
+            elif default_channel is not None and not database.execute(
+                    "SELECT 1 FROM tv_channels WHERE id=?", (default_channel,)).fetchone():
+                flash("Select a valid default channel.", "error")
+            else:
+                database.execute("UPDATE station SET tv_enabled=?,tv_max_upload_mb=?,tv_timezone=?,"
+                                 "tv_default_channel_id=? WHERE id=1",
+                                 (request.form.get("tv_enabled") == "on", max_upload, zone, default_channel))
+                tv.bump_version(database)
+                database.commit()
+                flash("TV settings updated.", "success")
+            return redirect(url_for("station.settings") + "#tv-service")
         name = request.form.get("name", "").strip()
         description = request.form.get("description", "").strip()
         landing_message = request.form.get(
@@ -1731,6 +1751,7 @@ def settings():
     return render_template("settings.html", header_fonts=header_fonts,
                            available_modules=ALL_MODULES,
                            **arcade.settings_data(),
+                           **tv.settings_data(),
                            header_taglines=header_taglines.configured(g.station),
                            site_themes=themes.options("site"), masthead_themes=themes.options("masthead"),
                            custom_themes=themes.custom_themes(),

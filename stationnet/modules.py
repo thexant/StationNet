@@ -21,6 +21,7 @@ ALL_MODULES = (
     ("videos", "VIDEOS"),
     ("library", "LIBRARY"),
     ("arcade", "ARCADE"),
+    ("tv", "TV"),
     ("chat", "CHAT"),
     ("mail", "MAIL"),
     ("radio", "RADIO"),
@@ -40,7 +41,7 @@ BLUEPRINT_MODULES = {
     "application_admin": "applications", "imageboard": "imageboard",
     "events": "events", "feeds": "user_feeds", "office": "office",
     "kiwix": "kiwix", "videos": "videos", "library": "library",
-    "arcade": "arcade", "mud": "mud",
+    "arcade": "arcade", "mud": "mud", "tv": "tv",
 }
 
 
