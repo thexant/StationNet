@@ -54,6 +54,16 @@ assert.deepEqual(values("/put Blue",socialAndItems), ["/put Blue Apple in Oak Ch
 assert.deepEqual(values("/respond",socialAndItems), ["/respond 1"]);
 assert.deepEqual(values("/tell",socialAndItems), ['/tell "Bea Two" ']);
 
+const storageCatalog = [...catalog, {name:"storage",key:"storage",description:"Deposit or withdraw items"}];
+const lockerRoom = {...state,room:{...state.room,storage:[{id:"locker",name:"Locker",scope:"personal"}]},
+  inventory:{inventory:[{id:"apple",name:"Blue Apple",item_type:"misc"}],equipment:[]}};
+assert.deepEqual(commandSuggestions("/sto",lockerRoom,storageCatalog).map(item=>item.command),
+  ["/storage deposit Blue Apple", "/storage"]);
+const twoPoints = {...lockerRoom,room:{...lockerRoom.room,storage:[{name:"Locker"},{name:"Oak Chest"}]}};
+assert.deepEqual(commandSuggestions("/storage deposit Blue Apple into \"O",twoPoints,storageCatalog)
+  .map(item=>item.command), ['/storage deposit Blue Apple into "Oak Chest"']);
+assert.deepEqual(commandSuggestions("/sto",state,storageCatalog), []);
+
 const history = ["/look", "/attack Rat 1"];
 assert.deepEqual(historyStep(history,-1,"unfinished",1),{index:0,value:"/attack Rat 1"});
 assert.deepEqual(historyStep(history,0,"unfinished",1),{index:1,value:"/look"});

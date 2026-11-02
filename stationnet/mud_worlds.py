@@ -9,7 +9,7 @@ import zipfile
 
 from flask import current_app
 
-from . import mud_conditions, mud_gathering, mud_quests, mud_work, mud_scope, mud_society, mud_triggers, mud_wayfinding, mud_wilderness, mud_world_dungeons
+from . import mud_conditions, mud_gathering, mud_housing, mud_quests, mud_work, mud_scope, mud_society, mud_triggers, mud_wayfinding, mud_wilderness, mud_world_dungeons
 from . import mud_abilities, mud_effects, mud_progression, mud_shared_definitions
 from .mud_package_report import PackageReport
 
@@ -84,6 +84,12 @@ CONTENT_TABLES = {
     "mud_world_destinations": ("id", "room_id", "name", "aliases", "category", "description", "public",
                                "discover_on_visit", "map_items_json", "conditions_json", "sort_order"),
     "mud_world_start_rules": ("id", "room_id", "spawn_conditions_json", "sort_order"),
+    "mud_properties": ("id", "name", "description", "kind", "entrance_room_id", "acquisition", "price",
+                       "refund_percent", "rent", "rent_period_seconds", "grace_seconds", "prepay_periods",
+                       "max_owners", "agent_npc_definition_id", "conditions_json", "available"),
+    "mud_property_rooms": ("room_id", "property_id"),
+    "mud_storage_points": ("id", "room_id", "name", "description", "scope", "capacity", "item_types",
+                           "conditions_json"),
 }
 FACTION_MEMBERSHIP_DEFAULTS = {"joinable": 0, "start_joinable": 0, "recruiter_npc_definition_id": None,
                                "join_conditions_json": [], "join_conditions_message": "",
@@ -116,6 +122,7 @@ REFERENCE_TABLE = {
     "provider_npc_definition_id": "mud_npc_definitions",
     "profession_id": "mud_professions", "activity_id": "mud_work_activities",
     "item_instance_id": "mud_item_instances", "exit_id": "exits",
+    "entrance_room_id": "rooms", "agent_npc_definition_id": "mud_npc_definitions", "property_id": "mud_properties",
 }
 # Quests and dialogue responses carry condition/outcome lists that name content.
 CONDITION_COLUMNS = {"mud_world_factions": ("join_conditions_json", "start_conditions_json"),
@@ -126,11 +133,13 @@ CONDITION_COLUMNS = {"mud_world_factions": ("join_conditions_json", "start_condi
                      "mud_dialogue_responses": ("conditions_json", "outcomes_json"),
                      "mud_world_destinations": ("conditions_json",),
                      "mud_world_start_rules": ("spawn_conditions_json",),
-                     "mud_shop_stock": ("conditions_json",)}
+                     "mud_shop_stock": ("conditions_json",),
+                     "mud_properties": ("conditions_json",),
+                     "mud_storage_points": ("conditions_json",)}
 CONDITION_TABLES = {"item": "mud_item_definitions", "quest": "mud_quests",
                     "objective": "mud_quest_objectives", "object": "mud_item_instances", "room": "rooms",
                     "destination": "mud_world_destinations", "npc": "mud_npc_definitions",
-                    "faction": "mud_world_factions"}
+                    "faction": "mud_world_factions", "property": "mud_properties"}
 # What each kind of trigger reference names; exits and triggers are mapped separately.
 TRIGGER_TABLES = {**CONDITION_TABLES, "npc": "mud_npc_definitions", "npc_instance": "mud_npc_instances",
                   "response": "mud_dialogue_responses"}
@@ -556,6 +565,31 @@ def read_package(payload, database=None, report=None):
                     if row.get("recruiter_npc_definition_id") is not None and (
                             row["recruiter_npc_definition_id"] not in raw_ids("mud_npc_definitions")):
                         raise WorldError("Faction recruiter must name an NPC in content.json.")
+                elif table == "mud_properties":
+                    try:
+                        clean = mud_housing.property(row)
+                    except ValueError as problem:
+                        raise WorldError(f"Invalid property {row.get('id')}: {problem}") from problem
+                    if row.get("entrance_room_id") not in room_ids:
+                        raise WorldError("Property entrance_room_id must name a room in the world.")
+                    if clean["agent_npc_definition_id"] and (
+                            clean["agent_npc_definition_id"] not in raw_ids("mud_npc_definitions")):
+                        raise WorldError("Property agent must name an NPC in content.json.")
+                    if "available" in row:
+                        row["available"] = clean["available"]
+                elif table == "mud_property_rooms":
+                    if row.get("room_id") not in room_ids:
+                        raise WorldError("Property room_id must name a room in the world.")
+                    if row.get("property_id") not in raw_ids("mud_properties"):
+                        raise WorldError("Property room must name a property in content.json.")
+                elif table == "mud_storage_points":
+                    try:
+                        clean = mud_housing.storage_point(row)
+                    except ValueError as problem:
+                        raise WorldError(f"Invalid storage point {row.get('id')}: {problem}") from problem
+                    if row.get("room_id") not in room_ids:
+                        raise WorldError("Storage room_id must name a room in the world.")
+                    row["item_types"] = clean["item_types"]
                 elif table == "mud_faction_relations":
                     try:
                         mud_society.validate_share(row.get("share_percent"))
@@ -638,6 +672,8 @@ def read_package(payload, database=None, report=None):
                 for objective in content.get("mud_quest_objectives", [])):
             report.error(CONTENT_FILE, f"$.mud_quest_rewards[{index}]",
                          f"Reward outcome {outcome!r} is not the outcome_key of any objective of its quest.")
+    for problem in _housing_problems(content, start):
+        report.error(CONTENT_FILE, "$.mud_properties", problem)
     reward_counts = {}
     banker_ids = [row["npc_definition_id"] for row in content.get("mud_npc_banks", [])]
     if len(banker_ids) != len(set(banker_ids)):
@@ -703,6 +739,33 @@ def read_package(payload, database=None, report=None):
             # wilderness is the file as written, so a parsed document repackages unchanged;
             # wild is its validated run index, used to install and resolve '@x,y,z'.
             "wilderness": docs.get(WILDERNESS_FILE), "wild": wilderness}
+
+
+def _housing_problems(content, start):
+    """Package-wide housing rules: rooms belong to one property, and entrances, starts and storage fit."""
+    problems = []
+    properties = {row.get("id"): row for row in content.get("mud_properties", [])}
+    names = [" ".join(str(row.get("name", "")).casefold().split()) for row in properties.values()]
+    if len(names) != len(set(names)):
+        problems.append("Two properties have the same name.")
+    owner = {}
+    for row in content.get("mud_property_rooms", []):
+        if row.get("room_id") in owner:
+            problems.append(f"Room {row.get('room_id')} belongs to more than one property.")
+        owner[row.get("room_id")] = row.get("property_id")
+    for property_id, row in properties.items():
+        if property_id not in owner.values():
+            problems.append(f"Property {property_id} needs at least one room in mud_property_rooms.")
+        if row.get("entrance_room_id") in owner:
+            problems.append(f"Property {property_id} entrance cannot itself be a property room.")
+    if start in owner:
+        problems.append("The start room cannot be a property room.")
+    if any(row.get("room_id") in owner for row in content.get("mud_world_start_rules", [])):
+        problems.append("Start rules cannot place characters in a property room.")
+    for row in content.get("mud_storage_points", []):
+        if row.get("scope") == "property" and row.get("room_id") not in owner:
+            problems.append(f"Storage point {row.get('id')} keeps owners' items, so it must be in a property room.")
+    return problems
 
 
 def _read_magic(docs, report):
@@ -1070,7 +1133,7 @@ def _insert_content(database, document, installation_key, skill_map=None, effect
                 fields[column] = value
             if table in {"mud_item_definitions", "mud_npc_definitions", "mud_conversations", "mud_quests",
                          "mud_world_destinations", "mud_world_factions", "mud_professions",
-                         "mud_world_start_rules"}:
+                         "mud_world_start_rules", "mud_properties"}:
                 fields["world_id"] = world_id
             names = list(fields)
             database.execute(
@@ -1706,6 +1769,7 @@ def _upgrade_rows(database, document, payload, *, reset_world_state=False):
     old_rooms = local_ids([row["id"] for row in database.execute(
         "SELECT id FROM mud_world_rooms WHERE world_id=? AND kind='authored' ORDER BY id", (world_id,))],
         world_id, "room", "room")
+    housing = _housing_snapshot(database, world_id)
     database.execute("UPDATE mud_world_packages SET enabled=0 WHERE id=?", (world_id,))
     retired_id = _retire_rows(database, world_id, "This world was upgraded; start a new run.", keep_state=True)
     for table in ("mud_world_triggers", "mud_world_dungeon_templates", "mud_world_room_presets", "mud_world_regions",
@@ -1730,8 +1794,11 @@ def _upgrade_rows(database, document, payload, *, reset_world_state=False):
         match = GLOBAL_ID_RE.fullmatch(old_id or "")
         return maps.get(table, {}).get(match.group("local")) if match and match.group("world") == world_id else None
 
+    kept_copies = _restore_housing(database, housing, carried, old_rooms, new_rooms)
     moved = 0
     for row in locations:
+        if row["location_key"] in kept_copies:
+            continue
         local = old_rooms.get(row["location_key"])
         target = new_rooms.get(local) if local else None
         if target is None:
@@ -1810,6 +1877,76 @@ def _upgrade_rows(database, document, payload, *, reset_world_state=False):
             notes.append(f"The world was left disabled: {problem}")
     return {"from_hash": before["package_hash"], "moved_to_start": moved, "carried": carried_rows,
             "notes": notes}
+
+
+def _housing_snapshot(database, world_id):
+    """Holdings, their owners, private rooms, and stored items, saved before an upgrade replaces the content."""
+    holdings = [dict(row) for row in database.execute(
+        "SELECT h.*,p.kind FROM mud_property_holdings h JOIN mud_properties p ON p.id=h.property_id "
+        "WHERE h.world_id=? ORDER BY h.created_at,h.id", (world_id,))]
+    ids = [row["id"] for row in holdings]
+    marks = ",".join("?" * len(ids))
+    return {
+        "holdings": holdings,
+        "owners": [dict(row) for row in database.execute(
+            f"SELECT * FROM mud_property_owners WHERE holding_id IN ({marks})", ids)] if ids else [],
+        "copies": [dict(row) for row in database.execute(
+            "SELECT id,template_room_id,holding_id FROM mud_world_rooms WHERE world_id=? AND kind='housing'",
+            (world_id,))],
+        "storage": [dict(row) for row in database.execute(
+            "SELECT s.* FROM mud_character_storage s JOIN mud_storage_points p ON p.id=s.storage_point_id "
+            "JOIN mud_world_rooms r ON r.id=p.room_id WHERE r.world_id=?", (world_id,))],
+    }
+
+
+def _restore_housing(database, housing, carried, old_rooms, new_rooms):
+    """Put holdings and stored items back on the upgraded content by local ID; returns the kept private rooms.
+
+    A holding whose property is gone ends, and items stored where nothing
+    matches any more stay with their owners as ordinary inventory.
+    """
+    kept = set()
+    for holding in housing["holdings"]:
+        target = carried(holding["property_id"], "mud_properties")
+        found = database.execute("SELECT kind FROM mud_properties WHERE id=?", (target,)).fetchone() if target else None
+        if found is None:
+            continue
+        if database.execute("INSERT OR IGNORE INTO mud_property_holdings(id,property_id,world_id,unique_key,created_at) "
+                            "VALUES(?,?,?,?,?)", (holding["id"], target, holding["world_id"],
+                                                  target if found["kind"] == "unique" else None,
+                                                  holding["created_at"])).rowcount:
+            kept.add(holding["id"])
+    for owner in housing["owners"]:
+        if owner["holding_id"] in kept:
+            database.execute(f"INSERT INTO mud_property_owners({','.join(owner)}) VALUES({','.join('?' * len(owner))})",
+                             tuple(owner.values()))
+    copies = set()
+    for room in housing["copies"]:
+        template = new_rooms.get(old_rooms.get(room["template_room_id"]))
+        instanced = database.execute("SELECT 1 FROM mud_property_holdings h JOIN mud_properties p ON p.id=h.property_id "
+                                     "JOIN mud_property_rooms r ON r.property_id=p.id WHERE h.id=? AND p.kind='instanced' "
+                                     "AND r.room_id=?", (room["holding_id"], template)).fetchone() if template else None
+        if room["holding_id"] in kept and instanced:
+            row = database.execute("SELECT name,description,world_id FROM mud_world_rooms WHERE id=?",
+                                   (template,)).fetchone()
+            database.execute("INSERT INTO mud_world_rooms(id,name,description,world_id,kind,template_room_id,holding_id) "
+                             "VALUES(?,?,?,?,'housing',?,?)", (room["id"], row["name"], row["description"],
+                                                               row["world_id"], template, room["holding_id"]))
+            copies.add(room["id"])
+    for row in housing["storage"]:
+        point = carried(row["storage_point_id"], "mud_storage_points")
+        scope = database.execute("SELECT scope FROM mud_storage_points WHERE id=?", (point,)).fetchone() if point else None
+        if scope is None or (scope["scope"] == "property" and row["holding_id"] not in kept):
+            continue
+        holding_id = row["holding_id"] if scope["scope"] == "property" else None
+        if scope["scope"] == "property" and holding_id is None:
+            continue
+        database.execute("INSERT OR IGNORE INTO mud_character_storage(item_instance_id,character_id,stored_at,"
+                         "storage_point_id,holding_id) SELECT ?,?,?,?,? WHERE EXISTS "
+                         "(SELECT 1 FROM mud_item_instances WHERE id=? AND owner_character_id=?)",
+                         (row["item_instance_id"], row["character_id"], row["stored_at"], point, holding_id,
+                          row["item_instance_id"], row["character_id"]))
+    return copies
 
 
 def _carried_availability(database, world_id, offered, old_links):
@@ -1925,7 +2062,8 @@ def local_ids(global_ids, world_id, table, prefix, taken=None):
 
 def _export_content(database, world_id, room_map, exit_map=None, report=None):
     report = PackageReport() if report is None else report
-    roots = {"mud_item_definitions", "mud_conversations", "mud_npc_definitions", "mud_quests", "mud_world_factions", "mud_professions"}
+    roots = {"mud_item_definitions", "mud_conversations", "mud_npc_definitions", "mud_quests", "mud_world_factions",
+             "mud_professions", "mud_properties"}
     all_placed_items = [dict(row) for row in database.execute(
         "SELECT id,definition_id,room_id,container_id FROM mud_item_instances "
         "WHERE spawn_source_id IS NULL AND id NOT LIKE 'world:wild-item:%'"
@@ -1970,6 +2108,9 @@ def _export_content(database, world_id, room_map, exit_map=None, report=None):
     )}
     needed_npcs |= {row["recruiter_npc_definition_id"] for row in database.execute(
         "SELECT recruiter_npc_definition_id FROM mud_professions WHERE world_id=?", (world_id,))}
+    needed_npcs |= {row["agent_npc_definition_id"] for row in database.execute(
+        "SELECT agent_npc_definition_id FROM mud_properties WHERE world_id=? AND agent_npc_definition_id IS NOT NULL",
+        (world_id,))}
     needed_npcs |= {row["recruiter_npc_definition_id"] for row in database.execute(
         "SELECT recruiter_npc_definition_id FROM mud_world_factions WHERE world_id=? AND "
         "recruiter_npc_definition_id IN (SELECT id FROM mud_npc_definitions)", (world_id,))}
@@ -2014,8 +2155,11 @@ def _export_content(database, world_id, room_map, exit_map=None, report=None):
         "UNION ALL SELECT a.conditions_json,'[]' FROM mud_work_activities a "
         "JOIN mud_professions p ON p.id=a.profession_id WHERE p.world_id=? "
         "UNION ALL SELECT d.conditions_json,'[]' FROM mud_room_discoveries d "
-        "JOIN mud_world_rooms r ON r.id=d.room_id WHERE r.world_id=?",
-        (world_id, world_id, world_id, world_id, world_id, world_id),
+        "JOIN mud_world_rooms r ON r.id=d.room_id WHERE r.world_id=? "
+        "UNION ALL SELECT conditions_json,'[]' FROM mud_properties WHERE world_id=? "
+        "UNION ALL SELECT s.conditions_json,'[]' FROM mud_storage_points s "
+        "JOIN mud_world_rooms r ON r.id=s.room_id WHERE r.world_id=?",
+        (world_id, world_id, world_id, world_id, world_id, world_id, world_id, world_id),
     ):
         named = list(mud_conditions.references(_stored_conditions(row["conditions_json"], "conditions_json"),
                                                _stored_conditions(row["outcomes_json"], "outcomes_json")))
@@ -2053,8 +2197,11 @@ def _export_content(database, world_id, room_map, exit_map=None, report=None):
             rows = [row for row in rows if row["node_id"] in selected["mud_dialogue_nodes"]]
         elif table == "mud_item_instances":
             rows = [row for row in rows if row["id"] in placed_item_ids]
-        elif table in {"mud_item_spawns", "mud_gathering_nodes", "mud_room_discoveries", "mud_world_destinations"}:
+        elif table in {"mud_item_spawns", "mud_gathering_nodes", "mud_room_discoveries", "mud_world_destinations",
+                       "mud_storage_points"}:
             rows = [row for row in rows if row["room_id"] in room_map]
+        elif table == "mud_property_rooms":
+            rows = [row for row in rows if row["room_id"] in room_map and row["property_id"] in selected["mud_properties"]]
         elif table == "mud_world_start_rules":
             rows = [row for row in rows if row["room_id"] in room_map]
             readable = [row for row in rows if _stored_conditions(row["spawn_conditions_json"],
@@ -2079,7 +2226,7 @@ def _export_content(database, world_id, room_map, exit_map=None, report=None):
                 "mud_world_destinations": "destination", "mud_world_factions": "faction",
                 "mud_faction_relations": "faction-relation", "mud_world_start_rules": "start-rule"}
     prefixes.update({"mud_professions": "profession", "mud_work_activities": "work",
-                     "mud_work_rewards": "work-reward"})
+                     "mud_work_rewards": "work-reward", "mud_properties": "property", "mud_storage_points": "storage"})
     maps = {"rooms": room_map, "exits": exit_map or {}}
     for table in ID_TABLES:
         maps[table] = local_ids(list(selected[table]), world_id, table, prefixes[table])
@@ -2366,6 +2513,12 @@ def export_document(database, world_id, *, origin_keys=None, skill_keys=None):
         for column, default in FACTION_MEMBERSHIP_DEFAULTS.items():
             if row.get(column) in (default, None):
                 row.pop(column, None)
+    for table, defaults in (("mud_properties", mud_housing.PROPERTY_DEFAULTS),
+                            ("mud_storage_points", mud_housing.STORAGE_DEFAULTS)):
+        for row in content.get(table, []):
+            for column, default in defaults.items():
+                if row.get(column) in (default, None):
+                    row.pop(column, None)
     for row in content.get("mud_item_definitions", []):
         if isinstance(row.get("properties_json"), dict) and row["properties_json"].get("requirements"):
             row["properties_json"] = json.loads(_remap_item_properties(row["properties_json"], local_reference))
@@ -2525,6 +2678,9 @@ def _retire_rows(database, world_id, reason, *, keep_state=False):
     for item in items:
         database.execute("DELETE FROM mud_item_instances WHERE id=?", (item["id"],))
     database.execute("DELETE FROM mud_professions WHERE world_id=?", (world_id,))
+    # Ending holdings hands stored items back to their owners before the rooms go.
+    database.execute("DELETE FROM mud_property_holdings WHERE world_id=?", (world_id,))
+    database.execute("DELETE FROM mud_properties WHERE world_id=?", (world_id,))
     database.execute("DELETE FROM mud_world_rooms WHERE world_id=?", (world_id,))
     return retired_id
 

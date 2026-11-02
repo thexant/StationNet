@@ -34,19 +34,22 @@ QUEST_STATUSES = ("not_started", "active", "ready", "completed", "failed", "aban
 OUTCOME_KEY_RE = re.compile(r"^[a-z][a-z0-9-]{0,39}$")
 CONDITION_TYPES = ("level", "race", "class", "tag", "has_item", "coins", "attribute", "skill",
                    "quest", "objective", "state", "claimed", "flag", "object_state", "in_room",
-                   "knows_destination", "time", "disposition", "reputation", "wanted", "member")
+                   "knows_destination", "time", "disposition", "reputation", "wanted", "member", "owns_property")
 OUTCOME_TYPES = ("give_item", "take_item", "experience", "coins", "take_coins", "learn_destination", "disposition",
-                 "reputation", "join_faction", "leave_faction")
+                 "reputation", "join_faction", "leave_faction", "grant_property", "revoke_property")
 # Condition types that only make sense in traditional worlds, where quests and
 # placed objects, rooms and wayfinding destinations exist.
 QUEST_CONDITION_TYPES = ("quest", "objective", "object_state", "in_room", "knows_destination", "time",
-                         "disposition", "reputation", "wanted", "member")
+                         "disposition", "reputation", "wanted", "member", "owns_property")
 # All a character being created can be tested on; nothing else exists yet.
 START_CONDITION_TYPES = ("level", "race", "class", "tag", "attribute", "skill")
 # What a start rule may test: the finished origins and the faction chosen with them.
 START_RULE_CONDITION_TYPES = ("race", "class", "member")
 # Outcomes that teach world knowledge; procedural dungeons have no destinations.
-WORLD_OUTCOME_TYPES = ("learn_destination", "disposition", "reputation", "join_faction", "leave_faction")
+WORLD_OUTCOME_TYPES = ("learn_destination", "disposition", "reputation", "join_faction", "leave_faction",
+                       "grant_property", "revoke_property")
+# owns_property role: any active owner, or only the primary owner who manages it.
+PROPERTY_ROLES = ("owner", "primary")
 REPUTATION_LIMIT = 1000
 DISPOSITION_TIERS = ("hostile", "unfriendly", "neutral", "friendly", "trusted")
 FLAG_SCOPES = ("player", "world")
@@ -66,6 +69,8 @@ _REFERENCE_FIELDS = {
     "wanted": ("faction", "faction"),
     "member": ("faction", "faction"),
     "join_faction": ("faction", "faction"), "leave_faction": ("faction", "faction"),
+    "owns_property": ("property", "property"),
+    "grant_property": ("property", "property"), "revoke_property": ("property", "property"),
 }
 
 
@@ -239,6 +244,13 @@ def _condition(raw, allowed, nested):
     elif kind == "member":
         fields |= {"faction"}
         result["faction"] = _identifier(raw.get("faction"), "member faction")
+    elif kind == "owns_property":
+        fields |= {"property", "role"}
+        result["property"] = _identifier(raw.get("property"), "owns_property property")
+        if raw.get("role", "owner") not in PROPERTY_ROLES:
+            raise ValueError("owns_property role must be owner or primary.")
+        if raw.get("role", "owner") != "owner":
+            result["role"] = raw["role"]
     elif kind == "reputation":
         fields |= {"faction", "min", "max", "rank"}
         result["faction"] = _identifier(raw.get("faction"), "reputation faction")
@@ -358,6 +370,10 @@ def validate_outcomes(value, *, allow_world=True):
                 raise ValueError(f"Reputation amounts must be nonzero whole numbers from -{REPUTATION_LIMIT} to {REPUTATION_LIMIT}.")
             result.append({"type": kind, "faction": _identifier(raw.get("faction"), "reputation faction"),
                            "amount": amount})
+        elif kind in ("grant_property", "revoke_property"):
+            if set(raw) - {"type", "property"}:
+                raise ValueError(f"{kind} outcomes accept only property.")
+            result.append({"type": kind, "property": _identifier(raw.get("property"), f"{kind} property")})
         elif kind in ("join_faction", "leave_faction"):
             if set(raw) - {"type", "faction"}:
                 raise ValueError(f"{kind} outcomes accept only faction.")
@@ -490,6 +506,9 @@ def _holds(condition, context):
         return condition.get("min", -REPUTATION_LIMIT) <= value <= condition.get("max", REPUTATION_LIMIT)
     if kind == "member":
         return bool(getattr(context, "member", lambda faction: False)(condition["faction"]))
+    if kind == "owns_property":
+        owns = getattr(context, "owns_property", lambda property_id, role: False)
+        return bool(owns(condition["property"], condition.get("role", "owner")))
     if kind == "disposition":
         found = getattr(context, "disposition", lambda npc: None)(condition.get("npc"))
         if found is None:

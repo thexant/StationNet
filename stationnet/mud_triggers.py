@@ -60,7 +60,7 @@ ACTION_TYPES = ("message", "set_flag", "clear_flag", "give_item", "take_item", "
                 "take_coins", "heal", "damage", "set_object_state", "set_exit", "show", "hide",
                 "spawn_npc", "teleport", "start_quest", "complete_objective", "fail_quest", "fail_objective", "run_trigger",
                 "learn_destination", "forget_destination", "disposition", "reputation", "fine", "clear_fines",
-                "apply_effect", "cure_effect", "join_faction", "leave_faction")
+                "apply_effect", "cure_effect", "join_faction", "leave_faction", "grant_property", "revoke_property")
 OUTCOME_ACTIONS =("give_item", "take_item", "experience", "coins", "take_coins")
 MESSAGE_TARGETS = ("actor", "room", "other_room")
 EXIT_STATES = ("open", "locked", "hidden", "default")
@@ -68,7 +68,7 @@ EXIT_STATES = ("open", "locked", "hidden", "default")
 _ACTOR_ACTIONS = {"give_item", "take_item", "experience", "coins", "take_coins", "heal", "damage",
                   "teleport", "start_quest", "complete_objective", "fail_quest", "fail_objective", "learn_destination", "forget_destination",
                   "disposition", "reputation", "fine", "clear_fines", "apply_effect", "cure_effect",
-                  "join_faction", "leave_faction"}
+                  "join_faction", "leave_faction", "grant_property", "revoke_property"}
 # Procedural dungeons are generated fresh for each run, so their triggers only
 # use actions that make sense inside one run.
 DUNGEON_EVENTS = ("enter_room", "use_object", "take_item", "say_phrase", "defeat_npc", "manual")
@@ -94,6 +94,7 @@ _ACTION_REFERENCES = {
     "reputation": (("faction", "faction"),),
     "fine": (("faction", "faction"),), "clear_fines": (("faction", "faction"),),
     "join_faction": (("faction", "faction"),), "leave_faction": (("faction", "faction"),),
+    "grant_property": (("property", "property"),), "revoke_property": (("property", "property"),),
     "apply_effect": (("effect", "effect"),), "cure_effect": (("effect", "effect"),),
 }
 
@@ -252,6 +253,9 @@ def _action(raw, index, dungeon):
     elif kind in ("join_faction", "leave_faction"):
         fields |= {"faction"}
         result["faction"] = _identifier(raw.get("faction"), f"{where} faction")
+    elif kind in ("grant_property", "revoke_property"):
+        fields |= {"property"}
+        result["property"] = _identifier(raw.get("property"), f"{where} property")
     elif kind == "apply_effect":
         fields |= {"effect", "potency", "duration"}
         if not _whole(raw.get("potency", 1), 1, 1000) or not _whole(raw.get("duration", 3), 1, 100):

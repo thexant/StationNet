@@ -385,6 +385,7 @@
       <label class="switch"><input type="checkbox" name="arcade_enabled" {% if g.station.arcade_enabled %}checked{% endif %}> Enable Arcade</label>
       <label>Catalogue mode<select name="arcade_mode"><option value="community" {% if g.station.arcade_mode == 'community' %}selected{% endif %}>Community uploads</option><option value="curated" {% if g.station.arcade_mode == 'curated' %}selected{% endif %}>Sysop curated</option></select></label>
       <label>Default per-user upload quota (MB)<input type="number" name="arcade_default_quota_mb" min="1" max="10240" required value="{{ g.station.arcade_default_quota_mb }}"></label>
+      <label>Max Sony PSP upload size (MB)<input type="number" name="arcade_psp_max_upload_mb" min="1" max="4096" required value="{{ g.station.arcade_psp_max_upload_mb }}"></label>
       <button>SAVE ARCADE SETTINGS</button>
     </form>
     {% if g.station.arcade_enabled %}

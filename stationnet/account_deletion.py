@@ -147,6 +147,12 @@ def delete_account(user_id):
         database.execute("DELETE FROM radio_broadcast_resume WHERE owner_key=? OR permission_user_id=?",
                          (str(user_id), user_id))
 
+        # A co-owner takes over each property the player's characters ran, or it ends
+        # and the items others stored there go back to them.
+        from . import mud
+        for character in database.execute("SELECT id FROM mud_characters WHERE user_id=?", (user_id,)).fetchall():
+            mud.character_leaving_holdings(database, character["id"])
+
         # Remove player-owned items and instances of definitions the player
         # authored. Containers must be emptied before their parent because
         # an item is required to have exactly one location.

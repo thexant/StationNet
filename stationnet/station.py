@@ -1498,15 +1498,19 @@ def settings():
         if request.form.get("settings_section") == "arcade":
             mode = request.form.get("arcade_mode")
             quota = request.form.get("arcade_default_quota_mb", type=int)
+            psp_max = request.form.get("arcade_psp_max_upload_mb", type=int,
+                                       default=g.station["arcade_psp_max_upload_mb"])
             if mode not in {"community", "curated"}:
                 flash("Select a valid Arcade mode.", "error")
             elif quota is None or not 1 <= quota <= 10240:
                 flash("Arcade quota must be between 1 and 10240 MB.", "error")
+            elif psp_max is None or not 1 <= psp_max <= 4096:
+                flash("Max PSP upload size must be between 1 and 4096 MB.", "error")
             else:
                 database = get_db()
                 database.execute("UPDATE station SET arcade_enabled=?,arcade_mode=?,"
-                                 "arcade_default_quota_mb=? WHERE id=1",
-                                 (request.form.get("arcade_enabled") == "on", mode, quota))
+                                 "arcade_default_quota_mb=?,arcade_psp_max_upload_mb=? WHERE id=1",
+                                 (request.form.get("arcade_enabled") == "on", mode, quota, psp_max))
                 database.commit()
                 flash("Arcade settings updated.", "success")
             return redirect(url_for("station.settings") + "#arcade-service")

@@ -206,6 +206,11 @@ def create_app(test_config=None):
                 "font-src 'self' data:; object-src 'none'; base-uri 'none'; "
                 "frame-ancestors 'self'"
             )
+        if request.endpoint in {"arcade.view", "arcade.player"} and g.get("arcade_isolated"):
+            # Threaded cores (PPSSPP) need SharedArrayBuffer, which requires both
+            # the page and its player frame to be cross-origin isolated.
+            response.headers["Cross-Origin-Opener-Policy"] = "same-origin"
+            response.headers["Cross-Origin-Embedder-Policy"] = "require-corp"
         if request.endpoint in {"applications.runtime", "applications.source"}:
             # The iframe has an opaque origin (no allow-same-origin). Its CSP
             # also closes every network channel available to application code.

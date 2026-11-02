@@ -20,7 +20,7 @@ from flask import (Blueprint, abort, current_app, flash, g, jsonify, redirect, r
 
 from .auth import admin_required, login_required
 from .db import get_db
-from . import dungeons, character_creation, mud_abilities, mud_combat, mud_conditions, mud_quests, mud_effects, mud_progression, mud_firearms, mud_compat, mud_gathering, mud_work, mud_scope, mud_skills, mud_society, mud_start_rules, mud_triggers, mud_wayfinding, mud_wilderness, moderation
+from . import dungeons, character_creation, mud_abilities, mud_combat, mud_conditions, mud_quests, mud_effects, mud_progression, mud_firearms, mud_compat, mud_gathering, mud_housing, mud_work, mud_scope, mud_skills, mud_society, mud_start_rules, mud_triggers, mud_wayfinding, mud_wilderness, moderation
 from .security import validate_csrf
 
 bp = Blueprint("mud", __name__, url_prefix="/mud")
@@ -287,7 +287,12 @@ def _hidden_actions(database, user_id):
     enabled.discard("factions")
     if _public_factions(database):
         enabled.add("factions")
-    return {key for key, system in SOCIETY_ACTIONS.items() if system not in enabled}
+    hidden = {key for key, system in SOCIETY_ACTIONS.items() if system not in enabled}
+    # /house stays usable while housing is switched off, so owners can still pay and leave.
+    if not database.execute("SELECT 1 FROM mud_properties WHERE world_id=? LIMIT 1",
+                            (_active_world(database),)).fetchone():
+        hidden.add("house")
+    return hidden
 
 
 def _public_factions(database):
@@ -1000,6 +1005,7 @@ def _help_action(_database, _user, parameters):
             "directions": '/directions "Kessa Gate"', "use": '/read "Old Map"',
             "give": '/give "Red Apple" to Baker', "steal": '/steal from "Fat Merchant"',
             "pay": '/pay "Town Watch"', "faction": '/faction join "Harbor Guild"',
+            "house": '/house invite "Harbor Cottage" Bram', "storage": '/storage deposit "Red Apple" into "Oak Chest"',
         }
         body = f"/{name}: {_action_description(definition, resource)}\nAliases: " + ", ".join(f"/{alias}" for alias in aliases)
         if definition.key in examples:
@@ -1117,9 +1123,17 @@ def _home_room(database, user_id):
 
 
 def _world_room(database, room_id):
-    """A world room as players see it; wilderness rooms take their text from their preset."""
+    """A world room as players see it; wilderness rooms take their text from their preset,
+    private housing copies from their template room."""
     row = mud_wilderness.room_row(database, room_id)
-    return mud_wilderness.resolve_room(database, row) if row is not None else None
+    if row is None:
+        return None
+    if row["kind"] == "housing":
+        template = database.execute("SELECT c.template_room_id,c.holding_id,t.name,t.description "
+                                    "FROM mud_world_rooms c JOIN mud_world_rooms t ON t.id=c.template_room_id "
+                                    "WHERE c.id=?", (room_id,)).fetchone()
+        return {**dict(row), **(dict(template) if template else {})}
+    return mud_wilderness.resolve_room(database, row)
 
 
 def _set_player_location(database, user_id, mode, location_type, location_key,
@@ -1189,6 +1203,15 @@ def _reconcile_player_location(database, user_id):
                 "SELECT 1 FROM mud_world_rooms WHERE id=? AND world_id=?",
                 (location["location_key"], world),
             ).fetchone() is not None)
+    if valid and location["location_type"] == "world_room" and not procedural:
+        target, barrier = _property_entry(database, user_id, location["location_key"])
+        if barrier:
+            found, _holding = _room_property(database, location["location_key"])
+            target = found["entrance_room_id"]
+        if target != location["location_key"]:
+            _leave_combat(database, user_id, "room", location["location_key"])
+            _set_player_location(database, user_id, "traditional", "world_room", target)
+            return _player_location(database, user_id)
     if valid:
         return location
     if location is not None and location["location_type"] == "world_room":
@@ -1325,6 +1348,7 @@ def _room_exits(database, room_id, instance_id=None, viewer_id=None):
             "WHERE e.instance_id=? AND e.from_room_key=? ORDER BY e.direction,e.to_room_key",
             (instance_id, room_id),
         ).fetchall()]
+    room_id = _housing_template(database, room_id) or room_id
     rows = database.execute(
         "SELECT e.id,e.name,e.direction,e.to_room_id,e.key_item_id,e.pick_difficulty,"
         "e.conditions_json,e.conditions_message,r.name AS destination_name,"
@@ -1461,6 +1485,8 @@ def _player_exit_label(database, user_id, exit_row):
     label = _exit_label(exit_row)
     if not _exit_open_to(database, user_id, exit_row):
         return label + " [barred]"
+    if _property_entry(database, user_id, exit_row["to_room_id"], create=False)[1]:
+        return label + " [private]"
     if not _exit_locked(exit_row):
         return label
     if _exit_sealed(exit_row):
@@ -1911,6 +1937,8 @@ def _room_state(database, user_id):
                            "WHERE room_id=? ORDER BY name,id", (room["id"],)))]
                       if not instance_id and not portal else []),
         "dialogue_responses": dialogue_responses,
+        "storage": [{"id": point["id"], "name": point["name"], "scope": point["scope"]}
+                    for point in _room_storage_points(database, room)] if not portal else [],
         "wilderness": room.get("kind") == "wild" and not instance_id,
         "travel": travel_state(database, user_id),
         "wayfinding": None if instance_id or portal else wayfinding_state(database, user_id),
@@ -1952,6 +1980,8 @@ def _describe_room(database, room, viewer_id=None):
         + (f"\n\n{states}" if states else "") + f"{instructions}\n\n"
         f"Exits: {routes}\nOther players: {people}\nNPCs: {npcs}\nItems: {items}"
         + (f"\nGathering: {gathering} (use /gather <name>)" if gathering else "")
+        + "".join(f"\n{line}" for line in (_housing_lines(database, viewer_id, room)
+                                            if room["id"] != PORTAL_ROOM_ID else []))
     )
 
 
@@ -2302,19 +2332,9 @@ def _bank_action(database, user, parameters):
     ).fetchone()
     if location is None:
         raise ActionError("Banking is only available in an authored world room.")
-    if not location["banking_enabled"]:
-        available = False
-        for npc in _room_npc_rows(database, room["id"]):
-            if not database.execute("SELECT 1 FROM mud_npc_banks WHERE npc_definition_id=?",
-                                    (npc["definition_id"],)).fetchone():
-                continue
-            if npc["combat_maximum_health"] is not None and _encounter_row(database, npc)["status"] == "defeated":
-                continue
-            if not _npc_closed(database, npc):
-                available = True
-                break
-        if not available:
-            raise ActionError("There is no available bank here.")
+    if not location["banking_enabled"] and not _npc_available_here(database, room["id"], {
+            row["npc_definition_id"] for row in database.execute("SELECT npc_definition_id FROM mud_npc_banks")}):
+        raise ActionError("There is no available bank here.")
     args = [str(value) for value in parameters.get("arguments", [])]
     operation = args[0].casefold() if args else "balance"
     if (operation not in {"balance", "deposit", "withdraw"}
@@ -2360,7 +2380,7 @@ def hub_state(database, user_id):
         "SELECT i.id,d.name,d.description,d.item_type,d.properties_json "
         "FROM mud_character_storage AS s JOIN mud_item_instances AS i ON i.id=s.item_instance_id "
         "JOIN mud_item_definitions AS d ON d.id=i.definition_id "
-        "WHERE s.character_id=? ORDER BY d.name,i.id", (character["id"],),
+        "WHERE s.character_id=? AND s.storage_point_id IS NULL ORDER BY d.name,i.id", (character["id"],),
     ).fetchall()
     return {
         "coins": _wallet(database, character["id"]),
@@ -2533,7 +2553,9 @@ def _world_shop_action(database, user, parameters):
 
 
 def _storage_action(database, user, parameters):
-    _require_hub(database, user["id"])
+    """Personal storage in the portal room; elsewhere, the world's storage points in this room."""
+    if _current_room(database, user["id"])["id"] != PORTAL_ROOM_ID:
+        return _world_storage_action(database, user, parameters)
     args = [str(value) for value in parameters.get("arguments", [])]
     operation = str(parameters.get("operation") or (args[0] if args else "list")).casefold()
     target = str(parameters.get("item_id") or " ".join(args[1:])).strip()
@@ -2560,7 +2582,7 @@ def _storage_action(database, user, parameters):
             "SELECT i.id,d.name FROM mud_character_storage AS s "
             "JOIN mud_item_instances AS i ON i.id=s.item_instance_id "
             "JOIN mud_item_definitions AS d ON d.id=i.definition_id "
-            "WHERE s.character_id=? AND i.owner_character_id=?",
+            "WHERE s.character_id=? AND i.owner_character_id=? AND s.storage_point_id IS NULL",
             (character["id"], character["id"]),
         ).fetchall()
         item = _item_matches(rows, target)
@@ -2568,6 +2590,792 @@ def _storage_action(database, user, parameters):
                          (item["id"], character["id"]))
         return [EventDraft(f"You withdraw {item['name']}.", event_type="item")]
     raise ActionError("Use /storage, /storage deposit <item>, or /storage withdraw <item>.")
+
+
+# --- Housing and storage ------------------------------------------------------
+# A property is a set of authored rooms a character can hold: one shared set
+# (unique) or a template every holding gets private copies of (instanced; the
+# copies are kind='housing' rooms that borrow the template's text and exits).
+# A storage point keeps items for one character, a holding's owners, or anyone.
+# A stored item stays owned by a character and its mud_character_storage row
+# only hides it, so whenever a holding ends its items go straight back.
+
+STORAGE_SCOPE_LABELS = {"personal": "personal", "property": "owners only", "communal": "shared"}
+
+
+def _housing_settings(database):
+    return society_settings(database)["housing"]
+
+
+def _world_properties(database):
+    return database.execute("SELECT * FROM mud_properties WHERE world_id=? ORDER BY name COLLATE NOCASE,id",
+                            (_active_world(database),)).fetchall()
+
+
+def _room_property(database, room_id):
+    """(property, holding ID) for a property room or private copy; an instanced template has no holding."""
+    row = database.execute("SELECT kind,holding_id FROM mud_world_rooms WHERE id=?", (room_id,)).fetchone()
+    if row is None:
+        return None, None
+    if row["kind"] == "housing":
+        found = database.execute("SELECT p.* FROM mud_property_holdings h JOIN mud_properties p "
+                                 "ON p.id=h.property_id WHERE h.id=?", (row["holding_id"],)).fetchone()
+        return found, row["holding_id"]
+    found = database.execute("SELECT p.* FROM mud_property_rooms r JOIN mud_properties p ON p.id=r.property_id "
+                             "WHERE r.room_id=?", (room_id,)).fetchone()
+    if found is None or found["kind"] == "instanced":
+        return found, None
+    holding = database.execute("SELECT id FROM mud_property_holdings WHERE property_id=?", (found["id"],)).fetchone()
+    return found, holding["id"] if holding else None
+
+
+def _housing_template(database, room_id):
+    """The template room a private copy stands for, or None for any other room."""
+    row = database.execute("SELECT template_room_id FROM mud_world_rooms WHERE id=? AND kind='housing'",
+                           (room_id,)).fetchone()
+    return row["template_room_id"] if row else None
+
+
+def _owner_row(database, holding_id, character_id, status="active"):
+    return database.execute("SELECT * FROM mud_property_owners WHERE holding_id=? AND character_id=? AND status=?",
+                            (holding_id, character_id, status)).fetchone()
+
+
+def _character_holding(database, character_id, property_id, status="active"):
+    """The holding of a property this character owns or shares (or is invited to), with their role."""
+    return database.execute(
+        "SELECT h.*,o.role,o.status,o.paid_until FROM mud_property_owners o "
+        "JOIN mud_property_holdings h ON h.id=o.holding_id WHERE o.character_id=? AND h.property_id=? "
+        "AND o.status=?", (character_id, property_id, status)).fetchone()
+
+
+def _holding_owners(database, holding_id, status="active"):
+    return database.execute(
+        "SELECT o.*,c.user_id,c.display_name FROM mud_property_owners o JOIN mud_characters c "
+        "ON c.id=o.character_id WHERE o.holding_id=? AND o.status=? "
+        "ORDER BY o.role='co_owner',o.joined_at,c.display_name COLLATE NOCASE", (holding_id, status)).fetchall()
+
+
+def _housing_copy(database, holding_id, template_room_id):
+    """A holding's private copy of a template room, made the first time someone enters it."""
+    row = database.execute("SELECT id FROM mud_world_rooms WHERE holding_id=? AND template_room_id=?",
+                           (holding_id, template_room_id)).fetchone()
+    if row is not None:
+        return row["id"]
+    template = database.execute("SELECT name,description,world_id FROM mud_world_rooms WHERE id=?",
+                                (template_room_id,)).fetchone()
+    room_id = f"housing:{uuid.uuid4().hex}"
+    database.execute("INSERT INTO mud_world_rooms(id,name,description,world_id,kind,template_room_id,holding_id) "
+                     "VALUES(?,?,?,?,'housing',?,?)",
+                     (room_id, template["name"], template["description"], template["world_id"],
+                      template_room_id, holding_id))
+    return room_id
+
+
+def _property_entry(database, user_id, room_id, create=True):
+    """(the room entering room_id really leads to, why the character may not or None).
+
+    Property rooms admit only the active owners of their holding; entering an
+    instanced template leads to the character's own copy of it.
+    """
+    found, holding_id = _room_property(database, room_id)
+    if found is None:
+        return room_id, None
+    character_id = _character_id(database, user_id)
+    if found["kind"] == "instanced" and holding_id is None:
+        holding = _character_holding(database, character_id, found["id"])
+        if holding is None:
+            return room_id, f"{found['name']} is private, and you have no place there."
+        return (_housing_copy(database, holding["id"], room_id) if create else room_id), None
+    if holding_id and _owner_row(database, holding_id, character_id):
+        return room_id, None
+    return room_id, f"{found['name']} is private."
+
+
+def _property_rooms(database, holding_id, found):
+    """Every room a holding's owners alone may stand in."""
+    if found["kind"] == "instanced":
+        return [row["id"] for row in database.execute("SELECT id FROM mud_world_rooms WHERE holding_id=?",
+                                                      (holding_id,))]
+    return [row["room_id"] for row in database.execute("SELECT room_id FROM mud_property_rooms WHERE property_id=?",
+                                                       (found["id"],))]
+
+
+def _evict(database, user_id, rooms, found):
+    """Send one character standing in a holding's rooms back out to its entrance."""
+    location = _player_location(database, user_id)
+    if location is None or location["location_type"] != "world_room" or location["location_key"] not in rooms:
+        return []
+    _leave_combat(database, user_id, "room", location["location_key"])
+    _set_player_location(database, user_id, "traditional", "world_room", found["entrance_room_id"])
+    return [_private(user_id, f"You find yourself outside {found['name']}.", "movement")]
+
+
+def _remove_owner(database, holding_id, character_id, notice):
+    """Take one co-owner or invitee off a holding; the items they stored there go back to them."""
+    found = database.execute("SELECT p.* FROM mud_property_holdings h JOIN mud_properties p ON p.id=h.property_id "
+                             "WHERE h.id=?", (holding_id,)).fetchone()
+    owner = database.execute("SELECT o.status,c.user_id FROM mud_property_owners o JOIN mud_characters c "
+                             "ON c.id=o.character_id WHERE o.holding_id=? AND o.character_id=?",
+                             (holding_id, character_id)).fetchone()
+    if owner is None:
+        return []
+    returned = database.execute("DELETE FROM mud_character_storage WHERE holding_id=? AND character_id=?",
+                                (holding_id, character_id)).rowcount
+    database.execute("DELETE FROM mud_property_owners WHERE holding_id=? AND character_id=?",
+                     (holding_id, character_id))
+    text = notice + (f" {returned} item{'s' if returned != 1 else ''} you stored there "
+                     f"{'are' if returned != 1 else 'is'} back in your pack." if returned else "")
+    drafts = [_private(owner["user_id"], text, "housing")]
+    return drafts + _evict(database, owner["user_id"], _property_rooms(database, holding_id, found), found)
+
+
+def _release_holding(database, holding_id, notice):
+    """End a holding: its owners lose it, everyone inside steps out, and stored items return to their owners."""
+    found = database.execute("SELECT p.* FROM mud_property_holdings h JOIN mud_properties p ON p.id=h.property_id "
+                             "WHERE h.id=?", (holding_id,)).fetchone()
+    if found is None:
+        return []
+    owners = [dict(row) for row in database.execute(
+        "SELECT c.id,c.user_id FROM mud_property_owners o JOIN mud_characters c ON c.id=o.character_id "
+        "WHERE o.holding_id=?", (holding_id,))]
+    returned = {row["character_id"]: row["total"] for row in database.execute(
+        "SELECT character_id,COUNT(*) AS total FROM mud_character_storage WHERE holding_id=? GROUP BY character_id",
+        (holding_id,))}
+    rooms = _property_rooms(database, holding_id, found)
+    database.execute("DELETE FROM mud_character_storage WHERE holding_id=?", (holding_id,))
+    database.execute("DELETE FROM mud_property_holdings WHERE id=?", (holding_id,))
+    entrance = _world_room(database, found["entrance_room_id"])
+    if rooms and entrance is not None:
+        _move_room_occupants(database, rooms, entrance, "You step outside to {name}.")
+    database.execute("DELETE FROM mud_world_rooms WHERE holding_id=?", (holding_id,))
+    drafts = []
+    for owner in owners:
+        count = returned.get(owner["id"], 0)
+        drafts.append(_private(owner["user_id"], notice + (
+            f" {count} item{'s' if count != 1 else ''} you stored there "
+            f"{'are' if count != 1 else 'is'} back in your pack." if count else ""), "housing"))
+    # Items other characters stored there went back to them as well.
+    for character_id, count in returned.items():
+        if character_id not in {owner["id"] for owner in owners}:
+            row = database.execute("SELECT user_id FROM mud_characters WHERE id=?", (character_id,)).fetchone()
+            if row:
+                drafts.append(_private(row["user_id"], f"{count} item{'s' if count != 1 else ''} you stored at "
+                                       f"{found['name']} {'are' if count != 1 else 'is'} back in your pack.",
+                                       "housing"))
+    return drafts
+
+
+def character_leaving_holdings(database, character_id):
+    """Before a character is deleted: a co-owner takes over each holding it ran, or the holding ends.
+
+    The other owners are told in that holding's world; the leaving player is not.
+    """
+    leaving = database.execute("SELECT user_id FROM mud_characters WHERE id=?", (character_id,)).fetchone()
+    for row in database.execute("SELECT o.holding_id,o.role,h.world_id FROM mud_property_owners o "
+                                "JOIN mud_property_holdings h ON h.id=o.holding_id WHERE o.character_id=?",
+                                (character_id,)).fetchall():
+        with mud_scope.use(row["world_id"]):
+            database.execute("DELETE FROM mud_property_owners WHERE holding_id=? AND character_id=?",
+                             (row["holding_id"], character_id))
+            if row["role"] != "primary":
+                continue
+            for draft in _settle_primary(database, row["holding_id"]):
+                if leaving is None or leaving["user_id"] not in (draft.recipient_ids or ()):
+                    _insert_event(database, draft)
+
+
+def _settle_primary(database, holding_id):
+    """A holding without a primary owner passes to its longest-standing co-owner, or ends."""
+    if database.execute("SELECT 1 FROM mud_property_owners WHERE holding_id=? AND role='primary'",
+                        (holding_id,)).fetchone():
+        return []
+    heir = database.execute("SELECT o.character_id,c.user_id,p.name FROM mud_property_owners o "
+                            "JOIN mud_characters c ON c.id=o.character_id "
+                            "JOIN mud_property_holdings h ON h.id=o.holding_id JOIN mud_properties p ON p.id=h.property_id "
+                            "WHERE o.holding_id=? AND o.status='active' ORDER BY o.joined_at,o.character_id LIMIT 1",
+                            (holding_id,)).fetchone()
+    if heir is None:
+        return _release_holding(database, holding_id, "Your claim on a property has ended.")
+    database.execute("UPDATE mud_property_owners SET role='primary' WHERE holding_id=? AND character_id=?",
+                     (holding_id, heir["character_id"]))
+    return [_private(heir["user_id"], f"You are now the primary owner of {heir['name']}.", "housing")]
+
+
+def _npc_available_here(database, room_id, definition_ids):
+    """Whether an NPC of one of these definitions stands here, undefeated and open for business."""
+    for npc in _room_npc_rows(database, room_id):
+        if npc["definition_id"] not in definition_ids:
+            continue
+        if npc["combat_maximum_health"] is not None and _encounter_row(database, npc)["status"] == "defeated":
+            continue
+        if not _npc_closed(database, npc):
+            return True
+    return False
+
+
+def _property_office(database, room, found):
+    """Whether this room is where a property is acquired: beside its agent, or else at its entrance."""
+    if found["agent_npc_definition_id"]:
+        return not room.get("instance_id") and _npc_available_here(database, room["id"],
+                                                                   {found["agent_npc_definition_id"]})
+    return room["id"] == found["entrance_room_id"]
+
+
+def _period_text(seconds):
+    for size, unit in ((86400, "day"), (3600, "hour")):
+        if seconds % size == 0:
+            count = seconds // size
+            return f"{count} {unit}{'s' if count != 1 else ''}"
+    return f"{seconds // 3600} hours"
+
+
+def _moment_text(value):
+    moment = mud_housing.parse_time(value)
+    return moment.strftime("%Y-%m-%d %H:%M UTC") if moment else "now"
+
+
+def _property_terms(found, owners=1):
+    parts = []
+    if found["acquisition"] == "purchase":
+        parts.append(f"{found['price']} coins" if found["price"] else "free to buy")
+    elif found["acquisition"] == "claim":
+        parts.append("free to claim")
+    else:
+        parts.append("granted, not sold")
+    if found["rent"]:
+        parts.append(f"rent {found['rent']} coins every {_period_text(found['rent_period_seconds'])}"
+                     + (f" split between {owners} owners" if owners > 1 else ""))
+    return ", ".join(parts)
+
+
+def _held_count(database, character_id):
+    return database.execute("SELECT COUNT(*) FROM mud_property_owners o JOIN mud_property_holdings h "
+                            "ON h.id=o.holding_id WHERE o.character_id=? AND o.status='active' AND h.world_id=?",
+                            (character_id, _active_world(database))).fetchone()[0]
+
+
+def _pay_coins(database, character_id, amount, problem):
+    if amount <= 0:
+        return
+    _wallet(database, character_id)
+    if not database.execute("UPDATE mud_character_wallets SET coins=coins-? WHERE character_id=? AND coins>=?",
+                            (amount, character_id, amount)).rowcount:
+        raise ActionError(problem)
+
+
+def _acquire_property(database, user, found, granted=False):
+    """Make the character the primary owner of a new holding; granted holdings skip price and requirements."""
+    character_id = _character_id(database, user["id"])
+    settings = _housing_settings(database)
+    if not settings["enabled"]:
+        raise ActionError("Housing is closed in this world.")
+    if _character_holding(database, character_id, found["id"]):
+        raise ActionError(f"You already have {found['name']}.")
+    if found["kind"] == "unique" and database.execute(
+            "SELECT 1 FROM mud_property_holdings WHERE property_id=?", (found["id"],)).fetchone():
+        raise ActionError(f"{found['name']} already has an owner.")
+    if _held_count(database, character_id) >= settings["max_holdings"]:
+        raise ActionError(f"You can hold at most {settings['max_holdings']} "
+                          f"propert{'ies' if settings['max_holdings'] != 1 else 'y'} in this world.")
+    now = datetime.now(timezone.utc)
+    cost = 0 if granted else found["price"] + found["rent"]
+    _pay_coins(database, character_id, cost, f"{found['name']} costs {cost} coins"
+               + (" including the first rent." if found["rent"] else "."))
+    holding_id = f"holding:{uuid.uuid4().hex}"
+    database.execute("INSERT INTO mud_property_holdings(id,property_id,world_id,unique_key) VALUES(?,?,?,?)",
+                     (holding_id, found["id"], _active_world(database),
+                      found["id"] if found["kind"] == "unique" else None))
+    paid_until = mud_housing.stamp(now + timedelta(seconds=found["rent_period_seconds"])) if found["rent"] else None
+    database.execute("INSERT INTO mud_property_owners(holding_id,character_id,role,status,paid_until) "
+                     "VALUES(?,?,'primary','active',?)", (holding_id, character_id, paid_until))
+    verb = "are given" if granted else "pay for" if cost else "claim"
+    text = f"You {verb} {found['name']}" + (f" ({cost} coins)" if cost else "") + "."
+    if paid_until:
+        text += f" Rent is paid until {_moment_text(paid_until)}."
+    return [EventDraft(text, event_type="housing")]
+
+
+def _scripted_property(database, user, kind, property_id):
+    """A grant_property or revoke_property outcome; nothing happens when it would change nothing."""
+    found = database.execute("SELECT * FROM mud_properties WHERE id=? AND world_id=?",
+                             (property_id, _active_world(database))).fetchone()
+    if found is None:
+        return []
+    character_id = _character_id(database, user["id"])
+    holding = _character_holding(database, character_id, found["id"])
+    if kind == "grant_property":
+        return [] if holding else _acquire_property(database, user, found, granted=True)
+    if holding is None:
+        return []
+    if holding["role"] == "primary":
+        return _release_holding(database, holding["id"], f"You no longer have {found['name']}.")
+    return _remove_owner(database, holding["id"], character_id, f"You no longer share {found['name']}.")
+
+
+def _match_property(rows, text, label="property"):
+    key = " ".join(text.casefold().split())
+    matches = [row for row in rows if " ".join(row["name"].casefold().split()) == key]
+    if not matches:
+        matches = [row for row in rows if " ".join(row["name"].casefold().split()).startswith(key)] if key else []
+    if len(matches) != 1:
+        raise ActionError(f'No single {label} matches "{text}".' if text else f"Name the {label}.")
+    return matches[0]
+
+
+def _split_property(rows, words):
+    """(property, the rest) for '<property> [to|from] <character>', trying the longest property name first."""
+    text = " ".join(words)
+    key = " ".join(text.casefold().split())
+    for row in sorted(rows, key=lambda item: -len(item["name"])):
+        name = " ".join(row["name"].casefold().split())
+        if key == name or key.startswith(name + " "):
+            rest = text[len(name):].strip() if text.casefold().startswith(name) else " ".join(words[len(name.split()):])
+            rest = re.sub(r"^(?:to|from)\s+", "", rest, flags=re.I)
+            return row, rest
+    raise ActionError(f'No property matches "{text}".' if text else "Name the property.")
+
+
+def _my_properties(database, character_id, status="active"):
+    return database.execute(
+        "SELECT p.*,h.id AS holding_id,o.role,o.paid_until FROM mud_property_owners o "
+        "JOIN mud_property_holdings h ON h.id=o.holding_id JOIN mud_properties p ON p.id=h.property_id "
+        "WHERE o.character_id=? AND o.status=? AND h.world_id=? ORDER BY p.name COLLATE NOCASE",
+        (character_id, status, _active_world(database))).fetchall()
+
+
+def _target_property(rows, words, label):
+    """The one property the command means: named, or the only candidate when none is named."""
+    if not words and len(rows) == 1:
+        return rows[0]
+    return _match_property(rows, " ".join(words), label)
+
+
+def _world_character(database, name):
+    row = database.execute("SELECT id,user_id,display_name FROM mud_characters WHERE world_key=? "
+                           "AND display_name=? COLLATE NOCASE AND creation_state<>'pending'",
+                           (_world(), " ".join(name.split()))).fetchone()
+    if row is None:
+        raise ActionError(f'There is no character named "{name}" in this world.')
+    return row
+
+
+def _holding_summary(database, row, character_id):
+    owners = _holding_owners(database, row["holding_id"])
+    invited = _holding_owners(database, row["holding_id"], "invited")
+    others = [owner["display_name"] for owner in owners if owner["character_id"] != character_id]
+    text = f"{row['name']} ({'primary owner' if row['role'] == 'primary' else 'co-owner'})"
+    if others:
+        text += " with " + ", ".join(others)
+    if invited:
+        text += "; invited: " + ", ".join(owner["display_name"] for owner in invited)
+    if row["rent"]:
+        share = mud_housing.rent_share(row["rent"], len(owners), row["role"] == "primary")
+        text += (f". Your rent: {share} coins every {_period_text(row['rent_period_seconds'])}, "
+                 f"paid until {_moment_text(row['paid_until'])}")
+    return text + "."
+
+
+def _house_action(database, user, parameters):
+    args = [str(value) for value in parameters.get("arguments", [])]
+    operation = args[0].casefold() if args else "list"
+    words = args[1:]
+    room = _current_room(database, user["id"])
+    if room.get("system_managed") or room.get("instance_id"):
+        raise ActionError("Property is only handled inside an authored world.")
+    character_id = _character_id(database, user["id"])
+    mine = _my_properties(database, character_id)
+    if operation == "list":
+        lines = [f"- {_holding_summary(database, row, character_id)}" for row in mine]
+        body = ("Your properties:\n" + "\n".join(lines)) if lines else "You hold no property in this world."
+        invites = _my_properties(database, character_id, "invited")
+        if invites:
+            body += "\nInvitations: " + ", ".join(row["name"] for row in invites) + " (/house accept <property>)."
+        offered = [found for found in _world_properties(database) if _property_office(database, room, found)]
+        if offered:
+            body += "\nOffered here: " + "; ".join(f"{found['name']} ({_property_terms(found)})" for found in offered)
+        return [EventDraft(body + "\nUse /house info <property> for details.", event_type="housing")]
+    if operation == "info":
+        found = _target_property(_world_properties(database), words, "property")
+        holding = database.execute("SELECT id FROM mud_property_holdings WHERE property_id=? "
+                                   "AND (unique_key IS NOT NULL OR id IN (SELECT holding_id FROM mud_property_owners "
+                                   "WHERE character_id=?)) LIMIT 1", (found["id"], character_id)).fetchone()
+        owners = _holding_owners(database, holding["id"]) if holding else []
+        storage = database.execute(
+            "SELECT COALESCE(SUM(s.capacity),0) FROM mud_storage_points s JOIN mud_property_rooms r "
+            "ON r.room_id=s.room_id WHERE r.property_id=? AND s.scope='property'", (found["id"],)).fetchone()[0]
+        lines = [found["name"], found["description"], f"Terms: {_property_terms(found, max(1, len(owners)))}."]
+        if found["kind"] == "instanced":
+            lines.append("Every holder gets a private place of their own.")
+        if owners:
+            lines.append("Owners: " + ", ".join(owner["display_name"] + (" (primary)" if owner["role"] == "primary"
+                                                                         else "") for owner in owners) + ".")
+        elif found["kind"] == "unique":
+            lines.append("Vacant." if found["available"] else "Vacant, but not offered right now.")
+        if found["max_owners"] > 1:
+            lines.append(f"Up to {found['max_owners']} owners may share it.")
+        else:
+            lines.append("Private to one owner.")
+        if storage:
+            lines.append(f"Owners' storage: {storage} item{'s' if storage != 1 else ''}.")
+        if found["refund_percent"] and found["acquisition"] == "purchase":
+            lines.append(f"Abandoning it refunds {found['refund_percent']}% of the price.")
+        return [EventDraft("\n".join(lines), event_type="housing")]
+    if operation in ("buy", "claim"):
+        found = _match_property(_world_properties(database), " ".join(words))
+        wanted = "purchase" if operation == "buy" else "claim"
+        if found["acquisition"] != wanted:
+            raise ActionError(f"{found['name']} is not {'for sale' if operation == 'buy' else 'free to claim'}"
+                              + (" (use /house buy)." if found["acquisition"] == "purchase" else
+                                 " (use /house claim)." if found["acquisition"] == "claim" else "."))
+        if not found["available"]:
+            raise ActionError(f"{found['name']} is not being offered right now.")
+        if not _property_office(database, room, found):
+            raise ActionError(f"Go to {found['name']}'s entrance" + (" and find its agent" if
+                                                                      found["agent_npc_definition_id"] else "")
+                              + f" to {operation} it.")
+        if not mud_conditions.evaluate(found["conditions_json"], _ConditionContext(database, user["id"])):
+            raise ActionError(f"You do not meet the requirements for {found['name']}.")
+        return _acquire_property(database, user, found)
+    if operation == "accept" or operation == "decline":
+        invites = _my_properties(database, character_id, "invited")
+        if not invites:
+            raise ActionError("You have no property invitations.")
+        found = _target_property(invites, words, "invitation")
+        if operation == "decline":
+            database.execute("DELETE FROM mud_property_owners WHERE holding_id=? AND character_id=?",
+                             (found["holding_id"], character_id))
+            return [EventDraft(f"You decline to share {found['name']}.", event_type="housing")] + [
+                _private(owner["user_id"], f"{character_state(database, user['id'])['name']} declines to share "
+                                           f"{found['name']}.", "housing")
+                for owner in _holding_owners(database, found["holding_id"]) if owner["role"] == "primary"]
+        if _character_holding(database, character_id, found["id"]):
+            raise ActionError(f"You already have {found['name']}.")
+        settings = _housing_settings(database)
+        if _held_count(database, character_id) >= settings["max_holdings"]:
+            raise ActionError(f"You can hold at most {settings['max_holdings']} properties in this world.")
+        owners = _holding_owners(database, found["holding_id"])
+        if len(owners) >= found["max_owners"]:
+            raise ActionError(f"{found['name']} already has as many owners as it can.")
+        now = datetime.now(timezone.utc)
+        share = mud_housing.rent_share(found["rent"], len(owners) + 1, False) if found["rent"] else 0
+        _pay_coins(database, character_id, share, f"Your first share of the rent is {share} coins.")
+        paid_until = mud_housing.stamp(now + timedelta(seconds=found["rent_period_seconds"])) if found["rent"] else None
+        database.execute("UPDATE mud_property_owners SET status='active',paid_until=?,joined_at=? "
+                         "WHERE holding_id=? AND character_id=? AND status='invited'",
+                         (paid_until, mud_housing.stamp(now), found["holding_id"], character_id))
+        name = character_state(database, user["id"])["name"]
+        return ([EventDraft(f"You now share {found['name']}" + (f", paying {share} coins of rent" if share else "")
+                            + ".", event_type="housing")]
+                + [_private(owner["user_id"], f"{name} now shares {found['name']}.", "housing") for owner in owners])
+    if operation == "pay":
+        if not mine:
+            raise ActionError("You hold no property in this world.")
+        periods = 1
+        if words and re.fullmatch(r"[0-9]+", words[-1]):
+            periods = int(words[-1])
+            words = words[:-1]
+        found = _target_property(mine, words, "property of yours")
+        if not found["rent"]:
+            raise ActionError(f"{found['name']} has no rent.")
+        now = datetime.now(timezone.utc)
+        paid = mud_housing.prepaid_periods(found["paid_until"], found["rent_period_seconds"], now)
+        if not 1 <= periods or paid + periods > found["prepay_periods"]:
+            raise ActionError(f"You can pay at most {found['prepay_periods']} period"
+                              f"{'s' if found['prepay_periods'] != 1 else ''} ahead; {paid} "
+                              f"{'are' if paid != 1 else 'is'} already paid.")
+        owners = _holding_owners(database, found["holding_id"])
+        cost = mud_housing.rent_share(found["rent"], len(owners), found["role"] == "primary") * periods
+        _pay_coins(database, character_id, cost, f"That rent costs {cost} coins.")
+        until = mud_housing.stamp(mud_housing.extended(found["paid_until"], found["rent_period_seconds"], periods, now))
+        database.execute("UPDATE mud_property_owners SET paid_until=?,warned_at=NULL WHERE holding_id=? "
+                         "AND character_id=?", (until, found["holding_id"], character_id))
+        return [EventDraft(f"You pay {cost} coins of rent for {found['name']}. Your share is paid until "
+                           f"{_moment_text(until)}.", event_type="housing")]
+    if operation == "leave":
+        shared = [row for row in mine if row["role"] == "co_owner"]
+        if not shared:
+            raise ActionError("You do not share anyone else's property here.")
+        found = _target_property(shared, words, "shared property")
+        primary = [owner for owner in _holding_owners(database, found["holding_id"]) if owner["role"] == "primary"]
+        name = character_state(database, user["id"])["name"]
+        drafts = _remove_owner(database, found["holding_id"], character_id, f"You stop sharing {found['name']}.")
+        return drafts + [_private(owner["user_id"], f"{name} stops sharing {found['name']}.", "housing")
+                         for owner in primary]
+    managed = [row for row in mine if row["role"] == "primary"]
+    if operation == "abandon":
+        if not managed:
+            raise ActionError("You are not the primary owner of any property here.")
+        confirmed = bool(words) and words[-1].casefold() == "confirm"
+        found = _target_property(managed, words[:-1] if confirmed else words, "property of yours")
+        if not confirmed:
+            raise ActionError(f"Abandoning {found['name']} ends it for every owner. "
+                              f"Use /house abandon {found['name']} confirm.")
+        refund = found["price"] * found["refund_percent"] // 100 if found["acquisition"] == "purchase" else 0
+        if refund:
+            _wallet(database, character_id)
+            database.execute("UPDATE mud_character_wallets SET coins=coins+? WHERE character_id=? AND coins<=?",
+                             (refund, character_id, MAX_COINS - refund))
+        drafts = _release_holding(database, found["holding_id"], f"{found['name']} is no longer yours.")
+        mine_notice = [draft for draft in drafts if draft.recipient_ids == (user["id"],)]
+        others = [draft for draft in drafts if draft.recipient_ids != (user["id"],)]
+        head = EventDraft(f"You abandon {found['name']}" + (f" and are refunded {refund} coins" if refund else "")
+                          + ".", event_type="housing")
+        return [head] + [EventDraft(draft.body, "housing") for draft in mine_notice] + others
+    if operation in ("invite", "remove", "transfer"):
+        if not managed:
+            raise ActionError("Only a primary owner can do that.")
+        found, rest = _split_property(managed, words)
+        if not rest:
+            raise ActionError(f"Use /house {operation} <property> <character>.")
+        target = _world_character(database, rest)
+        if target["id"] == character_id:
+            raise ActionError("Name someone other than yourself.")
+        name = character_state(database, user["id"])["name"]
+        if operation == "invite":
+            if found["max_owners"] < 2:
+                raise ActionError(f"{found['name']} is private to one owner.")
+            taken = database.execute("SELECT COUNT(*) FROM mud_property_owners WHERE holding_id=?",
+                                     (found["holding_id"],)).fetchone()[0]
+            if taken >= found["max_owners"]:
+                raise ActionError(f"{found['name']} already has as many owners and invitations as it can.")
+            if database.execute("SELECT 1 FROM mud_property_owners WHERE holding_id=? AND character_id=?",
+                                (found["holding_id"], target["id"])).fetchone():
+                raise ActionError(f"{target['display_name']} already shares or is invited to {found['name']}.")
+            if _character_holding(database, target["id"], found["id"]):
+                raise ActionError(f"{target['display_name']} already has a {found['name']}.")
+            database.execute("INSERT INTO mud_property_owners(holding_id,character_id,role,status,invited_by) "
+                             "VALUES(?,?,'co_owner','invited',?)", (found["holding_id"], target["id"], character_id))
+            share = (f" Your share of the rent would be "
+                     f"{mud_housing.rent_share(found['rent'], len(_holding_owners(database, found['holding_id'])) + 1, False)}"
+                     f" coins every {_period_text(found['rent_period_seconds'])}." if found["rent"] else "")
+            return [EventDraft(f"You invite {target['display_name']} to share {found['name']}.", event_type="housing"),
+                    _private(target["user_id"], f"{name} invites you to share {found['name']}.{share} "
+                                                f"Use /house accept {found['name']} or /house decline {found['name']}.",
+                             "housing")]
+        row = database.execute("SELECT role,status FROM mud_property_owners WHERE holding_id=? AND character_id=?",
+                               (found["holding_id"], target["id"])).fetchone()
+        if row is None:
+            raise ActionError(f"{target['display_name']} does not share {found['name']}.")
+        if operation == "remove":
+            verb = "withdraw your invitation to" if row["status"] == "invited" else "remove"
+            notice = (f"{name} withdraws your invitation to {found['name']}." if row["status"] == "invited"
+                      else f"{name} removes you from {found['name']}.")
+            return ([EventDraft(f"You {verb} {target['display_name']}" + ("" if row["status"] == "invited" else
+                                                                           f" from {found['name']}") + ".",
+                                event_type="housing")]
+                    + _remove_owner(database, found["holding_id"], target["id"], notice))
+        if row["status"] != "active":
+            raise ActionError(f"{target['display_name']} has not accepted yet.")
+        database.execute("UPDATE mud_property_owners SET role='co_owner' WHERE holding_id=? AND character_id=?",
+                         (found["holding_id"], character_id))
+        database.execute("UPDATE mud_property_owners SET role='primary' WHERE holding_id=? AND character_id=?",
+                         (found["holding_id"], target["id"]))
+        return [EventDraft(f"You hand {found['name']} to {target['display_name']}; you remain a co-owner.",
+                           event_type="housing"),
+                _private(target["user_id"], f"{name} makes you the primary owner of {found['name']}.", "housing")]
+    raise ActionError("Use /house, /house info|buy|claim|pay|accept|decline|leave <property>, "
+                      "/house invite|remove|transfer <property> <character>, or /house abandon <property> confirm.")
+
+
+def _room_storage_points(database, room):
+    """Storage points here; a private copy offers the ones placed in its template."""
+    if room.get("instance_id") or room.get("system_managed"):
+        return []
+    rooms = [room["id"]] + [template for template in [_housing_template(database, room["id"])] if template]
+    return database.execute(f"SELECT * FROM mud_storage_points WHERE room_id IN ({','.join('?' * len(rooms))}) "
+                            "ORDER BY name COLLATE NOCASE,id", rooms).fetchall()
+
+
+def _storage_compartment(database, user_id, room, point):
+    """(SQL filter on mud_character_storage, its parameters, holding ID) a character may reach at point."""
+    character_id = _character_id(database, user_id)
+    if not mud_conditions.evaluate(point["conditions_json"], _ConditionContext(database, user_id)):
+        raise ActionError(f"You cannot use {point['name']}.")
+    if point["scope"] == "personal":
+        return "s.storage_point_id=? AND s.character_id=? AND s.holding_id IS NULL", (point["id"], character_id), None
+    if point["scope"] == "communal":
+        return "s.storage_point_id=? AND s.holding_id IS NULL", (point["id"],), None
+    found, holding_id = _room_property(database, room["id"])
+    if found is None or holding_id is None or not _owner_row(database, holding_id, character_id):
+        raise ActionError(f"Only the owners can use {point['name']}.")
+    return "s.storage_point_id=? AND s.holding_id=?", (point["id"], holding_id), holding_id
+
+
+def _stored_count(database, where, parameters):
+    """Items in a compartment, counting everything inside stored containers."""
+    return database.execute(
+        "WITH RECURSIVE held(id) AS (SELECT s.item_instance_id FROM mud_character_storage s WHERE " + where +
+        " UNION ALL SELECT i.id FROM mud_item_instances i JOIN held ON i.container_id=held.id) "
+        "SELECT COUNT(*) FROM held", parameters).fetchone()[0]
+
+
+def _item_size(database, item_id):
+    return database.execute(
+        "WITH RECURSIVE held(id) AS (SELECT ? UNION ALL SELECT i.id FROM mud_item_instances i "
+        "JOIN held ON i.container_id=held.id) SELECT COUNT(*) FROM held", (item_id,)).fetchone()[0]
+
+
+def _stored_rows(database, where, parameters):
+    return database.execute(
+        "SELECT i.id,d.name,d.item_type,s.character_id AS stored_by FROM mud_character_storage s "
+        "JOIN mud_item_instances i ON i.id=s.item_instance_id JOIN mud_item_definitions d ON d.id=i.definition_id "
+        "WHERE " + where + " ORDER BY d.name COLLATE NOCASE,i.id", parameters).fetchall()
+
+
+def _pick_storage(points, name):
+    if name:
+        return _match_property(points, name, "storage")
+    if len(points) > 1:
+        raise ActionError("Name the storage: " + ", ".join(point["name"] for point in points) + ".")
+    return points[0]
+
+
+def _world_storage_action(database, user, parameters):
+    room = _current_room(database, user["id"])
+    points = _room_storage_points(database, room)
+    if not points:
+        raise ActionError("There is no storage here. Personal storage is in the portal room.")
+    args = [str(value) for value in parameters.get("arguments", [])]
+    operation = args[0].casefold() if args else "list"
+    text = " ".join(args[1:]).strip()
+    character_id = _character_id(database, user["id"])
+    if operation == "list":
+        if text:
+            points = [_match_property(points, text, "storage")]
+        lines = []
+        for point in points:
+            try:
+                where, values, _holding = _storage_compartment(database, user["id"], room, point)
+            except ActionError as problem:
+                lines.append(f"{point['name']}: {problem}")
+                continue
+            rows = _stored_rows(database, where, values)
+            contents = ", ".join(label for _row, label in _numbered_items(rows)) or "empty"
+            lines.append(f"{point['name']} ({STORAGE_SCOPE_LABELS[point['scope']]}, "
+                         f"{_stored_count(database, where, values)}/{point['capacity']}): {contents}")
+        return [EventDraft("\n".join(lines) + "\nUse /storage deposit <item> [into <storage>] or "
+                           "/storage withdraw <item> [from <storage>].", event_type="item")]
+    if operation not in ("deposit", "withdraw") or not text:
+        raise ActionError("Use /storage, /storage deposit <item> [into <storage>], "
+                          "or /storage withdraw <item> [from <storage>].")
+    match = re.fullmatch(r"(.+?)\s+(?:into|in|to|from)\s+(.+)", text, re.I)
+    target, point_name = text, ""
+    if match and any(" ".join(point["name"].casefold().split()).startswith(" ".join(match.group(2).casefold().split()))
+                     for point in points):
+        target, point_name = match.group(1), match.group(2)
+    point = _pick_storage(points, point_name)
+    where, values, holding_id = _storage_compartment(database, user["id"], room, point)
+    if operation == "deposit":
+        item = _item_matches(list(_inventory_rows(database, user["id"])) +
+                             list(_inventory_rows(database, user["id"], True)), target)
+        if item["acquired_run_id"]:
+            raise ActionError("Extract from the active run before storing its loot.")
+        allowed = [kind for kind in point["item_types"].split(",") if kind]
+        if allowed and item["item_type"] not in allowed:
+            raise ActionError(f"{point['name']} only holds {', '.join(allowed)} items.")
+        size = _item_size(database, item["id"])
+        used = _stored_count(database, where, values)
+        if used + size > point["capacity"]:
+            raise ActionError(f"{point['name']} is full ({used}/{point['capacity']}).")
+        database.execute("DELETE FROM mud_character_equipment WHERE item_instance_id=?", (item["id"],))
+        database.execute("INSERT INTO mud_character_storage(item_instance_id,character_id,storage_point_id,holding_id) "
+                         "VALUES(?,?,?,?)", (item["id"], character_id, point["id"], holding_id))
+        return [EventDraft(f"You put {item['name']} in {point['name']}.", event_type="item")]
+    item = _item_matches(_stored_rows(database, where, values), target)
+    # The storage row goes first; a second withdrawal of the same item finds nothing to take.
+    if database.execute("DELETE FROM mud_character_storage WHERE item_instance_id=? AND storage_point_id=? "
+                        "AND holding_id IS ?", (item["id"], point["id"], holding_id)).rowcount != 1:
+        raise ActionError(f"{item['name']} is no longer in {point['name']}.")
+    database.execute("UPDATE mud_item_instances SET owner_character_id=?,updated_at=CURRENT_TIMESTAMP WHERE id=?",
+                     (character_id, item["id"]))
+    return [EventDraft(f"You take {item['name']} from {point['name']}.", event_type="item")]
+
+
+def _housing_lines(database, user_id, room):
+    """What a room says about property and storage: offers, owners, and the storage points here."""
+    if room.get("instance_id") or room.get("system_managed"):
+        return []
+    lines = []
+    character_id = _character_id(database, user_id) if user_id else None
+    found, holding_id = _room_property(database, room["id"])
+    if found is not None and holding_id is not None:
+        owners = _holding_owners(database, holding_id)
+        me = next((owner for owner in owners if owner["character_id"] == character_id), None)
+        if me is not None:
+            lines.append(f"Property: {found['name']} - yours ({'primary owner' if me['role'] == 'primary' else 'co-owner'})"
+                         + (f", rent paid until {_moment_text(me['paid_until'])}" if found["rent"] else "") + ".")
+        else:
+            primary = next((owner["display_name"] for owner in owners if owner["role"] == "primary"), None)
+            lines.append(f"Property: {found['name']}" + (f" - owned by {primary}." if primary else "."))
+    elif found is not None and found["kind"] == "unique":
+        lines.append(f"Property: {found['name']} - vacant.")
+    offers = []
+    for offered in _world_properties(database):
+        if offered["acquisition"] == "grant" or not offered["available"] or not _property_office(database, room, offered):
+            continue
+        if offered["kind"] == "unique" and database.execute("SELECT 1 FROM mud_property_holdings WHERE property_id=?",
+                                                           (offered["id"],)).fetchone():
+            continue
+        offers.append(f"{offered['name']} ({_property_terms(offered)})")
+    if offers:
+        lines.append("Offered here: " + "; ".join(offers) + " (/house info <property>).")
+    points = _room_storage_points(database, room)
+    if points:
+        lines.append("Storage: " + ", ".join(f"{point['name']} ({STORAGE_SCOPE_LABELS[point['scope']]})"
+                                             for point in points) + " (use /storage).")
+    return lines
+
+
+def process_housing(database, now=None):
+    """Remind owners whose rent is due and end the shares of those past their grace period."""
+    now = now or datetime.now(timezone.utc)
+    stamp = mud_housing.stamp(now)
+    handled = 0
+    for world in sorted(_enabled_world_keys(database)):
+        with mud_scope.use(world):
+            if not _housing_settings(database)["enabled"]:
+                continue  # While housing is off nobody is evicted.
+            drafts = []
+            for holding in database.execute("SELECT h.id FROM mud_property_holdings h WHERE h.world_id=? AND NOT "
+                                            "EXISTS (SELECT 1 FROM mud_property_owners o WHERE o.holding_id=h.id "
+                                            "AND o.role='primary')", (world,)).fetchall():
+                drafts += _settle_primary(database, holding["id"])
+            database.execute("UPDATE mud_property_owners SET paid_until=? WHERE paid_until IS NULL AND status='active' "
+                             "AND holding_id IN (SELECT h.id FROM mud_property_holdings h JOIN mud_properties p "
+                             "ON p.id=h.property_id WHERE h.world_id=? AND p.rent>0)", (stamp, world))
+            due = database.execute(
+                "SELECT o.holding_id,o.character_id,o.role,o.paid_until,o.warned_at,c.user_id,p.name,p.rent,"
+                "p.grace_seconds,p.rent_period_seconds FROM mud_property_owners o "
+                "JOIN mud_property_holdings h ON h.id=o.holding_id JOIN mud_properties p ON p.id=h.property_id "
+                "JOIN mud_characters c ON c.id=o.character_id WHERE h.world_id=? AND o.status='active' "
+                "AND p.rent>0 AND o.paid_until<=? ORDER BY o.paid_until", (world, stamp)).fetchall()
+            for row in due:
+                if not database.execute("SELECT 1 FROM mud_property_owners WHERE holding_id=? AND character_id=?",
+                                        (row["holding_id"], row["character_id"])).fetchone():
+                    continue  # An earlier release in this pass already ended it.
+                deadline = mud_housing.parse_time(row["paid_until"]) + timedelta(seconds=row["grace_seconds"])
+                handled += 1
+                if now >= deadline:
+                    if row["role"] == "primary":
+                        drafts += _release_holding(database, row["holding_id"],
+                                                   f"Your rent for {row['name']} went unpaid, and it is no longer yours.")
+                    else:
+                        drafts += _remove_owner(database, row["holding_id"], row["character_id"],
+                                                f"Your share of the rent for {row['name']} went unpaid, "
+                                                "so you no longer share it.")
+                elif row["warned_at"] is None:
+                    share = mud_housing.rent_share(row["rent"], len(_holding_owners(database, row["holding_id"])),
+                                                   row["role"] == "primary")
+                    database.execute("UPDATE mud_property_owners SET warned_at=? WHERE holding_id=? AND character_id=?",
+                                     (stamp, row["holding_id"], row["character_id"]))
+                    drafts.append(_private(row["user_id"], f"Rent for {row['name']} is due: pay {share} coins with "
+                                                           f"/house pay {row['name']} before "
+                                                           f"{mud_housing.stamp(deadline)[:16].replace('T', ' ')} UTC.",
+                                           "housing"))
+            for draft in drafts:
+                _insert_event(database, draft, default_user_id=draft.recipient_ids[0] if draft.recipient_ids else None)
+    return handled
 
 
 def _settle_run_loot(database, user_id, run_id, keep):
@@ -3413,6 +4221,12 @@ class _ConditionContext:
     def member(self, faction_id):
         return (not self.dungeon and society_settings(self.database)["factions"]["enabled"]
                 and mud_society.is_member(self.database, self._character()["id"], faction_id))
+
+    def owns_property(self, property_id, role):
+        if self.dungeon:
+            return False
+        holding = _character_holding(self.database, self._character()["id"], property_id)
+        return holding is not None and (role == "owner" or holding["role"] == "primary")
 
     def game_hour(self):
         moment = None if self.dungeon else _game_time(self.database)
@@ -4683,12 +5497,14 @@ def _flee_action(database, user, _parameters):
         drafts.append(EventDraft(f"You flee {chosen['direction']}.", event_type="movement"))
         return drafts + [_room_entry_event(database, user)] + _entry_triggers(database, user) + \
             _entry_attack(database, user)
-    exits = _room_exits(database, room["id"], viewer_id=user["id"])
+    exits = [exit_row for exit_row in _room_exits(database, room["id"], viewer_id=user["id"])
+             if not _property_entry(database, user["id"], exit_row["to_room_id"], create=False)[1]]
     if not exits:
         return drafts
     chosen = exits[0]
     _leave_combat(database, user["id"], "room", room["id"])
-    _set_player_location(database, user["id"], "traditional", "world_room", chosen["to_room_id"])
+    _set_player_location(database, user["id"], "traditional", "world_room",
+                         _property_entry(database, user["id"], chosen["to_room_id"])[0])
     return drafts + [EventDraft(f"You flee {chosen['direction']}.", event_type="movement"),
                      _room_entry_event(database, user)] + _entry_triggers(database, user) + \
         _entry_attack(database, user)
@@ -4994,6 +5810,15 @@ def _get_action(database, user, parameters):
                       instance_id=room.get("instance_id"))
 
 
+def _item_root_room(database, item_id):
+    """The room an item finally rests in through its containers, or None when someone carries it."""
+    row = database.execute(
+        "WITH RECURSIVE up(id,room_id,container_id) AS (SELECT id,room_id,container_id FROM mud_item_instances "
+        "WHERE id=? UNION ALL SELECT i.id,i.room_id,i.container_id FROM mud_item_instances i JOIN up "
+        "ON i.id=up.container_id) SELECT room_id FROM up WHERE room_id IS NOT NULL LIMIT 1", (item_id,)).fetchone()
+    return row["room_id"] if row else None
+
+
 def _drop_action(database, user, parameters):
     target = _item_target(parameters)
     if not target:
@@ -5002,6 +5827,8 @@ def _drop_action(database, user, parameters):
     room = _current_room(database, user["id"])
     if room["id"] == PORTAL_ROOM_ID or room.get("instance_id"):
         raise ActionError("Items cannot be dropped in protected procedural locations.")
+    if _room_property(database, room["id"])[0] is not None:
+        raise ActionError("Keep belongings in this property's storage (/storage); the floor is not kept for you.")
     database.execute("DELETE FROM mud_character_equipment WHERE item_instance_id=?", (item["id"],))
     database.execute("UPDATE mud_item_instances SET room_id=?,owner_character_id=NULL,container_id=NULL,equipped_slot=NULL,updated_at=CURRENT_TIMESTAMP WHERE id=?", (room["id"], item["id"]))
     return [EventDraft(f"You drop {item['name']}.", event_type="item"),
@@ -5049,6 +5876,9 @@ def _put_action(database, user, parameters):
     container = _container_target(database, user["id"], room, container_name)
     if not container["is_open"]:
         raise ActionError("Open that container first.")
+    if (not room.get("instance_id") and _room_property(database, room["id"])[0] is not None
+            and _item_root_room(database, container["id"])):
+        raise ActionError("Keep belongings in this property's storage (/storage); its fixtures are not kept for you.")
     item = _item_matches(_inventory_rows(database, user["id"]), target)
     if item["acquired_run_id"]:
         raise ActionError("Run loot cannot be put in a container before completing the dungeon.")
@@ -5522,6 +6352,8 @@ def _settle_outcomes(database, user, outcomes, claim=None, event_type="dialogue"
             events += _change_reputation(database, user, outcome["faction"], outcome["amount"])
         elif outcome["type"] in ("join_faction", "leave_faction"):
             events += _scripted_membership(database, user, outcome["type"], outcome["faction"])
+        elif outcome["type"] in ("grant_property", "revoke_property"):
+            events += _scripted_property(database, user, outcome["type"], outcome["property"])
         elif outcome["type"] == "disposition" and (outcome.get("npc") or npc_definition_id):
             events += _change_disposition(database, user, outcome.get("npc") or npc_definition_id, outcome["amount"])
     return events
@@ -6745,6 +7577,11 @@ def _go_action(database, user, parameters, *, travel_step=None):
                                     (_character_row(database, user["id"])["id"], chosen["id"])).fetchone()
         if not unlocked:
             raise ActionError("That exit is locked. " + _locked_hint(chosen).removeprefix("Locked. "))
+    if not instance_id:
+        target, barrier = _property_entry(database, user["id"], chosen["to_room_id"])
+        if barrier:
+            raise ActionError(barrier)
+        chosen = {**dict(chosen), "to_room_id": target}
     old_recipients = _occupant_ids(database, room["id"], user["id"], instance_id)
     _leave_combat(database, user["id"], "instance" if instance_id else "room",
                   instance_id or room["id"])
@@ -6873,7 +7710,7 @@ def _travel_barrier(database, user_id, room, direction):
             "SELECT 1 FROM mud_exit_unlocks WHERE character_id=? AND exit_id=?",
             (_character_row(database, user_id)["id"], chosen["id"])).fetchone():
         return f"The way {direction} is locked."
-    return None
+    return _property_entry(database, user_id, chosen["to_room_id"], create=False)[1]
 
 
 def _travel_action(database, user, parameters):
@@ -7070,6 +7907,8 @@ def _route_exit_check(database, user_id):
                 "AND scope_key IN (?,'') ORDER BY scope_key='' LIMIT 1", (item.id, character_id)).fetchone()
             state = row["state"] if row else ("hidden" if item.hidden else "")
             if state in ("hidden", "locked"):
+                verdict = False
+            elif _property_entry(database, user_id, item.to_id, create=False)[1]:
                 verdict = False
             elif item.conditions_json not in (None, "", "[]") and not mud_conditions.evaluate(
                     item.conditions_json, context):
@@ -8094,6 +8933,11 @@ def _trigger_action(database, user, trigger, index, realm, instance_id=None):
                 return _scripted_membership(database, user, kind, action["faction"])
             except ActionError as problem:
                 return [_private(user_id, str(problem), "world")]
+        if kind in ("grant_property", "revoke_property"):
+            try:
+                return _scripted_property(database, user, kind, action["property"])
+            except ActionError as problem:
+                return [_private(user_id, str(problem), "world")]
         if kind == "fine":
             mud_society.record_crime(database, _character_row(database, user_id)["id"], _active_world(database),
                                      action["faction"], "other", action["amount"], 0)
@@ -8145,6 +8989,11 @@ def _trigger_teleport(database, user, room_id):
     destination = database.execute("SELECT id FROM mud_world_rooms WHERE id=? AND world_id=?",
                                    (room_id, _active_world(database))).fetchone()
     if destination is None or current.get("system_managed") or current["id"] == room_id:
+        return []
+    room_id, barrier = _property_entry(database, user["id"], room_id)
+    if barrier:
+        return [_private(user["id"], barrier, "movement")]
+    if current["id"] == room_id:
         return []
     name = character_state(database, user["id"])["name"]
     old_recipients = _occupant_ids(database, current["id"], user["id"])
@@ -8796,7 +9645,8 @@ actions.register(ActionDefinition(key="profession", label="JOIN PROFESSION", des
 actions.register(ActionDefinition(key="work", label="WORK", description="List work or use /work do|accept|deliver|turnin|abandon <name>.", commands=("work", "jobs"), handler=_work_action, group="QUESTS", show_context=False))
 actions.register(ActionDefinition(key="shop", label="SHOP", description="Browse, buy, or sell with a nearby merchant; the portal trader also serves the hub.", commands=("shop",), handler=_shop_action, group="HUB", show_context=False))
 actions.register(ActionDefinition(key="bank", label="BANK", description="Check, deposit, or withdraw coins at a bank in an authored world.", commands=("bank",), handler=_bank_action, group="HUB", show_context=False))
-actions.register(ActionDefinition(key="storage", label="PERSONAL STORAGE", description="Deposit or withdraw personal items in the portal room.", commands=("storage", "stash"), handler=_storage_action, group="HUB", show_context=False))
+actions.register(ActionDefinition(key="storage", label="STORAGE", description="Deposit or withdraw items: personal storage in the portal room, or a world's lockers, chests, and property storage.", commands=("storage", "stash"), handler=_storage_action, group="HUB", show_context=False))
+actions.register(ActionDefinition(key="house", label="HOUSING", description="See, acquire, share, pay rent for, or give up property: /house info|buy|claim|pay|invite|accept|leave <property>.", commands=("house", "property"), handler=_house_action, group="CHARACTER", show_context=False))
 actions.register(ActionDefinition(key="talk", label="TALK", description="Talk to a nearby NPC.", commands=("talk", "speak"), handler=_talk_action, group="NPCS", show_context=False))
 actions.register(ActionDefinition(key="respond", label="RESPOND", description="Choose a response in your current NPC conversation.", commands=("respond",), handler=_respond_action, group="DIALOGUE", show_context=False))
 actions.register(ActionDefinition(key="reply_player", label="REPLY", description="Reply to your latest private message; numeric replies still work in NPC dialogue.", commands=("reply",), handler=_reply_player_action, group="SOCIAL", show_context=False))
@@ -9419,6 +10269,7 @@ def run_scheduled_tick(app, now=None):
             sync_effect_pulse(database, now)
             count = process_scheduled_events(database, now)
             count += process_travel(database, now)
+            count += process_housing(database, now)
             database.commit()
             return count
         except Exception:
@@ -9899,6 +10750,8 @@ def delete_character():
                     "DELETE FROM mud_active_effects WHERE target_type='character' AND target_id=?",
                     (character["id"],),
                 )
+                # A co-owner takes over each property this character ran, or it ends.
+                character_leaving_holdings(database, character["id"])
                 # Contained items have no owner_id. Remove them before their
                 # containers so the location CHECK remains satisfied.
                 owned_items = database.execute(
@@ -10247,6 +11100,7 @@ def builder():
         rewards_by_work[row["id"]] = [dict(reward) for reward in database.execute(
             "SELECT * FROM mud_work_rewards WHERE activity_id=? ORDER BY id", (row["id"],))]
     dungeon_context = _builder_dungeon_context(database)
+    housing_context = _builder_housing_context(database)
     trigger_context = _builder_trigger_context(database, rooms, exits_by_room, items_by_room, npcs_by_room,
                                                nodes_by_conversation, responses_by_node, conversations)
     return render_template(
@@ -10259,6 +11113,7 @@ def builder():
         npcs_by_room=npcs_by_room, quests=quests, objectives_by_quest=objectives_by_quest,
         rewards_by_quest=rewards_by_quest, givers_by_quest=givers_by_quest,
         professions=professions, work_by_profession=work_by_profession, rewards_by_work=rewards_by_work,
+        **housing_context,
         npc_equipment=npc_equipment, npc_combat_rewards=npc_combat_rewards,
         npc_shops=npc_shops, npc_banks=npc_banks, shop_stock=shop_stock, discoveries_by_room=discoveries_by_room,
         world_destinations=world_destinations, destinations_by_room=destinations_by_room,
@@ -10555,7 +11410,7 @@ def _builder_rules(database, field, validate, references=None):
     tables = {"item": "mud_item_definitions", "quest": "mud_quests", "objective": "mud_quest_objectives",
               "object": "mud_item_instances", "room": "mud_world_rooms",
               "destination": "mud_world_destinations", "npc": "mud_npc_definitions",
-              "faction": "mud_world_factions"}
+              "faction": "mud_world_factions", "property": "mud_properties"}
     origins = character_creation.catalog(database)
     known = {"race": {entry["key"] for entry in origins["races"]},
              "class": {entry["key"] for entry in origins["classes"]},
@@ -10909,6 +11764,274 @@ def builder_delete_npc_instance(instance_id):
     if npc is None: abort(404)
     if request.form.get("confirmation") != "delete": flash("NPC removal was not confirmed.", "error"); return _builder_redirect(npc["room_id"])
     database.execute("DELETE FROM mud_npc_instances WHERE id=?", (instance_id,)); database.commit(); flash(f"Removed {npc['name']} from the room.", "success"); return _builder_redirect(npc["room_id"])
+
+
+def _housing_builder_redirect():
+    return redirect(url_for("mud.builder", _anchor="housing-heading"))
+
+
+def _builder_housing_context(database):
+    """Properties with their rooms and holdings, and storage points by room, for the builder page."""
+    properties = [dict(row) for row in _world_properties(database)]
+    for entry in properties:
+        entry["room_ids"] = [row["room_id"] for row in database.execute(
+            "SELECT room_id FROM mud_property_rooms WHERE property_id=? ORDER BY room_id", (entry["id"],))]
+        entry["holdings"] = []
+        for holding in database.execute("SELECT * FROM mud_property_holdings WHERE property_id=? "
+                                        "ORDER BY created_at,id", (entry["id"],)):
+            entry["holdings"].append({**dict(holding), "owners": [dict(row) for row in _holding_owners(
+                database, holding["id"])], "stored": database.execute(
+                "SELECT COUNT(*) FROM mud_character_storage WHERE holding_id=?", (holding["id"],)).fetchone()[0]})
+    storage_by_room = {}
+    for row in database.execute("SELECT s.*,(SELECT COUNT(*) FROM mud_character_storage c "
+                                "WHERE c.storage_point_id=s.id) AS stored FROM mud_storage_points s "
+                                "JOIN mud_world_rooms r ON r.id=s.room_id WHERE r.world_id=mud_world() "
+                                "ORDER BY s.name COLLATE NOCASE,s.id"):
+        storage_by_room.setdefault(row["room_id"], []).append(dict(row))
+    return {"properties": properties, "storage_by_room": storage_by_room,
+            "property_by_room": {room_id: entry for entry in properties for room_id in entry["room_ids"]},
+            "housing_kinds": mud_housing.KINDS, "housing_acquisitions": mud_housing.ACQUISITIONS,
+            "storage_scopes": mud_housing.SCOPES, "storage_item_types": mud_housing.ITEM_TYPES}
+
+
+def _builder_property(database, property_id=None):
+    """Clean property fields and its room list from the builder form, or an error message."""
+    conditions, error = _builder_rules(database, "conditions_json", mud_conditions.validate_conditions)
+    if error:
+        return None, None, error
+    number = lambda key: request.form.get(key, mud_housing.PROPERTY_DEFAULTS[key], type=int)  # noqa: E731
+    row = {"name": request.form.get("name"), "description": request.form.get("description"),
+           "kind": request.form.get("kind"), "acquisition": request.form.get("acquisition"),
+           **{key: number(key) for key in ("price", "refund_percent", "rent", "rent_period_seconds", "grace_seconds",
+                                           "prepay_periods", "max_owners")},
+           "agent_npc_definition_id": request.form.get("agent_npc_definition_id", "").strip() or None,
+           "conditions_json": conditions, "available": int(request.form.get("available") == "1")}
+    if row["acquisition"] != "purchase":
+        row["price"] = 0
+    try:
+        clean = mud_housing.property(row)
+    except ValueError as problem:
+        return None, None, str(problem)
+    world = _active_world(database)
+    entrance = request.form.get("entrance_room_id", "")
+    rooms = list(dict.fromkeys(request.form.getlist("room_ids")))
+    known = {row["id"] for row in database.execute("SELECT id FROM mud_world_rooms WHERE world_id=? "
+                                                   "AND kind='authored'", (world,))}
+    if entrance not in known:
+        return None, None, "Choose an entrance room in this world."
+    if not rooms or set(rooms) - known:
+        return None, None, "Choose at least one room of this world for the property."
+    if entrance in rooms:
+        return None, None, "The entrance must be outside the property."
+    start = _start_room(database)["id"]
+    if start in rooms or database.execute(
+            f"SELECT 1 FROM mud_world_start_rules WHERE room_id IN ({','.join('?' * len(rooms))})", rooms).fetchone():
+        return None, None, "The start room and start-rule rooms cannot be property rooms."
+    taken = database.execute(f"SELECT p.name FROM mud_property_rooms r JOIN mud_properties p ON p.id=r.property_id "
+                             f"WHERE r.room_id IN ({','.join('?' * len(rooms))}) AND p.id IS NOT ?",
+                             (*rooms, property_id)).fetchone()
+    if taken:
+        return None, None, f"Some of those rooms already belong to {taken['name']}."
+    if database.execute("SELECT 1 FROM mud_property_rooms WHERE room_id=?", (entrance,)).fetchone():
+        return None, None, "The entrance must be outside every property."
+    if clean["agent_npc_definition_id"] and database.execute(
+            "SELECT 1 FROM mud_npc_definitions WHERE id=? AND world_id=?",
+            (clean["agent_npc_definition_id"], world)).fetchone() is None:
+        return None, None, "Choose an agent NPC from this world."
+    if database.execute("SELECT 1 FROM mud_properties WHERE world_id=? AND name=? COLLATE NOCASE AND id IS NOT ?",
+                        (world, clean["name"], property_id)).fetchone():
+        return None, None, "A property with that name already exists."
+    return {**clean, "conditions_json": conditions, "entrance_room_id": entrance}, rooms, None
+
+
+def _save_property_rooms(database, property_id, rooms):
+    database.execute("DELETE FROM mud_property_rooms WHERE property_id=?", (property_id,))
+    database.executemany("INSERT INTO mud_property_rooms(room_id,property_id) VALUES(?,?)",
+                         ((room_id, property_id) for room_id in rooms))
+
+
+def _deliver_builder_drafts(database, drafts):
+    for draft in drafts:
+        _insert_event(database, draft)
+
+
+@bp.post("/w/<world_key>/builder/properties")
+@builder_required
+def builder_create_property():
+    validate_csrf()
+    database = get_db()
+    fields, rooms, error = _builder_property(database)
+    if error:
+        flash(error, "error"); return _housing_builder_redirect()
+    property_id = f"world:property:{uuid.uuid4().hex}"
+    names = list(fields)
+    database.execute(f"INSERT INTO mud_properties(id,world_id,{','.join(names)}) "
+                     f"VALUES(?,?,{','.join('?' * len(names))})",
+                     (property_id, _active_world(database), *(fields[name] for name in names)))
+    _save_property_rooms(database, property_id, rooms)
+    database.commit()
+    flash(f"Property {fields['name']} created.", "success")
+    return _housing_builder_redirect()
+
+
+@bp.post("/w/<world_key>/builder/properties/<path:property_id>/delete")
+@builder_required
+def builder_delete_property(property_id):
+    validate_csrf()
+    database = get_db()
+    found = database.execute("SELECT * FROM mud_properties WHERE id=? AND world_id=?",
+                             (property_id, _active_world(database))).fetchone()
+    if found is None:
+        abort(404)
+    if request.form.get("confirmation") != "delete":
+        flash("Property removal was not confirmed.", "error"); return _housing_builder_redirect()
+    # Holdings end first, so owners step outside and get their stored items back.
+    for holding in database.execute("SELECT id FROM mud_property_holdings WHERE property_id=?",
+                                    (property_id,)).fetchall():
+        _deliver_builder_drafts(database, _release_holding(
+            database, holding["id"], f"{found['name']} was removed from the world and is no longer yours."))
+    database.execute("DELETE FROM mud_properties WHERE id=?", (property_id,))
+    database.commit()
+    flash(f"Property {found['name']} removed.", "success")
+    return _housing_builder_redirect()
+
+
+@bp.post("/w/<world_key>/builder/properties/<path:property_id>")
+@builder_required
+def builder_update_property(property_id):
+    validate_csrf()
+    database = get_db()
+    found = database.execute("SELECT * FROM mud_properties WHERE id=? AND world_id=?",
+                             (property_id, _active_world(database))).fetchone()
+    if found is None:
+        abort(404)
+    fields, rooms, error = _builder_property(database, property_id)
+    if error:
+        flash(error, "error"); return _housing_builder_redirect()
+    held = database.execute("SELECT 1 FROM mud_property_holdings WHERE property_id=?", (property_id,)).fetchone()
+    if held and fields["kind"] != found["kind"]:
+        flash("Release every holding before changing whether the property is unique or instanced.", "error")
+        return _housing_builder_redirect()
+    database.execute(f"UPDATE mud_properties SET {','.join(f'{key}=?' for key in fields)},"
+                     "updated_at=CURRENT_TIMESTAMP WHERE id=?", (*fields.values(), property_id))
+    removed = set(row["room_id"] for row in database.execute(
+        "SELECT room_id FROM mud_property_rooms WHERE property_id=?", (property_id,))) - set(rooms)
+    _save_property_rooms(database, property_id, rooms)
+    if removed and found["kind"] == "instanced":
+        # Private copies of templates that left the property go; their occupants step outside.
+        copies = [row["id"] for row in database.execute(
+            f"SELECT id FROM mud_world_rooms WHERE template_room_id IN ({','.join('?' * len(removed))})",
+            tuple(removed))]
+        if copies:
+            _move_room_occupants(database, copies, _world_room(database, fields["entrance_room_id"]),
+                                 "You step outside to {name}.")
+            database.executemany("DELETE FROM mud_world_rooms WHERE id=?", ((room_id,) for room_id in copies))
+    database.execute("DELETE FROM mud_character_storage WHERE holding_id IN (SELECT id FROM mud_property_holdings "
+                     "WHERE property_id=?) AND storage_point_id NOT IN (SELECT s.id FROM mud_storage_points s "
+                     "JOIN mud_property_rooms r ON r.room_id=s.room_id WHERE r.property_id=?)",
+                     (property_id, property_id))
+    database.commit()
+    flash("Property updated.", "success")
+    return _housing_builder_redirect()
+
+
+@bp.post("/w/<world_key>/builder/holdings/<path:holding_id>/release")
+@builder_required
+def builder_release_holding(holding_id):
+    validate_csrf()
+    database = get_db()
+    holding = database.execute("SELECT p.name FROM mud_property_holdings h JOIN mud_properties p "
+                               "ON p.id=h.property_id WHERE h.id=? AND h.world_id=?",
+                               (holding_id, _active_world(database))).fetchone()
+    if holding is None:
+        abort(404)
+    if request.form.get("confirmation") != "release":
+        flash("Releasing the holding was not confirmed.", "error"); return _housing_builder_redirect()
+    _deliver_builder_drafts(database, _release_holding(
+        database, holding_id, f"A world builder ended your claim on {holding['name']}."))
+    database.commit()
+    flash(f"{holding['name']} released; stored items went back to their owners.", "success")
+    return _housing_builder_redirect()
+
+
+def _builder_storage(database, room_id):
+    conditions, error = _builder_rules(database, "conditions_json", mud_conditions.validate_conditions)
+    if error:
+        return None, error
+    try:
+        clean = mud_housing.storage_point({
+            "name": request.form.get("name"), "description": request.form.get("description", ""),
+            "scope": request.form.get("scope"), "capacity": request.form.get("capacity", 20, type=int),
+            "item_types": request.form.getlist("item_types"), "conditions_json": conditions})
+    except ValueError as problem:
+        return None, str(problem)
+    if clean["scope"] == "property" and not database.execute(
+            "SELECT 1 FROM mud_property_rooms WHERE room_id=?", (room_id,)).fetchone():
+        return None, "Owners-only storage must be in a property room."
+    return {**clean, "conditions_json": conditions}, None
+
+
+@bp.post("/w/<world_key>/builder/rooms/<path:room_id>/storage")
+@builder_required
+def builder_create_storage_point(room_id):
+    validate_csrf()
+    database = get_db()
+    if database.execute("SELECT 1 FROM mud_world_rooms WHERE id=? AND world_id=mud_world() AND kind='authored'",
+                        (room_id,)).fetchone() is None:
+        abort(404)
+    fields, error = _builder_storage(database, room_id)
+    if error:
+        flash(error, "error"); return _builder_redirect(room_id)
+    names = list(fields)
+    database.execute(f"INSERT INTO mud_storage_points(id,room_id,{','.join(names)}) "
+                     f"VALUES(?,?,{','.join('?' * len(names))})",
+                     (f"world:storage:{uuid.uuid4().hex}", room_id, *fields.values()))
+    database.commit()
+    flash(f"Storage {fields['name']} added.", "success")
+    return _builder_redirect(room_id)
+
+
+def _world_storage_point(database, point_id):
+    point = database.execute("SELECT s.* FROM mud_storage_points s JOIN mud_world_rooms r ON r.id=s.room_id "
+                             "WHERE s.id=? AND r.world_id=mud_world()", (point_id,)).fetchone()
+    if point is None:
+        abort(404)
+    return point
+
+
+@bp.post("/w/<world_key>/builder/storage/<path:point_id>/delete")
+@builder_required
+def builder_delete_storage_point(point_id):
+    validate_csrf()
+    database = get_db()
+    point = _world_storage_point(database, point_id)
+    if request.form.get("confirmation") != "delete":
+        flash("Storage removal was not confirmed.", "error"); return _builder_redirect(point["room_id"])
+    # Deleting the point deletes its storage rows, which hands every item back to its owner.
+    database.execute("DELETE FROM mud_storage_points WHERE id=?", (point_id,))
+    database.commit()
+    flash(f"Storage {point['name']} removed; its items went back to their owners.", "success")
+    return _builder_redirect(point["room_id"])
+
+
+@bp.post("/w/<world_key>/builder/storage/<path:point_id>")
+@builder_required
+def builder_update_storage_point(point_id):
+    validate_csrf()
+    database = get_db()
+    point = _world_storage_point(database, point_id)
+    fields, error = _builder_storage(database, point["room_id"])
+    if error:
+        flash(error, "error"); return _builder_redirect(point["room_id"])
+    if fields["scope"] != point["scope"] and database.execute(
+            "SELECT 1 FROM mud_character_storage WHERE storage_point_id=?", (point_id,)).fetchone():
+        flash("Empty the storage before changing who it belongs to.", "error")
+        return _builder_redirect(point["room_id"])
+    database.execute(f"UPDATE mud_storage_points SET {','.join(f'{key}=?' for key in fields)} WHERE id=?",
+                     (*fields.values(), point_id))
+    database.commit()
+    flash("Storage updated. Items already stored stay, even above a lower capacity.", "success")
+    return _builder_redirect(point["room_id"])
 
 
 def _work_builder_redirect():
@@ -11916,6 +13039,11 @@ def builder_delete_room(room_id):
             flash("Move or remove the start rules using this room before deleting it.", "error")
             database.rollback()
             return _builder_redirect(room_id)
+        if database.execute("SELECT 1 FROM mud_property_rooms WHERE room_id=? UNION ALL "
+                            "SELECT 1 FROM mud_properties WHERE entrance_room_id=?", (room_id, room_id)).fetchone():
+            flash("Take this room out of its property (or move the property's entrance) before deleting it.", "error")
+            database.rollback()
+            return _builder_redirect(room_id)
         start = _start_room(database)
         _move_room_occupants(database, [room_id], start,
                              f"{room['name']} was removed by a world builder. You have been moved to {{name}}.")
@@ -12284,7 +13412,7 @@ TRIGGER_REFERENCE_TABLES = {
     "room": "mud_world_rooms", "object": "mud_item_instances", "item": "mud_item_definitions",
     "npc": "mud_npc_definitions", "npc_instance": "mud_npc_instances", "response": "mud_dialogue_responses",
     "quest": "mud_quests", "objective": "mud_quest_objectives", "exit": "mud_world_exits",
-    "destination": "mud_world_destinations", "faction": "mud_world_factions",
+    "destination": "mud_world_destinations", "faction": "mud_world_factions", "property": "mud_properties",
 }
 
 

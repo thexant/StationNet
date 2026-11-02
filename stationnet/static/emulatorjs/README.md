@@ -5,6 +5,11 @@ Bundled cores: fceumm, snes9x, gambatte, mgba, genesis_plus_gx, smsplus,
 stella2014, prosystem, handy, mednafen_pce, gearcoleco, melonds, and
 mupen64plus_next. Both standard and legacy WebGL data files are included.
 
+The ppsspp (Sony PSP) core is also bundled. Its official package contains only
+`ppsspp-thread-wasm.data` and `ppsspp-assets.zip` (no legacy build), so it needs
+WebGL2 and threads. StationNet serves PSP game pages with COOP/COEP headers;
+browsers expose `SharedArrayBuffer` only over HTTPS or on localhost.
+
 StationNet uses the source player files because the npm package does not
 contain the minified distribution. Its local copy of `src/emulator.js` omits
 the upstream update probe and CDN core fallback so gameplay makes no network

@@ -6,6 +6,7 @@ from io import BytesIO
 import json
 import re
 import secrets
+import shutil
 import tarfile
 import urllib.request
 import zipfile
@@ -40,6 +41,7 @@ PLATFORMS = {
     "coleco": ("ColecoVision", ("gearcoleco",), (".col", ".rom", ".zip")),
     "nds": ("Nintendo DS", ("melonds", "desmume", "desmume2015"), (".nds", ".zip")),
     "n64": ("Nintendo 64", ("mupen64plus_next", "parallel_n64"), (".n64", ".z64", ".v64", ".zip")),
+    "psp": ("Sony PSP", ("ppsspp",), (".iso", ".cso", ".pbp", ".zip")),
 }
 DEFAULT_CORES = {name: info[1][0] for name, info in PLATFORMS.items()}
 AVAILABLE_CORES = frozenset(core for info in PLATFORMS.values() for core in info[1])
@@ -49,12 +51,29 @@ MAX_COVER_BYTES = 8 * 1024 * 1024
 MAX_CORE_BYTES = 32 * 1024 * 1024
 CORE_VERSION = "4.2.3"
 CORE_RE = re.compile(r"^[a-z][a-z0-9_]*$")
+# PPSSPP ships only a threaded build plus a firmware assets archive; it needs
+# SharedArrayBuffer, so its pages are served cross-origin isolated.
+THREADED_CORES = frozenset({"ppsspp"})
+CORE_FILES = {"ppsspp": ("ppsspp-thread-wasm.data", "ppsspp-assets.zip")}
+
+
+def _core_files(core):
+    return CORE_FILES.get(core, (f"{core}-wasm.data", f"{core}-legacy-wasm.data"))
+
+
+CORE_FILE_NAMES = {name: core for core in AVAILABLE_CORES for name in _core_files(core)}
 
 
 @bp.before_request
 def require_enabled():
     if not g.station or not g.station["arcade_enabled"]:
         abort(404)
+    if request.method == "POST" and request.endpoint in {"arcade.upload", "arcade.station_upload", "arcade.edit"}:
+        # PSP images can exceed Flask's global 128 MB request limit.
+        request.max_content_length = max(
+            current_app.config["MAX_CONTENT_LENGTH"],
+            (g.station["arcade_psp_max_upload_mb"] + 1) * 1024 * 1024,
+        )
 
 
 def _root():
@@ -84,14 +103,19 @@ def _preferred_core(platform):
     return row["core"] if row and row["core"] in PLATFORMS[platform][1] else DEFAULT_CORES[platform]
 
 
-def _core_path(core, legacy=False):
-    name = core + ("-legacy" if legacy else "") + "-wasm.data"
+def _core_file(name):
     installed = _root() / "cores" / name
     return installed if installed.is_file() else ASSETS / "cores" / name
 
 
 def _core_available(core):
-    return _core_path(core).is_file() and _core_path(core, True).is_file()
+    return all(_core_file(name).is_file() for name in _core_files(core))
+
+
+def _max_rom_bytes(platform):
+    if platform == "psp":
+        return g.station["arcade_psp_max_upload_mb"] * 1024 * 1024
+    return MAX_ROM_BYTES
 
 
 def _quota_remaining(user_id, exclude_game_id=None):
@@ -148,11 +172,18 @@ def _validate_rom(upload, platform):
     suffix = Path(original_name).suffix.lower()
     if suffix not in PLATFORMS[platform][2]:
         raise ValueError("ROM file extension does not match the selected platform.")
-    data = _read_upload(upload, MAX_ROM_BYTES)
+    # Werkzeug spools large uploads to disk, so ROMs are measured and copied
+    # from the stream rather than read into memory.
+    stream = upload.stream
+    stream.seek(0, 2)
+    size = stream.tell()
+    stream.seek(0)
+    limit = _max_rom_bytes(platform)
+    if not size or size > limit:
+        raise ValueError(f"ROM is empty or exceeds the {limit // (1024 * 1024)} MB limit.")
     if suffix == ".zip":
-        from io import BytesIO
         try:
-            with zipfile.ZipFile(BytesIO(data)) as archive:
+            with zipfile.ZipFile(stream) as archive:
                 members = archive.infolist()
                 has_rom = (any(not item.is_dir() for item in members) if platform == "arcade" else
                            any(Path(item.filename).suffix.lower() in PLATFORMS[platform][2][:-1]
@@ -161,7 +192,13 @@ def _validate_rom(upload, platform):
                     raise ValueError("ZIP must contain a ROM for the selected platform.")
         except zipfile.BadZipFile as exc:
             raise ValueError("Invalid ZIP archive.") from exc
-    return original_name, suffix, data
+        stream.seek(0)
+    return original_name, suffix, size, stream
+
+
+def _write_rom(stream, path):
+    with path.open("xb") as output:
+        shutil.copyfileobj(stream, output, length=1024 * 1024)
 
 
 def _save_cover(upload):
@@ -222,8 +259,10 @@ def index():
 def view(game_id):
     game = _game(game_id)
     core = _preferred_core(game["platform"])
+    g.arcade_isolated = core in THREADED_CORES
     return render_template("arcade/view.html", game=game, platforms=PLATFORMS,
-                           core=core, playable=_core_available(core))
+                           core=core, playable=_core_available(core),
+                           threads=g.arcade_isolated)
 
 
 @bp.get("/<int:game_id>/player")
@@ -232,7 +271,9 @@ def player(game_id):
     core = _preferred_core(game["platform"])
     if not _core_available(core) or not _game_path(game).is_file():
         abort(404)
-    return render_template("arcade/player.html", game=game, core=core)
+    g.arcade_isolated = core in THREADED_CORES
+    return render_template("arcade/player.html", game=game, core=core,
+                           threads=g.arcade_isolated)
 
 
 @bp.get("/<int:game_id>/rom")
@@ -279,9 +320,8 @@ def asset(asset):
         abort(404)
     if asset.startswith("cores/"):
         name = asset.removeprefix("cores/")
-        match = re.fullmatch(r"([a-z][a-z0-9_]*)(-legacy)?-wasm\.data", name)
-        if match and match.group(1) in AVAILABLE_CORES:
-            path = _core_path(match.group(1), bool(match.group(2)))
+        if name in CORE_FILE_NAMES:
+            path = _core_file(name)
             if path.is_file():
                 return send_file(path, mimetype="application/octet-stream", conditional=True)
         abort(404)
@@ -325,22 +365,22 @@ def _create_game(station_post):
     upload = request.files.get("rom")
     if not upload or not upload.filename:
         raise ValueError("Select a ROM file.")
-    original, suffix, data = _validate_rom(upload, fields[2])
-    if not station_post and len(data) > _quota_remaining(g.user["id"]):
+    original, suffix, size, stream = _validate_rom(upload, fields[2])
+    if not station_post and size > _quota_remaining(g.user["id"]):
         raise ValueError("Your Arcade upload quota is full.")
     name = secrets.token_hex(16) + suffix
     path = _root() / "roms" / name
     path.parent.mkdir(parents=True, exist_ok=True)
     cover_name = ""
     try:
-        path.write_bytes(data)
+        _write_rom(stream, path)
         cover_name = _save_cover(request.files.get("cover"))
         db = get_db()
         cursor = db.execute(
             "INSERT INTO arcade_games(uploader_id,station_post,title,description,platform,genre,"
             "release_year,developer,publisher,players,original_name,stored_name,size_bytes,cover_name) "
             "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
-            (g.user["id"], station_post, *fields, original, name, len(data), cover_name),
+            (g.user["id"], station_post, *fields, original, name, size, cover_name),
         )
         db.commit()
         return cursor.lastrowid
@@ -364,14 +404,14 @@ def edit(game_id):
             rom_upload = request.files.get("rom")
             cover_upload = request.files.get("cover")
             replacement = _validate_rom(rom_upload, fields[2]) if rom_upload and rom_upload.filename else None
-            if replacement and not game["station_post"] and len(replacement[2]) > _quota_remaining(game["uploader_id"], game_id):
+            if replacement and not game["station_post"] and replacement[2] > _quota_remaining(game["uploader_id"], game_id):
                 raise ValueError("Your Arcade upload quota is full.")
             if not replacement and fields[2] != game["platform"]:
                 raise ValueError("Upload a matching ROM when changing platform.")
             new_rom = secrets.token_hex(16) + replacement[1] if replacement else game["stored_name"]
             new_cover = _save_cover(cover_upload) if cover_upload and cover_upload.filename else game["cover_name"]
             if replacement:
-                (_root() / "roms" / new_rom).write_bytes(replacement[2])
+                _write_rom(replacement[3], _root() / "roms" / new_rom)
             if request.form.get("remove_cover") == "on":
                 if new_cover != game["cover_name"]:
                     (_root() / "covers" / new_cover).unlink(missing_ok=True)
@@ -382,7 +422,7 @@ def edit(game_id):
                 "developer=?,publisher=?,players=?,original_name=?,stored_name=?,size_bytes=?,"
                 "cover_name=?,updated_at=CURRENT_TIMESTAMP WHERE id=?",
                 (*fields, replacement[0] if replacement else game["original_name"],
-                 new_rom, len(replacement[2]) if replacement else game["size_bytes"], new_cover, game_id),
+                 new_rom, replacement[2] if replacement else game["size_bytes"], new_cover, game_id),
             )
             db.commit()
             if replacement:
@@ -488,8 +528,7 @@ def install_core():
         if not integrity.startswith("sha512-") or base64.b64encode(hashlib.sha512(package).digest()).decode() != integrity[7:]:
             raise ValueError("Official core package failed integrity verification.")
         with tarfile.open(fileobj=BytesIO(package), mode="r:gz") as archive:
-            for legacy in (False, True):
-                name = core + ("-legacy" if legacy else "") + "-wasm.data"
+            for name in _core_files(core):
                 member = archive.getmember("package/" + name)
                 if not member.isfile() or not 1024 <= member.size <= MAX_CORE_BYTES:
                     raise ValueError("Official core package is incomplete.")

@@ -9,9 +9,10 @@ window.EJS_startOnLoaded = true;
 window.EJS_DEBUG_XX = true;
 window.EJS_disableAutoLang = true;
 window.EJS_disableLocalStorage = true;
-window.EJS_defaultOptions = {
+{% if threads %}window.EJS_threads = true;
+{% endif %}window.EJS_defaultOptions = {
   retroarch_core: {{ core|tojson }},
-  ejs_threads: 'disabled',
+  ejs_threads: '{{ 'enabled' if threads else 'disabled' }}',
   'mame2003-plus_skip_warnings': 'enabled',
   'mame2003-plus_skip_disclaimer': 'enabled'
 };

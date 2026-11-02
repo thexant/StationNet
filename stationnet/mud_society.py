@@ -23,8 +23,11 @@ CRIME_DEFAULTS = {"enabled": False, "detection": 70, "fine_expiry_hours": 0,
 # Whether players may belong to factions, how many at once (0 for no limit), and
 # whether new characters must pick an eligible starting faction.
 FACTION_DEFAULTS = {"enabled": False, "max_memberships": 1, "start_required": False}
+# Housing is on by default because nothing happens until a world authors
+# properties; max_holdings caps how many a character may own or share at once.
+HOUSING_DEFAULTS = {"enabled": True, "max_holdings": 3}
 DEFAULT_SOCIETY = {"clock": CLOCK_DEFAULTS, "relationships": RELATIONSHIP_DEFAULTS, "crime": CRIME_DEFAULTS,
-                   "factions": FACTION_DEFAULTS}
+                   "factions": FACTION_DEFAULTS, "housing": HOUSING_DEFAULTS}
 SOCIETY_KEYS = tuple(DEFAULT_SOCIETY)
 # Hours at which each part of the day begins, in order.
 PERIODS = ((0, "night"), (5, "dawn"), (7, "morning"), (12, "afternoon"), (17, "evening"), (21, "night"))
@@ -97,9 +100,14 @@ def validate_factions(value):
     return result
 
 
+def validate_housing(value):
+    return _section(value, "housing", HOUSING_DEFAULTS, {"max_holdings": (1, 20)})
+
+
 VALIDATORS = {"clock": validate_clock, "relationships": validate_relationships, "crime": validate_crime,
-              "factions": validate_factions}
-SECTION_LABELS = {"clock": "clock", "relationships": "relationship", "crime": "crime", "factions": "faction"}
+              "factions": validate_factions, "housing": validate_housing}
+SECTION_LABELS = {"clock": "clock", "relationships": "relationship", "crime": "crime", "factions": "faction",
+                  "housing": "housing"}
 
 
 def validate_settings(value):

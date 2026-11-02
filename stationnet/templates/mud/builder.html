@@ -11,6 +11,32 @@
   <label>Search difficulty (0 = always found)<input type="number" name="difficulty" min="0" max="200" value="{{ discovery.difficulty if discovery else 0 }}"></label>
   <label>Conditions (JSON, optional)<textarea name="conditions_json" rows="2" spellcheck="false" placeholder='[{"type":"attribute","attribute":"intellect","min":12}]'>{{ discovery.conditions_json if discovery and discovery.conditions_json != '[]' else '' }}</textarea></label>
 {% endmacro %}
+{% macro storage_fields(point=None) %}
+<label>Name<input name="name" minlength="2" maxlength="80" value="{{ point.name if point else '' }}" placeholder="Oak Chest" required></label>
+<label>Description<input name="description" maxlength="1000" value="{{ point.description if point else '' }}"></label>
+<label>Belongs to<select name="scope">{% for scope in storage_scopes %}<option value="{{ scope }}" {% if point and point.scope == scope %}selected{% endif %}>{{ {'personal': 'Each character (personal)', 'property': 'The property owners', 'communal': 'Everyone (shared)'}[scope] }}</option>{% endfor %}</select></label>
+<label>Capacity (items, counting what is inside bags)<input name="capacity" type="number" min="1" max="500" value="{{ point.capacity if point else 20 }}" required></label>
+<fieldset><legend>Holds only (none checked = anything)</legend>{% for kind in storage_item_types %}<label class="check"><input type="checkbox" name="item_types" value="{{ kind }}" {% if point and kind in point.item_types.split(',') %}checked{% endif %}> {{ kind }}</label>{% endfor %}</fieldset>
+<label>Usable only when (conditions JSON)<textarea name="conditions_json" rows="1">{{ point.conditions_json if point else '[]' }}</textarea></label>
+{% endmacro %}
+{% macro property_fields(entry=None) %}
+<label>Name<input name="name" minlength="2" maxlength="80" value="{{ entry.name if entry else '' }}" required></label>
+<label>Description<textarea name="description" rows="2" maxlength="2000" required>{{ entry.description if entry else '' }}</textarea></label>
+<label>Kind<select name="kind">{% for kind in housing_kinds %}<option value="{{ kind }}" {% if entry and entry.kind == kind %}selected{% endif %}>{{ {'unique': 'Unique - one set of rooms, one holding at a time', 'instanced': 'Instanced - every holder gets a private copy'}[kind] }}</option>{% endfor %}</select></label>
+<label>Rooms (template rooms for instanced property)<select name="room_ids" multiple size="5" required>{% for room in rooms %}<option value="{{ room.id }}" {% if entry and room.id in entry.room_ids %}selected{% endif %}>{{ room.name }}</option>{% endfor %}</select></label>
+<label>Entrance (outside; buying happens and evicted players land here)<select name="entrance_room_id" required>{% for room in rooms %}<option value="{{ room.id }}" {% if entry and room.id == entry.entrance_room_id %}selected{% endif %}>{{ room.name }}</option>{% endfor %}</select></label>
+<label>Acquired by<select name="acquisition">{% for way in housing_acquisitions %}<option value="{{ way }}" {% if entry and entry.acquisition == way %}selected{% endif %}>{{ {'purchase': 'Purchase with /house buy', 'claim': 'Free claim with /house claim', 'grant': 'Grant only (dialogue or trigger grant_property)'}[way] }}</option>{% endfor %}</select></label>
+<label>Price (coins, purchase only)<input name="price" type="number" min="0" max="1000000" value="{{ entry.price if entry else 0 }}"></label>
+<label>Refund on abandon (%)<input name="refund_percent" type="number" min="0" max="100" value="{{ entry.refund_percent if entry else 0 }}"></label>
+<label>Rent per period (0 = none; split between owners)<input name="rent" type="number" min="0" max="1000000" value="{{ entry.rent if entry else 0 }}"></label>
+<label>Rent period (seconds)<input name="rent_period_seconds" type="number" min="3600" max="31536000" value="{{ entry.rent_period_seconds if entry else 604800 }}"></label>
+<label>Grace before eviction (seconds)<input name="grace_seconds" type="number" min="0" max="2592000" value="{{ entry.grace_seconds if entry else 86400 }}"></label>
+<label>Periods payable ahead<input name="prepay_periods" type="number" min="1" max="52" value="{{ entry.prepay_periods if entry else 4 }}"></label>
+<label>Owners (1 = private)<input name="max_owners" type="number" min="1" max="20" value="{{ entry.max_owners if entry else 1 }}"></label>
+<label>Agent NPC (optional; acquire beside them instead of at the entrance)<select name="agent_npc_definition_id"><option value="">None</option>{% for npc in npc_definitions %}<option value="{{ npc.id }}" {% if entry and npc.id == entry.agent_npc_definition_id %}selected{% endif %}>{{ npc.name }}</option>{% endfor %}</select></label>
+<label>Requirements (conditions JSON)<textarea name="conditions_json" rows="1">{{ entry.conditions_json if entry else '[]' }}</textarea></label>
+<label class="check"><input type="checkbox" name="available" value="1" {% if not entry or entry.available %}checked{% endif %}> Offered to new holders</label>
+{% endmacro %}
 {% block title %}MUD World Builder{% endblock %}
 {% block content %}
 <section class="builder-shell">
@@ -111,6 +137,15 @@
       <input id="crime-rep-{{ kind }}" name="reputation.{{ kind }}" type="number" min="-1000" max="0" value="{{ society.crime.reputation[kind] }}">
       {% endfor %}
       <button>SAVE CRIME</button>
+    </form>
+    <h3>Housing</h3>
+    <p class="muted">Housing does nothing until you add properties below. Switched off, nobody can acquire property and nobody is evicted for rent; owners keep their homes and storage, and can still pay or leave.</p>
+    <form method="post" action="{{ url_for('mud.builder_set_society', section='housing') }}" class="builder-inline-form">
+      <input type="hidden" name="csrf_token" value="{{ session.csrf_token }}">
+      <label class="check"><input type="checkbox" name="enabled" value="1" {% if society.housing.enabled %}checked{% endif %}> Players can acquire property</label>
+      <label for="housing-limit">Properties a character may hold or share</label>
+      <input id="housing-limit" name="max_holdings" type="number" min="1" max="20" value="{{ society.housing.max_holdings }}">
+      <button>SAVE HOUSING</button>
     </form>
   </section>
 
@@ -493,6 +528,13 @@ Condition: {"type":"knows_destination","destination":"DESTINATION ID"}   Dialogu
         </details>{% else %}<p class="muted">No gathering sources in this room.</p>{% endfor %}
         <form method="post" action="{{ url_for('mud.builder_create_gathering_node') }}" class="form-grid builder-subform"><input type="hidden" name="csrf_token" value="{{ session.csrf_token }}"><input type="hidden" name="room_id" value="{{ room.id }}"><label>Name<input name="name" maxlength="80" placeholder="Copper vein" required></label><label>Activity<select name="activity">{% for activity in gathering_activities %}<option value="{{ activity }}">{{ activity|title }}</option>{% endfor %}</select></label><label>Reward item<select name="item_id" required><option value="" selected disabled>Choose an item</option>{% for item in definitions %}<option value="{{ item.id }}">{{ item.name }}</option>{% endfor %}</select></label><label>Quantity<input type="number" name="amount" min="1" max="20" value="1" required></label><label>Skill<select name="skill_key"><option value="">None</option>{% for entry in skill_entries if entry.enabled %}<option value="{{ entry.key }}">{{ entry.definition.name }}</option>{% endfor %}</select></label><label>Minimum skill rank<input type="number" name="min_rank" min="0" max="20" value="0"></label><label>Required tool<select name="tool_definition_id"><option value="">None</option>{% for item in definitions %}<option value="{{ item.id }}">{{ item.name }}</option>{% endfor %}</select></label><label>Success chance (%)<input type="number" name="success_percent" min="1" max="100" value="100" required></label><label>Replenish after seconds<input type="number" name="respawn_seconds" min="5" max="86400" value="3600" required></label><button {% if not definitions %}disabled{% endif %}>ADD SOURCE</button></form>
       </section>
+      <section class="builder-exits"><h3>Storage in {{ room.name }}</h3><p class="muted">Players use /storage here. Personal storage keeps a separate compartment for each character, shared storage is one pile anyone may use, and owners-only storage (property rooms only) belongs to whoever holds the property. Removing storage hands every item in it back to its owner.</p>
+        {% for point in storage_by_room.get(room.id, []) %}<details class="builder-dialogue-node"><summary>{{ point.name }} · {{ point.scope }} · {{ point.stored }} stored · holds {{ point.capacity }}</summary>
+          <form method="post" action="{{ url_for('mud.builder_update_storage_point', point_id=point.id) }}" class="form-grid"><input type="hidden" name="csrf_token" value="{{ session.csrf_token }}">{{ storage_fields(point) }}<button class="secondary">SAVE STORAGE</button></form>
+          <form method="post" action="{{ url_for('mud.builder_delete_storage_point', point_id=point.id) }}" data-confirm="Remove {{ point.name }}? Stored items go back to their owners." class="builder-inline-form"><input type="hidden" name="csrf_token" value="{{ session.csrf_token }}"><input type="hidden" name="confirmation" value="delete"><button class="danger">REMOVE STORAGE</button></form>
+        </details>{% else %}<p class="muted">No storage in this room.</p>{% endfor %}
+        <form method="post" action="{{ url_for('mud.builder_create_storage_point', room_id=room.id) }}" class="form-grid builder-subform"><input type="hidden" name="csrf_token" value="{{ session.csrf_token }}">{{ storage_fields() }}<button>ADD STORAGE</button></form>
+      </section>
       <section class="builder-exits"><h3>Search discoveries</h3>
         <p class="muted">A character finds one eligible discovery per /search. Conditions use the same JSON rules as exits and triggers. Revealed exits keep their locks and entry conditions.</p>
         {% for discovery in discoveries_by_room[room.id] %}
@@ -561,5 +603,15 @@ Condition: {"type":"knows_destination","destination":"DESTINATION ID"}   Dialogu
     <form method="post" action="{{ url_for('mud.builder_create_work_activity',profession_id=profession.id) }}" class="form-grid builder-subform"><input type="hidden" name="csrf_token" value="{{ session.csrf_token }}"><h3>Add work activity</h3>{{ work_fields() }}<label>Initial reward<select name="reward_type"><option value="coins">Coins</option><option value="experience">Experience</option><option value="item">Item</option><option value="none">Skill practice only</option></select></label><label>Reward item<select name="reward_target_id"><option value="">None</option>{% for item in definitions %}<option value="{{ item.id }}">{{ item.name }}</option>{% endfor %}</select></label><label>Reward amount<input type="number" name="reward_amount" min="1" max="10000" value="1" required></label><button>ADD WORK</button></form>
     <form method="post" action="{{ url_for('mud.builder_delete_profession',profession_id=profession.id) }}" data-confirm="Remove this profession and its work activities?"><input type="hidden" name="csrf_token" value="{{ session.csrf_token }}"><input type="hidden" name="confirmation" value="delete"><button class="danger">REMOVE PROFESSION</button></form>
   </details>{% else %}<p class="muted">No professions yet.</p>{% endfor %}
+</section>
+<section class="terminal-card builder-create" aria-labelledby="housing-heading">
+  <p class="eyebrow">PLAYER HOMES</p><h2 id="housing-heading">Housing and storage</h2>
+  <p class="muted">A property is a set of rooms only its owners may enter. A unique property has one holding at a time; an instanced property gives every holder a private copy of its template rooms, sharing the template's text and exits. A primary owner can invite co-owners, who must accept, share the rent, and use owners-only storage. Unpaid rent past the grace period ends a co-owner's share, or the whole holding when the primary owner lapses. Items are never lost: whenever a holding ends, stored items return to whoever stored them. Players use <code>/house</code> and <code>/storage</code>; add storage to a room in its room panel.</p>
+  <form method="post" action="{{ url_for('mud.builder_create_property') }}" class="form-grid"><input type="hidden" name="csrf_token" value="{{ session.csrf_token }}">{{ property_fields() }}<button {% if not rooms %}disabled{% endif %}>CREATE PROPERTY</button></form>
+  {% for entry in properties %}<details class="builder-exits"><summary>{{ entry.name }} · {{ entry.kind }} · {{ entry.acquisition }} · {{ entry.holdings|length }} holding{{ '' if entry.holdings|length == 1 else 's' }}</summary>
+    <form method="post" action="{{ url_for('mud.builder_update_property', property_id=entry.id) }}" class="form-grid"><input type="hidden" name="csrf_token" value="{{ session.csrf_token }}">{{ property_fields(entry) }}<button class="secondary">SAVE PROPERTY</button></form>
+    <h3>Holdings</h3>{% for holding in entry.holdings %}<form method="post" action="{{ url_for('mud.builder_release_holding', holding_id=holding.id) }}" data-confirm="Release this holding? Owners lose it and stored items go back to them." class="builder-inline-form"><input type="hidden" name="csrf_token" value="{{ session.csrf_token }}"><input type="hidden" name="confirmation" value="release"><span>{% for owner in holding.owners %}{{ owner.display_name }}{% if owner.role == 'primary' %} (primary){% endif %}{% if entry.rent %} paid until {{ owner.paid_until or 'now' }}{% endif %}{{ ', ' if not loop.last }}{% endfor %} · {{ holding.stored }} stored item{{ '' if holding.stored == 1 else 's' }}</span><button class="danger">RELEASE</button></form>{% else %}<p class="muted">Nobody holds this property.</p>{% endfor %}
+    <form method="post" action="{{ url_for('mud.builder_delete_property', property_id=entry.id) }}" data-confirm="Remove {{ entry.name }}? Every holding ends and stored items go back to their owners."><input type="hidden" name="csrf_token" value="{{ session.csrf_token }}"><input type="hidden" name="confirmation" value="delete"><button class="danger">REMOVE PROPERTY</button></form>
+  </details>{% else %}<p class="muted">No properties yet.</p>{% endfor %}
 </section>
 {% endblock %}

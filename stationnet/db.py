@@ -1299,12 +1299,14 @@ def _migrate_office(database):
 
 
 def _rebuild_with_check(database, table, marker, old, new, adjust=None):
-    """Rewrite a table's CHECK text (old -> new) unless marker shows it is done, keeping rows."""
+    """Rewrite a table's CHECK text (old -> new) unless marker shows it is done, keeping rows, indexes and triggers."""
     sql = database.execute("SELECT sql FROM sqlite_master WHERE type='table' AND name=?", (table,)).fetchone()["sql"]
     if marker in sql:
         return
     indexes = [row["sql"] for row in database.execute(
         "SELECT sql FROM sqlite_master WHERE type='index' AND tbl_name=? AND sql IS NOT NULL", (table,))]
+    triggers = [row["sql"] for row in database.execute(
+        "SELECT sql FROM sqlite_master WHERE type='trigger' AND tbl_name=? AND sql IS NOT NULL", (table,))]
     declaration = (rf'\ACREATE TABLE(?: IF NOT EXISTS)?\s+'
                    rf'(?:(?:"{re.escape(table)}")|(?:`{re.escape(table)}`)|'
                    rf'(?:\[{re.escape(table)}\])|{re.escape(table)})(?=\s*\()')
@@ -1327,6 +1329,8 @@ def _rebuild_with_check(database, table, marker, old, new, adjust=None):
         database.execute(f"ALTER TABLE {table}_new RENAME TO {table}")
         for index in indexes:
             database.execute(index)
+        for trigger in triggers:
+            database.execute(trigger)
         database.commit()
     except Exception:
         database.rollback()
@@ -1515,6 +1519,7 @@ def init_db():
     _migrate_mud_faction_membership(database)
     _migrate_mud_start_rules(database)
     _migrate_mud_quest_failure(database)
+    _migrate_mud_housing(database)
     database.execute("INSERT OR IGNORE INTO mud_portal_settings(id) VALUES(1)")
     database.execute("INSERT OR IGNORE INTO mud_travel_settings(id) VALUES(1)")
     database.execute(
@@ -3226,6 +3231,90 @@ def _migrate_mud_quest_failure(database):
         for column, definition in columns:
             if column not in existing:
                 database.execute(f"ALTER TABLE {table} ADD COLUMN {column} {definition}")
+
+
+def _migrate_mud_housing(database):
+    """Authored properties and storage points, their holders, private housing rooms, and stored items."""
+    _rebuild_with_check(database, "mud_world_rooms", "'housing'",
+                        "CHECK(kind IN ('authored','wild'))", "CHECK(kind IN ('authored','wild','housing'))")
+    database.executescript("""
+    CREATE TABLE IF NOT EXISTS mud_properties (
+      id TEXT PRIMARY KEY,
+      world_id TEXT,
+      name TEXT NOT NULL COLLATE NOCASE,
+      description TEXT NOT NULL,
+      kind TEXT NOT NULL DEFAULT 'unique' CHECK(kind IN ('unique','instanced')),
+      entrance_room_id TEXT NOT NULL REFERENCES mud_world_rooms(id) ON DELETE CASCADE,
+      acquisition TEXT NOT NULL DEFAULT 'purchase' CHECK(acquisition IN ('purchase','claim','grant')),
+      price INTEGER NOT NULL DEFAULT 0 CHECK(price BETWEEN 0 AND 1000000),
+      refund_percent INTEGER NOT NULL DEFAULT 0 CHECK(refund_percent BETWEEN 0 AND 100),
+      rent INTEGER NOT NULL DEFAULT 0 CHECK(rent BETWEEN 0 AND 1000000),
+      rent_period_seconds INTEGER NOT NULL DEFAULT 604800 CHECK(rent_period_seconds BETWEEN 3600 AND 31536000),
+      grace_seconds INTEGER NOT NULL DEFAULT 86400 CHECK(grace_seconds BETWEEN 0 AND 2592000),
+      prepay_periods INTEGER NOT NULL DEFAULT 4 CHECK(prepay_periods BETWEEN 1 AND 52),
+      max_owners INTEGER NOT NULL DEFAULT 1 CHECK(max_owners BETWEEN 1 AND 20),
+      agent_npc_definition_id TEXT REFERENCES mud_npc_definitions(id) ON DELETE SET NULL,
+      conditions_json TEXT NOT NULL DEFAULT '[]',
+      available INTEGER NOT NULL DEFAULT 1 CHECK(available IN (0,1)),
+      created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);
+    CREATE INDEX IF NOT EXISTS idx_mud_properties_world ON mud_properties(world_id,name);
+    CREATE INDEX IF NOT EXISTS idx_mud_properties_entrance ON mud_properties(entrance_room_id);
+    CREATE TABLE IF NOT EXISTS mud_property_rooms (
+      room_id TEXT PRIMARY KEY REFERENCES mud_world_rooms(id) ON DELETE CASCADE,
+      property_id TEXT NOT NULL REFERENCES mud_properties(id) ON DELETE CASCADE);
+    CREATE INDEX IF NOT EXISTS idx_mud_property_rooms_property ON mud_property_rooms(property_id,room_id);
+    CREATE TABLE IF NOT EXISTS mud_storage_points (
+      id TEXT PRIMARY KEY,
+      room_id TEXT NOT NULL REFERENCES mud_world_rooms(id) ON DELETE CASCADE,
+      name TEXT NOT NULL COLLATE NOCASE,
+      description TEXT NOT NULL DEFAULT '',
+      scope TEXT NOT NULL DEFAULT 'personal' CHECK(scope IN ('personal','property','communal')),
+      capacity INTEGER NOT NULL DEFAULT 20 CHECK(capacity BETWEEN 1 AND 500),
+      item_types TEXT NOT NULL DEFAULT '',
+      conditions_json TEXT NOT NULL DEFAULT '[]');
+    CREATE INDEX IF NOT EXISTS idx_mud_storage_points_room ON mud_storage_points(room_id,name);
+    CREATE TABLE IF NOT EXISTS mud_property_holdings (
+      id TEXT PRIMARY KEY,
+      property_id TEXT NOT NULL REFERENCES mud_properties(id) ON DELETE CASCADE,
+      world_id TEXT NOT NULL,
+      unique_key TEXT UNIQUE,
+      created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);
+    CREATE INDEX IF NOT EXISTS idx_mud_property_holdings_property ON mud_property_holdings(property_id,id);
+    CREATE TABLE IF NOT EXISTS mud_property_owners (
+      holding_id TEXT NOT NULL REFERENCES mud_property_holdings(id) ON DELETE CASCADE,
+      character_id TEXT NOT NULL REFERENCES mud_characters(id) ON DELETE CASCADE,
+      role TEXT NOT NULL CHECK(role IN ('primary','co_owner')),
+      status TEXT NOT NULL CHECK(status IN ('invited','active')),
+      paid_until TEXT,
+      warned_at TEXT,
+      invited_by TEXT,
+      joined_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      PRIMARY KEY(holding_id,character_id));
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_mud_property_owners_primary
+      ON mud_property_owners(holding_id) WHERE role='primary';
+    CREATE INDEX IF NOT EXISTS idx_mud_property_owners_character ON mud_property_owners(character_id,holding_id);
+    """)
+    rooms = {row["name"] for row in database.execute("PRAGMA table_info(mud_world_rooms)")}
+    if "template_room_id" not in rooms:
+        database.execute("ALTER TABLE mud_world_rooms ADD COLUMN template_room_id TEXT "
+                         "REFERENCES mud_world_rooms(id) ON DELETE CASCADE")
+    if "holding_id" not in rooms:
+        database.execute("ALTER TABLE mud_world_rooms ADD COLUMN holding_id TEXT "
+                         "REFERENCES mud_property_holdings(id) ON DELETE CASCADE")
+    database.execute("CREATE INDEX IF NOT EXISTS idx_mud_world_rooms_holding "
+                     "ON mud_world_rooms(holding_id,template_room_id) WHERE holding_id IS NOT NULL")
+    # A stored item stays owned by a character; deleting its storage row (or the
+    # point or holding it sits in) hands it straight back to that inventory.
+    storage = {row["name"] for row in database.execute("PRAGMA table_info(mud_character_storage)")}
+    if "storage_point_id" not in storage:
+        database.execute("ALTER TABLE mud_character_storage ADD COLUMN storage_point_id TEXT "
+                         "REFERENCES mud_storage_points(id) ON DELETE CASCADE")
+    if "holding_id" not in storage:
+        database.execute("ALTER TABLE mud_character_storage ADD COLUMN holding_id TEXT "
+                         "REFERENCES mud_property_holdings(id) ON DELETE CASCADE")
+    database.execute("CREATE INDEX IF NOT EXISTS idx_mud_character_storage_point "
+                     "ON mud_character_storage(storage_point_id,holding_id)")
 
 
 def _migrate_mud_package_definitions(database):

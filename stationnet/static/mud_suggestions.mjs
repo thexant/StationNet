@@ -19,7 +19,8 @@ function available(command, state) {
   const dungeon = room.mode === "procedural" && !portal && room.id !== DEATH;
   switch (command.key) {
     case "expedition": case "daily": case "join_expedition":
-    case "resume_expedition": case "shop": case "storage": return portal;
+    case "resume_expedition": case "shop": return portal;
+    case "storage": return portal || (room.storage || []).length > 0;
     case "abandon_expedition": case "complete_expedition":
     case "expedition_status": return dungeon;
     case "continue": return room.id === DEATH;
@@ -102,6 +103,12 @@ export function commandSuggestions(value, state, catalog, limit = 6) {
       add(`/storage deposit ${targetName(item)}`, "Personal storage");
     }
     for (const item of state.hub?.storage || []) add(`/storage withdraw ${item.name}`, "Personal storage");
+  }
+  const points = room.id === PORTAL ? [] : room.storage || [];
+  for (const point of points) {
+    // Name the storage only when the room has more than one.
+    const into = points.length > 1 ? ` into ${quoteName(point.name)}` : "";
+    for (const item of inventory.inventory || []) add(`/storage deposit ${targetName(item)}${into}`, point.name);
   }
   for (const entry of catalog || []) {
     if (available(entry, state)) add(`/${entry.name}`, entry.description);

@@ -9,7 +9,7 @@ import zipfile
 from PIL import Image
 
 from stationnet import create_app
-from stationnet.arcade import ASSETS, AVAILABLE_CORES, DEFAULT_CORES, PLATFORMS
+from stationnet.arcade import ASSETS, AVAILABLE_CORES, DEFAULT_CORES, PLATFORMS, _core_files
 from stationnet.account_deletion import delete_account
 from stationnet.db import get_db
 
@@ -35,7 +35,7 @@ def _signin(client, user_id):
 
 def _upload(client, title, platform, genre, *, station=False, cover=False):
     rom_data = b"NES\x1a" + b"\0" * 100
-    rom_name = title + {"gb": ".gb", "gbc": ".gbc", "gba": ".gba"}.get(platform, ".nes")
+    rom_name = title + {"gb": ".gb", "gbc": ".gbc", "gba": ".gba", "psp": ".iso"}.get(platform, ".nes")
     if platform == "arcade":
         archive = BytesIO()
         with zipfile.ZipFile(archive, "w") as rom_set:
@@ -56,9 +56,11 @@ def _upload(client, title, platform, genre, *, station=False, cover=False):
 
 def test_default_cores_are_bundled_for_offline_play():
     bundled_defaults = {core for platform, core in DEFAULT_CORES.items() if platform != "arcade"}
+    assert "ppsspp" in bundled_defaults
     for core in bundled_defaults:
-        for suffix in ("-wasm.data", "-legacy-wasm.data"):
-            assert (ASSETS / "cores" / (core + suffix)).is_file()
+        for name in _core_files(core):
+            assert (ASSETS / "cores" / name).is_file()
+        assert (ASSETS / "cores" / "reports" / (core + ".json")).is_file()
     for asset in ("loader.js", "emulator.css", "src/emulator.js",
                   "src/gamepad.js", "compression/extractzip.js"):
         assert (ASSETS / asset).is_file()
@@ -199,3 +201,103 @@ def test_mame_core_install_is_pinned_verified_and_selected(tmp_path, monkeypatch
     assert client.get("/arcade/1/rom").status_code == 200
     assert client.get("/arcade/emulatorjs/data/cores/mame2003_plus-wasm.data").data == b"core" * 512
     assert b'"core":"mame2003_plus"' in client.get("/arcade/emulatorjs/data/cores/reports/mame2003_plus.json").data
+
+
+def _enable(app):
+    with app.app_context():
+        db = get_db()
+        db.execute("UPDATE station SET arcade_enabled=1")
+        db.commit()
+
+
+def test_psp_pages_are_cross_origin_isolated_and_threaded(tmp_path):
+    app, client, admin, member = _setup(tmp_path)
+    _enable(app)
+    _signin(client, admin)
+    assert PLATFORMS["psp"][1] == ("ppsspp",)
+    assert _upload(client, "PSP Game", "psp", "Action", station=True).status_code == 302
+    assert _upload(client, "GB Game", "gb", "Puzzle", station=True).status_code == 302
+    view = client.get("/arcade/1")
+    assert view.headers["Cross-Origin-Opener-Policy"] == "same-origin"
+    assert view.headers["Cross-Origin-Embedder-Policy"] == "require-corp"
+    assert "data-requires-isolation" in view.get_data(as_text=True)
+    player = client.get("/arcade/1/player")
+    assert player.status_code == 200
+    assert player.headers["Cross-Origin-Embedder-Policy"] == "require-corp"
+    assert b'EJS_core = "ppsspp"' in player.data
+    assert b"window.EJS_threads = true;" in player.data
+    assert b"ejs_threads: 'enabled'" in player.data
+    for name in ("ppsspp-thread-wasm.data", "ppsspp-assets.zip", "reports/ppsspp.json"):
+        assert client.get("/arcade/emulatorjs/data/cores/" + name).status_code == 200
+    assert client.get("/arcade/emulatorjs/data/cores/ppsspp-wasm.data").status_code == 404
+    gb_view = client.get("/arcade/2")
+    assert "Cross-Origin-Opener-Policy" not in gb_view.headers
+    assert "data-requires-isolation" not in gb_view.get_data(as_text=True)
+    gb_player = client.get("/arcade/2/player")
+    assert "Cross-Origin-Embedder-Policy" not in gb_player.headers
+    assert b"EJS_threads" not in gb_player.data and b"ejs_threads: 'disabled'" in gb_player.data
+
+
+def test_psp_upload_limit_is_configurable_and_zip_checked(tmp_path):
+    app, client, admin, member = _setup(tmp_path)
+    _enable(app)
+    _signin(client, admin)
+    saved = client.post("/sysop/settings", data={"csrf_token": "arcade-test",
+                        "settings_section": "arcade", "arcade_enabled": "on",
+                        "arcade_mode": "community", "arcade_default_quota_mb": "512",
+                        "arcade_psp_max_upload_mb": "1"})
+    assert saved.status_code == 302
+    with app.app_context():
+        assert get_db().execute("SELECT arcade_psp_max_upload_mb FROM station").fetchone()[0] == 1
+
+    def post(data, name):
+        return client.post("/arcade/station-upload", data={
+            "csrf_token": "arcade-test", "title": "PSP", "platform": "psp",
+            "rom": (BytesIO(data), name)}, content_type="multipart/form-data", follow_redirects=True)
+
+    assert b"exceeds the 1 MB limit" in post(b"\0" * (1024 * 1024 + 1), "big.iso").data
+    archive = BytesIO()
+    with zipfile.ZipFile(archive, "w") as bundle:
+        bundle.writestr("readme.txt", b"not a game")
+    assert b"ZIP must contain a ROM" in post(archive.getvalue(), "game.zip").data
+    archive = BytesIO()
+    with zipfile.ZipFile(archive, "w") as bundle:
+        bundle.writestr("game.cso", b"CISO" + b"\0" * 100)
+    assert b"Station game added" in post(archive.getvalue(), "game.zip").data
+    with app.app_context():
+        game = get_db().execute("SELECT stored_name,size_bytes FROM arcade_games").fetchone()
+    stored = tmp_path / "arcade" / "roms" / game["stored_name"]
+    assert stored.stat().st_size == game["size_bytes"] == len(archive.getvalue())
+    rejected = client.post("/sysop/settings", data={"csrf_token": "arcade-test",
+                           "settings_section": "arcade", "arcade_enabled": "on",
+                           "arcade_mode": "community", "arcade_default_quota_mb": "512",
+                           "arcade_psp_max_upload_mb": "5000"}, follow_redirects=True)
+    assert b"Max PSP upload size" in rejected.data
+
+
+def test_ppsspp_core_install_fetches_thread_build_and_assets(tmp_path, monkeypatch):
+    app, client, admin, member = _setup(tmp_path)
+    _enable(app)
+    _signin(client, admin)
+    package = BytesIO()
+    with tarfile.open(fileobj=package, mode="w:gz") as archive:
+        for name, data in (("ppsspp-thread-wasm.data", b"core" * 512),
+                           ("ppsspp-assets.zip", b"assets" * 512),
+                           ("reports/ppsspp.json", b'{"core":"ppsspp","buildStart":"test"}')):
+            entry = tarfile.TarInfo("package/" + name)
+            entry.size = len(data)
+            archive.addfile(entry, BytesIO(data))
+    blob = package.getvalue()
+    package_url = "https://registry.npmjs.org/@emulatorjs/core-ppsspp/-/core-ppsspp-4.2.3.tgz"
+    metadata = {"dist": {"tarball": package_url,
+                         "integrity": "sha512-" + base64.b64encode(hashlib.sha512(blob).digest()).decode()}}
+
+    def fake_open(url, timeout):
+        return BytesIO(json.dumps(metadata).encode() if url.endswith("/4.2.3") else blob)
+
+    monkeypatch.setattr("stationnet.arcade.urllib.request.urlopen", fake_open)
+    result = client.post("/arcade/cores/install", data={"csrf_token": "arcade-test",
+                            "core": "ppsspp"}, follow_redirects=True)
+    assert b"installed locally" in result.data
+    assert client.get("/arcade/emulatorjs/data/cores/ppsspp-assets.zip").data == b"assets" * 512
+    assert client.get("/arcade/emulatorjs/data/cores/ppsspp-thread-wasm.data").data == b"core" * 512

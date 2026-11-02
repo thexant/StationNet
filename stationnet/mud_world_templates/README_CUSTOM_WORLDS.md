@@ -540,6 +540,9 @@ The supported arrays are:
 | `mud_world_destinations` | Places players can ask the way to with `/directions` | `room_id`, `map_items_json`; see [wayfinding](#5e-wayfinding-destinations) |
 | `mud_world_factions` | Factions players earn standing with; see [factions](#factions-and-reputation) | `id` |
 | `mud_faction_relations` | How a change with one faction passes to another | `faction_id`, `other_faction_id` |
+| `mud_properties` | Homes and other property players can hold; see [housing](#5g-player-housing-and-storage) | `entrance_room_id`, optional `agent_npc_definition_id` |
+| `mud_property_rooms` | Which rooms belong to a property | `room_id`, `property_id` |
+| `mud_storage_points` | Lockers, chests, and owners' storage | `room_id` |
 
 Only these fields are accepted for each array; omitted optional fields use
 database defaults. IDs and references are local to this ZIP. All references
@@ -573,6 +576,9 @@ must point to records in the same package, including room IDs in `rooms.json`.
 | `mud_quest_givers` | `quest_id`, `npc_definition_id` (no `id` field) |
 | `mud_world_destinations` | `room_id`, `name`, `aliases`, `category`, `description`, `public`, `discover_on_visit`, `map_items_json`, `conditions_json`, `sort_order` |
 | `mud_world_factions` | `name`, `description`, `default_reputation`, `defeat_reputation`, `public`, `ranks_json`, `sort_order` |
+| `mud_properties` | `name`, `description`, `kind`, `entrance_room_id`, `acquisition`, `price`, `refund_percent`, `rent`, `rent_period_seconds`, `grace_seconds`, `prepay_periods`, `max_owners`, `agent_npc_definition_id`, `conditions_json`, `available` |
+| `mud_property_rooms` | `room_id`, `property_id` (no `id`) |
+| `mud_storage_points` | `room_id`, `name`, `description`, `scope`, `capacity`, `item_types`, `conditions_json` |
 | `mud_faction_relations` | `faction_id`, `other_faction_id`, `share_percent` |
 
 `mud_npc_combat_profiles` and `mud_npc_equipment` also have no `id` field;
@@ -766,11 +772,12 @@ its entries holds; groups cannot be nested. A list holds up to 20 entries.
 | `member` | `faction` | The character [belongs](#faction-membership) to the faction. Never holds while membership is off. |
 | `disposition` | optional `npc` (definition), and `tier` (one or a list of `hostile`, `unfriendly`, `neutral`, `friendly`, `trusted`) or `min`/`max` (-100 to 100) | That NPC's [regard](#relationships) for the character matches. Without `npc` it means the NPC being spoken to. Never holds while relationships are off. |
 | `time` | `from`, `to` (hours 0–23) | The [world clock](#world-clock) reads an hour from `from` up to, but not including, `to`. `{"from": 20, "to": 4}` wraps past midnight. Never holds while the clock is off. |
+| `owns_property` | `property`, optional `role`: `owner` (default; primary or co-owner) or `primary` | The character holds or shares that [property](#5g-player-housing-and-storage). |
 
 Flag keys are 1 to 80 lowercase letters, digits, and `. _ : -`, such as
 `gate.open` or `rats_slain`. Inside a procedural dungeon, `world` flags belong
 to that run. `object_state`, `in_room`, `knows_destination`, `time`,
-`disposition`, `reputation`, `wanted`, and `member` are not available in dungeon templates.
+`disposition`, `reputation`, `wanted`, `member`, and `owns_property` are not available in dungeon templates.
 
 ### Outcomes
 
@@ -791,6 +798,7 @@ nothing is granted.
 | `reputation` | `faction`, `amount` (-1000 to 1000, not 0) | Changes the player's [standing](#factions-and-reputation) with a faction, and with related factions. Not available in dungeon templates. |
 | `join_faction`, `leave_faction` | `faction` | Adds or removes the player's [membership](#faction-membership). Not available in dungeon templates. |
 | `disposition` | `amount` (-100 to 100, not 0), optional `npc` | Changes an NPC's [regard](#relationships) for the player; the NPC being spoken to unless `npc` names another. Not available in dungeon templates. |
+| `grant_property`, `revoke_property` | `property` | Gives the player a new holding of a [property](#5g-player-housing-and-storage) free of price and requirements (the first rent period is free too), or takes theirs away. Granting does nothing if they already have it. Not available in dungeon templates. |
 
 Item, quest, and objective IDs inside conditions and outcomes are local package
 IDs, like other references, and must exist in the package.
@@ -1311,6 +1319,7 @@ left the world, or the dungeon run, by the time it is due.
 | `disposition` | `npc` (definition), `amount` (-100 to 100, not 0) | Changes that NPC's [regard](#relationships) for the player. |
 | `reputation` | `faction`, `amount` (-1000 to 1000, not 0) | Changes the player's [standing](#factions-and-reputation) with a faction. |
 | `join_faction`, `leave_faction` | `faction` | Adds or removes the player's [membership](#faction-membership). |
+| `grant_property`, `revoke_property` | `property` | As in dialogue [outcomes](#outcomes). A refused grant only tells the player. |
 | `fine` | `faction`, `amount` (1–100,000) | Fines the player, as a [crime](#crime-and-consequences) would, without changing standing. |
 | `clear_fines` | optional `faction` | Pardons the player's unpaid fines, to that faction or to all. |
 | `apply_effect` | `effect`, optional `potency` (1–1,000, default 1) and `duration` (1–100 turns, default 3) | Puts a timed effect on the player: a built-in key or one of the world's own effects. Harmful effects are weakened by matching race, class, and gear resistances. Also allowed in dungeon triggers. |
@@ -1950,6 +1959,159 @@ or anything else that takes conditions:
  "conditions": [{"type": "wanted", "faction": "watch", "negate": true}],
  "conditions_message": "The gate guard turns you away until you settle your fines."}
 ```
+
+## 5g. Player housing and storage
+
+Housing lets players hold a place of their own: a cottage, an apartment, a
+barracks bunk, a fallout shelter, or anything else you describe. Storage lets
+them keep belongings in the world. Both are optional and work separately: a
+world may offer lockers but no homes, homes without storage, or neither.
+Nothing changes in a world that defines none of these tables.
+
+### Properties
+
+A property is a set of rooms that only its owners may enter. There are two
+kinds:
+
+- **`unique`** (the default): the property's own rooms. One holding at a
+  time, so once someone owns the lighthouse nobody else can.
+- **`instanced`**: the rooms are a template. Every holder gets a private copy
+  of them, with the template's names, descriptions, and exits. Use this for
+  apartment blocks, inn rooms, or shelter cells that anyone may rent.
+
+```json
+"mud_properties": [
+  {"id": "cottage", "name": "Harbor Cottage", "description": "A snug cottage by the water.",
+   "entrance_room_id": "harbor-street", "price": 500, "refund_percent": 50,
+   "rent": 30, "rent_period_seconds": 604800, "grace_seconds": 86400, "max_owners": 3},
+  {"id": "flat", "name": "Apartment", "description": "Two rooms of your own.",
+   "kind": "instanced", "acquisition": "claim", "entrance_room_id": "lobby",
+   "agent_npc_definition_id": "landlady", "conditions_json": [{"type": "level", "min": 3}]},
+  {"id": "bunk", "name": "Shelter Bunk", "description": "A cot behind a blast door.",
+   "kind": "instanced", "acquisition": "grant", "entrance_room_id": "shelter-hall"}
+],
+"mud_property_rooms": [
+  {"room_id": "cottage-parlour", "property_id": "cottage"},
+  {"room_id": "cottage-loft", "property_id": "cottage"},
+  {"room_id": "flat-main", "property_id": "flat"},
+  {"room_id": "flat-bedroom", "property_id": "flat"},
+  {"room_id": "bunk-cell", "property_id": "bunk"}
+]
+```
+
+| Field | Default | Meaning |
+| --- | --- | --- |
+| `kind` | `unique` | `unique` or `instanced`. |
+| `entrance_room_id` | required | A room outside the property. Players buy or claim it here (unless it has an agent), and anyone who loses access lands here. |
+| `acquisition` | `purchase` | `purchase` (`/house buy`), `claim` (free, `/house claim`), or `grant` (only through a `grant_property` [outcome](#outcomes) or trigger action, for quest rewards, faction quarters, or story homes). |
+| `price` | 0 | Coins for a purchase (0–1,000,000). Only purchased properties have a price. |
+| `refund_percent` | 0 | Share of the price returned when the primary owner abandons it. |
+| `rent` | 0 | Coins per period; 0 means no rent. Split evenly between the owners; the primary owner pays any remainder. |
+| `rent_period_seconds` | 604800 | Length of a rent period (one hour to one year). |
+| `grace_seconds` | 86400 | How long rent may go unpaid before the share ends (up to 30 days). |
+| `prepay_periods` | 4 | How many periods an owner may pay ahead (1–52). |
+| `max_owners` | 1 | Owners, including the primary owner (1–20). 1 keeps it private. |
+| `agent_npc_definition_id` | none | An NPC beside whom the property is bought or claimed, instead of at the entrance. A defeated or closed agent cannot sell. |
+| `conditions_json` | `[]` | [Conditions](#conditions) a character must meet to buy or claim it. Grants ignore them. |
+| `available` | 1 | 0 stops new holders without touching existing ones. |
+
+Rules checked on import: every property has at least one room; a room belongs
+to at most one property; the entrance is not itself a property room; and
+neither the start room nor a start rule's room may be a property room. Property
+names are unique within a world.
+
+Movement into property rooms by any route (walking, `/travel`, fleeing,
+directions, and `teleport` actions) admits only the property's owners. Exits
+into it show as `[private]` to everyone else. Entering an instanced template
+room leads each owner to their own copy, so two players in "the" apartment
+never meet unless they share one. Copies have no placed items, NPCs,
+gathering sources, or room triggers of their own; give them storage instead.
+Players cannot drop items, or put them into placed containers, inside a
+property, because the floor is not kept for them; they use storage.
+
+### Owners and rent
+
+The character who acquires a property is its **primary owner**. They manage
+it: `/house invite <property> <character>` asks someone to share it, and
+the invitee must `/house accept <property>` (or `/house decline`). Co-owners
+can enter, use the owners' storage, and pay their share of the rent. The
+primary owner can `/house remove` a co-owner or withdraw an invitation, and
+`/house transfer` the primary role to a co-owner. A co-owner can
+`/house leave`. A character can hold each property only once, and at most
+`max_holdings` properties in a world (see below).
+
+With rent, buying charges the price plus the first period, and accepting an
+invitation charges the first share. Each owner keeps their own share paid
+with `/house pay <property> [periods]`, from carried coins, anywhere in the
+world. Owners are reminded when their share falls due. When a share stays
+unpaid past the grace period, a co-owner stops sharing the property; if it is
+the primary owner, the holding ends for everyone. Paid periods are not refunded
+when owners come or go, and a change in the number of owners changes each
+share from the next payment.
+
+A holding also ends when its primary owner abandons it
+(`/house abandon <property> confirm`), when a `revoke_property` outcome takes
+it, when a builder releases it or removes the property, or when the property
+is left out of an upgraded package. If a primary owner's character is
+deleted, the longest-standing co-owner becomes the primary owner instead.
+
+**Nothing is lost when a holding ends.** Everyone inside steps out to the
+entrance, and every stored item goes straight back into the inventory of the
+character who stored it. When a co-owner leaves or is removed, only the items
+they stored go back with them.
+
+### Storage
+
+A storage point is a named place in a room where players `/storage` items:
+
+```json
+"mud_storage_points": [
+  {"id": "chest", "room_id": "cottage-parlour", "name": "Oak Chest", "scope": "property", "capacity": 40},
+  {"id": "locker", "room_id": "station-hall", "name": "Locker", "scope": "personal", "capacity": 10,
+   "item_types": ["misc", "consumable"]},
+  {"id": "cache", "room_id": "camp", "name": "Supply Cache", "scope": "communal",
+   "conditions_json": [{"type": "member", "faction": "rangers"}]}
+]
+```
+
+| Field | Default | Meaning |
+| --- | --- | --- |
+| `name` | required | 2–80 characters, used in `/storage deposit <item> into <name>`. |
+| `description` | `""` | Optional text for builders. |
+| `scope` | `personal` | `personal`: each character has a private compartment here, like a bank vault. `property`: the owners of the holding share it (property rooms only; each instanced copy has its own). `communal`: one pile anyone who meets the conditions may use. |
+| `capacity` | 20 | Items it holds (1–500). Items inside stored bags count too. |
+| `item_types` | any | A list of item types it accepts: `misc`, `equipment`, `container`, `consumable`, `key`. |
+| `conditions_json` | `[]` | [Conditions](#conditions) to use it. |
+
+Players use `/storage` to list what is here and `/storage deposit <item>` or
+`/storage withdraw <item>`, adding `into <storage>` or `from <storage>` when
+a room has more than one. Equipped items are unequipped as they go in; loot
+from an unfinished dungeon run cannot be stored. Stored items keep their state
+(ammunition, open containers and their contents). Taking an item out of shared
+or owners' storage makes it yours. Stored items do not count as carried for
+conditions, quests, shops, or `/give`. The portal room's personal storage is
+separate and unchanged.
+
+### World switch
+
+The `housing` manifest section (or **World Builder → World life → Housing**)
+controls the system:
+
+```json
+"housing": {"enabled": true, "max_holdings": 3}
+```
+
+`enabled` (default `true`) switched off stops anyone acquiring property and
+stops rent evictions; owners keep their homes and storage and can still pay
+or leave. `max_holdings` (1–20, default 3) caps how many properties a
+character may own or share in the world.
+
+In the World Builder, **Housing and storage** creates and edits properties,
+lists holdings, and releases them; each room's panel adds storage. A room that
+belongs to a property, or is a property's entrance, cannot be deleted until the
+property no longer uses it, and a property cannot switch between unique and
+instanced while anyone holds it. Upgrading a world keeps holdings, co-owners,
+private copies, and stored items by local ID.
 
 ## 6. Import, edit, export, and remove
 
