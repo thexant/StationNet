@@ -956,6 +956,11 @@ button:disabled { opacity: .5; cursor: not-allowed; }
 .mud-quest-list li span { flex: none; color: var(--cyan); }
 .mud-quest-list li.locked { color: var(--grey); }
 .mud-quest-list article > p.mud-quest-ready { color: var(--amber); font-size: var(--text-xs); }
+.mud-quest-list article > p.mud-quest-goal { color: var(--white); font-size: var(--text-xs); }
+.mud-quest-list article > p.mud-quest-timer { color: var(--amber); font-size: var(--text-xs); }
+.mud-quest-list article > p.mud-quest-failed { color: var(--red); font-size: var(--text-xs); }
+.mud-quest-list li.failed { color: var(--red); text-decoration: line-through; }
+.mud-quest-list h3 { margin: .4rem 0 0; color: var(--grey); font-size: var(--text-xs); font-weight: 400; letter-spacing: .06em; }
 
 .builder-shell { display: grid; gap: 1rem; }
 .builder-head { margin-bottom: .25rem; }
@@ -978,6 +983,8 @@ button:disabled { opacity: .5; cursor: not-allowed; }
 .builder-permission-list small { color: var(--grey); }
 .builder-permission-list button { min-height: 2rem; margin: 0; padding: .35rem .55rem; }
 .builder-exits { margin-top: 1.25rem; padding-top: 1rem; border-top: 1px dotted var(--cyan); }
+.builder-advanced { display: grid; gap: 1rem; padding: .6rem .8rem; border: 1px dotted var(--green-dim); }
+.builder-advanced > summary { cursor: pointer; color: var(--cyan); }
 .builder-exits h3 { color: var(--cyan); font-size: .75rem; font-weight: 400; letter-spacing: .06em; }
 .builder-exit-row { display: grid; grid-template-columns: minmax(7rem,.8fr) minmax(7rem,.7fr) minmax(9rem,1fr) minmax(9rem,1fr) auto; align-items: end; gap: .55rem; padding: .75rem 0; border-top: 1px dotted var(--green-dim); }
 .builder-exit-row label { min-width: 0; }

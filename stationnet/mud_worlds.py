@@ -9,7 +9,7 @@ import zipfile
 
 from flask import current_app
 
-from . import mud_conditions, mud_gathering, mud_work, mud_scope, mud_society, mud_triggers, mud_wayfinding, mud_wilderness, mud_world_dungeons
+from . import mud_conditions, mud_gathering, mud_quests, mud_work, mud_scope, mud_society, mud_triggers, mud_wayfinding, mud_wilderness, mud_world_dungeons
 from . import mud_abilities, mud_effects, mud_progression, mud_shared_definitions
 from .mud_package_report import PackageReport
 
@@ -41,13 +41,17 @@ ENGINE_RESERVED = {"max_level", "level_cap", "experience_curve", "xp_curve", "at
 # the package boundary; player state and generated dungeon data never do.
 CONTENT_TABLES = {
     "mud_world_factions": ("id", "name", "description", "default_reputation", "defeat_reputation", "public",
-                           "ranks_json", "sort_order"),
+                           "ranks_json", "sort_order", "joinable", "start_joinable", "recruiter_npc_definition_id",
+                           "join_conditions_json", "join_conditions_message", "start_conditions_json", "join_cost",
+                           "join_reputation", "leavable", "leave_reputation", "rejoin_hours", "expel_below"),
     "mud_faction_relations": ("id", "faction_id", "other_faction_id", "share_percent"),
     "mud_item_definitions": ("id", "name", "description", "item_type", "properties_json", "behaviors_json", "equipment_slot"),
     "mud_conversations": ("id", "name"),
     "mud_dialogue_nodes": ("id", "conversation_id", "node_key", "body", "is_start"),
     "mud_quests": ("id", "name", "description", "prerequisite_quest_id", "completion_mode",
-                   "turn_in_npc_definition_id", "sequential", "abandonable", "conditions_json"),
+                   "turn_in_npc_definition_id", "sequential", "abandonable", "conditions_json",
+                   "summary", "details_json", "time_limit_seconds", "fail_conditions_json", "retry_mode",
+                   "retry_cooldown_seconds"),
     "mud_npc_definitions": ("id", "name", "description", "conversation_id", "properties_json", "behaviors_json",
                             "faction_id"),
     "mud_professions": ("id", "name", "description", "recruiter_npc_definition_id", "conditions_json"),
@@ -64,8 +68,9 @@ CONTENT_TABLES = {
     "mud_shop_stock": ("id", "npc_definition_id", "item_definition_id", "price", "quantity", "conditions_json"),
     "mud_npc_trainers": ("id", "npc_definition_id", "skill_key", "price", "max_rank"),
     "mud_quest_objectives": ("id", "quest_id", "objective_type", "target_id", "description", "required_count", "sort_order",
-                             "optional", "consume_on_turn_in", "recipient_npc_definition_id"),
-    "mud_quest_rewards": ("id", "quest_id", "reward_type", "target_id", "amount"),
+                             "optional", "consume_on_turn_in", "recipient_npc_definition_id",
+                             "hidden", "outcome_key", "fail_conditions_json"),
+    "mud_quest_rewards": ("id", "quest_id", "reward_type", "target_id", "amount", "outcome"),
     "mud_quest_givers": ("quest_id", "npc_definition_id"),
     "mud_dialogue_responses": ("id", "node_id", "response_text", "next_node_id", "accept_quest_id", "deliver_item_id", "required_state_key", "required_state_value", "state_key", "state_value", "sort_order",
                                "conditions_json", "outcomes_json", "turn_in_quest_id"),
@@ -78,7 +83,22 @@ CONTENT_TABLES = {
     "mud_npc_instances": ("id", "definition_id", "room_id", "state_json"),
     "mud_world_destinations": ("id", "room_id", "name", "aliases", "category", "description", "public",
                                "discover_on_visit", "map_items_json", "conditions_json", "sort_order"),
+    "mud_world_start_rules": ("id", "room_id", "spawn_conditions_json", "sort_order"),
 }
+FACTION_MEMBERSHIP_DEFAULTS = {"joinable": 0, "start_joinable": 0, "recruiter_npc_definition_id": None,
+                               "join_conditions_json": [], "join_conditions_message": "",
+                               "start_conditions_json": [], "join_cost": 0, "join_reputation": 0, "leavable": 1,
+                               "leave_reputation": 0, "rejoin_hours": 0, "expel_below": None}
+# Optional quest fields; export leaves them out at these values so plain quests stay readable by older stations.
+QUEST_FIELD_DEFAULTS = {
+    "mud_quests": {"summary": "", "details_json": [], "time_limit_seconds": None, "fail_conditions_json": [],
+                   "retry_mode": "retry", "retry_cooldown_seconds": 0},
+    "mud_quest_objectives": {"hidden": 0, "outcome_key": None, "fail_conditions_json": []},
+    "mud_quest_rewards": {"outcome": ""},
+}
+# Quest JSON that holds conditions inside a larger shape: detail reveal rules and failure rules.
+QUEST_RULE_COLUMNS = {"mud_quests": {"details_json": "details", "fail_conditions_json": "fail"},
+                      "mud_quest_objectives": {"fail_conditions_json": "fail"}}
 ID_TABLES = {table for table, columns in CONTENT_TABLES.items() if "id" in columns}
 REFERENCE_TABLE = {
     "conversation_id": "mud_conversations", "node_id": "mud_dialogue_nodes",
@@ -98,12 +118,14 @@ REFERENCE_TABLE = {
     "item_instance_id": "mud_item_instances", "exit_id": "exits",
 }
 # Quests and dialogue responses carry condition/outcome lists that name content.
-CONDITION_COLUMNS = {"mud_quests": ("conditions_json",),
+CONDITION_COLUMNS = {"mud_world_factions": ("join_conditions_json", "start_conditions_json"),
+                     "mud_quests": ("conditions_json",),
                      "mud_room_discoveries": ("conditions_json",),
                      "mud_professions": ("conditions_json",),
                      "mud_work_activities": ("conditions_json",),
                      "mud_dialogue_responses": ("conditions_json", "outcomes_json"),
                      "mud_world_destinations": ("conditions_json",),
+                     "mud_world_start_rules": ("spawn_conditions_json",),
                      "mud_shop_stock": ("conditions_json",)}
 CONDITION_TABLES = {"item": "mud_item_definitions", "quest": "mud_quests",
                     "objective": "mud_quest_objectives", "object": "mud_item_instances", "room": "rooms",
@@ -442,6 +464,18 @@ def read_package(payload, database=None, report=None):
                     row.update({key: clean[key] for key in ("name", "aliases", "category", "description",
                                                            "public", "discover_on_visit", "sort_order")},
                                map_items_json=clean["map_items"])
+                elif table == "mud_world_start_rules":
+                    if row.get("room_id") not in room_ids:
+                        raise WorldError("Start rule room_id must name a room in the world.")
+                    if not _whole(row.get("sort_order", 0), -10000, 10000):
+                        raise WorldError("Start rule sort_order must be a whole number from -10000 to 10000.")
+                    try:
+                        conditions = mud_conditions.validate_start_rule_conditions(row.get("spawn_conditions_json"))
+                    except ValueError as problem:
+                        raise WorldError(f"Invalid start rule: {problem}") from problem
+                    if any(kind == "faction" and ref not in raw_ids("mud_world_factions")
+                           for kind, ref in mud_conditions.references(conditions)):
+                        raise WorldError("Start rule factions must name factions in content.json.")
                 elif table == "mud_npc_combat_profiles":
                     if any(row.get(key) is not None and not _whole(row[key], 0, 100)
                            for key in ("accuracy", "evasion")):
@@ -495,16 +529,33 @@ def read_package(payload, database=None, report=None):
                         raise WorldError("Only possess_item objectives can consume items on turn-in.")
                     if row.get("recipient_npc_definition_id") and row["objective_type"] != "deliver_item":
                         raise WorldError("Only deliver_item objectives can name a recipient NPC.")
+                    if not _whole(row.get("hidden", 0), 0, 1):
+                        raise WorldError("Quest objective hidden must be 0 or 1.")
+                    try:
+                        outcome_key = mud_quests.validate_outcome_key(row.get("outcome_key"))
+                    except ValueError as problem:
+                        raise WorldError(str(problem)) from problem
+                    if outcome_key and row.get("optional"):
+                        raise WorldError("An objective that resolves the quest (outcome_key) cannot be optional.")
                 elif table == "mud_quests":
                     if row.get("completion_mode", "auto") not in {"auto", "turn_in"}:
                         raise WorldError("Quest completion_mode must be auto or turn_in.")
                     if not _whole(row.get("sequential", 0), 0, 1) or not _whole(row.get("abandonable", 1), 0, 1):
                         raise WorldError("Quest sequential and abandonable must be 0 or 1.")
+                    try:
+                        mud_quests.validate_summary(row.get("summary", ""))
+                        mud_quests.validate_time_limit(row.get("time_limit_seconds"))
+                        mud_quests.validate_retry(row.get("retry_mode"), row.get("retry_cooldown_seconds"))
+                    except ValueError as problem:
+                        raise WorldError(f"Invalid quest {row.get('id')}: {problem}") from problem
                 elif table == "mud_world_factions":
                     try:
                         row.update(mud_society.validate_faction(row))
                     except ValueError as problem:
                         raise WorldError(f"Invalid faction {row.get('id')}: {problem}") from problem
+                    if row.get("recruiter_npc_definition_id") is not None and (
+                            row["recruiter_npc_definition_id"] not in raw_ids("mud_npc_definitions")):
+                        raise WorldError("Faction recruiter must name an NPC in content.json.")
                 elif table == "mud_faction_relations":
                     try:
                         mud_society.validate_share(row.get("share_percent"))
@@ -512,7 +563,12 @@ def read_package(payload, database=None, report=None):
                         raise WorldError(str(problem)) from problem
                     if row.get("faction_id") == row.get("other_faction_id"):
                         raise WorldError("A faction cannot be related to itself.")
-                elif table == "mud_quest_rewards" and row.get("reward_type") == "reputation":
+                if table == "mud_quest_rewards":
+                    try:
+                        mud_quests.validate_reward_outcome(row.get("outcome"))
+                    except ValueError as problem:
+                        raise WorldError(str(problem)) from problem
+                if table == "mud_quest_rewards" and row.get("reward_type") == "reputation":
                     if not row.get("target_id") or not _whole(row.get("amount", 1), 1, mud_society.REPUTATION_LIMIT):
                         raise WorldError("Reputation rewards need a target faction and an amount from 1 to 1000.")
                 elif table in {"mud_quest_rewards", "mud_npc_combat_rewards"}:
@@ -568,8 +624,20 @@ def read_package(payload, database=None, report=None):
                         _condition_validator(column)(row.get(column))
                     except ValueError as problem:
                         raise WorldError(f"Invalid {table} {column}: {problem}") from problem
+                for column, kind in QUEST_RULE_COLUMNS.get(table, {}).items():
+                    try:
+                        _quest_rules(kind, row.get(column))
+                    except ValueError as problem:
+                        raise WorldError(f"Invalid {table} {column}: {problem}") from problem
             except WorldError as problem:
                 report.error(CONTENT_FILE, f"$.{table}[{index}]", str(problem))
+    for index, row in enumerate(content.get("mud_quest_rewards", [])):
+        outcome = row.get("outcome") or ""
+        if outcome and outcome != mud_quests.FAILED_OUTCOME and not any(
+                objective.get("quest_id") == row.get("quest_id") and objective.get("outcome_key") == outcome
+                for objective in content.get("mud_quest_objectives", [])):
+            report.error(CONTENT_FILE, f"$.mud_quest_rewards[{index}]",
+                         f"Reward outcome {outcome!r} is not the outcome_key of any objective of its quest.")
     reward_counts = {}
     banker_ids = [row["npc_definition_id"] for row in content.get("mud_npc_banks", [])]
     if len(banker_ids) != len(set(banker_ids)):
@@ -968,6 +1036,10 @@ def _insert_content(database, document, installation_key, skill_map=None, effect
                 elif column in CONDITION_COLUMNS.get(table, ()):
                     value = json.dumps(mud_conditions.remap(_condition_validator(column)(value), condition_mapper),
                                        ensure_ascii=False, separators=(",", ":"))
+                elif column in QUEST_RULE_COLUMNS.get(table, {}):
+                    kind = QUEST_RULE_COLUMNS[table][column]
+                    value = json.dumps(_remap_quest_rules(kind, _quest_rules(kind, value), condition_mapper),
+                                       ensure_ascii=False, separators=(",", ":"))
                 elif table == "mud_item_definitions" and column == "properties_json":
                     value = _remap_item_properties(value, condition_mapper)
                 elif table == "mud_npc_definitions" and column == "properties_json":
@@ -997,7 +1069,8 @@ def _insert_content(database, document, installation_key, skill_map=None, effect
                     raise WorldError(f"{table}.{column} must be a scalar value.")
                 fields[column] = value
             if table in {"mud_item_definitions", "mud_npc_definitions", "mud_conversations", "mud_quests",
-                         "mud_world_destinations", "mud_world_factions", "mud_professions"}:
+                         "mud_world_destinations", "mud_world_factions", "mud_professions",
+                         "mud_world_start_rules"}:
                 fields["world_id"] = world_id
             names = list(fields)
             database.execute(
@@ -1636,7 +1709,7 @@ def _upgrade_rows(database, document, payload, *, reset_world_state=False):
     database.execute("UPDATE mud_world_packages SET enabled=0 WHERE id=?", (world_id,))
     retired_id = _retire_rows(database, world_id, "This world was upgraded; start a new run.", keep_state=True)
     for table in ("mud_world_triggers", "mud_world_dungeon_templates", "mud_world_room_presets", "mud_world_regions",
-                  "mud_world_destinations"):
+                  "mud_world_destinations", "mud_world_start_rules"):
         database.execute(f"DELETE FROM {table} WHERE world_id=?", (world_id,))
     for kind in ("effects", "abilities", "skills", "races"):
         table, owner_column, _key = mud_shared_definitions.LINKS["world"][kind]
@@ -1664,6 +1737,13 @@ def _upgrade_rows(database, document, payload, *, reset_world_state=False):
         if target is None:
             target, moved = start, moved + 1
         database.execute("UPDATE mud_player_locations SET location_key=? WHERE user_id=?", (target, row["user_id"]))
+    # A character's start room keeps following its local ID; wilderness cells keep theirs.
+    for row in database.execute("SELECT id,start_room_id FROM mud_characters WHERE world_key=? "
+                                "AND start_room_id IS NOT NULL", (world_id,)).fetchall():
+        local = old_rooms.get(row["start_room_id"])
+        if local:
+            database.execute("UPDATE mud_characters SET start_room_id=? WHERE id=?",
+                             (new_rooms.get(local), row["id"]))
     for row in learned:
         target = carried(row["destination_id"], "mud_world_destinations")
         if target:
@@ -1674,6 +1754,7 @@ def _upgrade_rows(database, document, payload, *, reset_world_state=False):
     carry = (("mud_player_quests", "quest_id", "mud_quests", ("character_id",)),
              ("mud_player_objectives", "objective_id", "mud_quest_objectives", ("character_id",)),
              ("mud_character_reputation", "faction_id", "mud_world_factions", ("character_id",)),
+             ("mud_character_factions", "faction_id", "mud_world_factions", ("character_id",)),
              ("mud_npc_relationships", "npc_definition_id", "mud_npc_definitions", ("character_id",)))
     carried_rows = 0
     for table, column, target_table, keys in carry:
@@ -1792,8 +1873,19 @@ def world_triggers(database, world_id):
     return result
 
 
+def _quest_rules(kind, value):
+    return mud_quests.validate_details(value) if kind == "details" else mud_quests.validate_fail_rules(value)
+
+
+def _remap_quest_rules(kind, rules, mapper):
+    return (mud_quests.remap_details(rules, mapper) if kind == "details"
+            else mud_quests.remap_fail_rules(rules, mapper))
+
+
 def _condition_validator(column):
     return (mud_conditions.validate_outcomes if column == "outcomes_json"
+            else mud_conditions.validate_start_conditions if column == "start_conditions_json"
+            else mud_conditions.validate_start_rule_conditions if column == "spawn_conditions_json"
             else mud_conditions.validate_conditions)
 
 
@@ -1878,6 +1970,9 @@ def _export_content(database, world_id, room_map, exit_map=None, report=None):
     )}
     needed_npcs |= {row["recruiter_npc_definition_id"] for row in database.execute(
         "SELECT recruiter_npc_definition_id FROM mud_professions WHERE world_id=?", (world_id,))}
+    needed_npcs |= {row["recruiter_npc_definition_id"] for row in database.execute(
+        "SELECT recruiter_npc_definition_id FROM mud_world_factions WHERE world_id=? AND "
+        "recruiter_npc_definition_id IN (SELECT id FROM mud_npc_definitions)", (world_id,))}
     for row in database.execute("SELECT a.provider_npc_definition_id,a.objective_type,a.objective_target_id "
                                 "FROM mud_work_activities a JOIN mud_professions p ON p.id=a.profession_id "
                                 "WHERE p.world_id=?", (world_id,)):
@@ -1960,6 +2055,13 @@ def _export_content(database, world_id, room_map, exit_map=None, report=None):
             rows = [row for row in rows if row["id"] in placed_item_ids]
         elif table in {"mud_item_spawns", "mud_gathering_nodes", "mud_room_discoveries", "mud_world_destinations"}:
             rows = [row for row in rows if row["room_id"] in room_map]
+        elif table == "mud_world_start_rules":
+            rows = [row for row in rows if row["room_id"] in room_map]
+            readable = [row for row in rows if _stored_conditions(row["spawn_conditions_json"],
+                                                                  "spawn_conditions_json")]
+            if len(readable) != len(rows):
+                report.warning(CONTENT_FILE, f"$.{table}", "A start rule with unreadable conditions was left out.")
+            rows = readable
         elif table == "mud_npc_instances":
             spawned = {row["id"] for row in database.execute(
                 "SELECT id FROM mud_npc_instances WHERE spawned_by_trigger IS NOT NULL")}
@@ -1975,7 +2077,7 @@ def _export_content(database, world_id, room_map, exit_map=None, report=None):
                 "mud_item_spawns": "spawn", "mud_room_discoveries": "discovery",
                 "mud_gathering_nodes": "gathering-node",
                 "mud_world_destinations": "destination", "mud_world_factions": "faction",
-                "mud_faction_relations": "faction-relation"}
+                "mud_faction_relations": "faction-relation", "mud_world_start_rules": "start-rule"}
     prefixes.update({"mud_professions": "profession", "mud_work_activities": "work",
                      "mud_work_rewards": "work-reward"})
     maps = {"rooms": room_map, "exits": exit_map or {}}
@@ -1995,6 +2097,11 @@ def _export_content(database, world_id, room_map, exit_map=None, report=None):
                     if value:
                         report.warning(CONTENT_FILE, f"$.{table}", f"A discovery reveals an object outside this "
                                        "world's rooms; the object link was left out.")
+                    value = None
+                elif (table == "mud_world_factions" and column == "recruiter_npc_definition_id"
+                      and value and value not in maps["mud_npc_definitions"]):
+                    report.warning(CONTENT_FILE, f"$.{table}", f"Faction {row['name']} names a recruiter that "
+                                   "no longer exists; the recruiter was left out.")
                     value = None
                 elif column in REFERENCE_TABLE:
                     ref_table = REFERENCE_TABLE[column]
@@ -2026,6 +2133,15 @@ def _export_content(database, world_id, room_map, exit_map=None, report=None):
                         _stored_conditions(value, column),
                         lambda kind, ref: ref if kind not in CONDITION_TABLES
                         else _mapped(maps, CONDITION_TABLES[kind], ref, f"{kind} condition"))
+                elif column in QUEST_RULE_COLUMNS.get(table, {}):
+                    kind = QUEST_RULE_COLUMNS[table][column]
+                    try:
+                        stored = _quest_rules(kind, value)
+                    except ValueError:
+                        stored = []
+                    value = _remap_quest_rules(
+                        kind, stored, lambda ref_kind, ref: ref if ref_kind not in CONDITION_TABLES
+                        else _mapped(maps, CONDITION_TABLES[ref_kind], ref, f"{ref_kind} condition"))
                 elif table == "mud_world_destinations" and column == "map_items_json":
                     dropped = [ref for ref in mud_wayfinding.map_items(row) if ref not in maps["mud_item_definitions"]]
                     if dropped:
@@ -2235,6 +2351,21 @@ def export_document(database, world_id, *, origin_keys=None, skill_keys=None):
         for row in content.get(table, []):
             for column in columns:
                 row[column] = mud_conditions.remap(row[column], local_reference)
+    for table, columns in QUEST_RULE_COLUMNS.items():
+        for row in content.get(table, []):
+            for column, kind in columns.items():
+                if column in row:
+                    row[column] = _remap_quest_rules(kind, row[column], local_reference)
+    for table, defaults in QUEST_FIELD_DEFAULTS.items():
+        for row in content.get(table, []):
+            for column, default in defaults.items():
+                if row.get(column) in (default, None):
+                    row.pop(column, None)
+    # Leave out untouched joining rules so plain worlds stay readable by older stations.
+    for row in content.get("mud_world_factions", []):
+        for column, default in FACTION_MEMBERSHIP_DEFAULTS.items():
+            if row.get(column) in (default, None):
+                row.pop(column, None)
     for row in content.get("mud_item_definitions", []):
         if isinstance(row.get("properties_json"), dict) and row["properties_json"].get("requirements"):
             row["properties_json"] = json.loads(_remap_item_properties(row["properties_json"], local_reference))

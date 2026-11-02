@@ -16,7 +16,8 @@ disposition(npc_definition_id), an NPC's (regard, tier) toward the character or
 None while relationships are off; a missing NPC means the one being spoken to;
 reputation(faction_id), the character's (standing, rank key) with a faction; and
 fines(faction_id), unpaid fines in coins (to one faction, or to all for None),
-or None while crime is off.
+or None while crime is off; and member(faction_id), whether the character
+belongs to a faction, which is false while faction membership is off.
 
 It also validates and checks equipment requirements, which gate items on
 attributes, level, and the wearer's race, class, or origin tags.
@@ -29,18 +30,23 @@ from .character_creation import ATTRIBUTES, KEY_RE
 MAX_CONDITIONS = 20
 MAX_OUTCOMES = 10
 MAX_ID_LENGTH = 200
-QUEST_STATUSES = ("not_started", "active", "ready", "completed")
+QUEST_STATUSES = ("not_started", "active", "ready", "completed", "failed", "abandoned")
+OUTCOME_KEY_RE = re.compile(r"^[a-z][a-z0-9-]{0,39}$")
 CONDITION_TYPES = ("level", "race", "class", "tag", "has_item", "coins", "attribute", "skill",
                    "quest", "objective", "state", "claimed", "flag", "object_state", "in_room",
-                   "knows_destination", "time", "disposition", "reputation", "wanted")
+                   "knows_destination", "time", "disposition", "reputation", "wanted", "member")
 OUTCOME_TYPES = ("give_item", "take_item", "experience", "coins", "take_coins", "learn_destination", "disposition",
-                 "reputation")
+                 "reputation", "join_faction", "leave_faction")
 # Condition types that only make sense in traditional worlds, where quests and
 # placed objects, rooms and wayfinding destinations exist.
 QUEST_CONDITION_TYPES = ("quest", "objective", "object_state", "in_room", "knows_destination", "time",
-                         "disposition", "reputation", "wanted")
+                         "disposition", "reputation", "wanted", "member")
+# All a character being created can be tested on; nothing else exists yet.
+START_CONDITION_TYPES = ("level", "race", "class", "tag", "attribute", "skill")
+# What a start rule may test: the finished origins and the faction chosen with them.
+START_RULE_CONDITION_TYPES = ("race", "class", "member")
 # Outcomes that teach world knowledge; procedural dungeons have no destinations.
-WORLD_OUTCOME_TYPES = ("learn_destination", "disposition", "reputation")
+WORLD_OUTCOME_TYPES = ("learn_destination", "disposition", "reputation", "join_faction", "leave_faction")
 REPUTATION_LIMIT = 1000
 DISPOSITION_TIERS = ("hostile", "unfriendly", "neutral", "friendly", "trusted")
 FLAG_SCOPES = ("player", "world")
@@ -58,6 +64,8 @@ _REFERENCE_FIELDS = {
     "disposition": ("npc", "npc"),
     "reputation": ("faction", "faction"),
     "wanted": ("faction", "faction"),
+    "member": ("faction", "faction"),
+    "join_faction": ("faction", "faction"), "leave_faction": ("faction", "faction"),
 }
 
 
@@ -164,7 +172,7 @@ def _condition(raw, allowed, nested):
             raise ValueError("Skill min_rank must be a whole number from 1 to 100.")
         result.update(skill=skill, min_rank=rank)
     elif kind == "quest":
-        fields |= {"quest", "status"}
+        fields |= {"quest", "status", "outcome"}
         result["quest"] = _identifier(raw.get("quest"), "Quest condition quest")
         status = raw.get("status", "completed")
         status = [status] if isinstance(status, str) else status
@@ -172,6 +180,13 @@ def _condition(raw, allowed, nested):
                 or any(value not in QUEST_STATUSES for value in status)):
             raise ValueError(f"Quest condition status must be one or more of {', '.join(QUEST_STATUSES)}.")
         result["status"] = [value for value in QUEST_STATUSES if value in status]
+        if "outcome" in raw:
+            # success, a resolution objective's outcome key, or failed.
+            outcomes = [raw["outcome"]] if isinstance(raw["outcome"], str) else raw["outcome"]
+            if (not isinstance(outcomes, list) or not 1 <= len(outcomes) <= 10
+                    or any(not isinstance(value, str) or not OUTCOME_KEY_RE.fullmatch(value) for value in outcomes)):
+                raise ValueError("Quest condition outcome must be one or more outcome keys, such as success.")
+            result["outcome"] = sorted(set(outcomes))
     elif kind == "objective":
         fields |= {"objective"}
         result["objective"] = _identifier(raw.get("objective"), "Objective condition objective")
@@ -221,6 +236,9 @@ def _condition(raw, allowed, nested):
         if not _whole(raw.get("min_fine", 1), 1, 10_000_000):
             raise ValueError("wanted min_fine must be a whole number of coins from 1.")
         result["min_fine"] = raw.get("min_fine", 1)
+    elif kind == "member":
+        fields |= {"faction"}
+        result["faction"] = _identifier(raw.get("faction"), "member faction")
     elif kind == "reputation":
         fields |= {"faction", "min", "max", "rank"}
         result["faction"] = _identifier(raw.get("faction"), "reputation faction")
@@ -284,6 +302,41 @@ def validate_conditions(value, *, allow_quests=True):
     return [_condition(item, allowed, False) for item in items]
 
 
+def validate_start_conditions(value):
+    """Conditions for a starting faction, limited to what a new character has."""
+    items = _load(value, "Starting conditions")
+    if len(items) > MAX_CONDITIONS:
+        raise ValueError(f"Use at most {MAX_CONDITIONS} conditions.")
+    return [_condition(item, START_CONDITION_TYPES, False) for item in items]
+
+
+def validate_start_rule_conditions(value):
+    """Conditions for a start rule: one race, class, and faction test at most.
+
+    Rules rank by how many of these they test, so each is positive and appears
+    once; several factions are alternatives in one 'any' group of member tests.
+    """
+    items = _load(value, "Start rule conditions")
+    if not items:
+        raise ValueError("A start rule needs a race, class, or faction; "
+                         "the world's starting room already covers everyone else.")
+    if len(items) > len(START_RULE_CONDITION_TYPES):
+        raise ValueError("A start rule tests race, class, and faction once each.")
+    result = [_condition(item, START_RULE_CONDITION_TYPES, False) for item in items]
+    seen = set()
+    for entry in result:
+        options = entry.get("any", [entry])
+        kinds = {option["type"] for option in options}
+        if entry.get("negate") or any(option.get("negate") for option in options):
+            raise ValueError("Start rules cannot use negate.")
+        if "any" in entry and kinds != {"member"}:
+            raise ValueError("Start rule 'any' groups list factions; give races and classes as keys.")
+        if kinds & seen:
+            raise ValueError("A start rule tests race, class, and faction once each.")
+        seen |= kinds
+    return result
+
+
 def validate_outcomes(value, *, allow_world=True):
     """Return a normalized outcome list or raise ValueError."""
     items = _load(value, "Outcomes")
@@ -305,6 +358,10 @@ def validate_outcomes(value, *, allow_world=True):
                 raise ValueError(f"Reputation amounts must be nonzero whole numbers from -{REPUTATION_LIMIT} to {REPUTATION_LIMIT}.")
             result.append({"type": kind, "faction": _identifier(raw.get("faction"), "reputation faction"),
                            "amount": amount})
+        elif kind in ("join_faction", "leave_faction"):
+            if set(raw) - {"type", "faction"}:
+                raise ValueError(f"{kind} outcomes accept only faction.")
+            result.append({"type": kind, "faction": _identifier(raw.get("faction"), f"{kind} faction")})
         elif kind == "disposition":
             if set(raw) - {"type", "npc", "amount"}:
                 raise ValueError("disposition outcomes accept only npc and amount.")
@@ -391,7 +448,14 @@ def _holds(condition, context):
     if kind == "skill":
         return context.skill_rank(condition["skill"]) >= condition["min_rank"]
     if kind == "quest":
-        return context.quest_status(condition["quest"]) in condition["status"]
+        status = context.quest_status(condition["quest"])
+        # Abandoning once erased the record, so not_started still covers abandoned quests.
+        if status not in condition["status"] and not (status == "abandoned" and "not_started" in condition["status"]):
+            return False
+        if "outcome" in condition:
+            outcome = getattr(context, "quest_outcome", lambda quest: None)(condition["quest"])
+            return outcome in condition["outcome"]
+        return True
     if kind == "objective":
         return context.objective_complete(condition["objective"])
     if kind == "state":
@@ -424,6 +488,8 @@ def _holds(condition, context):
         if "rank" in condition:
             return rank in condition["rank"]
         return condition.get("min", -REPUTATION_LIMIT) <= value <= condition.get("max", REPUTATION_LIMIT)
+    if kind == "member":
+        return bool(getattr(context, "member", lambda faction: False)(condition["faction"]))
     if kind == "disposition":
         found = getattr(context, "disposition", lambda npc: None)(condition.get("npc"))
         if found is None:

@@ -46,6 +46,7 @@ CREATE TABLE IF NOT EXISTS station (
  arcade_enabled INTEGER NOT NULL DEFAULT 0 CHECK(arcade_enabled IN (0,1)),
  arcade_mode TEXT NOT NULL DEFAULT 'community' CHECK(arcade_mode IN ('community','curated')),
  arcade_default_quota_mb INTEGER NOT NULL DEFAULT 512,
+ arcade_psp_max_upload_mb INTEGER NOT NULL DEFAULT 1024,
  library_mode TEXT NOT NULL DEFAULT 'community' CHECK(library_mode IN ('community','curated')),
  library_default_quota_mb INTEGER NOT NULL DEFAULT 512,
  library_max_upload_mb INTEGER NOT NULL DEFAULT 512,
@@ -1511,6 +1512,9 @@ def init_db():
     _migrate_mud_banking(database)
     _migrate_mud_multiworld(database)
     _migrate_mud_package_definitions(database)
+    _migrate_mud_faction_membership(database)
+    _migrate_mud_start_rules(database)
+    _migrate_mud_quest_failure(database)
     database.execute("INSERT OR IGNORE INTO mud_portal_settings(id) VALUES(1)")
     database.execute("INSERT OR IGNORE INTO mud_travel_settings(id) VALUES(1)")
     database.execute(
@@ -2360,6 +2364,8 @@ def _migrate_arcade(database):
         database.execute("ALTER TABLE station ADD COLUMN arcade_mode TEXT NOT NULL DEFAULT 'community'")
     if "arcade_default_quota_mb" not in columns:
         database.execute("ALTER TABLE station ADD COLUMN arcade_default_quota_mb INTEGER NOT NULL DEFAULT 512")
+    if "arcade_psp_max_upload_mb" not in columns:
+        database.execute("ALTER TABLE station ADD COLUMN arcade_psp_max_upload_mb INTEGER NOT NULL DEFAULT 1024")
     user_columns = {row["name"] for row in database.execute("PRAGMA table_info(users)")}
     if "arcade_quota_mb" not in user_columns:
         database.execute("ALTER TABLE users ADD COLUMN arcade_quota_mb INTEGER")
@@ -3138,6 +3144,88 @@ def _split_procedural_character(database, character, policy, procedural_only):
         database.execute("UPDATE mud_character_wallets SET character_id=? WHERE character_id=?", (pid, cid))
     normalize_mud_character(database, pid, "procedural", "procedural", "procedural")
     return pid
+
+
+def _migrate_mud_faction_membership(database):
+    """Player faction membership: per-faction join rules and each character's memberships."""
+    columns = {row["name"] for row in database.execute("PRAGMA table_info(mud_world_factions)")}
+    # The recruiter has no foreign key: NPC definitions reference factions, and
+    # factions install first, so a key here would form a cycle.
+    additions = (
+        ("joinable", "INTEGER NOT NULL DEFAULT 0 CHECK(joinable IN (0,1))"),
+        ("start_joinable", "INTEGER NOT NULL DEFAULT 0 CHECK(start_joinable IN (0,1))"),
+        ("recruiter_npc_definition_id", "TEXT"),
+        ("join_conditions_json", "TEXT NOT NULL DEFAULT '[]'"),
+        ("join_conditions_message", "TEXT NOT NULL DEFAULT ''"),
+        ("start_conditions_json", "TEXT NOT NULL DEFAULT '[]'"),
+        ("join_cost", "INTEGER NOT NULL DEFAULT 0 CHECK(join_cost>=0)"),
+        ("join_reputation", "INTEGER NOT NULL DEFAULT 0 CHECK(join_reputation BETWEEN -1000 AND 1000)"),
+        ("leavable", "INTEGER NOT NULL DEFAULT 1 CHECK(leavable IN (0,1))"),
+        ("leave_reputation", "INTEGER NOT NULL DEFAULT 0 CHECK(leave_reputation BETWEEN -1000 AND 1000)"),
+        ("rejoin_hours", "INTEGER NOT NULL DEFAULT 0 CHECK(rejoin_hours BETWEEN 0 AND 8760)"),
+        ("expel_below", "INTEGER CHECK(expel_below IS NULL OR expel_below BETWEEN -1000 AND 1000)"),
+    )
+    for name, definition in additions:
+        if name not in columns:
+            database.execute(f"ALTER TABLE mud_world_factions ADD COLUMN {name} {definition}")
+    database.execute("""
+    CREATE TABLE IF NOT EXISTS mud_character_factions (
+      character_id TEXT NOT NULL REFERENCES mud_characters(id) ON DELETE CASCADE,
+      faction_id TEXT NOT NULL REFERENCES mud_world_factions(id) ON DELETE CASCADE,
+      joined_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      left_at TEXT,
+      PRIMARY KEY(character_id,faction_id))""")
+
+
+def _migrate_mud_start_rules(database):
+    """Conditional starting rooms, and the room a rule gave each character."""
+    database.execute("""
+    CREATE TABLE IF NOT EXISTS mud_world_start_rules (
+      id TEXT PRIMARY KEY,
+      world_id TEXT NOT NULL REFERENCES mud_world_packages(id) ON DELETE CASCADE,
+      room_id TEXT NOT NULL REFERENCES mud_world_rooms(id) ON DELETE CASCADE,
+      spawn_conditions_json TEXT NOT NULL DEFAULT '[]',
+      sort_order INTEGER NOT NULL DEFAULT 0,
+      created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP)""")
+    database.execute("CREATE INDEX IF NOT EXISTS idx_mud_world_start_rules_world ON mud_world_start_rules(world_id)")
+    database.execute("CREATE INDEX IF NOT EXISTS idx_mud_world_start_rules_room ON mud_world_start_rules(room_id)")
+    columns = {row["name"] for row in database.execute("PRAGMA table_info(mud_characters)")}
+    if "start_room_id" not in columns:
+        database.execute("ALTER TABLE mud_characters ADD COLUMN start_room_id TEXT")
+
+
+def _migrate_mud_quest_failure(database):
+    """Quest goals, details, deadlines, failure rules, retries, outcomes, and failed/abandoned records."""
+    _rebuild_with_check(database, "mud_player_quests", "'failed'",
+                        "CHECK(status IN ('active','completed'))",
+                        "CHECK(status IN ('active','completed','failed','abandoned'))")
+    additions = {
+        "mud_quests": (
+            ("summary", "TEXT NOT NULL DEFAULT ''"),
+            ("details_json", "TEXT NOT NULL DEFAULT '[]'"),
+            ("time_limit_seconds", "INTEGER CHECK(time_limit_seconds IS NULL OR time_limit_seconds>=60)"),
+            ("fail_conditions_json", "TEXT NOT NULL DEFAULT '[]'"),
+            ("retry_mode", "TEXT NOT NULL DEFAULT 'retry' CHECK(retry_mode IN ('retry','once'))"),
+            ("retry_cooldown_seconds", "INTEGER NOT NULL DEFAULT 0 CHECK(retry_cooldown_seconds>=0)"),
+        ),
+        "mud_quest_objectives": (
+            ("hidden", "INTEGER NOT NULL DEFAULT 0 CHECK(hidden IN (0,1))"),
+            ("outcome_key", "TEXT"),
+            ("fail_conditions_json", "TEXT NOT NULL DEFAULT '[]'"),
+        ),
+        "mud_quest_rewards": (("outcome", "TEXT NOT NULL DEFAULT ''"),),
+        "mud_player_quests": (
+            ("outcome", "TEXT"), ("deadline_at", "TEXT"), ("failed_at", "TEXT"), ("fail_reason", "TEXT"),
+            ("abandoned_at", "TEXT"), ("attempts", "INTEGER NOT NULL DEFAULT 1"), ("fail_rewarded_at", "TEXT"),
+        ),
+        "mud_player_objectives": (("failed_at", "TEXT"),),
+    }
+    for table, columns in additions.items():
+        existing = {row["name"] for row in database.execute(f"PRAGMA table_info({table})")}
+        for column, definition in columns:
+            if column not in existing:
+                database.execute(f"ALTER TABLE {table} ADD COLUMN {column} {definition}")
 
 
 def _migrate_mud_package_definitions(database):

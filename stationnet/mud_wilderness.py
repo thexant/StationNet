@@ -654,6 +654,17 @@ def entrance_count(database, room_ids):
     return total
 
 
+def start_rule_count(database, room_ids):
+    """How many start rules name one of these rooms."""
+    total = 0
+    for start in range(0, len(room_ids), 500):
+        chunk = room_ids[start:start + 500]
+        total += database.execute(
+            f"SELECT COUNT(*) FROM mud_world_start_rules WHERE room_id IN ({','.join('?' * len(chunk))})",
+            chunk).fetchone()[0]
+    return total
+
+
 def delete_cells(database, room_ids):
     """Delete wild rooms and what lies in them; occupants must already have been moved."""
     for start in range(0, len(room_ids), 500):
@@ -712,6 +723,7 @@ def place_authored(database, room_id, position, grid_link=True, blocked_dirs="")
             for table, column in (("mud_npc_instances", "room_id"), ("mud_item_instances", "room_id"),
                                   ("mud_item_spawns", "room_id"), ("mud_room_discoveries", "room_id"),
                                   ("mud_world_destinations", "room_id"),
+                                  ("mud_world_start_rules", "room_id"), ("mud_characters", "start_room_id"),
                                   ("mud_world_dungeon_entrances", "room_id"),
                                   ("mud_world_dungeon_entrances", "return_room_id"),
                                   ("mud_world_exits", "from_room_id"), ("mud_world_exits", "to_room_id")):

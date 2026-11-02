@@ -101,6 +101,55 @@ starting with a letter. `stationnet` is reserved for the original builder
 world. `name` is 2 to 80 characters; `author` is 1 to 80. `start_room` must
 match a room ID in `rooms.json`.
 
+### Give characters different beginnings
+
+`start_room` is the world's default. To start some characters elsewhere, add
+optional start rules to `mud_world_start_rules` in `content.json`. Worlds with a
+single starting room need nothing here.
+
+```json
+{"mud_world_start_rules": [
+  {"id": "elves", "room_id": "glade",
+   "spawn_conditions_json": [{"type": "race", "keys": ["elf"]}]},
+  {"id": "hill-scouts", "room_id": "watchtower",
+   "spawn_conditions_json": [{"type": "race", "keys": ["dwarf", "gnome"]},
+                             {"type": "class", "keys": ["scout"]}]},
+  {"id": "wardens", "room_id": "barracks", "sort_order": -1,
+   "spawn_conditions_json": [{"type": "member", "faction": "wardens"}]}
+]}
+```
+
+Each rule names a `room_id` and at least one condition: `race`, `class`, or
+`member` (the faction chosen at character creation). A rule uses each of these
+once. Keys in one condition are alternatives, and all of a rule's conditions
+must match. For several factions, use
+`{"any": [{"type": "member", "faction": "a"}, {"type": "member", "faction": "b"}]}`.
+`negate` and other condition types are not accepted. A rule with no conditions
+is refused, because `start_room` already covers everyone else.
+
+When several rules match a character:
+
+1. The rule testing the most of race, class, and faction wins, so a race and
+   class rule beats a race rule without needing an order.
+2. Between equally specific rules, the lowest `sort_order` wins (default 0).
+3. If those tie too, the room name decides, then the rule ID. The World Builder
+   warns about rules that tie this way.
+
+A character who matches no rule begins in `start_room`, as does one whose only
+matching rules name rooms that are no longer valid. A faction rule only matches
+factions offered at creation (`start_joinable`, with membership on).
+
+Rules apply once, when a new character is created, using the finished race,
+class, and faction. They never move existing characters, and changing a rule
+later doesn't either. The room a rule gives is saved on the character, who also
+recovers there after defeat. Characters that matched no rule recover in
+`start_room`. Replacing a character's origins does not change either room, but
+deleting a character and creating a new one applies the rules again.
+
+In the World Builder, use **Start rules** to add, edit, remove, and review rules
+in the order they are checked. A room used by a rule cannot be deleted until the
+rule is moved or removed.
+
 ### Rename or disable mana
 
 An optional `resource` object sets what this world calls mana, or turns it off:
@@ -508,9 +557,9 @@ must point to records in the same package, including room IDs in `rooms.json`.
 | `mud_npc_combat_profiles` | `npc_definition_id`, `maximum_health`, `attack`, `defense`, `experience_reward`, `respawn_seconds`, optional `accuracy`, `evasion` |
 | `mud_npc_equipment` | `npc_definition_id`, `equipment_slot`, `item_definition_id` |
 | `mud_npc_combat_rewards` | `npc_definition_id`, `reward_type`, `target_id`, `amount`, `chance_percent` |
-| `mud_quests` | `name`, `description`, `prerequisite_quest_id`, `completion_mode`, `turn_in_npc_definition_id`, `sequential`, `abandonable`, `conditions_json` |
-| `mud_quest_objectives` | `quest_id`, `objective_type`, `target_id`, `description`, `required_count`, `sort_order`, `optional`, `consume_on_turn_in`, `recipient_npc_definition_id` |
-| `mud_quest_rewards` | `quest_id`, `reward_type`, `target_id`, `amount` |
+| `mud_quests` | `name`, `description`, `prerequisite_quest_id`, `completion_mode`, `turn_in_npc_definition_id`, `sequential`, `abandonable`, `conditions_json`, optional `summary`, `details_json`, `time_limit_seconds`, `fail_conditions_json`, `retry_mode`, `retry_cooldown_seconds` |
+| `mud_quest_objectives` | `quest_id`, `objective_type`, `target_id`, `description`, `required_count`, `sort_order`, `optional`, `consume_on_turn_in`, `recipient_npc_definition_id`, optional `hidden`, `outcome_key`, `fail_conditions_json` |
+| `mud_quest_rewards` | `quest_id`, `reward_type`, `target_id`, `amount`, optional `outcome` |
 | `mud_npc_shops` | `npc_definition_id`, `buys_items`, `sell_percent` (no `id`) |
 | `mud_npc_banks` | `npc_definition_id` (no `id`) |
 | `mud_shop_stock` | `npc_definition_id`, `item_definition_id`, `price`, `quantity`, `conditions_json` |
@@ -594,8 +643,14 @@ and an `amount` of standing from 1 to 1000; `amount` is at least 1.
 | `completion_mode` | `auto` (default) or `turn_in` | `auto` completes and pays the moment the required objectives are done. `turn_in` marks the quest **ready** instead; the player returns to an NPC and turns it in to receive the rewards. |
 | `turn_in_npc_definition_id` | NPC definition ID or omitted | The NPC that accepts the turn-in. Omit it to accept turn-ins from any of the quest's givers. |
 | `sequential` | `0` (default) or `1` | With `1`, objectives unlock in stages by `sort_order`. Objectives that share a `sort_order` run together; a stage opens once every required objective in earlier stages is complete. Locked objectives do not advance. Items already carried count as soon as their stage unlocks. |
-| `abandonable` | `1` (default) or `0` | Whether `/quest abandon <name>` may drop the active quest. Abandoning clears its progress so it can be accepted again. Items already delivered are not returned. |
+| `abandonable` | `1` (default) or `0` | Whether `/quest abandon <name>` may drop the active quest. Abandoning clears its progress and records the quest as **abandoned**; it can be accepted again unless it is a one-attempt quest. Items already delivered are not returned. |
 | `conditions_json` | Condition array (default `[]`) | Who may accept the quest. See the condition reference below. |
+| `summary` | Text up to 300 characters (default empty) | The quest's overall goal, shown as **Goal:** above the individual tasks. Keep `description` for the story and `summary` for what "done" means. |
+| `details_json` | Detail array (default `[]`) | Extra notes revealed as the quest goes on. See [Quest details](#quest-details). |
+| `time_limit_seconds` | 60 to 2,592,000 (30 days), or omitted | A deadline counted in real time from acceptance; it keeps running while the player is offline. When it passes, the quest fails with "Time ran out." |
+| `fail_conditions_json` | Failure rule array (default `[]`) | The quest fails as soon as every condition of any rule holds. See [Failing quests](#failing-quests). |
+| `retry_mode` | `retry` (default) or `once` | What happens after a failure. `retry` lets the player accept the quest again; `once` allows a single attempt per character, so failing **or abandoning** closes the quest for good. |
+| `retry_cooldown_seconds` | 0 (default) to 2,592,000 | `retry` quests only: how long after failing before the quest can be accepted again. |
 
 | Objective field | Values | Meaning |
 | --- | --- | --- |
@@ -603,11 +658,85 @@ and an `amount` of standing from 1 to 1000; `amount` is at least 1.
 | `optional` | `0` (default) or `1` | Optional objectives are tracked but never block completion. |
 | `consume_on_turn_in` | `0` (default) or `1` | `possess_item` only. At turn-in the player must still carry `required_count` of the item (unequipped, not run loot), and those items are taken. |
 | `recipient_npc_definition_id` | NPC definition ID or omitted | `deliver_item` only. Who receives the delivery. |
+| `hidden` | `0` (default) or `1` | A hidden objective is left out of the player's quest log until it shows progress, is finished, or fails. Use it for secrets and surprise twists. |
+| `outcome_key` | Lowercase key such as `spared`, or omitted | Makes the objective an **alternative ending**: finishing it resolves the whole quest with that outcome. It cannot also be `optional`, and `success` and `failed` are reserved. |
+| `fail_conditions_json` | Failure rule array (default `[]`) | This objective fails when a rule holds. See [Failing quests](#failing-quests). |
+
+| Reward field | Values | Meaning |
+| --- | --- | --- |
+| `outcome` | Omitted (default), an objective's `outcome_key`, or `failed` | Omitted pays on any successful ending. An outcome key pays only when the quest ends that way. `failed` pays when the quest fails, once per character however often it is retried; use it for consolation prizes, and the `quest_failed` trigger event for penalties. |
 
 Rewards are paid exactly once per character. Repeated turn-ins, repeated
 dialogue choices, and completed quests cannot pay again. Players manage quests
-with `/quests`, `/quests completed`, `/quest available`, `/quest info <name>`,
-`/quest accept <name>`, `/quest turnin <name>`, and `/quest abandon <name>`.
+with `/quests`, `/quests completed`, `/quests failed`, `/quests history`,
+`/quest available`, `/quest info <name>`, `/quest accept <name>`,
+`/quest turnin <name>`, and `/quest abandon <name>`. `/quest info` shows the
+goal, who gave the quest and who takes the turn-in, the details revealed so
+far, current tasks before finished ones, any time left, and how the quest
+ended.
+
+Every field above the objective table except the original ones is optional.
+A quest that uses none of them never fails and behaves exactly as before.
+
+#### Quest details
+
+`details_json` lists up to 12 notes:
+
+```json
+[{"kind": "background", "text": "Wolves have taken three sheep.", "reveal": "offer"},
+ {"kind": "location", "text": "The den lies north of the woods.", "room": "woods"},
+ {"kind": "consequence", "text": "The elder will not forget cowardice.", "reveal": "finished"},
+ {"kind": "note", "text": "The pack leader has a white muzzle.",
+  "reveal": [{"type": "objective", "objective": "track"}]}]
+```
+
+`kind` is `background`, `location`, `consequence`, or `note`. Only `location`
+may name a `room`, which is shown by name. `reveal` says when the player sees
+the note: `offer` (already while deciding whether to accept), `accepted` (the
+default, once on the quest), `finished` (after it is completed or failed), or a
+condition array that must hold. Nothing hidden is ever sent to the player's
+browser, so details and hidden objectives never spoil anything early.
+
+#### Failing quests
+
+A quest can fail four ways:
+
+- **Deadline.** `time_limit_seconds` passes.
+- **Failure rules.** Any rule in `fail_conditions_json` holds. Each rule is
+  `{"when": [conditions], "message": "Shown to the player"}`; `message` is
+  optional. Rules are checked after every action the player takes.
+- **Triggers.** A trigger's `fail_quest` action fails the quest on any event:
+  defeating the wrong NPC, a dialogue choice, a crime, entering a room, and so
+  on. `fail_objective` fails a single objective.
+- **Impossibility.** When world edits delete what a required objective targets,
+  or a turn-in quest loses every NPC who could take it, the quest fails with
+  "The world has changed; this quest can no longer be completed."
+
+When an objective fails, an optional objective or one alternative ending just
+closes; a failed required objective, or closing every way to finish the quest,
+fails the whole quest. A failed quest can never be progressed, readied, or
+turned in, so nothing pays twice by accident. Its record stays, with the
+reason shown in `/quest info` and `/quests failed`. Accepting it again (when
+`retry_mode` allows and any cooldown has passed) starts a fresh attempt with
+cleared progress and a new deadline.
+
+```json
+{"id": "escort", "name": "Escort the Elder", "description": "Walk the elder to the shrine.",
+ "summary": "Bring the elder safely to the shrine", "time_limit_seconds": 1800,
+ "retry_mode": "retry", "retry_cooldown_seconds": 3600,
+ "fail_conditions_json": [{"when": [{"type": "flag", "scope": "world", "key": "elder.dead"}],
+                           "message": "The elder has fallen."}]}
+```
+
+#### Alternative endings
+
+Give objectives an `outcome_key` to offer several ways to resolve a quest. The
+first one finished decides the outcome; plain required objectives still give
+the ordinary `success` ending, but a quest built only from alternative endings
+waits for one of them. Turn-in quests remember the outcome until they are
+turned in. Rewards with a matching `outcome` pay only for that ending, and the
+`quest` condition's `outcome` field lets later dialogue, quests, and triggers
+react to how a quest ended.
 
 ### Conditions
 
@@ -624,7 +753,7 @@ its entries holds; groups cannot be nested. A list holds up to 20 entries.
 | `coins` | `min` | The character has at least `min` coins. |
 | `attribute` | `attribute` (`strength`, `agility`, `intellect`, `vitality`), `min` | The attribute is at least `min`. |
 | `skill` | `skill` key, optional `min_rank` (default 1) | The skill rank is at least `min_rank`. |
-| `quest` | `quest`, `status`: one or more of `not_started`, `active`, `ready`, `completed` (default `completed`) | The character's quest status matches. `ready` means a `turn_in` quest whose objectives are done. |
+| `quest` | `quest`, `status`: one or more of `not_started`, `active`, `ready`, `completed`, `failed`, `abandoned` (default `completed`); optional `outcome`: one or more of `success`, an objective's `outcome_key`, or `failed` | The character's quest status matches. `ready` means a `turn_in` quest whose objectives are done. `not_started` also matches abandoned quests, as it did before abandonment was recorded. With `outcome`, the quest must also have ended (or be ready) that way. |
 | `objective` | `objective` | That quest objective is complete. |
 | `state` | `key`, `value` | This NPC's saved per-player state for `key` equals `value` (`""` when unset). |
 | `claimed` | none | This response's outcomes have already been granted. Use it with `negate` to hide a one-time offer after it is claimed. |
@@ -634,13 +763,14 @@ its entries holds; groups cannot be nested. A list holds up to 20 entries.
 | `knows_destination` | `destination` | The character has learned that [destination](#5e-wayfinding-destinations) (by visiting, dialogue, a trigger, or reading). Carrying a map does not count. |
 | `reputation` | `faction`, and `rank` (one or a list of rank keys) or `min`/`max` (-1000 to 1000) | The character's [standing](#factions-and-reputation) with the faction matches. |
 | `wanted` | optional `faction`, optional `min_fine` (default 1) | The character owes at least `min_fine` coins in unpaid [fines](#crime-and-consequences), to that faction or to any. Never holds while crime is off; add `"negate": true` to bar wanted characters. |
+| `member` | `faction` | The character [belongs](#faction-membership) to the faction. Never holds while membership is off. |
 | `disposition` | optional `npc` (definition), and `tier` (one or a list of `hostile`, `unfriendly`, `neutral`, `friendly`, `trusted`) or `min`/`max` (-100 to 100) | That NPC's [regard](#relationships) for the character matches. Without `npc` it means the NPC being spoken to. Never holds while relationships are off. |
 | `time` | `from`, `to` (hours 0–23) | The [world clock](#world-clock) reads an hour from `from` up to, but not including, `to`. `{"from": 20, "to": 4}` wraps past midnight. Never holds while the clock is off. |
 
 Flag keys are 1 to 80 lowercase letters, digits, and `. _ : -`, such as
 `gate.open` or `rats_slain`. Inside a procedural dungeon, `world` flags belong
 to that run. `object_state`, `in_room`, `knows_destination`, `time`,
-`disposition`, `reputation`, and `wanted` are not available in dungeon templates.
+`disposition`, `reputation`, `wanted`, and `member` are not available in dungeon templates.
 
 ### Outcomes
 
@@ -659,6 +789,7 @@ nothing is granted.
 | `take_coins` | `amount` (1–100,000) | Charges coins (refused if too few). |
 | `learn_destination` | `destination` | Teaches the way to a [destination](#5e-wayfinding-destinations). Not available in dungeon templates. |
 | `reputation` | `faction`, `amount` (-1000 to 1000, not 0) | Changes the player's [standing](#factions-and-reputation) with a faction, and with related factions. Not available in dungeon templates. |
+| `join_faction`, `leave_faction` | `faction` | Adds or removes the player's [membership](#faction-membership). Not available in dungeon templates. |
 | `disposition` | `amount` (-100 to 100, not 0), optional `npc` | Changes an NPC's [regard](#relationships) for the player; the NPC being spoken to unless `npc` names another. Not available in dungeon templates. |
 
 Item, quest, and objective IDs inside conditions and outcomes are local package
@@ -1130,7 +1261,9 @@ expressions, or loops, and nothing in a package can run code.
 | `defeat_npc` | `npc` (any NPC of that type) or `npc_instance` (one placed NPC) | An NPC is defeated. It fires once for **each** player who earned a share of the rewards. |
 | `dialogue_choice` | `response` | A player picks that dialogue response. It runs after the response's own outcomes and quest changes. |
 | `quest_complete` | `quest` | A player completes the quest, automatically or by turning it in. |
+| `quest_failed` | `quest` | A player's quest fails, by deadline, failure rule, trigger, or impossibility. Use it for penalties such as `take_coins`, `disposition`, or `reputation`. |
 | `crime` | `room`, `npc` (a witness or victim of that type), or `faction` (one whose standing the crime cost) | A player is seen committing a [crime](#crime-and-consequences). |
+| `faction_join`, `faction_leave` | `faction` | A player joins a faction during play, or leaves or is expelled from one. See [Faction membership](#faction-membership). |
 | `timer` | `room`, plus `interval_seconds` (30–86,400) | Repeatedly while the world is active, whether or not anyone is there. Timers have no player. |
 | `linger` | `room`, plus `interval_seconds` (30–86,400) | Repeatedly, once for **each** player in the room at that moment, as that player. Use it for [hazards](#protective-gear-cures-and-hazards) and boons that last as long as someone stays. Every action and condition is available. |
 | `manual` | none | Only when another trigger runs it with `run_trigger`. Use these to share a set of actions. |
@@ -1171,10 +1304,13 @@ left the world, or the dungeon run, by the time it is due.
 | `teleport` | `room` | Moves the player to a room in this world. That room's `enter_room` triggers run. |
 | `start_quest` | `quest` | Gives the player a quest, if they can accept it. |
 | `complete_objective` | `objective` | Advances an objective by one, or completes it. Use it with `script` objectives, which only triggers can advance. |
+| `fail_quest` | `quest`, optional `message` | Fails the player's active quest, showing `message` as the reason. Nothing happens if they are not on it. |
+| `fail_objective` | `objective`, optional `message` | Fails one unfinished objective of an active quest; see [Failing quests](#failing-quests). |
 | `run_trigger` | `trigger` | Runs a `manual` trigger. The manual trigger's own conditions and limits still apply. |
 | `learn_destination`, `forget_destination` | `destination` | Teaches the player the way to a [destination](#5e-wayfinding-destinations), or makes them forget it. |
 | `disposition` | `npc` (definition), `amount` (-100 to 100, not 0) | Changes that NPC's [regard](#relationships) for the player. |
 | `reputation` | `faction`, `amount` (-1000 to 1000, not 0) | Changes the player's [standing](#factions-and-reputation) with a faction. |
+| `join_faction`, `leave_faction` | `faction` | Adds or removes the player's [membership](#faction-membership). |
 | `fine` | `faction`, `amount` (1–100,000) | Fines the player, as a [crime](#crime-and-consequences) would, without changing standing. |
 | `clear_fines` | optional `faction` | Pardons the player's unpaid fines, to that faction or to all. |
 | `apply_effect` | `effect`, optional `potency` (1–1,000, default 1) and `duration` (1–100 turns, default 3) | Puts a timed effect on the player: a built-in key or one of the world's own effects. Harmful effects are weakened by matching race, class, and gear resistances. Also allowed in dungeon triggers. |
@@ -1663,6 +1799,84 @@ triggers and stock, so a guild hall can admit only members of standing. Players
 see public factions with `/reputation` (or `/standing`) and in their Standing
 panel. In the World Builder, the **Factions** section creates factions, ranks
 and relations, and each NPC form chooses a faction.
+
+### Faction membership
+
+Standing alone never makes a player part of a faction. Membership is a separate,
+optional layer: a world can have factions that nobody can join. It is off until
+`manifest.json` enables it:
+
+```json
+"factions": {"enabled": true, "max_memberships": 1, "start_required": false}
+```
+
+| Field | Default | Meaning |
+| --- | --- | --- |
+| `enabled` | `false` | Players can belong to factions. While off, `/faction` is hidden, `member` conditions fail, and any stored memberships lie dormant until it is turned back on. |
+| `max_memberships` | `1` | How many factions a character may belong to at once, 0 to 20; `0` means no limit. Lowering it removes nobody. |
+| `start_required` | `false` | New characters must pick a starting faction. A character who qualifies for none proceeds without one, so a poorly chosen set of requirements can't lock anyone out. Characters that already exist are never asked. |
+
+Each faction then opts in. Without these fields it cannot be joined by players,
+and it behaves exactly as described above:
+
+```json
+{"id": "guild", "name": "Smiths' Guild", "joinable": 1, "start_joinable": 1,
+ "recruiter_npc_definition_id": "guildmaster", "join_cost": 50, "join_reputation": 100,
+ "join_conditions_json": [{"type": "level", "min": 3},
+                          {"type": "member", "faction": "red-hand", "negate": true}],
+ "join_conditions_message": "The guildmaster won't take a stranger or a Red Hand.",
+ "start_conditions_json": [{"type": "class", "keys": ["warrior"]}],
+ "leave_reputation": -200, "rejoin_hours": 24, "expel_below": -100}
+```
+
+| Field | Default | Meaning |
+| --- | --- | --- |
+| `joinable` | `0` | `1` lets players join during play with `/faction join`. Needs `public: 1`. |
+| `start_joinable` | `0` | `1` offers the faction at character creation. Needs `public: 1`, and members must not start at a hostile rank or below `expel_below`. |
+| `recruiter_npc_definition_id` | none | This NPC must be in the room, and willing to talk, to join during play. Without one, players can join anywhere. |
+| `join_conditions_json` | `[]` | [Conditions](#conditions) to join during play. |
+| `join_conditions_message` | generic | Up to 300 characters shown when the conditions fail. |
+| `start_conditions_json` | `[]` | Who may choose the faction at creation. Only `level`, `race`, `class`, `tag`, `attribute` and `skill` conditions are allowed, since a new character has nothing else to test. |
+| `join_cost` | `0` | Coins to join during play. Starting members pay nothing. |
+| `join_reputation` | `0` | Standing change on joining, however the player joined. It passes through relations as usual. |
+| `leavable` | `1` | `0` makes `/faction leave` refuse. Triggers and dialogue can still remove a member. |
+| `leave_reputation` | `0` | Standing change on leaving or being expelled. |
+| `rejoin_hours` | `0` | Hours before someone who left or was expelled can join again, up to 8760. |
+| `expel_below` | none | A member whose standing falls below this is expelled. |
+
+Players use `/faction` to list factions that are recruiting or that they belong
+to, `/faction info <name>`, `/faction join <name>`, and `/faction leave <name>`.
+Members are marked in `/reputation` and the Standing panel.
+
+Rules that always apply:
+
+- A member can't hold a hostile rank. Reaching one, or falling below
+  `expel_below`, expels them, with the `leave_reputation` change. This can happen
+  through any standing change, including a relation's share: joining a guild can
+  cost you your place in its rival.
+- Anyone who would land at such a standing can't join, and anyone owing the
+  faction fines can't join during play.
+- To keep rivals exclusive, add a negated `member` condition to each faction's
+  `join_conditions_json`, or set `max_memberships` to `1`.
+- Making a faction unjoinable keeps its existing members. Removing it ends their
+  memberships.
+
+Authored content reacts to membership through:
+
+- the `member` [condition](#conditions), for dialogue, quests, exits, stock,
+  destinations and triggers;
+- `join_faction` and `leave_faction` [outcomes](#outcomes) and
+  [trigger actions](#5c-events-and-triggers-eventsjson), which ignore `joinable`,
+  the recruiter, conditions and the fee, so a hidden society can recruit through
+  a quest. They still respect `enabled`, `max_memberships`, `rejoin_hours` and
+  the hostile-rank rule. A refused `join_faction` refuses a dialogue choice, and
+  in a trigger only tells the player;
+- `faction_join` and `faction_leave` [trigger events](#5c-events-and-triggers-eventsjson).
+  These don't fire for a faction chosen at creation, because the character isn't
+  in the world yet; use a `member` condition instead.
+
+In the World Builder, turn membership on under **Faction membership**, then set
+each faction's joining rules on its form in the **Factions** section.
 
 ### Crime and consequences
 

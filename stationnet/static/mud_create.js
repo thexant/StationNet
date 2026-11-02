@@ -41,11 +41,39 @@ for(const creator of document.querySelectorAll("[data-character-creator]")){
     const bonus=(race?.progression?.starting_skill_choices||0)+(archetype?.progression?.starting_skill_choices||0);
     return {grants,notes,eligible,required:Math.min(config.starting_skill_choices+bonus,eligible.length)};
   };
+  // Mirrors the start condition types of mud_conditions; the server has the last word.
+  const startHolds=(condition,facts)=>{
+    if(condition.any)return condition.any.some(option=>startCheck(option,facts));
+    switch(condition.type){
+      case "level":return (condition.min||1)<=1&&1<=(condition.max??1);
+      case "race":return condition.keys.includes(facts.race?.key);
+      case "class":return condition.keys.includes(facts.archetype?.key);
+      case "tag":return condition.keys.some(key=>[...facts.race?.tags||[],...facts.archetype?.tags||[]].includes(key));
+      case "attribute":return (facts.final[condition.attribute]||0)>=condition.min;
+      case "skill":return (facts.ranks[condition.skill]||0)>=condition.min_rank;
+      default:return false;
+    }
+  };
+  const startCheck=(condition,facts)=>startHolds(condition,facts)!==Boolean(condition.negate);
+  const factionFacts=data=>{
+    const race=config.races.find(item=>item.key===data.race);
+    const archetype=config.classes.find(item=>item.key===data.class);
+    const final=Object.fromEntries(Object.entries(data.attributes).map(([key,value])=>
+      [key,value+(race?.attributes?.[key]||0)+(archetype?.attributes?.[key]||0)]));
+    const ranks=grantsFor(race,archetype);
+    for(const key of data.skills)ranks[key]=Math.max(ranks[key]||0,archetype?.skill===key?2:1);
+    return {race,archetype,final,ranks};
+  };
+  const eligibleFactions=data=>{
+    const facts=factionFacts(data);
+    return (config.starting_factions||[]).filter(faction=>faction.conditions.every(condition=>startCheck(condition,facts)));
+  };
   const build=()=>({
     name:form.querySelector("[data-name]").value.trim().replace(/\s+/g," "),
     race:chosen("race"),class:chosen("class"),
     attributes:Object.fromEntries([...form.querySelectorAll("[data-attribute]")].map(input=>[input.dataset.attribute,Number(input.value)])),
-    skills:[...form.querySelectorAll('input[name="skill"]:checked:not(:disabled)')].map(input=>input.value)
+    skills:[...form.querySelectorAll('input[name="skill"]:checked:not(:disabled)')].map(input=>input.value),
+    faction:chosen("faction")||null
   });
   const update=()=>{
     const data=build();
@@ -81,6 +109,22 @@ for(const creator of document.querySelectorAll("[data-character-creator]")){
       const result=final[key];
       creator.querySelector(`[data-final-attribute="${key}"]`).textContent=`Final: ${result}`;
     }
+    const open=eligibleFactions(data).map(faction=>faction.id);
+    for(const card of form.querySelectorAll("[data-faction-card]")){
+      const radio=card.querySelector("input");
+      const allowed=open.includes(card.dataset.factionCard);
+      radio.disabled=!allowed;
+      if(!allowed)radio.checked=false;
+      card.querySelector("[data-faction-note]").textContent=allowed?"":"This character does not qualify.";
+    }
+    const none=form.querySelector("[data-faction-none]");
+    if(none){
+      const radio=none.querySelector("input");
+      const hidden=Boolean(config.faction_required)&&open.length>0;
+      none.hidden=hidden;radio.disabled=hidden;
+      if(!hidden&&!chosen("faction"))radio.checked=true;
+    }
+    data.faction=chosen("faction")||null;
     const review=creator.querySelector("[data-review]");
     review.replaceChildren();
     const ranks={...skillState.grants};
@@ -107,6 +151,7 @@ for(const creator of document.querySelectorAll("[data-character-creator]")){
       `Abilities: ${unique([...archetype?.spells||[],...race?.spells||[]]).map(key=>config.ability_names?.[key]||key).join(", ")||"—"}${config.resource?.enabled===false?" (unavailable in this world)":""}`,
       `Trained with: ${unique([race,archetype].flatMap(origin=>[...origin?.proficiencies?.weapons||[],...origin?.proficiencies?.armor||[]])).join(", ")||"skills only"}`,
       `Resists: ${resistances.join(" · ")||"—"}`];
+    if(config.starting_factions?.length)lines.push(`Faction: ${config.starting_factions.find(item=>item.id===data.faction)?.name||"Independent"}`);
     for(const line of lines){const p=document.createElement("p");p.textContent=line;review.append(p)}
   };
   const validate=current=>{
@@ -123,6 +168,7 @@ for(const creator of document.querySelectorAll("[data-character-creator]")){
       const required=eligibility(data).required;
       if(data.skills.length!==required)return `Choose ${required} skill${required===1?"":"s"}.`;
     }
+    if(current===5&&steps.length===7&&config.faction_required&&!data.faction&&eligibleFactions(data).length)return "Choose a starting faction.";
     return "";
   };
   const show=()=>{

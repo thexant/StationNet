@@ -299,21 +299,33 @@ for(const mud of document.querySelectorAll("[data-mud]")){
     }
     if(!hubStored.childElementCount)hubStored.textContent="empty";
   };
+  const questMarks={done:"✓",failed:"✗",locked:"🔒"};
+  const questLine=(className,text)=>{const line=document.createElement("p");line.className=className;line.textContent=text;return line};
   const renderQuests=state=>{
     if(!quests||!state)return;
-    const active=state.active||[];
+    const active=state.active||[];const failed=state.failed||[];
     if(questCount)questCount.textContent=active.length;
     quests.replaceChildren();
-    if(!active.length){const empty=document.createElement("span");empty.className="muted";empty.textContent="no active quests";quests.append(empty);return}
+    if(!active.length){const empty=document.createElement("span");empty.className="muted";empty.textContent="no active quests";quests.append(empty)}
     for(const quest of active){
       const article=document.createElement("article");
       const title=document.createElement("strong");title.textContent=quest.name;
-      const description=document.createElement("p");description.textContent=quest.description;
+      article.append(title,questLine("",quest.description));
+      if(quest.summary)article.append(questLine("mud-quest-goal",`Goal: ${quest.summary}`));
+      if(quest.time_left)article.append(questLine("mud-quest-timer",`Time left: ${quest.time_left}`));
+      if(quest.ready)article.append(questLine("mud-quest-ready",`READY — return to ${quest.turn_in_npc_name}`));
       const list=document.createElement("ul");
-      for(const objective of quest.objectives||[]){const row=document.createElement("li");row.className=objective.completed_at?"complete":objective.locked?"locked":"";row.append(`${objective.completed_at?"✓":objective.locked?"🔒":"·"} ${objective.description}${objective.optional?" (optional)":""} `);const progress=document.createElement("span");progress.textContent=`${objective.progress}/${objective.required_count}`;row.append(progress);list.append(row)}
-      article.append(title,description);
-      if(quest.ready){const ready=document.createElement("p");ready.className="mud-quest-ready";ready.textContent=`READY — return to ${quest.turn_in_npc_name}`;article.append(ready)}
+      for(const objective of quest.objectives||[]){
+        const state=objective.state||(objective.completed_at?"done":objective.locked?"locked":"current");
+        const row=document.createElement("li");row.className=state==="done"?"complete":state==="current"?"":state;
+        row.append(`${questMarks[state]||"·"} ${objective.description}${objective.optional?" (optional)":""}${objective.resolves?" (another way)":""} `);
+        const progress=document.createElement("span");progress.textContent=`${objective.progress}/${objective.required_count}`;row.append(progress);list.append(row)
+      }
       article.append(list);quests.append(article);
+    }
+    if(failed.length){
+      const heading=document.createElement("h3");heading.textContent="FAILED";quests.append(heading);
+      for(const quest of failed){const article=document.createElement("article");const title=document.createElement("strong");title.textContent=quest.name;article.append(title,questLine("mud-quest-failed",quest.ending||"Failed."));quests.append(article)}
     }
   };
   const renderStanding=factions=>{
@@ -321,7 +333,7 @@ for(const mud of document.querySelectorAll("[data-mud]")){
     standingPanel.hidden=!factions.length;
     standingList.replaceChildren(...factions.map(faction=>{
       const row=document.createElement("p");
-      row.textContent=`${faction.name}: ${faction.rank} (${faction.reputation>=0?"+":""}${faction.reputation})`;
+      row.textContent=`${faction.name}: ${faction.rank} (${faction.reputation>=0?"+":""}${faction.reputation})${faction.member?" · member":""}`;
       return row;
     }));
   };

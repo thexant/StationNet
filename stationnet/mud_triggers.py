@@ -30,7 +30,8 @@ MAX_PENDING_DELAYS = 20
 TRIGGER_ID_RE = re.compile(r"^[a-z][a-z0-9-]{0,63}$")
 SCOPES = ("character", "world")
 EVENT_TYPES = ("enter_room", "use_object", "take_item", "say_phrase", "defeat_npc",
-               "dialogue_choice", "quest_complete", "timer", "linger", "manual", "crime")
+               "dialogue_choice", "quest_complete", "quest_failed", "timer", "linger", "manual", "crime",
+               "faction_join", "faction_leave")
 # Repeating events: a timer runs once with no player; linger runs for each player in its room.
 INTERVAL_EVENTS = ("timer", "linger")
 # Which source kinds each event accepts. Exactly one source is required,
@@ -38,33 +39,36 @@ INTERVAL_EVENTS = ("timer", "linger")
 EVENT_SOURCES = {
     "enter_room": ("room",), "use_object": ("object", "item"), "take_item": ("object", "item"),
     "say_phrase": ("room",), "defeat_npc": ("npc", "npc_instance"),
-    "dialogue_choice": ("response",), "quest_complete": ("quest",), "timer": ("room",), "linger": ("room",),
+    "dialogue_choice": ("response",), "quest_complete": ("quest",), "quest_failed": ("quest",), "timer": ("room",), "linger": ("room",),
     "manual": (), "crime": ("room", "npc", "faction"),
+    "faction_join": ("faction",), "faction_leave": ("faction",),
 }
 EVENT_LABELS = {
     "enter_room": "A player enters a room", "use_object": "A player uses or interacts with an object",
     "take_item": "A player picks up an item", "say_phrase": "A player says a phrase in a room",
     "defeat_npc": "A player helps defeat an NPC", "dialogue_choice": "A player picks a dialogue response",
-    "quest_complete": "A player completes a quest", "timer": "A repeating timer (no player)",
+    "quest_complete": "A player completes a quest", "quest_failed": "A player fails a quest", "timer": "A repeating timer (no player)",
     "linger": "Repeatedly, for each player who stays in a room",
     "manual": "Only when another trigger runs it",
     "crime": "A player is seen committing a crime (by room, witness or victim NPC type, or faction)",
+    "faction_join": "A player joins a faction during play", "faction_leave": "A player leaves or is expelled from a faction",
 }
 SOURCE_LABELS = {"room": "room", "object": "placed object", "item": "item type", "npc": "NPC type",
                  "npc_instance": "placed NPC", "response": "dialogue response", "quest": "quest",
                  "faction": "faction"}
 ACTION_TYPES = ("message", "set_flag", "clear_flag", "give_item", "take_item", "experience", "coins",
                 "take_coins", "heal", "damage", "set_object_state", "set_exit", "show", "hide",
-                "spawn_npc", "teleport", "start_quest", "complete_objective", "run_trigger",
+                "spawn_npc", "teleport", "start_quest", "complete_objective", "fail_quest", "fail_objective", "run_trigger",
                 "learn_destination", "forget_destination", "disposition", "reputation", "fine", "clear_fines",
-                "apply_effect", "cure_effect")
-OUTCOME_ACTIONS = ("give_item", "take_item", "experience", "coins", "take_coins")
+                "apply_effect", "cure_effect", "join_faction", "leave_faction")
+OUTCOME_ACTIONS =("give_item", "take_item", "experience", "coins", "take_coins")
 MESSAGE_TARGETS = ("actor", "room", "other_room")
 EXIT_STATES = ("open", "locked", "hidden", "default")
 # Actions that need a player to act on. Timer triggers have no player.
 _ACTOR_ACTIONS = {"give_item", "take_item", "experience", "coins", "take_coins", "heal", "damage",
-                  "teleport", "start_quest", "complete_objective", "learn_destination", "forget_destination",
-                  "disposition", "reputation", "fine", "clear_fines", "apply_effect", "cure_effect"}
+                  "teleport", "start_quest", "complete_objective", "fail_quest", "fail_objective", "learn_destination", "forget_destination",
+                  "disposition", "reputation", "fine", "clear_fines", "apply_effect", "cure_effect",
+                  "join_faction", "leave_faction"}
 # Procedural dungeons are generated fresh for each run, so their triggers only
 # use actions that make sense inside one run.
 DUNGEON_EVENTS = ("enter_room", "use_object", "take_item", "say_phrase", "defeat_npc", "manual")
@@ -82,12 +86,14 @@ _ACTION_REFERENCES = {
     "hide": (("npc_instance", "npc_instance"), ("object", "object")),
     "spawn_npc": (("npc", "npc"), ("room", "room")), "teleport": (("room", "room"),),
     "start_quest": (("quest", "quest"),), "complete_objective": (("objective", "objective"),),
+    "fail_quest": (("quest", "quest"),), "fail_objective": (("objective", "objective"),),
     "run_trigger": (("trigger", "trigger"),), "message": (("room", "room"),),
     "learn_destination": (("destination", "destination"),),
     "forget_destination": (("destination", "destination"),),
     "disposition": (("npc", "npc"),),
     "reputation": (("faction", "faction"),),
     "fine": (("faction", "faction"),), "clear_fines": (("faction", "faction"),),
+    "join_faction": (("faction", "faction"),), "leave_faction": (("faction", "faction"),),
     "apply_effect": (("effect", "effect"),), "cure_effect": (("effect", "effect"),),
 }
 
@@ -208,6 +214,18 @@ def _action(raw, index, dungeon):
     elif kind == "complete_objective":
         fields |= {"objective"}
         result["objective"] = _identifier(raw.get("objective"), f"{where} objective")
+    elif kind == "fail_quest":
+        fields |= {"quest", "message"}
+        result["quest"] = _identifier(raw.get("quest"), f"{where} quest")
+        message = _text(raw.get("message"), f"{where} message", 300, required=False)
+        if message:
+            result["message"] = message
+    elif kind == "fail_objective":
+        fields |= {"objective", "message"}
+        result["objective"] = _identifier(raw.get("objective"), f"{where} objective")
+        message = _text(raw.get("message"), f"{where} message", 300, required=False)
+        if message:
+            result["message"] = message
     elif kind == "run_trigger":
         fields |= {"trigger"}
         result["trigger"] = _identifier(raw.get("trigger"), f"{where} trigger")
@@ -231,6 +249,9 @@ def _action(raw, index, dungeon):
         except ValueError as problem:
             raise ValueError(f"{where}: {problem}") from problem
         result.update(faction=outcome["faction"], amount=outcome["amount"])
+    elif kind in ("join_faction", "leave_faction"):
+        fields |= {"faction"}
+        result["faction"] = _identifier(raw.get("faction"), f"{where} faction")
     elif kind == "apply_effect":
         fields |= {"effect", "potency", "duration"}
         if not _whole(raw.get("potency", 1), 1, 1000) or not _whole(raw.get("duration", 3), 1, 100):

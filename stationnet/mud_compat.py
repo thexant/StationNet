@@ -15,6 +15,7 @@ PERSISTENT_TABLES = (
 RESTORED_OPTIONAL_TABLES = (
     "mud_character_destinations", "mud_npc_relationships", "mud_character_reputation",
     "mud_character_crimes", "mud_pickpocket_marks", "mud_character_professions", "mud_character_work",
+    "mud_character_factions",
 )
 
 

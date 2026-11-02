@@ -20,7 +20,7 @@ from flask import (Blueprint, abort, current_app, flash, g, jsonify, redirect, r
 
 from .auth import admin_required, login_required
 from .db import get_db
-from . import dungeons, character_creation, mud_abilities, mud_combat, mud_conditions, mud_effects, mud_progression, mud_firearms, mud_compat, mud_gathering, mud_work, mud_scope, mud_skills, mud_society, mud_triggers, mud_wayfinding, mud_wilderness, moderation
+from . import dungeons, character_creation, mud_abilities, mud_combat, mud_conditions, mud_quests, mud_effects, mud_progression, mud_firearms, mud_compat, mud_gathering, mud_work, mud_scope, mud_skills, mud_society, mud_start_rules, mud_triggers, mud_wayfinding, mud_wilderness, moderation
 from .security import validate_csrf
 
 bp = Blueprint("mud", __name__, url_prefix="/mud")
@@ -246,7 +246,8 @@ def _world_package(database, world=None):
 
 # Commands that belong to an optional world-life system, hidden from help while it is off.
 SOCIETY_ACTIONS = {"time": "clock", "relations": "relationships", "give": "relationships",
-                   "reputation": "factions", "steal": "crime", "fines": "crime", "pay": "crime"}
+                   "reputation": "factions", "faction": "membership", "steal": "crime", "fines": "crime",
+                   "pay": "crime"}
 # Commands that only exist to spend the resource; worlds without it hide them.
 RESOURCE_ACTIONS = frozenset({"spells", "cast"})
 RESOURCE_DISABLED_DESCRIPTIONS = {
@@ -280,6 +281,10 @@ def _hidden_actions(database, user_id):
     if _current_mode(database, user_id) != "traditional":
         return set(SOCIETY_ACTIONS)
     enabled = {key for key, section in society_settings(database).items() if section["enabled"]}
+    # The factions section switches membership; /reputation only needs a public faction.
+    if "factions" in enabled:
+        enabled.add("membership")
+    enabled.discard("factions")
     if _public_factions(database):
         enabled.add("factions")
     return {key for key, system in SOCIETY_ACTIONS.items() if system not in enabled}
@@ -994,7 +999,7 @@ def _help_action(_database, _user, parameters):
             "pick": '/pick north', "interact": '/pull "Rusty Lever"', "travel": '/travel north',
             "directions": '/directions "Kessa Gate"', "use": '/read "Old Map"',
             "give": '/give "Red Apple" to Baker', "steal": '/steal from "Fat Merchant"',
-            "pay": '/pay "Town Watch"',
+            "pay": '/pay "Town Watch"', "faction": '/faction join "Harbor Guild"',
         }
         body = f"/{name}: {_action_description(definition, resource)}\nAliases: " + ", ".join(f"/{alias}" for alias in aliases)
         if definition.key in examples:
@@ -1102,6 +1107,15 @@ def _start_room(database, world=None):
     return room
 
 
+def _home_room(database, user_id):
+    """Where a character recovers: the room a start rule gave it, else the world's start."""
+    room = database.execute(
+        "SELECT r.id,r.name,r.description FROM mud_characters c JOIN mud_world_rooms r "
+        "ON r.id=c.start_room_id AND r.world_id=c.world_key WHERE c.user_id=? AND c.world_key=?",
+        (user_id, _world())).fetchone()
+    return room if room is not None else _start_room(database)
+
+
 def _world_room(database, room_id):
     """A world room as players see it; wilderness rooms take their text from their preset."""
     row = mud_wilderness.room_row(database, room_id)
@@ -1189,7 +1203,7 @@ def _reconcile_player_location(database, user_id):
         if room_id is None or database.execute(
             "SELECT 1 FROM mud_world_rooms WHERE id=? AND world_id=?", (room_id, world),
         ).fetchone() is None:
-            room_id = _start_room(database)["id"]
+            room_id = _home_room(database, user_id)["id"]
         _set_player_location(database, user_id, "traditional", "world_room", room_id)
     return _player_location(database, user_id)
 
@@ -1289,7 +1303,7 @@ def _current_room(database, user_id):
     room = _world_room(database, location["location_key"])
     if room is not None:
         return room
-    fallback = _start_room(database)
+    fallback = _home_room(database, user_id)
     _set_player_location(
         database, user_id, "traditional", "world_room", fallback["id"]
     )
@@ -2578,9 +2592,16 @@ def _objective_target_name(database, objective):
         "deliver_item": ("mud_item_definitions", "item"),
         "defeat_npc": ("mud_npc_definitions", "NPC"),
     }
+    if objective["objective_type"] not in tables:
+        return None  # Script objectives name an event label, not content.
     table, fallback = tables[objective["objective_type"]]
     row = database.execute(f"SELECT name FROM {table} WHERE id=?", (objective["target_id"],)).fetchone()
     return row["name"] if row else f"Unknown {fallback}"
+
+
+_OBJECTIVE_TARGET_TABLES = {"talk_npc": "mud_npc_definitions", "defeat_npc": "mud_npc_definitions",
+                            "visit_room": "mud_world_rooms", "possess_item": "mud_item_definitions",
+                            "deliver_item": "mud_item_definitions"}
 
 
 def _npc_names(database, definition_ids):
@@ -2601,7 +2622,7 @@ def _turn_in_npc_ids(database, quest):
 
 def _quest_objectives(database, character_id, quest_id):
     return [dict(row) for row in database.execute(
-        "SELECT o.*,COALESCE(p.progress,0) AS progress,p.completed_at "
+        "SELECT o.*,COALESCE(p.progress,0) AS progress,p.completed_at,p.failed_at "
         "FROM mud_quest_objectives AS o LEFT JOIN mud_player_objectives AS p "
         "ON p.objective_id=o.id AND p.character_id=? WHERE o.quest_id=? "
         "ORDER BY o.sort_order,o.id", (character_id, quest_id),
@@ -2609,7 +2630,10 @@ def _quest_objectives(database, character_id, quest_id):
 
 
 def _locked_objective_ids(quest, objectives):
-    """Sequential quests unlock stages (equal sort_order) once earlier required work is done."""
+    """Sequential quests unlock stages (equal sort_order) once earlier required work is done.
+
+    Optional and resolution objectives never hold a stage back.
+    """
     if not quest["sequential"]:
         return set()
     locked, blocked = set(), False
@@ -2617,38 +2641,141 @@ def _locked_objective_ids(quest, objectives):
         members = [objective for objective in objectives if objective["sort_order"] == stage]
         if blocked:
             locked.update(objective["id"] for objective in members)
-        elif any(not objective["optional"] and not objective["completed_at"] for objective in members):
+        elif any(not objective["optional"] and not objective["outcome_key"] and not objective["completed_at"]
+                 for objective in members):
             blocked = True
     return locked
 
 
+def _quest_resolution(objectives):
+    """The outcome finished objectives reach, or None while work remains.
+
+    A finished resolution objective (one with an outcome_key) ends the quest
+    that way. Otherwise finishing every plain required objective is a
+    'success'; a quest built only from resolutions has no such default path.
+    """
+    for objective in objectives:
+        if objective["outcome_key"] and objective["completed_at"]:
+            return objective["outcome_key"]
+    required = [objective for objective in objectives if not objective["outcome_key"] and not objective["optional"]]
+    if not required and any(objective["outcome_key"] for objective in objectives):
+        return None
+    return "success" if all(objective["completed_at"] for objective in required) else None
+
+
+def _quest_open(objectives, dead=frozenset()):
+    """Whether some way to finish the quest remains; dead objectives count as failed."""
+    def closed(objective):
+        return objective["failed_at"] or objective["id"] in dead
+    required = [objective for objective in objectives if not objective["outcome_key"] and not objective["optional"]]
+    resolutions = [objective for objective in objectives if objective["outcome_key"]]
+    default_open = (bool(required) or not resolutions) and not any(closed(objective) for objective in required)
+    return default_open or any(not closed(objective) for objective in resolutions)
+
+
+def _seconds_until(database, stamp):
+    if not stamp:
+        return None
+    return int(database.execute("SELECT (julianday(?)-julianday('now'))*86400", (stamp,)).fetchone()[0])
+
+
+def _retry_wait(database, quest, row):
+    """Seconds before a failed quest may be accepted again (0 when it may)."""
+    if row["status"] != "failed" or not quest["retry_cooldown_seconds"] or not row["failed_at"]:
+        return 0
+    return max(0, int(database.execute(
+        "SELECT (julianday(?)+?/86400.0-julianday('now'))*86400",
+        (row["failed_at"], quest["retry_cooldown_seconds"])).fetchone()[0]) + 1)
+
+
+def _revealed_details(database, user_id, quest, stage):
+    """Quest details the player may see at this stage (offer, accepted, or finished)."""
+    try:
+        details = mud_quests.validate_details(quest["details_json"])
+    except ValueError:
+        return []
+    order = {stage_name: index for index, stage_name in enumerate(mud_quests.REVEAL_STAGES)}
+    context = None
+    shown = []
+    for detail in details:
+        reveal = detail["reveal"]
+        if isinstance(reveal, list):
+            if stage == "offer":
+                continue
+            context = context or _ConditionContext(database, user_id)
+            if not mud_conditions.evaluate(reveal, context):
+                continue
+        elif order[stage] < order[reveal]:
+            continue
+        room = (database.execute("SELECT name FROM mud_world_rooms WHERE id=?", (detail["room"],)).fetchone()
+                if detail.get("room") else None)
+        shown.append({"kind": detail["kind"], "label": mud_quests.DETAIL_LABELS[detail["kind"]],
+                      "text": detail["text"], "room_name": room["name"] if room else None})
+    return shown
+
+
+def _player_objective(item, locked):
+    """An objective as the player sees it, or None while it stays hidden."""
+    state = ("done" if item["completed_at"] else "failed" if item["failed_at"]
+             else "locked" if item["id"] in locked else "current")
+    if item["hidden"] and (state == "locked" or state == "current" and not item["progress"]):
+        return None
+    return {"id": item["id"], "description": item["description"], "objective_type": item["objective_type"],
+            "progress": item["progress"], "required_count": item["required_count"],
+            "completed_at": item["completed_at"], "failed": bool(item["failed_at"]), "state": state,
+            "locked": state == "locked", "optional": bool(item["optional"]), "resolves": bool(item["outcome_key"]),
+            "sort_order": item["sort_order"]}
+
+
+QUEST_LISTS = ("active", "completed", "failed", "abandoned")
+
+
 def quest_state(database, user_id):
-    """Return player-specific active/completed quest state for rendering."""
+    """Return player-specific quest state for rendering, grouped by status.
+
+    Only what the player may know is included: hidden objectives stay out
+    until they show progress, and failure rules are never sent.
+    """
     character = _character_row(database, user_id)
     quests = []
     rows = database.execute(
-        "SELECT q.id,q.name,q.description,q.completion_mode,q.sequential,q.abandonable,"
-        "q.turn_in_npc_definition_id,p.status,p.accepted_at,p.completed_at,p.rewarded_at,p.ready_at "
+        "SELECT q.id,q.name,q.description,q.summary,q.details_json,q.completion_mode,q.sequential,q.abandonable,"
+        "q.turn_in_npc_definition_id,q.time_limit_seconds,q.retry_mode,q.retry_cooldown_seconds,"
+        "p.status,p.accepted_at,p.completed_at,p.rewarded_at,p.ready_at,p.outcome,p.deadline_at,"
+        "p.failed_at,p.fail_reason,p.abandoned_at,p.attempts "
         "FROM mud_player_quests AS p JOIN mud_quests AS q ON q.id=p.quest_id "
         "WHERE p.character_id=? ORDER BY p.status,q.name COLLATE NOCASE,q.id",
         (character["id"],),
     ).fetchall()
     for row in rows:
         entry = dict(row)
-        entry["ready"] = row["status"] == "active" and row["ready_at"] is not None
+        del entry["details_json"]
+        active = row["status"] == "active"
+        entry["ready"] = active and row["ready_at"] is not None
         entry["turn_in_npc_name"] = (_npc_names(database, _turn_in_npc_ids(database, row))
                                      if row["completion_mode"] == "turn_in" else None)
+        entry["giver_names"] = _npc_names(database, {giver["npc_definition_id"] for giver in database.execute(
+            "SELECT npc_definition_id FROM mud_quest_givers WHERE quest_id=?", (row["id"],))})
+        entry["seconds_left"] = max(0, _seconds_until(database, row["deadline_at"])) if active and row["deadline_at"] else None
+        entry["details"] = _revealed_details(database, user_id, row, "finished" if row["status"] in (
+            "completed", "failed") else "accepted")
+        entry["retry"] = ({"closed": row["retry_mode"] == "once", "wait": _retry_wait(database, row, row)}
+                          if row["status"] in ("failed", "abandoned") else None)
         objectives = _quest_objectives(database, character["id"], row["id"])
-        locked = _locked_objective_ids(row, objectives) if row["status"] == "active" else set()
+        locked = _locked_objective_ids(row, objectives) if active else set()
         entry["objectives"] = []
         for item in objectives:
-            item["target_name"] = _objective_target_name(database, item)
-            item["locked"] = item["id"] in locked
-            item["optional"] = bool(item["optional"])
-            entry["objectives"].append(item)
+            shown = _player_objective(item, locked)
+            if shown is not None:
+                shown["target_name"] = _objective_target_name(database, item)
+                entry["objectives"].append(shown)
+        # Current work first, so the next step is always at the top.
+        entry["objectives"].sort(key=lambda objective: objective["state"] in ("done", "failed"))
+        entry["time_left"] = (mud_quests.describe_duration(entry["seconds_left"])
+                              if entry["seconds_left"] is not None else None)
+        entry["ending"] = _ending_line(database, entry)
         quests.append(entry)
-    return {"active": [q for q in quests if q["status"] == "active"],
-            "completed": [q for q in quests if q["status"] == "completed"]}
+    return {status: [quest for quest in quests if quest["status"] == status] for status in QUEST_LISTS}
 
 
 def _grant_rewards(database, user, rewards):
@@ -2683,7 +2810,8 @@ def _grant_rewards(database, user, rewards):
     return messages
 
 
-def _award_quest_rewards(database, user, quest_id):
+def _award_quest_rewards(database, user, quest_id, outcome="success"):
+    """Pay a completed quest's rewards once: those for any success plus those for its outcome."""
     character = _character_row(database, user["id"])
     # Claim the payout first so a repeated completion can never pay twice.
     if database.execute(
@@ -2692,7 +2820,8 @@ def _award_quest_rewards(database, user, quest_id):
     ).rowcount == 0:
         return []
     rewards = database.execute(
-        "SELECT * FROM mud_quest_rewards WHERE quest_id=? ORDER BY id", (quest_id,),
+        "SELECT * FROM mud_quest_rewards WHERE quest_id=? AND (outcome='' OR outcome=?) ORDER BY id",
+        (quest_id, outcome or "success"),
     ).fetchall()
     messages = _grant_rewards(database, user, rewards)
     for reward in rewards:
@@ -2719,32 +2848,31 @@ def _finish_ready_quests(database, user):
         "WHERE p.character_id=? AND p.status='active'", (character["id"],),
     ).fetchall()
     for quest in active:
-        remaining = database.execute(
-            "SELECT 1 FROM mud_quest_objectives AS o LEFT JOIN mud_player_objectives AS p "
-            "ON p.objective_id=o.id AND p.character_id=? WHERE o.quest_id=? AND o.optional=0 "
-            "AND (p.completed_at IS NULL) LIMIT 1", (character["id"], quest["id"]),
-        ).fetchone()
-        if remaining is not None:
+        outcome = _quest_resolution(_quest_objectives(database, character["id"], quest["id"]))
+        if outcome is None:
             continue
         if quest["completion_mode"] == "turn_in":
             if quest["ready_at"] is None and database.execute(
-                "UPDATE mud_player_quests SET ready_at=CURRENT_TIMESTAMP WHERE character_id=? "
+                "UPDATE mud_player_quests SET ready_at=CURRENT_TIMESTAMP,outcome=? WHERE character_id=? "
                 "AND quest_id=? AND status='active' AND ready_at IS NULL",
-                (character["id"], quest["id"]),
+                (outcome, character["id"], quest["id"]),
             ).rowcount:
                 who = _npc_names(database, _turn_in_npc_ids(database, quest))
                 completed.append(EventDraft(
                     f"Objectives complete: {quest['name']}. Return to {who} to turn it in "
                     f"(/quest turnin {quest['name']}).", event_type="quest"))
             continue
-        database.execute(
-            "UPDATE mud_player_quests SET status='completed',completed_at=CURRENT_TIMESTAMP "
+        if database.execute(
+            "UPDATE mud_player_quests SET status='completed',completed_at=CURRENT_TIMESTAMP,outcome=? "
             "WHERE character_id=? AND quest_id=? AND status='active'",
-            (character["id"], quest["id"]),
-        )
-        rewards = _award_quest_rewards(database, user, quest["id"])
+            (outcome, character["id"], quest["id"]),
+        ).rowcount == 0:
+            continue
+        _cancel_quest_deadline(database, character["id"], quest["id"])
+        rewards = _award_quest_rewards(database, user, quest["id"], outcome)
         suffix = f" Rewards: {', '.join(rewards)}." if rewards else ""
         completed.append(EventDraft(f"Quest complete: {quest['name']}.{suffix}", event_type="quest"))
+        completed += _expel_lapsed(database, user)
         completed += fire_triggers(database, user, "quest_complete", [quest["id"]])
     return completed
 
@@ -2775,7 +2903,7 @@ def _record_objective_progress(database, user, objective_type, target_id, object
         "JOIN mud_player_quests AS q ON q.quest_id=o.quest_id "
         "LEFT JOIN mud_player_objectives AS p ON p.objective_id=o.id AND p.character_id=q.character_id "
         "WHERE q.character_id=? AND q.status='active' AND o.objective_type=? AND o.target_id=? "
-        "AND (? IS NULL OR o.id=?)",
+        "AND p.failed_at IS NULL AND (? IS NULL OR o.id=?)",
         (character["id"], objective_type, target_id, objective_id, objective_id),
     ).fetchall()
     newly_completed = False
@@ -2835,8 +2963,17 @@ def _quest_status(database, character_id, quest_id):
 def _quest_blocker(database, user, quest):
     """Why this character cannot accept the quest now, or None."""
     character = _character_row(database, user["id"])
-    if _quest_status(database, character["id"], quest["id"]) != "not_started":
+    status = _quest_status(database, character["id"], quest["id"])
+    if status in ("active", "ready", "completed"):
         return "You have already accepted that quest."
+    if status in ("failed", "abandoned"):
+        if quest["retry_mode"] == "once":
+            return f"{quest['name']} cannot be attempted again."
+        row = database.execute("SELECT status,failed_at FROM mud_player_quests WHERE character_id=? AND quest_id=?",
+                               (character["id"], quest["id"])).fetchone()
+        wait = _retry_wait(database, quest, row)
+        if wait:
+            return f"You can try {quest['name']} again in {mud_quests.describe_duration(wait)}."
     if quest["prerequisite_quest_id"] and database.execute(
         "SELECT 1 FROM mud_player_quests WHERE character_id=? AND quest_id=? "
         "AND status='completed' AND rewarded_at IS NOT NULL",
@@ -2857,7 +2994,17 @@ def _available_quests(database, user, room_id):
         if _quest_blocker(database, user, row) is None]
 
 
+def _deadline_key(character_id, quest_id):
+    return f"{character_id}|{quest_id}"
+
+
+def _cancel_quest_deadline(database, character_id, quest_id):
+    database.execute("DELETE FROM mud_scheduled_events WHERE event_kind='quest_deadline' AND entity_id=?",
+                     (_deadline_key(character_id, quest_id),))
+
+
 def _accept_quest(database, user, quest_id):
+    """Start a quest, or start it over after a failure or abandonment."""
     character = _character_row(database, user["id"])
     quest = database.execute("SELECT * FROM mud_quests WHERE id=?", (quest_id,)).fetchone()
     if quest is None:
@@ -2865,17 +3012,49 @@ def _accept_quest(database, user, quest_id):
     blocker = _quest_blocker(database, user, quest)
     if blocker:
         raise ActionError(blocker)
-    database.execute(
-        "INSERT INTO mud_player_quests(character_id,quest_id) VALUES(?,?)",
-        (character["id"], quest_id),
-    )
+    deadline = (_scheduled_now(datetime.now(timezone.utc) + timedelta(seconds=quest["time_limit_seconds"]))
+                if quest["time_limit_seconds"] else None)
+    retry = _quest_status(database, character["id"], quest_id) != "not_started"
+    if retry:
+        database.execute(
+            "UPDATE mud_player_quests SET status='active',accepted_at=CURRENT_TIMESTAMP,completed_at=NULL,"
+            "ready_at=NULL,outcome=NULL,failed_at=NULL,fail_reason=NULL,abandoned_at=NULL,deadline_at=?,"
+            "attempts=attempts+1 WHERE character_id=? AND quest_id=? AND status IN ('failed','abandoned')",
+            (deadline, character["id"], quest_id),
+        )
+        database.execute(
+            "DELETE FROM mud_player_objectives WHERE character_id=? AND objective_id IN "
+            "(SELECT id FROM mud_quest_objectives WHERE quest_id=?)", (character["id"], quest_id),
+        )
+    else:
+        database.execute(
+            "INSERT INTO mud_player_quests(character_id,quest_id,deadline_at) VALUES(?,?,?)",
+            (character["id"], quest_id, deadline),
+        )
     database.execute(
         "INSERT INTO mud_player_objectives(character_id,objective_id) "
         "SELECT ?,id FROM mud_quest_objectives WHERE quest_id=?",
         (character["id"], quest_id),
     )
+    if deadline:
+        database.execute(
+            "INSERT INTO mud_scheduled_events(event_kind,entity_id,due_at,payload_json) VALUES('quest_deadline',?,?,?) "
+            "ON CONFLICT(event_kind,entity_id) DO UPDATE SET due_at=excluded.due_at,payload_json=excluded.payload_json",
+            (_deadline_key(character["id"], quest_id), deadline,
+             json.dumps({"user_id": user["id"], "quest_id": quest_id, "world": quest["world_id"]},
+                        separators=(",", ":"))),
+        )
     room = _current_room(database, user["id"])
-    events = [EventDraft(f"Quest accepted: {quest['name']} — {quest['description']}", event_type="quest")]
+    body = f"Quest accepted: {quest['name']} — {quest['description']}"
+    if quest["summary"]:
+        body += f"\nGoal: {quest['summary']}"
+    if deadline:
+        body += f"\nYou have {mud_quests.describe_duration(quest['time_limit_seconds'])} to finish it."
+    if retry:
+        attempts = database.execute("SELECT attempts FROM mud_player_quests WHERE character_id=? AND quest_id=?",
+                                    (character["id"], quest_id)).fetchone()["attempts"]
+        body += f"\nAttempt {attempts}."
+    events = [EventDraft(body, event_type="quest")]
     _record_objective_progress(database, user, "visit_room", room["id"])
     _sync_held_items(database, user)
     return events + _finish_ready_quests(database, user)
@@ -2884,7 +3063,7 @@ def _accept_quest(database, user, quest_id):
 def _abandon_quest(database, user, quest):
     character = _character_row(database, user["id"])
     status = _quest_status(database, character["id"], quest["id"])
-    if status in ("not_started", "completed"):
+    if status not in ("active", "ready"):
         raise ActionError("You can only abandon an active quest.")
     if not quest["abandonable"]:
         raise ActionError(f"{quest['name']} cannot be abandoned.")
@@ -2892,9 +3071,146 @@ def _abandon_quest(database, user, quest):
         "DELETE FROM mud_player_objectives WHERE character_id=? AND objective_id IN "
         "(SELECT id FROM mud_quest_objectives WHERE quest_id=?)", (character["id"], quest["id"]),
     )
-    database.execute("DELETE FROM mud_player_quests WHERE character_id=? AND quest_id=? AND status='active'",
+    # The record stays so history and one-attempt quests remember it.
+    database.execute("UPDATE mud_player_quests SET status='abandoned',abandoned_at=CURRENT_TIMESTAMP,ready_at=NULL,"
+                     "outcome=NULL,deadline_at=NULL WHERE character_id=? AND quest_id=? AND status='active'",
                      (character["id"], quest["id"]))
-    return [EventDraft(f"Quest abandoned: {quest['name']}. Its progress has been cleared.", event_type="quest")]
+    _cancel_quest_deadline(database, character["id"], quest["id"])
+    closed = " It cannot be attempted again." if quest["retry_mode"] == "once" else ""
+    return [EventDraft(f"Quest abandoned: {quest['name']}. Its progress has been cleared.{closed}", event_type="quest")]
+
+
+def _sentence(text):
+    text = " ".join(str(text or "").split())
+    return text if not text or text[-1] in ".!?" else text + "."
+
+
+def _retry_text(database, quest, character_id):
+    if quest["retry_mode"] == "once":
+        return "It cannot be attempted again."
+    row = database.execute("SELECT status,failed_at FROM mud_player_quests WHERE character_id=? AND quest_id=?",
+                           (character_id, quest["id"])).fetchone()
+    wait = _retry_wait(database, quest, row) if row else 0
+    if wait:
+        return f"You may try again in {mud_quests.describe_duration(wait)}."
+    return "You may accept it again."
+
+
+def _fail_quest(database, user, quest, reason=""):
+    """Move an active quest to failed once, pay its failure consequences, and fire quest_failed."""
+    character = _character_row(database, user["id"])
+    reason = _sentence(reason) or "The quest can no longer be completed."
+    if database.execute(
+        "UPDATE mud_player_quests SET status='failed',failed_at=CURRENT_TIMESTAMP,fail_reason=?,outcome='failed',"
+        "deadline_at=NULL WHERE character_id=? AND quest_id=? AND status='active'",
+        (reason, character["id"], quest["id"]),
+    ).rowcount == 0:
+        return []
+    _cancel_quest_deadline(database, character["id"], quest["id"])
+    events = [EventDraft(f"Quest failed: {quest['name']}. {reason} {_retry_text(database, quest, character['id'])}",
+                         event_type="quest")]
+    # Failure consequences pay once per character, however often the quest is retried.
+    if database.execute(
+        "UPDATE mud_player_quests SET fail_rewarded_at=CURRENT_TIMESTAMP WHERE character_id=? AND quest_id=? "
+        "AND fail_rewarded_at IS NULL", (character["id"], quest["id"]),
+    ).rowcount:
+        rewards = database.execute("SELECT * FROM mud_quest_rewards WHERE quest_id=? AND outcome=? ORDER BY id",
+                                   (quest["id"], mud_quests.FAILED_OUTCOME)).fetchall()
+        received = _grant_rewards(database, user, rewards)
+        if received:
+            events.append(EventDraft(f"You receive {', '.join(received)}.", event_type="reward"))
+            events += _expel_lapsed(database, user)
+    events += fire_triggers(database, user, "quest_failed", [quest["id"]])
+    return events
+
+
+def _fail_objective(database, user, objective_id, reason=""):
+    """Close one unfinished objective; the quest fails when no way to finish it remains."""
+    character = _character_row(database, user["id"])
+    row = database.execute(
+        "SELECT o.*,p.completed_at,p.failed_at FROM mud_quest_objectives o "
+        "JOIN mud_player_quests q ON q.quest_id=o.quest_id AND q.character_id=? AND q.status='active' "
+        "LEFT JOIN mud_player_objectives p ON p.objective_id=o.id AND p.character_id=q.character_id WHERE o.id=?",
+        (character["id"], objective_id),
+    ).fetchone()
+    if row is None or row["completed_at"] or row["failed_at"]:
+        return []
+    database.execute(
+        "INSERT INTO mud_player_objectives(character_id,objective_id,failed_at) VALUES(?,?,CURRENT_TIMESTAMP) "
+        "ON CONFLICT(character_id,objective_id) DO UPDATE SET failed_at=CURRENT_TIMESTAMP,updated_at=CURRENT_TIMESTAMP",
+        (character["id"], objective_id),
+    )
+    quest = database.execute("SELECT * FROM mud_quests WHERE id=?", (row["quest_id"],)).fetchone()
+    if not _quest_open(_quest_objectives(database, character["id"], quest["id"])):
+        return _fail_quest(database, user, quest, reason or f"Failed: {row['description']}")
+    note = f" {_sentence(reason)}" if reason else ""
+    return [EventDraft(f"Task failed ({quest['name']}): {row['description']}.{note}", event_type="quest")]
+
+
+def _impossible_quest(database, quest, objectives):
+    """True when deleted content leaves no way to finish the quest."""
+    dead = set()
+    for objective in objectives:
+        table = _OBJECTIVE_TARGET_TABLES.get(objective["objective_type"])
+        if (table and not objective["completed_at"] and not objective["failed_at"]
+                and database.execute(f"SELECT 1 FROM {table} WHERE id=?", (objective["target_id"],)).fetchone() is None):
+            dead.add(objective["id"])
+    if dead and not _quest_open(objectives, dead):
+        return True
+    return quest["completion_mode"] == "turn_in" and not _turn_in_npc_ids(database, quest)
+
+
+def _fail_rule(database, user_id, rules_json):
+    """The first failure rule whose conditions all hold, or None."""
+    try:
+        rules = mud_quests.validate_fail_rules(rules_json)
+    except ValueError:
+        return None
+    for rule in rules:
+        if mud_conditions.evaluate(rule["when"], _ConditionContext(database, user_id)):
+            return rule
+    return None
+
+
+def _check_quest_failures(database, user, deadlines_only=False):
+    """Fail overdue quests, then (unless deadlines_only) quests and objectives whose failure rules hold.
+
+    Runs before and after every action and on each quest deadline, so a quest
+    never stays completable once it has failed.
+    """
+    character = _character_row(database, user["id"])
+    rows = database.execute(
+        "SELECT q.*,p.deadline_at,CASE WHEN p.deadline_at IS NOT NULL "
+        "AND julianday(p.deadline_at)<=julianday('now') THEN 1 ELSE 0 END AS overdue "
+        "FROM mud_player_quests p JOIN mud_quests q ON q.id=p.quest_id "
+        "WHERE p.character_id=? AND p.status='active' ORDER BY p.accepted_at,q.id", (character["id"],),
+    ).fetchall()
+    events = []
+    for quest in rows:
+        if quest["overdue"]:
+            events += _fail_quest(database, user, quest, "Time ran out.")
+            continue
+        # Rules read this world's flags and rooms, so only the current world's quests are checked.
+        if deadlines_only or quest["world_id"] != _active_world(database):
+            continue
+        rule = _fail_rule(database, user["id"], quest["fail_conditions_json"])
+        if rule is not None:
+            events += _fail_quest(database, user, quest, rule["message"])
+            continue
+        objectives = _quest_objectives(database, character["id"], quest["id"])
+        if _impossible_quest(database, quest, objectives):
+            events += _fail_quest(database, user, quest,
+                                  "The world has changed; this quest can no longer be completed.")
+            continue
+        for objective in objectives:
+            if objective["completed_at"] or objective["failed_at"] or objective["fail_conditions_json"] in ("", "[]"):
+                continue
+            rule = _fail_rule(database, user["id"], objective["fail_conditions_json"])
+            if rule is not None:
+                events += _fail_objective(database, user, objective["id"], rule["message"])
+                if _quest_status(database, character["id"], quest["id"]) not in ("active", "ready"):
+                    break
+    return events
 
 
 def _handover_items(database, user, definition_id, amount):
@@ -2922,7 +3238,9 @@ def _turn_in_quest(database, user, quest_id, npc_definition_id=None):
     status = _quest_status(database, character["id"], quest_id)
     if status == "completed":
         raise ActionError(f"You have already turned in {quest['name']}.")
-    if status == "not_started":
+    if status == "failed":
+        raise ActionError(f"You failed {quest['name']}; it can no longer be turned in.")
+    if status in ("not_started", "abandoned"):
         raise ActionError(f"You are not on the quest {quest['name']}.")
     if quest["completion_mode"] != "turn_in":
         raise ActionError(f"{quest['name']} completes on its own once its objectives are done.")
@@ -2956,9 +3274,13 @@ def _turn_in_quest(database, user, quest_id, npc_definition_id=None):
     if handed:
         events.append(EventDraft("You hand over " + ", ".join(item["name"] for item in handed) + ".",
                                  event_type="quest"))
-    rewards = _award_quest_rewards(database, user, quest_id)
+    _cancel_quest_deadline(database, character["id"], quest_id)
+    outcome = database.execute("SELECT outcome FROM mud_player_quests WHERE character_id=? AND quest_id=?",
+                               (character["id"], quest_id)).fetchone()["outcome"] or "success"
+    rewards = _award_quest_rewards(database, user, quest_id, outcome)
     suffix = f" Rewards: {', '.join(rewards)}." if rewards else ""
     events.append(EventDraft(f"Quest complete: {quest['name']}.{suffix}", event_type="quest"))
+    events += _expel_lapsed(database, user)
     events += fire_triggers(database, user, "quest_complete", [quest_id])
     return events + _finish_ready_quests(database, user)
 
@@ -3016,6 +3338,14 @@ class _ConditionContext:
 
     def quest_status(self, quest_id):
         return _quest_status(self.database, self._character()["id"], quest_id)
+
+    def quest_outcome(self, quest_id):
+        row = self.database.execute(
+            "SELECT status,outcome FROM mud_player_quests WHERE character_id=? AND quest_id=?",
+            (self._character()["id"], quest_id)).fetchone()
+        if row is None:
+            return None
+        return "failed" if row["status"] == "failed" else row["outcome"]
 
     def objective_complete(self, objective_id):
         return self.database.execute(
@@ -3079,6 +3409,10 @@ class _ConditionContext:
         if self.dungeon or not society_settings(self.database)["crime"]["enabled"]:
             return None
         return _fines_owed(self.database, self.user_id, faction_id)
+
+    def member(self, faction_id):
+        return (not self.dungeon and society_settings(self.database)["factions"]["enabled"]
+                and mud_society.is_member(self.database, self._character()["id"], faction_id))
 
     def game_hour(self):
         moment = None if self.dungeon else _game_time(self.database)
@@ -3643,8 +3977,73 @@ def _reputation_text(changes):
 def _change_reputation(database, user, faction_id, amount):
     """Change a player's standing with a faction and its related factions, and say so."""
     changes = mud_society.adjust_reputation(database, _character_id(database, user['id']), faction_id, amount)
+    return _standing_drafts(database, user, changes) + _expel_lapsed(database, user)
+
+
+def _standing_drafts(database, user, changes):
     parts = _reputation_text(changes)
     return [_private(user["id"], "Your standing changes: " + "; ".join(parts) + ".", "reward")] if parts else []
+
+
+def _expel_lapsed(database, user):
+    """End memberships whose standing rules a character now breaks, which can cascade."""
+    if not society_settings(database)["factions"]["enabled"]:
+        return []
+    character_id = _character_id(database, user["id"])
+    drafts = []
+    while True:
+        lapsed = mud_society.lapsed(database, character_id)
+        if not lapsed:
+            return drafts
+        changes = mud_society.withdraw(database, character_id, lapsed[0])
+        drafts.append(_private(user["id"], f"{lapsed[0]['name']} casts you out.", "character"))
+        drafts += _standing_drafts(database, user, changes)
+        drafts += fire_triggers(database, user, "faction_leave", [lapsed[0]["id"]])
+
+
+def _join_faction(database, user, row, scripted=False):
+    """Make a player a member. Scripted joins skip what only gates players applying themselves."""
+    character_id = _character_id(database, user["id"])
+    problem = mud_society.join_problem(database, character_id, row, society_settings(database)["factions"])
+    if problem:
+        raise ActionError(problem)
+    drafts = [_private(user["id"], f"You join {row['name']}.", "character")]
+    if not scripted:
+        if row["recruiter_npc_definition_id"]:
+            _work_provider(database, user, row["recruiter_npc_definition_id"], _current_room(database, user["id"]))
+        context = _ConditionContext(database, user["id"])
+        if context.fines(row["id"]):
+            raise ActionError(f"{row['name']} will not take you while you owe them fines.")
+        if not mud_conditions.evaluate(row["join_conditions_json"], context):
+            raise ActionError(row["join_conditions_message"] or "You do not meet this faction's requirements.")
+        if row["join_cost"]:
+            _wallet(database, character_id)
+            if not database.execute("UPDATE mud_character_wallets SET coins=coins-? WHERE character_id=? AND coins>=?",
+                                    (row["join_cost"], character_id, row["join_cost"])).rowcount:
+                raise ActionError(f"Joining costs {row['join_cost']} coins.")
+            drafts.insert(0, _private(user["id"], f"You pay {row['join_cost']} coins.", "character"))
+    changes = mud_society.enroll(database, character_id, row)
+    return (drafts + _standing_drafts(database, user, changes) + _expel_lapsed(database, user)
+            + fire_triggers(database, user, "faction_join", [row["id"]]))
+
+
+def _leave_faction(database, user, row):
+    changes = mud_society.withdraw(database, _character_id(database, user["id"]), row)
+    return ([_private(user["id"], f"You leave {row['name']}.", "character")]
+            + _standing_drafts(database, user, changes) + _expel_lapsed(database, user)
+            + fire_triggers(database, user, "faction_leave", [row["id"]]))
+
+
+def _scripted_membership(database, user, kind, faction_id):
+    """A join_faction or leave_faction outcome; leaving a faction you are not in does nothing."""
+    row = mud_society.faction(database, faction_id)
+    if row is None or not society_settings(database)["factions"]["enabled"]:
+        return []
+    if kind == "join_faction":
+        return _join_faction(database, user, row, scripted=True)
+    if not mud_society.is_member(database, _character_id(database, user["id"]), row["id"]):
+        return []
+    return _leave_faction(database, user, row)
 
 
 def _relationship_spec(npc):
@@ -4020,7 +4419,7 @@ def _defeat_player(database, user, encounter, npc):
                 recipient_ids=_instance_participant_ids(database, instance_id, user["id"]),
             ),
         ]
-    start = _start_room(database)
+    start = _home_room(database, user["id"])
     _set_player_location(
         database, user["id"], "traditional", "world_room", start["id"]
     )
@@ -4900,7 +5299,8 @@ def _delivery_objective(database, user, definition_id, npc_definition_id=None):
         "JOIN mud_player_quests q ON q.quest_id=o.quest_id "
         "LEFT JOIN mud_player_objectives p ON p.objective_id=o.id AND p.character_id=q.character_id "
         "WHERE q.character_id=? AND q.status='active' AND o.objective_type='deliver_item' "
-        "AND o.target_id=? AND p.completed_at IS NULL ORDER BY q.accepted_at,o.sort_order,o.id",
+        "AND o.target_id=? AND p.completed_at IS NULL AND p.failed_at IS NULL "
+        "ORDER BY q.accepted_at,o.sort_order,o.id",
         (character["id"], definition_id),
     ).fetchall():
         recipients = ({objective["recipient_npc_definition_id"]} if objective["recipient_npc_definition_id"]
@@ -4973,11 +5373,13 @@ def _quest_hints(database, user, room, npc, responses=()):
         return []
     in_dialogue = {response[key] for response in responses
                    for key in ("accept_quest_id", "turn_in_quest_id") if response[key]}
-    offered = [quest["name"] for quest in _available_quests(database, user, room["id"])
+    character = _character_row(database, user["id"])
+    offered = [quest["name"] + (" (try again)" if _quest_status(database, character["id"], quest["id"])
+                                  != "not_started" else "")
+               for quest in _available_quests(database, user, room["id"])
                if quest["id"] not in in_dialogue and database.execute(
                    "SELECT 1 FROM mud_quest_givers WHERE quest_id=? AND npc_definition_id=?",
                    (quest["id"], npc["definition_id"])).fetchone()]
-    character = _character_row(database, user["id"])
     ready = [quest["name"] for quest in database.execute(
         "SELECT q.* FROM mud_player_quests p JOIN mud_quests q ON q.id=p.quest_id "
         "WHERE p.character_id=? AND p.status='active' AND p.ready_at IS NOT NULL "
@@ -5118,6 +5520,8 @@ def _settle_outcomes(database, user, outcomes, claim=None, event_type="dialogue"
             events += _learn_destination(database, user, outcome["destination"], "dialogue")
         elif outcome["type"] == "reputation":
             events += _change_reputation(database, user, outcome["faction"], outcome["amount"])
+        elif outcome["type"] in ("join_faction", "leave_faction"):
+            events += _scripted_membership(database, user, outcome["type"], outcome["faction"])
         elif outcome["type"] == "disposition" and (outcome.get("npc") or npc_definition_id):
             events += _change_disposition(database, user, outcome.get("npc") or npc_definition_id, outcome["amount"])
     return events
@@ -5212,8 +5616,8 @@ def _respond_action(database, user, parameters):
     return events
 
 
-QUEST_USAGE = ("Use /quests, /quests completed, /quest available, /quest info <name>, "
-               "/quest accept <name>, /quest turnin <name>, or /quest abandon <name>.")
+QUEST_USAGE = ("Use /quests, /quests completed, /quests failed, /quests history, /quest available, "
+               "/quest info <name>, /quest accept <name>, /quest turnin <name>, or /quest abandon <name>.")
 
 
 def _match_quest(quests, target, missing):
@@ -5225,17 +5629,82 @@ def _match_quest(quests, target, missing):
     return matches[0]
 
 
+_OBJECTIVE_MARKS = {"done": "✓", "failed": "✗", "locked": "🔒", "current": "·"}
+
+
 def _objective_line(objective):
-    mark = "✓" if objective["completed_at"] else ("🔒" if objective["locked"] else "·")
+    mark = _OBJECTIVE_MARKS[objective.get("state") or ("done" if objective["completed_at"] else
+                                                       "locked" if objective["locked"] else "current")]
     suffix = " (optional)" if objective["optional"] else ""
+    if objective.get("resolves"):
+        suffix += " (another way to finish)"
+    if objective.get("failed"):
+        suffix += " — failed"
     return f"{mark} {objective['description']} ({objective['progress']}/{objective['required_count']}){suffix}"
 
 
-def _quest_lines(quest):
+def _quest_lines(quest, full=False):
+    """A quest's goal, deadline, and tasks; full adds givers, details, attempts, and its ending."""
     lines = [f"\n{quest['name']} — {quest['description']}"]
+    if quest.get("summary"):
+        lines.append(f"Goal: {quest['summary']}")
     if quest["ready"]:
         lines.append(f"READY — return to {quest['turn_in_npc_name']} to turn it in.")
-    lines += [_objective_line(objective) for objective in quest["objectives"]]
+    if quest.get("seconds_left") is not None:
+        lines.append(f"Time left: {mud_quests.describe_duration(quest['seconds_left'])}")
+    if not full:
+        return lines + [_objective_line(objective) for objective in quest["objectives"]]
+    if quest.get("giver_names") and quest["giver_names"] != "the quest giver":
+        lines.append(f"From: {quest['giver_names']}")
+    if quest.get("turn_in_npc_name"):
+        lines.append(f"Turn in to: {quest['turn_in_npc_name']}")
+    for detail in quest.get("details", []):
+        room = f" ({detail['room_name']})" if detail.get("room_name") else ""
+        lines.append(f"{detail['label']}: {detail['text']}{room}")
+    current = [objective for objective in quest["objectives"] if objective.get("state") in ("current", "locked")]
+    finished = [objective for objective in quest["objectives"] if objective.get("state") in ("done", "failed")]
+    if current:
+        lines.append("Current tasks:")
+        lines += [_objective_line(objective) for objective in current]
+    if finished:
+        lines.append("Finished tasks:")
+        lines += [_objective_line(objective) for objective in finished]
+    if quest.get("attempts", 1) > 1:
+        lines.append(f"Attempt {quest['attempts']}.")
+    if quest.get("retry_mode") == "once" and quest["status"] in ("active", "abandoned", "failed"):
+        lines.append("One attempt only.")
+    return lines
+
+
+def _ending_line(database, quest):
+    if quest["status"] == "completed":
+        return "Completed." if quest.get("outcome") in (None, "success") else f"Completed ({quest['outcome']})."
+    if quest["status"] == "failed":
+        retry = quest["retry"]
+        then = (" It cannot be attempted again." if retry["closed"] else
+                f" You may try again in {mud_quests.describe_duration(retry['wait'])}." if retry["wait"] else
+                " You may accept it again.")
+        return f"Failed: {quest.get('fail_reason') or 'the quest can no longer be completed.'}{then}"
+    if quest["status"] == "abandoned":
+        return "Abandoned." + (" It cannot be attempted again." if quest["retry"]["closed"] else "")
+    return None
+
+
+def _offer_lines(database, user, quest, givers=None):
+    """What a player may learn about a quest before accepting it."""
+    lines = [f"{quest['name']}{f' (from {givers})' if givers else ''} — {quest['description']}"]
+    if quest["summary"]:
+        lines.append(f"Goal: {quest['summary']}")
+    if quest["time_limit_seconds"]:
+        lines.append(f"Time limit: {mud_quests.describe_duration(quest['time_limit_seconds'])}")
+    if quest["retry_mode"] == "once":
+        lines.append("One attempt only: failing or abandoning it closes it for good.")
+    for detail in _revealed_details(database, user["id"], quest, "offer"):
+        room = f" ({detail['room_name']})" if detail.get("room_name") else ""
+        lines.append(f"{detail['label']}: {detail['text']}{room}")
+    status = _quest_status(database, _character_row(database, user["id"])["id"], quest["id"])
+    if status in ("failed", "abandoned"):
+        lines.append("You may try this quest again.")
     return lines
 
 
@@ -5264,22 +5733,24 @@ def _quests_action(database, user, parameters):
         for quest in available:
             givers = {row["npc_definition_id"] for row in database.execute(
                 "SELECT npc_definition_id FROM mud_quest_givers WHERE quest_id=?", (quest["id"],))}
-            lines.append(f"\n{quest['name']} (from {_npc_names(database, givers)}) — {quest['description']}")
+            lines.append("")
+            lines += _offer_lines(database, user, quest, _npc_names(database, givers))
         lines.append("\nUse /quest accept <name>.")
         return [EventDraft("\n".join(lines), event_type="quest")]
     if command == "info":
-        known = state["active"] + state["completed"]
+        known = [quest for status in QUEST_LISTS for quest in state[status]]
         try:
             quest = _match_quest(known, target, "")
         except ActionError:
             offered = _available_quests(database, user, room["id"])
             quest = _match_quest(offered, target, "You know of no quest by that name.")
-            return [EventDraft(f"{quest['name']} — {quest['description']}\nAvailable here: /quest accept {quest['name']}.",
-                               event_type="quest")]
-        lines = _quest_lines(quest)
+            lines = _offer_lines(database, user, quest) + [f"Available here: /quest accept {quest['name']}."]
+            return [EventDraft("\n".join(lines), event_type="quest")]
+        lines = _quest_lines(quest, full=True)
         lines[0] = lines[0].lstrip()
-        if quest["status"] == "completed":
-            lines.insert(1, "Completed.")
+        ending = _ending_line(database, quest)
+        if ending:
+            lines.insert(1, ending)
         elif quest["abandonable"]:
             lines.append(f"Use /quest abandon {quest['name']} to give it up.")
         return [EventDraft("\n".join(lines), event_type="quest")]
@@ -5288,6 +5759,19 @@ def _quests_action(database, user, parameters):
             return [EventDraft("You have not completed any quests yet.", event_type="quest")]
         return [EventDraft("Completed quests:\n" + "\n".join(f"✓ {quest['name']}" for quest in state["completed"]),
                            event_type="quest")]
+    if command == "failed" and not target:
+        if not state["failed"]:
+            return [EventDraft("You have not failed any quests.", event_type="quest")]
+        return [EventDraft("Failed quests:\n" + "\n".join(
+            f"✗ {quest['name']} — {_ending_line(database, quest)[len('Failed: '):]}" for quest in state["failed"]),
+            event_type="quest")]
+    if command == "history" and not target:
+        marks = {"completed": "✓", "failed": "✗", "abandoned": "–"}
+        rows = [f"{marks[status]} {quest['name']} ({status})" for status in ("completed", "failed", "abandoned")
+                for quest in state[status]]
+        if not rows:
+            return [EventDraft("You have no finished quests yet.", event_type="quest")]
+        return [EventDraft("Quest history:\n" + "\n".join(rows), event_type="quest")]
     if args:
         raise ActionError(QUEST_USAGE)
     if not state["active"]:
@@ -6875,10 +7359,15 @@ def reputation_state(database, user_id):
     if _current_mode(database, user_id) != "traditional":
         return []
     character_id = _character_id(database, user_id)
+    joined = {row["id"]: row for row in mud_society.memberships(database, character_id)
+              if society_settings(database)["factions"]["enabled"]}
     result = []
-    for row in _public_factions(database):
+    public = _public_factions(database)
+    # A hidden faction shows only to its own members.
+    for row in [*public, *(row for row in joined.values() if not row["public"])]:
         value, rank = mud_society.standing(database, character_id, row)
-        result.append({"id": row["id"], "name": row["name"], "reputation": value, "rank": rank["name"]})
+        result.append({"id": row["id"], "name": row["name"], "reputation": value, "rank": rank["name"],
+                       "member": row["id"] in joined})
     return result
 
 
@@ -6887,7 +7376,73 @@ def _reputation_action(database, user, _parameters):
     if not standing or _current_room(database, user["id"]).get("instance_id"):
         raise ActionError("No faction here keeps track of you.")
     return [EventDraft("Your standing:\n" + "\n".join(
-        f"- {entry['name']}: {entry['rank']} ({entry['reputation']:+d})" for entry in standing))]
+        f"- {entry['name']}: {entry['rank']} ({entry['reputation']:+d})" + (" · member" if entry["member"] else "")
+        for entry in standing))]
+
+
+def _faction_status(database, user, row, room):
+    """One line on whether and how a player could join a faction."""
+    character_id = _character_id(database, user["id"])
+    if mud_society.is_member(database, character_id, row["id"]):
+        return "member"
+    if not row["joinable"]:
+        return "not recruiting"
+    parts = ["recruiting"]
+    if row["join_cost"]:
+        parts.append(f"{row['join_cost']} coins")
+    if row["recruiter_npc_definition_id"]:
+        nearby = any(npc["definition_id"] == row["recruiter_npc_definition_id"]
+                     for npc in _room_npc_rows(database, room["id"]))
+        parts.append("recruiter here" if nearby else "see a recruiter")
+    if not mud_conditions.evaluate(row["join_conditions_json"], _ConditionContext(database, user["id"])):
+        parts.append("requirements unmet")
+    return " · ".join(parts)
+
+
+def _faction_action(database, user, parameters):
+    room = _current_room(database, user["id"])
+    settings = society_settings(database)["factions"]
+    if (not settings["enabled"] or _current_mode(database, user["id"]) != "traditional"
+            or room.get("instance_id")):
+        raise ActionError("No faction here takes members.")
+    args = [str(value) for value in parameters.get("arguments", [])]
+    verb = args.pop(0).casefold() if args else ""
+    if verb not in {"", "list", "info", "join", "leave"}:
+        raise ActionError("Use /faction, /faction info <name>, /faction join <name>, or /faction leave <name>.")
+    character_id = _character_id(database, user["id"])
+    joined = mud_society.memberships(database, character_id)
+    joined_ids = {member["id"] for member in joined}
+    known = [*_public_factions(database), *(row for row in joined if not row["public"])]
+    if verb in {"", "list"}:
+        lines = [f"{row['name']} ({_faction_status(database, user, row, room)})" for row in known
+                 if row["joinable"] or row["id"] in joined_ids]
+        return [EventDraft("Factions:\n" + "\n".join(lines) if lines else "No faction here is recruiting.",
+                           event_type="character")]
+    if not args:
+        raise ActionError(f"Use /faction {verb} <name>.")
+    row = _work_match(known, " ".join(args), "faction")
+    if verb == "info":
+        value, rank = mud_society.standing(database, character_id, row)
+        lines = [row["name"], *([row["description"]] if row["description"] else []),
+                 f"Your standing: {rank['name']} ({value:+d})", f"Status: {_faction_status(database, user, row, room)}"]
+        relations = database.execute(
+            "SELECT o.name,r.share_percent FROM mud_faction_relations r JOIN mud_world_factions o "
+            "ON o.id=r.other_faction_id WHERE r.faction_id=? AND o.public=1 ORDER BY o.name COLLATE NOCASE",
+            (row["id"],)).fetchall()
+        for label, wanted in (("Allied with", True), ("Opposed to", False)):
+            names = [other["name"] for other in relations if (other["share_percent"] > 0) == wanted]
+            if names:
+                lines.append(f"{label}: {', '.join(names)}")
+        return [EventDraft("\n".join(lines), event_type="character")]
+    if verb == "join":
+        if not row["joinable"]:
+            raise ActionError(f"{row['name']} does not accept applicants.")
+        return _join_faction(database, user, row)
+    if row["id"] not in joined_ids:
+        raise ActionError(f"You do not belong to {row['name']}.")
+    if not row["leavable"]:
+        raise ActionError(f"{row['name']} does not let its members go.")
+    return _leave_faction(database, user, row)
 
 
 def _relations_action(database, user, _parameters):
@@ -7522,12 +8077,23 @@ def _trigger_action(database, user, trigger, index, realm, instance_id=None):
                 return []
             return _set_objective_progress(database, user, objective["objective_type"], objective["target_id"],
                                            action["objective"])
+        if kind == "fail_quest":
+            quest = database.execute("SELECT * FROM mud_quests WHERE id=?", (action["quest"],)).fetchone()
+            return _fail_quest(database, user, quest, action.get("message", "")) if quest else []
+        if kind == "fail_objective":
+            return _fail_objective(database, user, action["objective"], action.get("message", ""))
         if kind == "learn_destination":
             return _learn_destination(database, user, action["destination"], "script")
         if kind == "disposition":
             return _change_disposition(database, user, action["npc"], action["amount"])
         if kind == "reputation":
             return _change_reputation(database, user, action["faction"], action["amount"])
+        if kind in ("join_faction", "leave_faction"):
+            # A refused join must not cancel the rest of a trigger, so it only tells the player.
+            try:
+                return _scripted_membership(database, user, kind, action["faction"])
+            except ActionError as problem:
+                return [_private(user_id, str(problem), "world")]
         if kind == "fine":
             mud_society.record_crime(database, _character_row(database, user_id)["id"], _active_world(database),
                                      action["faction"], "other", action["amount"], 0)
@@ -8306,6 +8872,11 @@ actions.register(ActionDefinition(
     commands=("reputation", "standing", "factions"), handler=_reputation_action, group="SOCIAL",
 ))
 actions.register(ActionDefinition(
+    key="faction", label="FACTION MEMBERSHIP",
+    description="List factions recruiting here, read about one, or join or leave one.",
+    commands=("faction",), handler=_faction_action, group="SOCIAL", show_context=False,
+))
+actions.register(ActionDefinition(
     key="relations", label="RELATIONSHIPS", description="See how the people of this world regard you.",
     commands=("relations", "relationships"), handler=_relations_action, group="SOCIAL",
 ))
@@ -8605,6 +9176,9 @@ def _scheduled_event_world(database, event):
         row = database.execute("SELECT world_id FROM mud_world_triggers WHERE id=?", (event["entity_id"],)).fetchone()
     elif kind == "effect_pulse":
         return event["entity_id"]
+    elif kind == "quest_deadline":
+        # The world, not the quest: an upgrade gives the world's quests new IDs.
+        return _json_properties(event["payload_json"]).get("world")
     else:
         realm = _json_properties(event["payload_json"]).get("realm")
         row = database.execute(
@@ -8624,7 +9198,7 @@ def process_scheduled_events(database, now=None, limit=50):
     rows = database.execute(
         "SELECT * FROM mud_scheduled_events WHERE due_at<=? "
         "AND event_kind IN ('ambient','wander','patrol','schedule','room_message','item_respawn',"
-        "'trigger_action','trigger_timer','npc_despawn','effect_pulse') ORDER BY due_at,id LIMIT ?",
+        "'trigger_action','trigger_timer','npc_despawn','effect_pulse','quest_deadline') ORDER BY due_at,id LIMIT ?",
         (stamp, min(50, max(1, limit))),
     ).fetchall()
     enabled = _enabled_world_keys(database)
@@ -8643,6 +9217,15 @@ def process_scheduled_events(database, now=None, limit=50):
 
 
 def _process_scheduled_event(database, event, now):
+    if event["event_kind"] == "quest_deadline":
+        # Fail the quest on time, even for a player who is away; they read why when they return.
+        database.execute("DELETE FROM mud_scheduled_events WHERE id=?", (event["id"],))
+        user = database.execute("SELECT * FROM users WHERE id=?",
+                                (_json_properties(event["payload_json"]).get("user_id"),)).fetchone()
+        if user is not None and character_creation.find_character(database, user["id"]) is not None:
+            for draft in _check_quest_failures(database, user, deadlines_only=True):
+                _insert_event(database, draft, default_user_id=user["id"])
+        return
     if event["event_kind"] == "npc_despawn":
         _despawn_npc(database, event, now)
         return
@@ -8936,7 +9519,8 @@ class MudService:
                     )["name"]
                 except ActionError:
                     used_item = None
-            drafts = []
+            # An overdue quest fails before the action, so late work cannot complete it.
+            drafts = _check_quest_failures(database, user, deadlines_only=True)
             if action_request.definition.key not in TRAVEL_SAFE_ACTIONS:
                 drafts += _cancel_travel(database, user["id"], "You stop travelling.")
             drafts += action_request.definition.handler(
@@ -8946,6 +9530,7 @@ class MudService:
                 drafts.append(_room_item_event(database, user, use_room,
                                                f"{_character_row(database, user['id'])['display_name']} uses {used_item}."))
             drafts += _npc_reactions(database, user, action_request.definition.key)
+            drafts += _check_quest_failures(database, user)
             cursor = database.execute(
                 "INSERT INTO mud_action_log(request_id,actor_id,action_key,input_method,parameters_json) "
                 "VALUES(?,?,?,?,?)",
@@ -9212,6 +9797,7 @@ def create_character():
                              for key, definition in mud_skills.definitions(database).items()}
     config["effect_names"] = mud_skills.EFFECT_TYPES
     config["resource"] = resource = resource_settings(database, g.user["id"])
+    config["starting_factions"], config["faction_required"] = character_creation.starting_factions(database)
     # Without the resource, the built-in Intellect text would promise mana that does not exist.
     config["attribute_descriptions"] = {
         key: ("Raises healing and experience earned."
@@ -9686,7 +10272,7 @@ def builder():
         world_definitions=_builder_world_definitions(database),
         built_in_abilities=mud_abilities.BUILT_IN, built_in_effects=mud_effects.EFFECTS,
         factions=_builder_factions(database), default_ranks=json.dumps(mud_society.validate_ranks(None), indent=1),
-        game_time=_game_time(database), **dungeon_context, **trigger_context,
+        game_time=_game_time(database), **_builder_start_rules(database), **dungeon_context, **trigger_context,
     )
 
 
@@ -9960,7 +10546,7 @@ def builder_update_dialogue_node(node_id):
     flash("Dialogue node updated.", "success"); return _builder_redirect()
 
 
-def _builder_rules(database, field, validate):
+def _builder_rules(database, field, validate, references=None):
     """Validate a builder conditions/outcomes JSON field and the content it names."""
     try:
         entries = validate(request.form.get(field, "").strip() or "[]")
@@ -9974,7 +10560,7 @@ def _builder_rules(database, field, validate):
     known = {"race": {entry["key"] for entry in origins["races"]},
              "class": {entry["key"] for entry in origins["classes"]},
              "skill": {entry["key"] for entry in mud_skills.catalog(database)}}
-    for kind, ref in mud_conditions.references(entries):
+    for kind, ref in (references or mud_conditions.references)(entries):
         missing = (ref not in known[kind] if kind in known else
                    database.execute(f"SELECT 1 FROM {tables[kind]} WHERE id=?", (ref,)).fetchone() is None)
         if missing:
@@ -10584,8 +11170,57 @@ def _quest_fields(database, quest_id=None):
     if turn_in_npc and database.execute("SELECT 1 FROM mud_npc_definitions WHERE id=?", (turn_in_npc,)).fetchone() is None: return None, "Choose an existing turn-in NPC."
     conditions_json, error = _builder_rules(database, "conditions_json", mud_conditions.validate_conditions)
     if error: return None, error
+    advanced, error = _quest_advanced_fields(database)
+    if error: return None, error
     return (name, description, prerequisite, completion_mode, turn_in_npc if completion_mode == "turn_in" else None,
-            int(request.form.get("sequential") == "1"), int(request.form.get("abandonable") == "1"), conditions_json), None
+            int(request.form.get("sequential") == "1"), int(request.form.get("abandonable") == "1"), conditions_json,
+            *advanced), None
+
+
+def _form_minutes(field):
+    """A minutes form field as seconds; blank is 0, unreadable is None."""
+    raw = request.form.get(field, "").strip()
+    if not raw:
+        return 0
+    try:
+        minutes = float(raw)
+    except ValueError:
+        return None
+    return round(minutes * 60) if minutes >= 0 else None
+
+
+def _quest_advanced_fields(database):
+    """The optional goal, details, deadline, failure rules, and retry settings of a quest form."""
+    time_limit, cooldown = _form_minutes("time_limit_minutes"), _form_minutes("retry_cooldown_minutes")
+    if time_limit is None or cooldown is None:
+        return None, "Time limit and retry cooldown must be numbers of minutes."
+    try:
+        summary = mud_quests.validate_summary(request.form.get("summary", ""))
+        time_limit = mud_quests.validate_time_limit(time_limit)
+        retry_mode, cooldown = mud_quests.validate_retry(request.form.get("retry_mode", "retry"), cooldown)
+    except ValueError as problem:
+        return None, str(problem)
+    details_json, error = _builder_rules(database, "details_json", mud_quests.validate_details,
+                                         lambda entries: mud_quests.references(details=entries))
+    if error: return None, error
+    fail_json, error = _builder_rules(database, "fail_conditions_json", mud_quests.validate_fail_rules,
+                                      lambda entries: mud_quests.references(fail_rules=entries))
+    if error: return None, error
+    return (summary, details_json, time_limit, fail_json, retry_mode, cooldown), None
+
+
+_QUEST_COLUMNS = ("name,description,prerequisite_quest_id,completion_mode,turn_in_npc_definition_id,sequential,"
+                  "abandonable,conditions_json,summary,details_json,time_limit_seconds,fail_conditions_json,"
+                  "retry_mode,retry_cooldown_seconds")
+
+
+def _flash_quest_structure(database, quest_id):
+    """Warn about outcome rewards and resolution objectives that do not fit together."""
+    problems = mud_quests.check_structure(
+        [dict(row) for row in database.execute("SELECT * FROM mud_quest_objectives WHERE quest_id=?", (quest_id,))],
+        [dict(row) for row in database.execute("SELECT * FROM mud_quest_rewards WHERE quest_id=?", (quest_id,))])
+    for problem in problems:
+        flash(problem, "error")
 
 
 @bp.post("/w/<world_key>/builder/quests")
@@ -10593,7 +11228,7 @@ def _quest_fields(database, quest_id=None):
 def builder_create_quest():
     validate_csrf(); database = get_db(); fields, error = _quest_fields(database)
     if error: flash(error, "error"); return _builder_redirect()
-    quest_id = f"world:quest:{uuid.uuid4().hex}"; database.execute("INSERT INTO mud_quests(id,name,description,prerequisite_quest_id,completion_mode,turn_in_npc_definition_id,sequential,abandonable,conditions_json,created_by,world_id) VALUES(?,?,?,?,?,?,?,?,?,?,mud_world())", (quest_id, *fields, g.user["id"])); database.commit(); flash(f"Quest {fields[0]} created.", "success"); return _builder_redirect()
+    quest_id = f"world:quest:{uuid.uuid4().hex}"; database.execute(f"INSERT INTO mud_quests(id,{_QUEST_COLUMNS},created_by,world_id) VALUES({','.join('?' for _ in range(len(fields) + 2))},mud_world())", (quest_id, *fields, g.user["id"])); database.commit(); flash(f"Quest {fields[0]} created.", "success"); return _builder_redirect()
 
 
 @bp.post("/w/<world_key>/builder/quests/<path:quest_id>")
@@ -10603,7 +11238,7 @@ def builder_update_quest(quest_id):
     if database.execute("SELECT 1 FROM mud_quests WHERE id=?", (quest_id,)).fetchone() is None: abort(404)
     fields, error = _quest_fields(database, quest_id)
     if error: flash(error, "error"); return _builder_redirect()
-    database.execute("UPDATE mud_quests SET name=?,description=?,prerequisite_quest_id=?,completion_mode=?,turn_in_npc_definition_id=?,sequential=?,abandonable=?,conditions_json=?,updated_at=CURRENT_TIMESTAMP WHERE id=?", (*fields, quest_id)); database.commit(); flash("Quest updated.", "success"); return _builder_redirect()
+    database.execute(f"UPDATE mud_quests SET {','.join(f'{column}=?' for column in _QUEST_COLUMNS.split(','))},updated_at=CURRENT_TIMESTAMP WHERE id=?", (*fields, quest_id)); database.commit(); flash("Quest updated.", "success"); return _builder_redirect()
 
 
 @bp.post("/w/<world_key>/builder/quests/<path:quest_id>/givers")
@@ -10628,7 +11263,17 @@ def _quest_objective_fields(database):
     if consume and objective_type != "possess_item": return None, "Only possess-item objectives can take the items at turn-in."
     if recipient and objective_type != "deliver_item": return None, "Only delivery objectives can name a recipient NPC."
     if recipient and database.execute("SELECT 1 FROM mud_npc_definitions WHERE id=?", (recipient,)).fetchone() is None: return None, "Choose an existing recipient NPC."
-    return {"objective_type": objective_type, "target_id": target_id, "description": description, "required_count": required_count, "sort_order": sort_order, "optional": int(request.form.get("optional") == "1"), "consume_on_turn_in": consume, "recipient_npc_definition_id": recipient}, None
+    try:
+        outcome_key = mud_quests.validate_outcome_key(request.form.get("outcome_key", ""))
+    except ValueError as problem:
+        return None, str(problem)
+    optional = int(request.form.get("optional") == "1")
+    if outcome_key and optional: return None, "An objective that resolves the quest (outcome key) cannot be optional."
+    fail_json, error = _builder_rules(database, "fail_conditions_json", mud_quests.validate_fail_rules,
+                                      lambda entries: mud_quests.references(fail_rules=entries))
+    if error: return None, error
+    return {"objective_type": objective_type, "target_id": target_id, "description": description, "required_count": required_count, "sort_order": sort_order, "optional": optional, "consume_on_turn_in": consume, "recipient_npc_definition_id": recipient,
+            "hidden": int(request.form.get("hidden") == "1"), "outcome_key": outcome_key, "fail_conditions_json": fail_json}, None
 
 
 @bp.post("/w/<world_key>/builder/quests/<path:quest_id>/objectives")
@@ -10649,7 +11294,9 @@ def builder_update_quest_objective(objective_id):
     if database.execute("SELECT 1 FROM mud_quest_objectives WHERE id=?", (objective_id,)).fetchone() is None: abort(404)
     fields, error = _quest_objective_fields(database)
     if error: flash(error, "error"); return _builder_redirect()
-    database.execute(f"UPDATE mud_quest_objectives SET {','.join(f'{name}=?' for name in fields)} WHERE id=?", (*fields.values(), objective_id)); database.commit(); flash("Quest objective updated.", "success"); return _builder_redirect()
+    database.execute(f"UPDATE mud_quest_objectives SET {','.join(f'{name}=?' for name in fields)} WHERE id=?", (*fields.values(), objective_id)); database.commit(); flash("Quest objective updated.", "success")
+    _flash_quest_structure(database, database.execute("SELECT quest_id FROM mud_quest_objectives WHERE id=?", (objective_id,)).fetchone()["quest_id"])
+    return _builder_redirect()
 
 
 @bp.post("/w/<world_key>/builder/quest-objectives/<path:objective_id>/delete")
@@ -10666,18 +11313,25 @@ def builder_delete_quest_objective(objective_id):
 def builder_create_quest_reward(quest_id):
     validate_csrf(); database = get_db(); reward_type = request.form.get("reward_type", ""); target_id = request.form.get("target_id", "").strip() or None; amount = request.form.get("amount", 1, type=int)
     if database.execute("SELECT 1 FROM mud_quests WHERE id=?", (quest_id,)).fetchone() is None: abort(404)
+    try:
+        outcome = mud_quests.validate_reward_outcome(request.form.get("outcome", ""))
+    except ValueError as problem:
+        flash(str(problem), "error"); return _builder_redirect()
+    if outcome and outcome != mud_quests.FAILED_OUTCOME and database.execute(
+            "SELECT 1 FROM mud_quest_objectives WHERE quest_id=? AND outcome_key=?", (quest_id, outcome)).fetchone() is None:
+        flash(f"No objective of this quest resolves it as {outcome!r}; add that outcome key to an objective first.", "error"); return _builder_redirect()
     if reward_type == "reputation":
         faction_id = request.form.get("faction_id", "").strip()
         if database.execute("SELECT 1 FROM mud_world_factions WHERE id=? AND world_id=?",
                             (faction_id, _active_world(database))).fetchone() is None or amount is None or not 1 <= amount <= 1000:
             flash("Choose a faction and an amount from 1 to 1000 standing.", "error"); return _builder_redirect()
-        database.execute("INSERT INTO mud_quest_rewards(id,quest_id,reward_type,target_id,amount) VALUES(?,?,?,?,?)",
-                         (f"world:quest-reward:{uuid.uuid4().hex}", quest_id, reward_type, faction_id, amount))
+        database.execute("INSERT INTO mud_quest_rewards(id,quest_id,reward_type,target_id,amount,outcome) VALUES(?,?,?,?,?,?)",
+                         (f"world:quest-reward:{uuid.uuid4().hex}", quest_id, reward_type, faction_id, amount, outcome))
         database.commit(); flash("Quest reward added.", "success"); return _builder_redirect()
     if reward_type not in {"experience", "item", "coins"} or amount is None or not 1 <= amount <= 100000 or (reward_type == "item" and amount > 100): flash("Choose a valid reward amount (up to 100 items or 100,000 XP/coins).", "error"); return _builder_redirect()
     if reward_type == "item" and database.execute("SELECT 1 FROM mud_item_definitions WHERE id=?", (target_id,)).fetchone() is None: flash("Choose an item definition for an item reward.", "error"); return _builder_redirect()
     if reward_type in {"experience", "coins"}: target_id = None
-    database.execute("INSERT INTO mud_quest_rewards(id,quest_id,reward_type,target_id,amount) VALUES(?,?,?,?,?)", (f"world:quest-reward:{uuid.uuid4().hex}", quest_id, reward_type, target_id, amount)); database.commit(); flash("Quest reward added.", "success"); return _builder_redirect()
+    database.execute("INSERT INTO mud_quest_rewards(id,quest_id,reward_type,target_id,amount,outcome) VALUES(?,?,?,?,?,?)", (f"world:quest-reward:{uuid.uuid4().hex}", quest_id, reward_type, target_id, amount, outcome)); database.commit(); flash("Quest reward added.", "success"); return _builder_redirect()
 
 
 @bp.post("/w/<world_key>/builder/quest-rewards/<path:reward_id>/delete")
@@ -11256,6 +11910,10 @@ def builder_delete_room(room_id):
                             "(objective_type='visit_room' AND objective_target_id=?)",
                             (room_id, room_id)).fetchone():
             flash("Move or remove work activities using this room before deleting it.", "error")
+            database.rollback()
+            return _builder_redirect(room_id)
+        if database.execute("SELECT 1 FROM mud_world_start_rules WHERE room_id=?", (room_id,)).fetchone():
+            flash("Move or remove the start rules using this room before deleting it.", "error")
             database.rollback()
             return _builder_redirect(room_id)
         start = _start_room(database)
@@ -11841,20 +12499,62 @@ def _builder_factions(database):
             "ON f.id=r.other_faction_id WHERE r.faction_id=? ORDER BY f.name COLLATE NOCASE", (row["id"],))]
         row["members"] = [member["name"] for member in database.execute(
             "SELECT name FROM mud_npc_definitions WHERE faction_id=? ORDER BY name COLLATE NOCASE", (row["id"],))]
+        row["player_members"] = database.execute(
+            "SELECT COUNT(*) FROM mud_character_factions WHERE faction_id=? AND left_at IS NULL",
+            (row["id"],)).fetchone()[0]
     return rows
 
 
-def _faction_fields():
+def _faction_membership_fields(database):
+    """The joining rules posted by a faction form, or (None, error)."""
+    join_conditions, error = _builder_rules(database, "join_conditions_json", mud_conditions.validate_conditions)
+    if error:
+        return None, error
+    start_conditions, error = _builder_rules(database, "start_conditions_json",
+                                             mud_conditions.validate_start_conditions)
+    if error:
+        return None, error
+    recruiter = request.form.get("recruiter_npc_definition_id", "").strip() or None
+    if recruiter and database.execute("SELECT 1 FROM mud_npc_definitions WHERE id=? AND world_id=?",
+                                      (recruiter, _active_world(database))).fetchone() is None:
+        return None, "Choose a recruiter from this world."
+    floor = request.form.get("expel_below", "").strip()
     try:
-        return mud_society.validate_faction({
+        floor = int(floor) if floor else None
+    except ValueError:
+        return None, "Expel below must be blank or a whole number."
+    return {"joinable": int(request.form.get("joinable") == "1"),
+            "start_joinable": int(request.form.get("start_joinable") == "1"),
+            "leavable": int(request.form.get("leavable") == "1"),
+            "recruiter_npc_definition_id": recruiter, "join_conditions_json": join_conditions,
+            "start_conditions_json": start_conditions,
+            "join_conditions_message": request.form.get("join_conditions_message", ""),
+            "join_cost": request.form.get("join_cost", 0, type=int),
+            "join_reputation": request.form.get("join_reputation", 0, type=int),
+            "leave_reputation": request.form.get("leave_reputation", 0, type=int),
+            "rejoin_hours": request.form.get("rejoin_hours", 0, type=int), "expel_below": floor}, None
+
+
+def _faction_fields(database, current=None):
+    """A faction form's values; a form without the joining rules keeps the current ones."""
+    membership = dict(current) if current is not None else {}
+    if request.form.get("membership_fields") == "1":
+        membership, error = _faction_membership_fields(database)
+        if error:
+            return None, error
+    try:
+        values = mud_society.validate_faction({
+            **membership,
             "name": request.form.get("name", ""), "description": request.form.get("description", ""),
             "default_reputation": request.form.get("default_reputation", 0, type=int),
             "defeat_reputation": request.form.get("defeat_reputation", 0, type=int),
             "public": 1 if request.form.get("public") == "1" else 0,
             "sort_order": request.form.get("sort_order", 0, type=int),
-            "ranks_json": request.form.get("ranks_json", "").strip()}), None
+            "ranks_json": request.form.get("ranks_json", "").strip()})
     except ValueError as problem:
         return None, str(problem)
+    values["recruiter_npc_definition_id"] = membership.get("recruiter_npc_definition_id")
+    return values, None
 
 
 def _world_faction_or_404(database, faction_id):
@@ -11869,7 +12569,7 @@ def _world_faction_or_404(database, faction_id):
 @builder_required
 def builder_create_faction():
     validate_csrf(); database = get_db()
-    values, error = _faction_fields()
+    values, error = _faction_fields(database)
     if error:
         flash(error, "error"); return _builder_redirect()
     database.execute(
@@ -11928,15 +12628,20 @@ def builder_delete_faction_relation(relation_id):
 @bp.post("/w/<world_key>/builder/factions/<path:faction_id>")
 @builder_required
 def builder_update_faction(faction_id):
-    validate_csrf(); database = get_db(); _world_faction_or_404(database, faction_id)
-    values, error = _faction_fields()
+    validate_csrf(); database = get_db()
+    values, error = _faction_fields(database, _world_faction_or_404(database, faction_id))
     if error:
         flash(error, "error"); return _builder_redirect()
     database.execute(
         "UPDATE mud_world_factions SET name=?,description=?,default_reputation=?,defeat_reputation=?,public=?,"
-        "ranks_json=?,sort_order=?,updated_at=CURRENT_TIMESTAMP WHERE id=?",
+        "ranks_json=?,sort_order=?,joinable=?,start_joinable=?,recruiter_npc_definition_id=?,"
+        "join_conditions_json=?,join_conditions_message=?,start_conditions_json=?,join_cost=?,join_reputation=?,"
+        "leavable=?,leave_reputation=?,rejoin_hours=?,expel_below=?,updated_at=CURRENT_TIMESTAMP WHERE id=?",
         (values["name"], values["description"], values["default_reputation"], values["defeat_reputation"],
-         values["public"], values["ranks_json"], values["sort_order"], faction_id))
+         values["public"], values["ranks_json"], values["sort_order"], values["joinable"], values["start_joinable"],
+         values["recruiter_npc_definition_id"], values["join_conditions_json"], values["join_conditions_message"],
+         values["start_conditions_json"], values["join_cost"], values["join_reputation"], values["leavable"],
+         values["leave_reputation"], values["rejoin_hours"], values["expel_below"], faction_id))
     database.commit(); flash("Faction updated.", "success"); return _builder_redirect()
 
 
@@ -12050,6 +12755,97 @@ def builder_set_start():
         raise
     flash(f"{room['name']} is now this world's starting room.", "success")
     return _builder_redirect(room_id)
+
+
+def _start_rule_names(database):
+    """{race|class|member: {key: name}} for what this world's start rules can test."""
+    config = character_creation.options(database)
+    factions = database.execute("SELECT id,name FROM mud_world_factions WHERE world_id=? "
+                                "ORDER BY sort_order,name COLLATE NOCASE", (_active_world(database),))
+    return {"race": {entry["key"]: entry["name"] for entry in config["races"]},
+            "class": {entry["key"]: entry["name"] for entry in config["classes"]},
+            "member": {row["id"]: row["name"] for row in factions}}
+
+
+def _builder_start_rules(database):
+    """The current world's start rules in evaluation order, and what they can choose from."""
+    names = _start_rule_names(database)
+    offered = {entry["id"] for entry in character_creation.starting_factions(database)[0]}
+    return {"start_rules": mud_start_rules.review(database, _active_world(database), names, offered),
+            "start_rule_races": names["race"], "start_rule_classes": names["class"],
+            "start_rule_factions": names["member"]}
+
+
+def _start_rule_fields(database):
+    """A start rule form's room, stored conditions, and order, or (None, error)."""
+    world_id = _active_world_id(database)
+    room_id = request.form.get("room_id", "").strip()
+    if database.execute("SELECT 1 FROM mud_world_rooms WHERE id=? AND world_id=?", (room_id, world_id)).fetchone() is None:
+        return None, "Choose a room in this world."
+    sort_order = request.form.get("sort_order", 0, type=int)
+    if sort_order is None or not -10000 <= sort_order <= 10000:
+        return None, "Order must be a whole number from -10000 to 10000."
+    names = _start_rule_names(database)
+    picked = {kind: request.form.getlist(field) for kind, field in
+              (("race", "races"), ("class", "classes"), ("member", "factions"))}
+    for kind, keys in picked.items():
+        if set(keys) - set(names[kind]):
+            return None, f"Choose a {mud_start_rules.LABELS[kind].lower()} from this world."
+    try:
+        conditions = mud_conditions.validate_start_rule_conditions(
+            mud_start_rules.conditions_from(picked["race"], picked["class"], picked["member"]))
+    except ValueError as problem:
+        return None, str(problem)
+    return {"room_id": room_id, "spawn_conditions_json": mud_start_rules.stored(conditions),
+            "sort_order": sort_order}, None
+
+
+def _start_rules_redirect():
+    return redirect(url_for("mud.builder", _anchor="start-rules-heading"))
+
+
+def _world_start_rule_or_404(database, rule_id):
+    row = database.execute("SELECT id FROM mud_world_start_rules WHERE id=? AND world_id=?",
+                           (rule_id, _active_world_id(database))).fetchone()
+    if row is None:
+        abort(404)
+    return row
+
+
+@bp.post("/w/<world_key>/builder/start-rules")
+@builder_required
+def builder_create_start_rule():
+    validate_csrf(); database = get_db()
+    values, error = _start_rule_fields(database)
+    if error:
+        flash(error, "error"); return _start_rules_redirect()
+    database.execute("INSERT INTO mud_world_start_rules(id,world_id,room_id,spawn_conditions_json,sort_order) "
+                     "VALUES(?,?,?,?,?)", (f"world:start-rule:{uuid.uuid4().hex}", _active_world_id(database),
+                                           values["room_id"], values["spawn_conditions_json"], values["sort_order"]))
+    database.commit(); flash("Start rule added.", "success"); return _start_rules_redirect()
+
+
+@bp.post("/w/<world_key>/builder/start-rules/<path:rule_id>/delete")
+@builder_required
+def builder_delete_start_rule(rule_id):
+    validate_csrf(); database = get_db(); _world_start_rule_or_404(database, rule_id)
+    if request.form.get("confirmation") != "delete":
+        flash("Start rule removal was not confirmed.", "error"); return _start_rules_redirect()
+    database.execute("DELETE FROM mud_world_start_rules WHERE id=?", (rule_id,))
+    database.commit(); flash("Start rule removed.", "success"); return _start_rules_redirect()
+
+
+@bp.post("/w/<world_key>/builder/start-rules/<path:rule_id>")
+@builder_required
+def builder_update_start_rule(rule_id):
+    validate_csrf(); database = get_db(); _world_start_rule_or_404(database, rule_id)
+    values, error = _start_rule_fields(database)
+    if error:
+        flash(error, "error"); return _start_rules_redirect()
+    database.execute("UPDATE mud_world_start_rules SET room_id=?,spawn_conditions_json=?,sort_order=?,"
+                     "updated_at=CURRENT_TIMESTAMP WHERE id=?",
+                     (values["room_id"], values["spawn_conditions_json"], values["sort_order"], rule_id))
+    database.commit(); flash("Start rule updated.", "success"); return _start_rules_redirect()
 
 
 @bp.post("/w/<world_key>/builder/permissions/<int:user_id>")
@@ -12610,6 +13406,8 @@ def builder_wilderness_clear():
         if entrances and request.form.get("remove_entrances") != "1":
             raise mud_wilderness.WildernessError(
                 f"{entrances} dungeon entrances stand in that area. Tick 'also remove dungeon entrances' to proceed.")
+        if mud_wilderness.start_rule_count(database, room_ids):
+            raise mud_wilderness.WildernessError("Start rules use rooms in that area. Move or remove them first.")
         if room_ids:
             _move_room_occupants(database, room_ids, _start_room(database),
                                  "The land around you was reshaped by a world builder. You have been moved to {name}.")

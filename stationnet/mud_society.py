@@ -20,7 +20,11 @@ CRIMES = ("theft", "pickpocket", "assault")
 CRIME_DEFAULTS = {"enabled": False, "detection": 70, "fine_expiry_hours": 0,
                   "fines": {"theft": 25, "pickpocket": 40, "assault": 75},
                   "reputation": {"theft": -50, "pickpocket": -75, "assault": -100}}
-DEFAULT_SOCIETY = {"clock": CLOCK_DEFAULTS, "relationships": RELATIONSHIP_DEFAULTS, "crime": CRIME_DEFAULTS}
+# Whether players may belong to factions, how many at once (0 for no limit), and
+# whether new characters must pick an eligible starting faction.
+FACTION_DEFAULTS = {"enabled": False, "max_memberships": 1, "start_required": False}
+DEFAULT_SOCIETY = {"clock": CLOCK_DEFAULTS, "relationships": RELATIONSHIP_DEFAULTS, "crime": CRIME_DEFAULTS,
+                   "factions": FACTION_DEFAULTS}
 SOCIETY_KEYS = tuple(DEFAULT_SOCIETY)
 # Hours at which each part of the day begins, in order.
 PERIODS = ((0, "night"), (5, "dawn"), (7, "morning"), (12, "afternoon"), (17, "evening"), (21, "night"))
@@ -82,8 +86,20 @@ def validate_crime(value):
     return {key: result[key] for key in CRIME_DEFAULTS}
 
 
-VALIDATORS = {"clock": validate_clock, "relationships": validate_relationships, "crime": validate_crime}
-SECTION_LABELS = {"clock": "clock", "relationships": "relationship", "crime": "crime"}
+def validate_factions(value):
+    result = _section({key: item for key, item in value.items() if key != "start_required"}
+                      if isinstance(value, dict) else value,
+                      "factions", FACTION_DEFAULTS, {"max_memberships": (0, 20)})
+    if isinstance(value, dict) and "start_required" in value:
+        if type(value["start_required"]) is not bool:
+            raise SocietyError("factions start_required must be true or false.")
+        result["start_required"] = value["start_required"]
+    return result
+
+
+VALIDATORS = {"clock": validate_clock, "relationships": validate_relationships, "crime": validate_crime,
+              "factions": validate_factions}
+SECTION_LABELS = {"clock": "clock", "relationships": "relationship", "crime": "crime", "factions": "faction"}
 
 
 def validate_settings(value):
@@ -379,6 +395,51 @@ def validate_faction(values):
     result.update(public=values.get("public", 1), sort_order=values.get("sort_order", 0))
     ranks = values.get("ranks_json")
     result["ranks_json"] = "" if ranks in (None, "", []) else json.dumps(validate_ranks(ranks), separators=(",", ":"))
+    result.update(_validate_membership(values, result))
+    return result
+
+
+def _flag(values, key, default):
+    value = values.get(key, default)
+    if value not in (0, 1) or type(value) is not int:
+        raise ValueError(f"Faction {key} must be 0 or 1.")
+    return value
+
+
+def _validate_membership(values, base):
+    """The joining rules of a faction; a faction that omits them cannot be joined."""
+    from . import mud_conditions
+    result = {key: _flag(values, key, default)
+              for key, default in (("joinable", 0), ("start_joinable", 0), ("leavable", 1))}
+    if (result["joinable"] or result["start_joinable"]) and not base["public"]:
+        raise ValueError("A joinable faction must be public; hidden factions are joined by triggers or dialogue.")
+    result["join_conditions_json"] = json.dumps(mud_conditions.validate_conditions(values.get("join_conditions_json")),
+                                                ensure_ascii=False, separators=(",", ":"))
+    result["start_conditions_json"] = json.dumps(
+        mud_conditions.validate_start_conditions(values.get("start_conditions_json")),
+        ensure_ascii=False, separators=(",", ":"))
+    message = str(values.get("join_conditions_message") or "").strip()
+    if len(message) > 300:
+        raise ValueError("Faction join_conditions_message must be up to 300 characters.")
+    result["join_conditions_message"] = message
+    if not _whole(values.get("join_cost", 0), 0, 10_000_000):
+        raise ValueError("Faction join_cost must be a whole number of coins from 0.")
+    result["join_cost"] = values.get("join_cost", 0)
+    for key in ("join_reputation", "leave_reputation"):
+        if not _whole(values.get(key, 0), -REPUTATION_LIMIT, REPUTATION_LIMIT):
+            raise ValueError(f"Faction {key} must be a whole number from -{REPUTATION_LIMIT} to {REPUTATION_LIMIT}.")
+        result[key] = values.get(key, 0)
+    if not _whole(values.get("rejoin_hours", 0), 0, 8760):
+        raise ValueError("Faction rejoin_hours must be a whole number from 0 to 8760.")
+    result["rejoin_hours"] = values.get("rejoin_hours", 0)
+    floor = values.get("expel_below")
+    if floor is not None and not _whole(floor, -REPUTATION_LIMIT, REPUTATION_LIMIT):
+        raise ValueError(f"Faction expel_below must be blank or a whole number from -{REPUTATION_LIMIT} to {REPUTATION_LIMIT}.")
+    result["expel_below"] = floor
+    if result["start_joinable"]:
+        start = max(-REPUTATION_LIMIT, min(REPUTATION_LIMIT, base["default_reputation"] + result["join_reputation"]))
+        if standing_forbids_membership({**base, **result}, start):
+            raise ValueError("A starting faction cannot begin its members at a hostile rank or below expel_below.")
     return result
 
 
@@ -431,6 +492,75 @@ def adjust_reputation(database, character_id, faction_id, amount):
             "updated_at=CURRENT_TIMESTAMP", (character_id, row["id"], new))
         changed.append((row, old, new))
     return changed
+
+
+# --- Membership ------------------------------------------------------------
+
+def standing_forbids_membership(faction_row, value):
+    """True at a rank the faction attacks on sight, or below its expel_below."""
+    floor = faction_row["expel_below"]
+    return (rank_for(stored_ranks(faction_row["ranks_json"]), value)["attitude"] == "hostile"
+            or floor is not None and value < floor)
+
+
+def is_member(database, character_id, faction_id):
+    return database.execute("SELECT 1 FROM mud_character_factions WHERE character_id=? AND faction_id=? "
+                            "AND left_at IS NULL", (character_id, faction_id)).fetchone() is not None
+
+
+def memberships(database, character_id):
+    """Rows of the factions a character currently belongs to in this world."""
+    return database.execute(
+        "SELECT f.* FROM mud_character_factions m JOIN mud_world_factions f ON f.id=m.faction_id "
+        "WHERE m.character_id=? AND m.left_at IS NULL ORDER BY f.sort_order,f.name COLLATE NOCASE",
+        (character_id,)).fetchall()
+
+
+def join_problem(database, character_id, faction_row, settings):
+    """Why the world's membership rules refuse this join, or None.
+
+    These hold for every way of joining; recruiters, conditions, and fees apply
+    only to players joining on their own.
+    """
+    if not settings["enabled"]:
+        return "Faction membership is not available here."
+    if is_member(database, character_id, faction_row["id"]):
+        return f"You already belong to {faction_row['name']}."
+    limit = settings["max_memberships"]
+    if limit and len(memberships(database, character_id)) >= limit:
+        return "You already belong to as many factions as this world allows."
+    if faction_row["rejoin_hours"] and database.execute(
+            "SELECT 1 FROM mud_character_factions WHERE character_id=? AND faction_id=? AND left_at IS NOT NULL "
+            "AND left_at>datetime('now',?)",
+            (character_id, faction_row["id"], f"-{faction_row['rejoin_hours']} hours")).fetchone():
+        return f"{faction_row['name']} will not take you back yet."
+    value = max(-REPUTATION_LIMIT, min(REPUTATION_LIMIT, reputation(database, character_id, faction_row)
+                                       + faction_row["join_reputation"]))
+    if standing_forbids_membership(faction_row, value):
+        return f"Your standing with {faction_row['name']} is too low."
+    return None
+
+
+def enroll(database, character_id, faction_row):
+    """Make a character a member; returns the resulting standing changes."""
+    database.execute(
+        "INSERT INTO mud_character_factions(character_id,faction_id) VALUES(?,?) "
+        "ON CONFLICT(character_id,faction_id) DO UPDATE SET joined_at=CURRENT_TIMESTAMP,left_at=NULL",
+        (character_id, faction_row["id"]))
+    return adjust_reputation(database, character_id, faction_row["id"], faction_row["join_reputation"])
+
+
+def withdraw(database, character_id, faction_row):
+    """End a membership; returns the resulting standing changes."""
+    database.execute("UPDATE mud_character_factions SET left_at=CURRENT_TIMESTAMP "
+                     "WHERE character_id=? AND faction_id=? AND left_at IS NULL", (character_id, faction_row["id"]))
+    return adjust_reputation(database, character_id, faction_row["id"], faction_row["leave_reputation"])
+
+
+def lapsed(database, character_id):
+    """Factions the character belongs to whose standing rules they now break."""
+    return [row for row in memberships(database, character_id)
+            if standing_forbids_membership(row, reputation(database, character_id, row))]
 
 
 # --- Crime -----------------------------------------------------------------

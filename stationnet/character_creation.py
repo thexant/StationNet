@@ -610,6 +610,101 @@ def eligible_skills(config, race, archetype, attributes):
                                                 ranks=grants)]
 
 
+class _CreationContext:
+    """What conditions can read of a character that is still being created."""
+
+    def __init__(self, race, archetype, attributes, skills, faction_id=None):
+        from . import mud_skills
+        self.race_row, self.archetype, self.attributes = race, archetype, attributes
+        self.faction_id = faction_id
+        self.ranks = dict(mud_skills.origin_grants(race, archetype))
+        for skill in skills:
+            self.ranks[skill] = max(self.ranks.get(skill, 0), 2 if archetype.get("skill") == skill else 1)
+
+    def level(self):
+        return 1
+
+    def race(self):
+        return self.race_row["key"]
+
+    def class_key(self):
+        return self.archetype["key"]
+
+    def tags(self):
+        return origin_profile(self.race_row, self.archetype)["tags"]
+
+    def attribute(self, name):
+        return self.attributes[name]
+
+    def skill_rank(self, skill_key):
+        return self.ranks.get(skill_key, 0)
+
+    def member(self, faction_id):
+        return faction_id == self.faction_id
+
+
+def _world_faction_settings(database):
+    from . import mud_scope, mud_society
+    world = mud_scope.authored()
+    row = database.execute("SELECT society_json FROM mud_world_packages WHERE id=?", (world,)).fetchone() if world else None
+    return mud_society.stored_settings(row["society_json"] if row else None)["factions"]
+
+
+def starting_factions(database):
+    """([factions offered at creation], whether one is required) for the current world."""
+    from . import mud_conditions, mud_scope
+    settings = _world_faction_settings(database)
+    if not settings["enabled"]:
+        return [], False
+    rows = database.execute("SELECT id,name,description,start_conditions_json FROM mud_world_factions "
+                            "WHERE world_id=? AND start_joinable=1 AND public=1 ORDER BY sort_order,name COLLATE NOCASE",
+                            (mud_scope.authored(),)).fetchall()
+    return [{"id": row["id"], "name": row["name"], "description": row["description"],
+             "conditions": mud_conditions.validate_start_conditions(row["start_conditions_json"])}
+            for row in rows], settings["start_required"]
+
+
+def _starting_faction(database, payload, character_id, race, archetype, attributes, skills):
+    """The faction row this build chose, or None; refuses what the world does not offer it."""
+    from . import mud_conditions, mud_society
+    offered, required = starting_factions(database)
+    context = _CreationContext(race, archetype, attributes, skills)
+    eligible = {entry["id"] for entry in offered if mud_conditions.evaluate(entry["conditions"], context)}
+    choice = payload.get("faction") or None
+    if choice is None:
+        if required and eligible and not mud_society.memberships(database, character_id):
+            raise ValueError("Choose a starting faction.")
+        return None
+    if choice not in eligible:
+        raise ValueError("Choose a starting faction this character qualifies for.")
+    row = mud_society.faction(database, choice)
+    problem = mud_society.join_problem(database, character_id, row, _world_faction_settings(database))
+    if problem:
+        raise ValueError(problem)
+    return row
+
+
+def _starting_room(database, row, race, archetype, attributes, skills, faction):
+    """The room a start rule gives this build, or None for the world's default.
+
+    Only a pending character has yet to begin anywhere; legacy characters
+    finishing a build stay where they are.
+    """
+    from . import mud, mud_scope, mud_start_rules
+    world = mud_scope.authored()
+    if not world:
+        return None
+    try:
+        mud._start_room(database)
+    except mud.ActionError:
+        raise ValueError("This world has no rooms yet, so no character can start here. "
+                         "Ask a world builder to add one.") from None
+    if row["creation_state"] != "pending":
+        return None
+    context = _CreationContext(race, archetype, attributes, skills, faction["id"] if faction else None)
+    return mud_start_rules.choose(database, world, context)
+
+
 def ensure_character(database, user_id, world=None):
     """The account's character in a world, created pending on first visit.
 
@@ -662,7 +757,9 @@ def complete(database, user_id, payload):
     ).fetchone()
     if collision:
         raise ValueError("That character name is already in use.")
-    health_bonus = (attributes["vitality"] - 10) * 5
+    starting_faction = _starting_faction(database, payload, row["id"], race, archetype, attributes, skills)
+    starting_room = _starting_room(database, row, race, archetype, attributes, skills, starting_faction)
+    health_bonus =(attributes["vitality"] - 10) * 5
     mana_bonus = (attributes["intellect"] - 10) * 3
     for track in (possession_mode,):
         progression = database.execute(
@@ -718,11 +815,17 @@ def complete(database, user_id, payload):
             )
     database.execute(
         "UPDATE mud_characters SET display_name=?,race_key=?,class_key=?,base_attributes_json=?,"
-        "creation_state='complete',"
+        "creation_state='complete',start_room_id=?,"
         "updated_at=CURRENT_TIMESTAMP WHERE id=? AND creation_state IN ('pending','legacy')",
-        (name, race["key"], archetype["key"], json.dumps(allocated), row["id"]),
+        (name, race["key"], archetype["key"], json.dumps(allocated), starting_room, row["id"]),
     )
     sync_origin_resources(database, row["id"])
+    if starting_faction is not None:
+        from . import mud_society
+        mud_society.enroll(database, row["id"], starting_faction)
+    if starting_room is not None:
+        from . import mud
+        mud._set_player_location(database, user_id, "traditional", "world_room", starting_room)
     return name
 
 
