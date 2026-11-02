@@ -376,7 +376,7 @@ function initialize() {
       else if (agenda.agenda) decrypt(agenda.agenda.envelope);
       else if (drawings.drawings.length) decrypt(drawings.drawings[0].envelope);
       else if (programs.programs.length) decrypt(programs.programs[0].envelope);
-      rememberOfficeKey(key, csrf);
+      rememberOfficeKey(key, csrf, $('#sheets-remember').checked);
       $('#sheets-password').value = ''; $('#sheets-confirm').value = ''; $('#sheets-confirm-row').hidden = true;
       $('#sheets-unlock').hidden = true; $('#sheets-workspace').hidden = false; $('#sheets-lock').hidden = false;
       await refreshList(); if (records.length) await load(records[0].id); else await newWorkbook();

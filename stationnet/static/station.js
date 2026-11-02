@@ -1,4 +1,12 @@
 "use strict";
+// Disconnecting removes OFFICE keys from this browser. Key names match office_vault.js.
+document.addEventListener("submit",event=>{
+  if(!event.target.matches?.("[data-office-forget]"))return;
+  try{
+    localStorage.removeItem("stationnet.office.remembered.v1");
+    sessionStorage.removeItem("stationnet.office.unlock.v1");
+  }catch{/* Browser storage is unavailable. */}
+});
 // Keep spelling and automatic capitalization out of terminal-style fields.
 // Authentication fields retain their declared autocomplete values so password
 // managers and the browser can fill them reliably.

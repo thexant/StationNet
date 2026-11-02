@@ -251,7 +251,7 @@ function start() {
       const [programs, documents, sheets, presentations, agenda, drawings] = await Promise.all([request(api), request(app.dataset.documentsApi), request(app.dataset.sheetsApi), request(app.dataset.presentationsApi), request(app.dataset.agendaApi), request(app.dataset.drawApi)]);
       const first = programs.programs[0]?.envelope || documents.documents[0]?.envelope || sheets.sheets[0]?.envelope || presentations.presentations[0]?.envelope || agenda.agenda?.envelope || drawings.drawings[0]?.envelope;
       if (!first) { if ($('#basic-confirm-row').hidden) { $('#basic-confirm-row').hidden = false; $('#basic-confirm').required = true; status('CONFIRM NEW PASSWORD', 'pending'); $('#basic-confirm').focus(); return; } if ($('#basic-confirm').value !== pass) throw new Error('The new passwords do not match.'); }
-      key = await pbkdf2Async(sha256, enc.encode(pass), un64(vault.salt), { c: 210000, dkLen: 32, asyncTick: 20 }); if (first) decrypt(first); rememberOfficeKey(key, csrf);
+      key = await pbkdf2Async(sha256, enc.encode(pass), un64(vault.salt), { c: 210000, dkLen: 32, asyncTick: 20 }); if (first) decrypt(first); rememberOfficeKey(key, csrf, $('#basic-remember').checked);
       $('#basic-password').value = ''; $('#basic-confirm').value = ''; $('#basic-confirm-row').hidden = true;
       await openWorkspace();
     } catch (error) { key?.fill(0); key = null; errorBox.textContent = `Could not unlock. Check your OFFICE Password and try again. ${error.message}`; errorBox.hidden = false; status('LOCKED', 'error'); }
@@ -292,6 +292,6 @@ function start() {
     else if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 's') { event.preventDefault(); saveNow(); }
   });
   window.addEventListener('beforeunload', event => { if (dirty || saving || conflict) { event.preventDefault(); event.returnValue = ''; } });
-  (async () => { key = readOfficeKey(csrf); if (!key) return; try { const result = await request(api); if (result.programs[0]) decrypt(result.programs[0].envelope); await openWorkspace(); }
-    catch (error) { key?.fill(0); key = null; forgetOfficeKey(); status('LOCKED'); $('#basic-workspace').hidden = true; $('#basic-unlock').hidden = false; $('#basic-lock').hidden = true; message(`Could not load BASIC: ${error.message}`); } })();
+  (async () => { key = readOfficeKey(csrf); if (!key) return; let badKey = false; try { const result = await request(api); if (result.programs[0]) { try { decrypt(result.programs[0].envelope); } catch (error) { badKey = true; throw error; } } await openWorkspace(); }
+    catch (error) { key?.fill(0); key = null; if (badKey) forgetOfficeKey(); status('LOCKED'); $('#basic-workspace').hidden = true; $('#basic-unlock').hidden = false; $('#basic-lock').hidden = true; message(`Could not load BASIC: ${error.message}`); } })();
 }

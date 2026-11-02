@@ -13,7 +13,7 @@
   {% set header_tagline = station_header_tagline() if g.station else none %}
   {% if header_tagline and header_tagline.color %}<style nonce="{{ g.style_nonce }}">.brand-tag-current { color: {{ header_tagline.color }}; --tagline-ink: {{ header_tagline.color }}; }</style>{% endif %}
   {% block extra_styles %}{% endblock %}
-  <script src="{{ url_for('static',filename='station.js',v='early-hours-1') }}" defer></script>
+  <script src="{{ url_for('static',filename='station.js',v='early-hours-2') }}" defer></script>
   <script src="{{ url_for('static',filename='account-deletion.js',v='1') }}" defer></script>
   <script src="{{ url_for('static',filename='pwa.js',v='1') }}" defer></script>
   <script src="{{ url_for('static',filename='feeds.js',v='1') }}" defer></script>

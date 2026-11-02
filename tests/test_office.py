@@ -352,6 +352,21 @@ def test_every_office_program_counts_basic_files_when_unlocking(tmp_path):
         assert "basicApi" in (STATIC / f"office-{name}.js").read_text(encoding="utf-8")
 
 
+def test_every_office_program_offers_unchecked_remember_option(tmp_path):
+    app, user_id = _configured_app(tmp_path)
+    client = app.test_client()
+    _sign_in(client, user_id)
+    with app.app_context():
+        database = get_db()
+        database.execute("UPDATE station SET office_enabled=1 WHERE id=1")
+        database.commit()
+    programs = {"documents": "document", "sheets": "sheets", "presentations": "presentations", "agenda": "agenda", "draw": "draw", "basic": "basic"}
+    for name, prefix in programs.items():
+        page = client.get(f"/office/{name}").data.decode()
+        assert f'<input id="{prefix}-remember" type="checkbox">' in page
+        assert f"#{prefix}-remember" in (STATIC / f"office-{name}.js").read_text(encoding="utf-8")
+
+
 def test_sheets_are_owner_scoped_and_share_office_vault(tmp_path):
     app, sysop_id = _configured_app(tmp_path)
     with app.app_context():

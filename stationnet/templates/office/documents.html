@@ -10,7 +10,7 @@
   <section id="document-unlock" class="terminal-card documents-unlock">
     <h2>Unlock OFFICE</h2>
     <p>One OFFICE Password unlocks Documents, Sheets, Presentations, Agenda, Draw, and BASIC in this browser tab. It encrypts files before saving and is separate from your StationNet password. If you lose it, saved files cannot be recovered.</p>
-    <form id="document-unlock-form" class="form-grid"><label>OFFICE Password<input id="document-passphrase" type="password" minlength="12" required autocomplete="off"></label><label id="document-confirm-row" hidden>Confirm new OFFICE Password<input id="document-passphrase-confirm" type="password" minlength="12" autocomplete="off"></label><button type="submit">UNLOCK DOCUMENTS</button></form>
+    <form id="document-unlock-form" class="form-grid"><label>OFFICE Password<input id="document-passphrase" type="password" minlength="12" required autocomplete="off"></label><label id="document-confirm-row" hidden>Confirm new OFFICE Password<input id="document-passphrase-confirm" type="password" minlength="12" autocomplete="off"></label><label class="switch"><input id="document-remember" type="checkbox"> Remember on this browser. Stays unlocked here until you press LOCK or disconnect. Don't use on a shared computer.</label><button type="submit">UNLOCK DOCUMENTS</button></form>
     <p id="document-unlock-error" class="documents-error" role="alert" hidden></p>
   </section>
   <div id="document-workspace" class="documents-workspace" hidden>
@@ -45,5 +45,5 @@
   </div>
   <dialog id="document-export-dialog"><form method="dialog"><h2>EXPORT DOCUMENT</h2><div class="documents-export-grid"><button value="docx">WORD .DOCX</button><button value="pdf">PDF</button><button value="odt">ODT</button><button value="html">HTML</button><button value="md">MARKDOWN</button><button value="txt">PLAIN TEXT</button></div><button value="cancel" class="secondary">CANCEL</button></form></dialog>
 </div>
-<script src="{{ url_for('static', filename='office-documents.js', v='10') }}" defer></script>
+<script src="{{ url_for('static', filename='office-documents.js', v='11') }}" defer></script>
 {% endblock %}

@@ -62,7 +62,7 @@
       <h2>&gt; CURRENT OPERATOR</h2>
       {% if g.user %}
       <div class="operator-summary"><strong>{{ g.user.username }}</strong><span>{{ g.user.callsign }} / {{ 'SYSOP' if g.user.is_admin else 'MEMBER' }}</span><small class="positive">* AUTHENTICATED</small></div>
-      <div class="operator-actions">{% if module_enabled('users') %}<a href="{{ url_for('users.profile',user_id=g.user.id) }}">[ PROFILE ]</a>{% endif %}<form method="post" action="{{ url_for('auth.logout') }}"><input type="hidden" name="csrf_token" value="{{ session.csrf_token }}"><button class="text-button">[ DISCONNECT ]</button></form></div>
+      <div class="operator-actions">{% if module_enabled('users') %}<a href="{{ url_for('users.profile',user_id=g.user.id) }}">[ PROFILE ]</a>{% endif %}<form method="post" action="{{ url_for('auth.logout') }}" data-office-forget><input type="hidden" name="csrf_token" value="{{ session.csrf_token }}"><button class="text-button">[ DISCONNECT ]</button></form></div>
       {% else %}
       <div class="operator-summary"><strong>UNASSIGNED</strong><span>READ ONLY</span><small class="warning-text">* ANONYMOUS</small></div>
       <a class="button compact-button" href="{{ url_for('auth.login') }}">&gt; AUTHENTICATE</a>

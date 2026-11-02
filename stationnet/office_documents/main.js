@@ -345,7 +345,7 @@ function initialize() {
       else if (agenda.agenda) decrypt(agenda.agenda.envelope);
       else if (drawings.drawings.length) decrypt(drawings.drawings[0].envelope);
       else if (programs.programs.length) decrypt(programs.programs[0].envelope);
-      rememberOfficeKey(key, csrf);
+      rememberOfficeKey(key, csrf, $('#document-remember').checked);
       $('#document-passphrase').value = '';
       $('#document-passphrase-confirm').value = '';
       $('#document-confirm-row').hidden = true;

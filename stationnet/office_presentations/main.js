@@ -202,7 +202,7 @@ function initialize() {
       }
       key = await pbkdf2Async(sha256, enc.encode(pass), unb64(vault.salt), { c: 210000, dkLen: 32, asyncTick: 20 });
       if (first) decrypt(first);
-      rememberOfficeKey(key, csrf);
+      rememberOfficeKey(key, csrf, $('#presentations-remember').checked);
       $('#presentations-password').value = ''; $('#presentations-confirm').value = ''; $('#presentations-confirm-row').hidden = true; $('#presentations-unlock').hidden = true; $('#presentations-workspace').hidden = false; $('#presentations-lock').hidden = false;
       await refreshList(); if (records.length) await load(records[0].id); else await makeNew();
     } catch (error) { key?.fill(0); key = null; errorBox.textContent = `Could not unlock. Check your OFFICE Password and try again. ${error.message}`; errorBox.hidden = false; status('LOCKED', 'error'); }

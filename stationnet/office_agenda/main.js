@@ -101,7 +101,7 @@ function initialize() {
       if (first) decrypt(first);
       data = agenda.agenda ? normalize(decrypt(agenda.agenda.envelope)) : blankAgenda();
       revision = agenda.agenda?.revision ?? null;
-      rememberOfficeKey(key, csrf); setUnlocked();
+      rememberOfficeKey(key, csrf, $('#agenda-remember').checked); setUnlocked();
     } catch (error) { key?.fill(0); key = null; errorBox.textContent = `Could not unlock. Check your OFFICE Password and try again. ${error.message}`; errorBox.hidden = false; status('LOCKED', 'error'); }
   }
   function lock() {
