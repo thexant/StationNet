@@ -289,10 +289,12 @@ def media(name):
 
 @bp.post("/<int:thread_id>/moderate")
 def moderate_thread(thread_id):
-    _moderator_required()
     validate_csrf()
     item = _thread(thread_id)
     action = request.form.get("action")
+    self_delete = action == "delete" and item["author_id"] == g.user["id"]
+    if not self_delete:
+        _moderator_required()
     if action not in {"pin", "unpin", "lock", "unlock", "delete"}:
         abort(400)
     database = get_db()
@@ -307,8 +309,9 @@ def moderate_thread(thread_id):
         value = int(action in {"pin", "lock"})
         database.execute(f"UPDATE imageboard_threads SET {column}=? WHERE id=?", (value, thread_id))
         destination = url_for("imageboard.thread", thread_id=thread_id)
-    audit(database, g.user["id"], item["author_id"], f"imageboard_{action}_thread",
-          request.form.get("reason", "")[:500], "imageboard_thread", thread_id)
+    if not self_delete:
+        audit(database, g.user["id"], item["author_id"], f"imageboard_{action}_thread",
+              request.form.get("reason", "")[:500], "imageboard_thread", thread_id)
     database.commit()
     if action == "delete":
         _remove_images([item, *replies])
@@ -320,20 +323,23 @@ def moderate_thread(thread_id):
 
 @bp.post("/replies/<int:reply_id>/delete")
 def delete_reply(reply_id):
-    _moderator_required()
     validate_csrf()
     database = get_db()
     reply = database.execute("SELECT * FROM imageboard_replies WHERE id=?", (reply_id,)).fetchone()
     if reply is None:
         abort(404)
+    own = reply["author_id"] == g.user["id"]
+    if not own:
+        _moderator_required()
     database.execute("DELETE FROM imageboard_replies WHERE id=?", (reply_id,))
     database.execute(
         "UPDATE imageboard_threads SET bumped_at=COALESCE((SELECT MAX(created_at) "
         "FROM imageboard_replies WHERE thread_id=?),created_at) WHERE id=?",
         (reply["thread_id"], reply["thread_id"]),
     )
-    audit(database, g.user["id"], reply["author_id"], "imageboard_delete_reply",
-          request.form.get("reason", "")[:500], "imageboard_reply", reply_id)
+    if not own:
+        audit(database, g.user["id"], reply["author_id"], "imageboard_delete_reply",
+              request.form.get("reason", "")[:500], "imageboard_reply", reply_id)
     database.commit()
     _remove_images([reply])
     flash("Reply deleted.", "success")

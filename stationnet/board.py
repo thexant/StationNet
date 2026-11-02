@@ -1,6 +1,6 @@
 """Initial bulletin board service."""
 from flask import Blueprint, abort, flash, g, redirect, render_template, request, url_for
-from .auth import admin_required, login_required
+from .auth import login_required
 from .db import get_db
 from .security import validate_csrf
 from .moderation import audit
@@ -51,10 +51,14 @@ def thread(post_id):
     return render_template("board/thread.html", post=post, replies=replies)
 
 @bp.post("/<int:post_id>/delete")
-@admin_required
+@login_required
 def delete(post_id):
     validate_csrf(); database=get_db(); post=database.execute("SELECT id,parent_id,author_id FROM posts WHERE id=?", (post_id,)).fetchone()
     if post is None: abort(404)
+    own=post["author_id"] == g.user["id"]
+    if not own and not g.user["is_admin"]: abort(403)
     destination=url_for("board.thread", post_id=post["parent_id"]) if post["parent_id"] else url_for("board.index")
-    database.execute("DELETE FROM posts WHERE id=?", (post_id,)); audit(database,g.user["id"],post["author_id"],"delete_bulletin",request.form.get("reason", "SYSOP removal")[:500],"bulletin",post_id); database.commit(); flash("Bulletin content removed by SYSOP.", "success")
+    database.execute("DELETE FROM posts WHERE id=?", (post_id,))
+    if not own: audit(database,g.user["id"],post["author_id"],"delete_bulletin",request.form.get("reason", "SYSOP removal")[:500],"bulletin",post_id)
+    database.commit(); flash("Bulletin content removed." if own else "Bulletin content removed by SYSOP.", "success")
     return redirect(destination)
