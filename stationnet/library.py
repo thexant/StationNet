@@ -483,6 +483,8 @@ def set_category(book_id):
 
 @bp.get("/<int:book_id>/download")
 def download(book_id):
+    if not g.station["library_downloads_enabled"]:
+        abort(404)
     book = _book(book_id)
     path = _path(book)
     if not path.is_file():

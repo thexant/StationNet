@@ -117,6 +117,40 @@ def test_library_file_size_setting_controls_member_and_station_uploads(tmp_path)
     assert accepted.status_code == 302 and accepted.headers["Location"].endswith("/library/3")
 
 
+def test_library_downloads_setting_hides_controls_and_blocks_route(tmp_path):
+    app = create_app({"TESTING": True, "DATA_DIR": str(tmp_path)})
+    with app.app_context():
+        db = get_db()
+        db.execute("INSERT INTO station(name,description,callsign,library_enabled) VALUES('Test','Test','TST-1',1)")
+        admin = db.execute("INSERT INTO users(username,callsign,password_hash,is_admin) VALUES('admin','ADM-1','unused',1)").lastrowid
+        db.commit()
+    client = app.test_client()
+    sign_in(client, admin)
+    data = pdf()
+    client.post("/library/station-upload", data={"csrf_token": "library-test",
+        "file": (io.BytesIO(data), "manual.pdf")}, content_type="multipart/form-data")
+    assert b"Allow Library Downloads" in client.get("/sysop/settings").data
+    assert b"DOWNLOAD PDF" in client.get("/library/1").data
+    assert b"Open PDF in a new tab" in client.get("/library/1/read").data
+    assert client.get("/library/1/download").data == data
+
+    settings = {"csrf_token": "library-test", "settings_section": "library",
+                "library_enabled": "on", "library_mode": "community",
+                "library_default_quota_mb": "512", "library_max_upload_mb": "512"}
+    assert client.post("/sysop/settings", data=settings).status_code == 302
+    with app.app_context():
+        assert get_db().execute("SELECT library_downloads_enabled FROM station").fetchone()[0] == 0
+    assert b"DOWNLOAD PDF" not in client.get("/library/1").data
+    reader = client.get("/library/1/read")
+    assert reader.status_code == 200 and b"Open PDF in a new tab" not in reader.data
+    assert client.get("/library/1/download").status_code == 404
+    assert client.get("/library/1/pdf").status_code == 200
+
+    assert client.post("/sysop/settings", data={**settings, "library_downloads_enabled": "on"}).status_code == 302
+    assert b"DOWNLOAD PDF" in client.get("/library/1").data
+    assert client.get("/library/1/download").data == data
+
+
 def test_pdf_library_upload_reader_and_modes(tmp_path):
     app = create_app({"TESTING": True, "DATA_DIR": str(tmp_path)})
     with app.app_context():

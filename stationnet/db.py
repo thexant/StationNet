@@ -49,6 +49,7 @@ CREATE TABLE IF NOT EXISTS station (
  library_mode TEXT NOT NULL DEFAULT 'community' CHECK(library_mode IN ('community','curated')),
  library_default_quota_mb INTEGER NOT NULL DEFAULT 512,
  library_max_upload_mb INTEGER NOT NULL DEFAULT 512,
+ library_downloads_enabled INTEGER NOT NULL DEFAULT 1 CHECK(library_downloads_enabled IN (0,1)),
  imageboard_enabled INTEGER NOT NULL DEFAULT 0 CHECK(imageboard_enabled IN (0,1)),
  events_enabled INTEGER NOT NULL DEFAULT 0 CHECK(events_enabled IN (0,1)),
  office_enabled INTEGER NOT NULL DEFAULT 0 CHECK(office_enabled IN (0,1)),
@@ -2366,7 +2367,8 @@ def _migrate_library(database):
     for name, definition in (("library_enabled", "INTEGER NOT NULL DEFAULT 0"),
                              ("library_mode", "TEXT NOT NULL DEFAULT 'community'"),
                              ("library_default_quota_mb", "INTEGER NOT NULL DEFAULT 512"),
-                             ("library_max_upload_mb", "INTEGER NOT NULL DEFAULT 512")):
+                             ("library_max_upload_mb", "INTEGER NOT NULL DEFAULT 512"),
+                             ("library_downloads_enabled", "INTEGER NOT NULL DEFAULT 1")):
         if name not in columns:
             database.execute(f"ALTER TABLE station ADD COLUMN {name} {definition}")
     user_columns = {row["name"] for row in database.execute("PRAGMA table_info(users)")}

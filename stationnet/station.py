@@ -1488,8 +1488,10 @@ def settings():
             else:
                 database = get_db()
                 database.execute("UPDATE station SET library_enabled=?,library_mode=?,"
-                                 "library_default_quota_mb=?,library_max_upload_mb=? WHERE id=1",
-                                 (request.form.get("library_enabled") == "on", mode, quota, max_upload))
+                                 "library_default_quota_mb=?,library_max_upload_mb=?,"
+                                 "library_downloads_enabled=? WHERE id=1",
+                                 (request.form.get("library_enabled") == "on", mode, quota, max_upload,
+                                  request.form.get("library_downloads_enabled") == "on"))
                 database.commit()
                 flash("Library settings updated.", "success")
             return redirect(url_for("station.settings") + "#library-service")
