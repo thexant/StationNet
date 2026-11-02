@@ -1240,6 +1240,7 @@ button:disabled { opacity: .5; cursor: not-allowed; }
   .bulletin-columns { display: none; }
   .bulletin-row { grid-template-columns: minmax(0,1fr) 3.5rem; }
   .bulletin-meta { grid-column: 1 / -1; grid-template-columns: auto auto 1fr; }
+  .bulletin-row .bulletin-meta { grid-template-columns: auto 1fr; }
   .bulletin-meta time { text-align: right; }
   .station-profile { grid-template-columns: 1fr; }
   .profile-ident { border-top: 1px dotted var(--cyan); border-left: 0; }

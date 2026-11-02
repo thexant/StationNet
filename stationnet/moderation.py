@@ -48,7 +48,12 @@ def dashboard():
         (utc_now(), utc_now(), f"%{query}%", f"%{query}%"),
     ).fetchall()
     reports = database.execute(
-        "SELECT r.*,u.username reporter,s.username subject FROM moderation_reports r "
+        "SELECT r.*,u.username reporter,s.username subject,"
+        "CASE r.target_type "
+        "WHEN 'bulletin' THEN (SELECT COALESCE(p.parent_id,p.id) FROM posts p WHERE p.id=r.target_id) "
+        "WHEN 'imageboard_thread' THEN (SELECT t.id FROM imageboard_threads t WHERE t.id=r.target_id) "
+        "WHEN 'imageboard_reply' THEN (SELECT i.thread_id FROM imageboard_replies i WHERE i.id=r.target_id) "
+        "END thread_id FROM moderation_reports r "
         "JOIN users u ON u.id=r.reporter_id LEFT JOIN users s ON s.id=r.subject_user_id "
         "WHERE r.status='open' AND (? OR r.target_type NOT IN ('feed_post','feed_comment')) "
         "AND (? OR r.target_type NOT IN ('imageboard_thread','imageboard_reply')) "

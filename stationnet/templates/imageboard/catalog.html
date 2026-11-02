@@ -6,7 +6,7 @@
 {% for thread in threads %}
 <article class="terminal-card imageboard-card">
   <a class="imageboard-card-image" href="{{ url_for('imageboard.thread',thread_id=thread.id) }}"><img src="{{ url_for('imageboard.media',name=thread.thumb_name) }}" alt="Preview for {{ thread.subject }}" loading="lazy"></a>
-  <div class="imageboard-card-copy"><p class="eyebrow">#{{ thread.id }} {% if thread.pinned %}/ PINNED{% endif %} {% if thread.locked %}/ LOCKED{% endif %}</p><h2><a href="{{ url_for('imageboard.thread',thread_id=thread.id) }}">{{ thread.subject }}</a></h2><p>{{ thread.body|truncate(180) }}</p><p class="muted">{{ thread.username }} - [{{ thread.callsign }}] · {{ thread.reply_count }} replies</p><time class="muted" datetime="{{ thread.bumped_at }}">Bumped {{ thread.bumped_at }} UTC</time></div>
+  <div class="imageboard-card-copy">{% if thread.pinned or thread.locked %}<p class="eyebrow">{% if thread.pinned %}PINNED{% endif %}{% if thread.pinned and thread.locked %} / {% endif %}{% if thread.locked %}LOCKED{% endif %}</p>{% endif %}<h2><a href="{{ url_for('imageboard.thread',thread_id=thread.id) }}">{{ thread.subject }}</a></h2><p>{{ thread.body|truncate(180) }}</p><p class="muted">{{ thread.username }} - [{{ thread.callsign }}] · {{ thread.reply_count }} replies</p><time class="muted" datetime="{{ thread.bumped_at }}">Bumped {{ thread.bumped_at }} UTC</time></div>
 </article>
 {% else %}<div class="empty-state"><h2>No threads yet.</h2><a class="button" href="{{ url_for('imageboard.create') }}">POST FIRST THREAD</a></div>{% endfor %}
 </section>
