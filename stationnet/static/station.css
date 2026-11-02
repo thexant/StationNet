@@ -24,6 +24,9 @@
   --surface-lamp: #001005;
   --border-soft: #064d1d;
   --border-muted: #454540;
+  --theme-ink: #00330d;
+  --surface-tint-rgb: 0,12,3;
+  --surface-accent-rgb: 0,10,8;
   --theme-rgb: 0,237,69;
   --accent-rgb: 0,216,207;
   --masthead-color: #00d8cf;
@@ -600,9 +603,9 @@ button:focus-visible, .button:focus-visible, a:focus-visible, summary:focus-visi
 .program-list a:hover, .program-list a[aria-current="true"] { color: #000; background: var(--green); }
 .program-row-name { display: flex; align-items: center; gap: .4rem; min-width: 0; overflow-wrap: anywhere; }
 .program-glyph { flex: none; color: var(--cyan); }
-.program-list a:hover .program-glyph, .program-list a[aria-current="true"] .program-glyph { color: #00330d; }
+.program-list a:hover .program-glyph, .program-list a[aria-current="true"] .program-glyph { color: var(--theme-ink); }
 .program-row-meta { flex: none; color: var(--grey); font-size: .6rem; text-align: right; }
-.program-list a:hover .program-row-meta, .program-list a[aria-current="true"] .program-row-meta { color: #00330d; }
+.program-list a:hover .program-row-meta, .program-list a[aria-current="true"] .program-row-meta { color: var(--theme-ink); }
 .program-pagination { display: flex; align-items: center; justify-content: space-between; gap: .4rem; padding: .6rem .7rem; border-top: 1px dotted var(--green-dim); }
 .program-pagination button { min-height: 2.4rem; padding: .35rem .5rem; font-size: .62rem; }
 .program-pagination span { color: var(--grey); font-size: .62rem; white-space: nowrap; }
@@ -697,17 +700,17 @@ button:focus-visible, .button:focus-visible, a:focus-visible, summary:focus-visi
 .app-grid { width: fit-content; letter-spacing: .04em; }
 .app-cell-grid { display: grid; grid-template-columns: repeat(var(--app-grid-columns),1.35rem); width: fit-content; max-width: 100%; max-height: 34rem; overflow: auto; padding: .55rem; border: 1px dotted var(--green-dim); background: var(--black); touch-action: none; }
 .app-cell { display: grid; place-items: center; width: 1.35rem; min-width: 1.35rem; height: 1.55rem; min-height: 1.55rem; margin: 0; padding: 0; border: 0; border-radius: 0; font: 400 .82rem/1 var(--mono); text-transform: none; box-shadow: none; }
-.app-cell-grid[data-app-component="art-canvas"] .app-cell { box-shadow: inset 0 0 0 1px rgba(100,190,135,.13); }
+.app-cell-grid[data-app-component="art-canvas"] .app-cell { box-shadow: inset 0 0 0 1px rgba(var(--theme-rgb),.13); }
 .app-cell:hover { outline: 1px solid var(--cyan); outline-offset: -1px; filter: brightness(1.25); }
 .app-cell:focus, .app-cell-cursor { z-index: 1; outline: 2px solid var(--cyan); outline-offset: -2px; }
 .app-canvas-wrap { position: relative; width: min(100%,52rem); }
 .app-canvas { display: block; width: min(100%, calc(70vh * var(--app-canvas-ratio, 1))); height: auto; max-height: 70vh; border: 1px solid var(--green-dim); background: var(--surface-field); image-rendering: pixelated; touch-action: none; }
 .app-canvas:focus { outline: 2px solid var(--cyan); outline-offset: 2px; }
 .app-canvas-controls { position: absolute; inset: 0; display: grid; place-items: center; pointer-events: none; background: rgba(0,0,0,.28); }
-.app-canvas-controls button { min-width: 8rem; padding: .8rem 1.2rem; pointer-events: auto; border-width: 2px; background: rgba(0,12,3,.94); font-size: .85rem; }
+.app-canvas-controls button { min-width: 8rem; padding: .8rem 1.2rem; pointer-events: auto; border-width: 2px; background: rgba(var(--surface-tint-rgb),.94); font-size: .85rem; }
 .app-canvas-controls.app-canvas-gamepad { position: relative; inset: auto; display: flex; align-items: flex-end; justify-content: space-between; gap: .5rem; width: min(100%, calc(70vh * var(--app-canvas-ratio, 1))); min-height: 10rem; margin-top: .45rem; padding: .35rem max(.35rem, env(safe-area-inset-right)) max(.35rem, env(safe-area-inset-bottom)) max(.35rem, env(safe-area-inset-left)); box-sizing: border-box; background: none; touch-action: none; user-select: none; }
 .app-canvas-gamepad .app-touch-positioned { position: absolute; transform: translate(-50%, -50%); z-index: 1; pointer-events: auto; }
-.app-gamepad-joystick, .app-gamepad-steering { box-sizing: border-box; border: 2px solid var(--green-dim); border-radius: 50%; background: rgba(0,12,3,.78); touch-action: none; pointer-events: auto; }
+.app-gamepad-joystick, .app-gamepad-steering { box-sizing: border-box; border: 2px solid var(--green-dim); border-radius: 50%; background: rgba(var(--surface-tint-rgb),.78); touch-action: none; pointer-events: auto; }
 .app-gamepad-steering { border-radius: 2rem; }
 .app-gamepad-knob { position: absolute; left: 30%; top: 30%; width: 40%; height: 40%; border-radius: 50%; background: var(--green-dim); pointer-events: none; }
 @media (orientation: portrait) and (max-width: 600px) { .app-canvas-controls.app-canvas-gamepad { min-height: 12rem; } .app-canvas-gamepad button { width: clamp(2rem, 10vw, 3rem); height: clamp(2rem, 10vw, 3rem); } }
@@ -1044,7 +1047,7 @@ button:disabled { opacity: .5; cursor: not-allowed; }
 .permission-summary span { padding: .25rem .4rem; border: 1px dotted var(--green-dim); }
 .radio-rule-form { margin-top: .75rem; }
 
-.radio-player { position: sticky; bottom: 1.65rem; z-index: 12; display: grid; grid-template-columns: 1fr; gap: .35rem; align-items: center; width: 100%; padding: .38rem .5rem; border: 1px solid var(--cyan); background: rgba(0,10,8,.98); box-shadow: 0 -.2rem .65rem #000; }
+.radio-player { position: sticky; bottom: 1.65rem; z-index: 12; display: grid; grid-template-columns: 1fr; gap: .35rem; align-items: center; width: 100%; padding: .38rem .5rem; border: 1px solid var(--cyan); background: rgba(var(--surface-accent-rgb),.98); box-shadow: 0 -.2rem .65rem #000; }
 .radio-player-state, .radio-player-controls { display: flex; align-items: center; justify-content: center; gap: .4rem; flex-wrap: wrap; }
 .radio-player.minimized { width: 2.5rem; height: 2.5rem; min-height: 0; justify-self: end; grid-template-columns: 1fr; padding: .18rem; }
 .radio-player.minimized .radio-player-controls, .radio-player.minimized .radio-player-error { display: none; }
@@ -1170,7 +1173,7 @@ button:disabled { opacity: .5; cursor: not-allowed; }
 .video-grid { display: grid; grid-template-columns: repeat(auto-fill,minmax(13rem,1fr)); gap: .8rem; margin: 1rem 0; }
 .video-card { min-width: 0; }
 .video-card a { display: block; text-decoration: none; }
-.video-card video, .video-card img { width: 100%; aspect-ratio: 16 / 9; object-fit: contain; background: #050b09; pointer-events: none; }
+.video-card video, .video-card img { width: 100%; aspect-ratio: 16 / 9; object-fit: contain; background: rgb(var(--surface-accent-rgb)); pointer-events: none; }
 .video-card h2 { font-size: 1rem; overflow-wrap: anywhere; }
 .video-card small { display: block; }
 .video-page video { display: block; width: 100%; max-height: 70vh; background: var(--black); }

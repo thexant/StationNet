@@ -209,3 +209,53 @@ def test_remove_custom_theme_requires_confirmation_and_resets_selections(tmp_pat
         user = db.execute("SELECT site_theme,masthead_theme FROM users WHERE id=?", (member,)).fetchone()
         assert tuple(station) == ("cyan", "cyan")
         assert tuple(user) == (None, None)
+
+
+def _variables(stylesheet):
+    root = stylesheet.split("}", 1)[0].split("{", 1)[1]
+    return dict(item.split(":", 1) for item in root.split(";") if item)
+
+
+LEGACY_SURFACES = ("#030703", "#001b08", "#071107", "#020702", "#010701", "#092010", "#10351c",
+                   "#10241a", "#001506", "#001505", "#001005", "#064d1d", "#00330d")
+
+
+def test_default_theme_keeps_legacy_surfaces(tmp_path):
+    app, *_ = _client(tmp_path)
+    with app.app_context():
+        variables = _variables(themes.css("cyan", "cyan"))
+    assert variables["--surface-field"] == "#030703"
+    assert variables["--surface-button"] == "#001b08"
+    assert variables["--surface-selected"] == "#10351c"
+    assert variables["--border-soft"] == "#064d1d"
+    assert variables["--theme-ink"] == "#00330d"
+    assert variables["--surface-tint-rgb"] == "0,12,3"
+    assert variables["--surface-accent-rgb"] == "0,10,8"
+
+
+def test_non_green_theme_surfaces_follow_its_palette(tmp_path):
+    app, *_ = _client(tmp_path)
+    with app.app_context():
+        stylesheet = themes.css("crimson", "crimson")
+    root = stylesheet.split("}", 1)[0]
+    assert not any(color in root for color in LEGACY_SURFACES)
+    variables = _variables(stylesheet)
+    for name in ("--surface-button", "--surface-selected", "--surface-soft-hover", "--border-soft"):
+        red, green, _ = themes._rgb(variables[name])
+        assert red > green, name
+
+
+def test_custom_field_and_button_are_kept_unless_template_defaults(tmp_path):
+    app, client, *_ = _client(tmp_path)
+    _import(client, _theme())
+    site = {key: "#f05c6a" for key in themes.SITE_KEYS}
+    site.update(field="#030703", button="#001b08")
+    _import(client, _theme(id="red-template", name="Red Template", site=site))
+    with app.app_context():
+        custom = _variables(themes.css("custom-ocean-night", "cyan"))
+        template = _variables(themes.css("custom-red-template", "cyan"))
+    assert custom["--surface-field"] == "#123456"
+    assert custom["--surface-button"] == "#123456"
+    assert template["--surface-field"] != "#030703"
+    assert template["--surface-button"] != "#001b08"
+    assert themes._rgb(template["--surface-button"])[0] > themes._rgb(template["--surface-button"])[1]

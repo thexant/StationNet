@@ -51,8 +51,12 @@ not a promise that every element of that type uses it.
 | `masthead` | Large text logo colour |
 | `masthead-shadow` | Offset shadow behind the logo |
 
-`green` and `cyan` also drive translucent accents used in some panels. Some
-interface surfaces and special status styles use fixed colours, so a custom
-theme does not recolour every pixel. Choose colours with enough contrast for
+`green` and `cyan` also drive translucent accents and the dark panel, hover,
+selection, and soft-border surfaces, which StationNet derives automatically as
+dark tints of those colours. If `field` or `button` keep the template's default
+dark greens (`#030703` and `#001b08`) while `green` is changed, they are tinted
+from `green` too; any other value is used exactly. Special status styles
+(warnings, errors) and document content keep fixed colours, so a custom theme
+does not recolour every pixel. Choose colours with enough contrast for
 text, controls, and the masthead shadow, then preview both selectors in Station
 settings.

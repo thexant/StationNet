@@ -32,6 +32,27 @@ ID_RE = re.compile(r"[a-z0-9]+(?:-[a-z0-9]+)*\Z")
 COLOR_RE = re.compile(r"#[0-9a-fA-F]{6}\Z")
 MAX_THEME_BYTES = 16 * 1024
 
+# Shared surfaces are dark tints of a palette colour. Themes never define them,
+# so they are derived here; the original colours keep their exact legacy values.
+LEGACY = {"green": "#00ed45", "cyan": "#00d8cf", "field": "#030703", "button": "#001b08"}
+DERIVED = (
+    ("--surface-image", "green", .07, "#071107"),
+    ("--surface-small", "green", .03, "#020702"),
+    ("--surface-soft", "green", .03, "#010701"),
+    ("--surface-soft-hover", "green", .135, "#092010"),
+    ("--surface-selected", "green", .22, "#10351c"),
+    ("--surface-event", "green", .15, "#10241a"),
+    ("--surface-title", "green", .09, "#001506"),
+    ("--surface-flash", "green", .09, "#001505"),
+    ("--surface-lamp", "green", .07, "#001005"),
+    ("--border-soft", "green", .32, "#064d1d"),
+    ("--theme-ink", "green", .215, "#00330d"),
+)
+DERIVED_RGB = (
+    ("--surface-tint-rgb", "green", .05, "0,12,3"),
+    ("--surface-accent-rgb", "cyan", .045, "0,10,8"),
+)
+
 
 class ThemeError(ValueError):
     """A colour theme file is invalid."""
@@ -146,13 +167,39 @@ def effective(station, user):
     return selected("site_theme"), selected("masthead_theme")
 
 
+def _rgb(color):
+    return tuple(int(color[i:i+2], 16) for i in (1, 3, 5))
+
+
+def _mix(color, weight):
+    """``color`` at ``weight`` strength over black."""
+    return tuple(round(channel * weight) for channel in _rgb(color))
+
+
+def _surfaces(site):
+    """Surface colours that follow the palette instead of the default green."""
+    def legacy(key):
+        return site[key].lower() == LEGACY[key]
+    variables = {}
+    # Field and button keep any deliberate choice; the template's default dark
+    # greens are re-tinted unless the palette is itself the default green.
+    for key, weight in (("field", .03), ("button", .115)):
+        derive = site[key].lower() == LEGACY[key] and not legacy("green")
+        variables[f"--surface-{key}"] = "#%02x%02x%02x" % _mix(site["green"], weight) if derive else site[key]
+    for name, key, weight, fallback in DERIVED:
+        variables[name] = fallback if legacy(key) else "#%02x%02x%02x" % _mix(site[key], weight)
+    for name, key, weight, fallback in DERIVED_RGB:
+        variables[name] = fallback if legacy(key) else ",".join(map(str, _mix(site[key], weight)))
+    return variables
+
+
 def css(site_id, masthead_id, legacy_color=""):
     site = palette(site_id, "site")
     masthead = palette(masthead_id, "masthead")
     variables = {f"--{key}": site[key] for key in KEYS[1:12]}
-    variables.update({"--surface-field": site["field"], "--surface-button": site["button"],
-                      "--theme-rgb": ",".join(str(int(site["green"][i:i+2], 16)) for i in (1, 3, 5)),
-                      "--accent-rgb": ",".join(str(int(site["cyan"][i:i+2], 16)) for i in (1, 3, 5)),
+    variables.update(_surfaces(site))
+    variables.update({"--theme-rgb": ",".join(map(str, _rgb(site["green"]))),
+                      "--accent-rgb": ",".join(map(str, _rgb(site["cyan"]))),
                       "--masthead-color": legacy_color or masthead["masthead"],
                       "--masthead-shadow": masthead["masthead-shadow"]})
     rules = [":root {" + "".join(f"{key}:{value};" for key, value in variables.items()) + "}"]
