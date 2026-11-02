@@ -50,7 +50,8 @@ COMPASS = ("north", "northeast", "east", "southeast", "south", "southwest", "wes
 ROOM_COLUMNS = "id,kind,name,x,y,z,preset_id,region_id,grid_link,blocked_dirs"
 
 Node = namedtuple("Node", "id kind name x y z preset_id region_id grid_link blocked")
-Exit = namedtuple("Exit", "id from_id to_id name direction key_item_id pick_difficulty conditions_json hidden")
+Exit = namedtuple("Exit", "id from_id to_id name direction key_item_id pick_difficulty conditions_json hidden "
+                         "requires_mode allow_vehicles")
 Step = namedtuple("Step", "direction exit_name node")
 Route = namedtuple("Route", "status start steps graph")
 Leg = namedtuple("Leg", "kind steps start heading ground region landmarks")
@@ -221,11 +222,12 @@ class _Graph:
         self.exits, self.reverse = {}, {}
         for row in database.execute(
                 "SELECT e.id,e.from_room_id,e.to_room_id,e.name,e.direction,e.key_item_id,e.pick_difficulty,"
-                "e.conditions_json,e.hidden FROM mud_world_exits AS e "
+                "e.conditions_json,e.hidden,e.requires_mode,e.allow_vehicles FROM mud_world_exits AS e "
                 "JOIN mud_world_rooms AS r ON r.id=e.from_room_id WHERE r.world_id=? ORDER BY e.id", (world_id,)):
             item = Exit(row["id"], row["from_room_id"], row["to_room_id"], row["name"],
                         (row["direction"] or "").casefold() or None, row["key_item_id"], row["pick_difficulty"],
-                        row["conditions_json"], bool(row["hidden"]))
+                        row["conditions_json"], bool(row["hidden"]), row["requires_mode"],
+                        bool(row["allow_vehicles"]))
             self.exits.setdefault(item.from_id, []).append(item)
             self.reverse.setdefault(item.to_id, []).append(item.from_id)
         missing = sorted({room for item in self.reverse for room in (item, *self.reverse[item])} - set(self.nodes))
@@ -263,11 +265,12 @@ class _Graph:
         return chunk.get((x, y))
 
     def preset(self, database, preset_id):
-        """(terrain, links, ground name) for a preset; unknown presets read as plain wilds."""
+        """(terrain, links, ground name, required mode) for a preset; unknown presets read as plain wilds."""
         if preset_id not in self.presets:
             preset = preset_for(database, preset_id)
-            self.presets[preset_id] = ((preset["terrain"], preset["links"], preset["name"].casefold())
-                                       if preset else ("custom", "4", "wilds"))
+            self.presets[preset_id] = ((preset["terrain"], preset["links"], preset["name"].casefold(),
+                                        preset.get("requires_mode"))
+                                       if preset else ("custom", "4", "wilds", None))
         return self.presets[preset_id]
 
     def links(self, database, node):
@@ -299,15 +302,30 @@ class _Graph:
             self.anchors[node.id] = found
         return self.anchors[node.id]
 
-    def neighbours(self, database, node, allowed):
-        """Rooms one step away by the same rules as movement; allowed(exit) judges stored exits."""
+    def ground(self, database, node):
+        """(kind, terrain, required mode) of a room, as vehicle rules read it."""
+        if node.kind != "wild":
+            return node.kind, None, None
+        terrain, _links, _name, mode = self.preset(database, node.preset_id)
+        return node.kind, terrain, mode
+
+    def enterable(self, database, item, source, node, enter):
+        return enter is None or enter(item, self.ground(database, source), self.ground(database, node))
+
+    def neighbours(self, database, node, allowed, enter=None):
+        """Rooms one step away by the same rules as movement.
+
+        allowed(exit) judges stored exits; enter(exit or None, source ground,
+        target ground), when given, judges every step by the rooms it leaves and
+        enters, as vehicles and ways that need one do.
+        """
         stored = self.exits.get(node.id, ())
         # Stored exits win their direction even while hidden or sealed, as in _room_exits.
         taken = {item.direction for item in stored if item.direction}
         for item in stored:
             if allowed(item):
                 target = self.node(database, item.to_id)
-                if target is not None:
+                if target is not None and self.enterable(database, item, node, target, enter):
                     yield Step(item.direction, item.name, target)
         if node.x is None or not node.grid_link:
             return
@@ -316,8 +334,10 @@ class _Graph:
             if direction in taken:
                 continue
             other = self.at(database, node.x + dx, node.y + dy, node.z + dz)
-            if other is not None and grid_linked(direction, node.blocked, own_links, other.grid_link, other.blocked,
-                                                 self.links(database, other) if direction in DIAGONALS else ""):
+            if (other is not None
+                    and grid_linked(direction, node.blocked, own_links, other.grid_link, other.blocked,
+                                    self.links(database, other) if direction in DIAGONALS else "")
+                    and self.enterable(database, None, node, other, enter)):
                 yield Step(direction, direction, other)
 
 
@@ -339,7 +359,7 @@ def _graph(database, world_id):
     return graph
 
 
-def find_route(database, world_id, start_id, goal_id, allowed, budget=MAX_EXPANSIONS):
+def find_route(database, world_id, start_id, goal_id, allowed, budget=MAX_EXPANSIONS, enter=None):
     """A* from one room to another: exact first, then greedier if the exact search runs long.
 
     status is 'ok' with the steps, 'none' when no route exists, or 'far' when
@@ -352,13 +372,13 @@ def find_route(database, world_id, start_id, goal_id, allowed, budget=MAX_EXPANS
             return Route("none", start, [], graph)
         if start.id == goal.id:
             return Route("ok", start, [], graph)
-        route = _search(database, graph, start, goal, allowed, 1, min(budget, EXACT_EXPANSIONS))
+        route = _search(database, graph, start, goal, allowed, 1, min(budget, EXACT_EXPANSIONS), enter)
         if route.status == "far" and budget > EXACT_EXPANSIONS:
-            route = _search(database, graph, start, goal, allowed, GREEDY_WEIGHT, budget)
+            route = _search(database, graph, start, goal, allowed, GREEDY_WEIGHT, budget, enter)
         return route
 
 
-def _search(database, graph, start, goal, allowed, weight, budget):
+def _search(database, graph, start, goal, allowed, weight, budget, enter=None):
     target = graph.position(goal)
 
     def estimate(node):
@@ -385,7 +405,7 @@ def _search(database, graph, start, goal, allowed, weight, budget):
         if len(closed) > budget:
             return Route("far", start, [], graph)
         cost = -negative
-        for step in graph.neighbours(database, node, allowed):
+        for step in graph.neighbours(database, node, allowed, enter):
             following = step.node
             if following.id in closed:
                 continue

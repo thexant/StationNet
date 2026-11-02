@@ -26,8 +26,10 @@ FACTION_DEFAULTS = {"enabled": False, "max_memberships": 1, "start_required": Fa
 # Housing is on by default because nothing happens until a world authors
 # properties; max_holdings caps how many a character may own or share at once.
 HOUSING_DEFAULTS = {"enabled": True, "max_holdings": 3}
+# Vehicles and transit lines are likewise inert until a world authors them.
+TRANSPORT_DEFAULTS = {"enabled": True}
 DEFAULT_SOCIETY = {"clock": CLOCK_DEFAULTS, "relationships": RELATIONSHIP_DEFAULTS, "crime": CRIME_DEFAULTS,
-                   "factions": FACTION_DEFAULTS, "housing": HOUSING_DEFAULTS}
+                   "factions": FACTION_DEFAULTS, "housing": HOUSING_DEFAULTS, "transport": TRANSPORT_DEFAULTS}
 SOCIETY_KEYS = tuple(DEFAULT_SOCIETY)
 # Hours at which each part of the day begins, in order.
 PERIODS = ((0, "night"), (5, "dawn"), (7, "morning"), (12, "afternoon"), (17, "evening"), (21, "night"))
@@ -104,10 +106,14 @@ def validate_housing(value):
     return _section(value, "housing", HOUSING_DEFAULTS, {"max_holdings": (1, 20)})
 
 
+def validate_transport(value):
+    return _section(value, "transport", TRANSPORT_DEFAULTS, {})
+
+
 VALIDATORS = {"clock": validate_clock, "relationships": validate_relationships, "crime": validate_crime,
-              "factions": validate_factions, "housing": validate_housing}
+              "factions": validate_factions, "housing": validate_housing, "transport": validate_transport}
 SECTION_LABELS = {"clock": "clock", "relationships": "relationship", "crime": "crime", "factions": "faction",
-                  "housing": "housing"}
+                  "housing": "housing", "transport": "transport"}
 
 
 def validate_settings(value):

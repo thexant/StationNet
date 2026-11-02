@@ -77,4 +77,21 @@ assert.deepEqual(commandSuggestions("/tr",wayfinding,catalog), [
   {command:"/travel north",detail:"Travel onward"},
 ]);
 assert.deepEqual(values("/dir",wayfinding), ["/directions"]);
+
+const transportCatalog = [...catalog, {name:"board",key:"board",description:"Board a vehicle"},
+  {name:"disembark",key:"disembark",description:"Get off"}, {name:"refuel",key:"refuel",description:"Refuel"},
+  {name:"ride",key:"ride",description:"Take a line"}];
+const transport = (value, snapshot) => commandSuggestions(value,snapshot,transportCatalog).map(item=>item.command);
+const harbor = {...state,room:{...state.room,vehicle:null,
+  vehicles:[{name:"Rowboat",display_name:"Rowboat (1)",yours:false},{name:"Rowboat",display_name:"Rowboat (2)",yours:true}],
+  transit:[{line:"Coast Ferry",stop:"Isle Landing",seconds:120,fare:7}],trip:null}};
+assert.deepEqual(transport("/bo",harbor), ["/board Rowboat 1", "/board Rowboat 2", "/board"]);
+assert.deepEqual(transport("/ri",harbor), ["/ride Isle Landing", "/ride"]);
+assert.deepEqual(transport("/dis",harbor), []);
+const afloat = {...state,room:{...state.room,vehicles:[],transit:[],
+  vehicle:{name:"Rowboat",role:"operator",interior:true,fuel:1,fuel_capacity:4,outside:"Open Sea"}}};
+assert.deepEqual(transport("/dis",afloat), ["/disembark"]);
+assert.deepEqual(transport("/look o",afloat), ["/look out"]);
+assert.deepEqual(transport("/ref",afloat), ["/refuel"]);
+assert.deepEqual(transport("/bo",afloat), []);
 console.log("MUD suggestions and command history passed");

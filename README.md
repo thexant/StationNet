@@ -26,6 +26,8 @@ Authored worlds can optionally offer banking through designated rooms or banker 
 
 Authored worlds can also offer player housing and storage. World authors mark rooms as properties: unique homes with one holder at a time, or instanced apartments where every holder gets a private copy. Each property is bought, claimed for free, or granted through dialogue and triggers, with optional split rent. Players use `/house` to acquire, share with accepted co-owners, pay rent, or give up property, and `/storage` to keep items in personal lockers, shared stashes, or property storage. Only owners may enter a property, and whenever a holding ends, stored items return to whoever stored them. See section 5g of the [world guide](stationnet/mud_world_templates/README_CUSTOM_WORLDS.md).
 
+Worlds can also offer vehicles and transit. Authors define vehicles with their own movement modes (water, rail, air, or any word), the wilderness terrain they can cross, speed, optional fuel, and an optional interior that carries passengers. Exits and wilderness presets can need a mode or be on foot only, so a boat crosses the bay a walker cannot, and a cart cannot fit down an alley. Public vehicles stand where authors place them; owned ones are granted through dialogue and triggers. Transit lines carry riders between stops for a fare after a set time, with optional cabins and operating hours. Players use `/board`, `/go`, `/travel`, `/disembark`, `/refuel`, `/vehicles`, and `/ride`, and `/directions` plans routes for whatever they are riding. See section 5h of the [world guide](stationnet/mud_world_templates/README_CUSTOM_WORLDS.md).
+
 ## Why this stack
 
 - **Python 3.11+ and Flask** are small, readable, and cross-platform.

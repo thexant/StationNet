@@ -9,7 +9,7 @@ import zipfile
 
 from flask import current_app
 
-from . import mud_conditions, mud_gathering, mud_housing, mud_quests, mud_work, mud_scope, mud_society, mud_triggers, mud_wayfinding, mud_wilderness, mud_world_dungeons
+from . import mud_conditions, mud_gathering, mud_housing, mud_quests, mud_work, mud_scope, mud_society, mud_transport, mud_triggers, mud_wayfinding, mud_wilderness, mud_world_dungeons
 from . import mud_abilities, mud_effects, mud_progression, mud_shared_definitions
 from .mud_package_report import PackageReport
 
@@ -90,6 +90,11 @@ CONTENT_TABLES = {
     "mud_property_rooms": ("room_id", "property_id"),
     "mud_storage_points": ("id", "room_id", "name", "description", "scope", "capacity", "item_types",
                            "conditions_json"),
+    "mud_vehicle_definitions": ("id", *mud_transport.VEHICLE_FIELDS),
+    "mud_vehicle_placements": ("id", "vehicle_definition_id", "room_id"),
+    "mud_fuel_stations": ("id", "room_id", *mud_transport.STATION_DEFAULTS),
+    "mud_transit_lines": ("id", *mud_transport.LINE_FIELDS),
+    "mud_transit_stops": ("id", "line_id", "room_id", *mud_transport.STOP_DEFAULTS),
 }
 FACTION_MEMBERSHIP_DEFAULTS = {"joinable": 0, "start_joinable": 0, "recruiter_npc_definition_id": None,
                                "join_conditions_json": [], "join_conditions_message": "",
@@ -123,6 +128,8 @@ REFERENCE_TABLE = {
     "profession_id": "mud_professions", "activity_id": "mud_work_activities",
     "item_instance_id": "mud_item_instances", "exit_id": "exits",
     "entrance_room_id": "rooms", "agent_npc_definition_id": "mud_npc_definitions", "property_id": "mud_properties",
+    "vehicle_definition_id": "mud_vehicle_definitions", "interior_room_id": "rooms", "cabin_room_id": "rooms",
+    "fuel_item_id": "mud_item_definitions", "line_id": "mud_transit_lines",
 }
 # Quests and dialogue responses carry condition/outcome lists that name content.
 CONDITION_COLUMNS = {"mud_world_factions": ("join_conditions_json", "start_conditions_json"),
@@ -135,11 +142,14 @@ CONDITION_COLUMNS = {"mud_world_factions": ("join_conditions_json", "start_condi
                      "mud_world_start_rules": ("spawn_conditions_json",),
                      "mud_shop_stock": ("conditions_json",),
                      "mud_properties": ("conditions_json",),
-                     "mud_storage_points": ("conditions_json",)}
+                     "mud_storage_points": ("conditions_json",),
+                     "mud_vehicle_definitions": ("conditions_json",),
+                     "mud_transit_lines": ("conditions_json",)}
 CONDITION_TABLES = {"item": "mud_item_definitions", "quest": "mud_quests",
                     "objective": "mud_quest_objectives", "object": "mud_item_instances", "room": "rooms",
                     "destination": "mud_world_destinations", "npc": "mud_npc_definitions",
-                    "faction": "mud_world_factions", "property": "mud_properties"}
+                    "faction": "mud_world_factions", "property": "mud_properties",
+                    "vehicle": "mud_vehicle_definitions"}
 # What each kind of trigger reference names; exits and triggers are mapped separately.
 TRIGGER_TABLES = {**CONDITION_TABLES, "npc": "mud_npc_definitions", "npc_instance": "mud_npc_instances",
                   "response": "mud_dialogue_responses"}
@@ -382,10 +392,20 @@ def read_package(payload, database=None, report=None):
             hidden = item.get("hidden", False)
             if type(hidden) is not bool:
                 raise WorldError("Exit hidden must be true or false.")
+            try:
+                requires_mode = mud_transport.mode(item.get("requires_mode"))
+            except ValueError as problem:
+                raise WorldError(f"Exit {label}: {problem}") from problem
+            allow_vehicles = item.get("allow_vehicles", True)
+            if type(allow_vehicles) is not bool:
+                raise WorldError("Exit allow_vehicles must be true or false.")
+            if requires_mode and not allow_vehicles:
+                raise WorldError(f"Exit {label} cannot both require a vehicle mode and refuse vehicles.")
             clean_exits.append({"from": source, "to": target, "name": label, "direction": direction,
                                 "key_item_id": key_item_id, "pick_difficulty": pick_difficulty,
                                 "conditions": conditions, "conditions_message": " ".join(message.split()),
-                                "id": exit_id, "hidden": hidden})
+                                "id": exit_id, "hidden": hidden, "requires_mode": requires_mode,
+                                "allow_vehicles": allow_vehicles})
         except WorldError as problem:
             report.error("exits.json", f"$[{exit_index}]", str(problem))
     local_effects, local_abilities = _read_magic(docs, report)
@@ -590,6 +610,8 @@ def read_package(payload, database=None, report=None):
                     if row.get("room_id") not in room_ids:
                         raise WorldError("Storage room_id must name a room in the world.")
                     row["item_types"] = clean["item_types"]
+                elif table in TRANSPORT_VALIDATORS:
+                    _check_transport_row(table, row, room_ids, raw_ids)
                 elif table == "mud_faction_relations":
                     try:
                         mud_society.validate_share(row.get("share_percent"))
@@ -674,6 +696,12 @@ def read_package(payload, database=None, report=None):
                          f"Reward outcome {outcome!r} is not the outcome_key of any objective of its quest.")
     for problem in _housing_problems(content, start):
         report.error(CONTENT_FILE, "$.mud_properties", problem)
+    transport_errors, transport_warnings = _transport_problems(content, clean_exits, start,
+                                                               docs.get(WILDERNESS_FILE))
+    for problem in transport_errors:
+        report.error(CONTENT_FILE, "$.mud_vehicle_definitions", problem)
+    for problem in transport_warnings:
+        report.warning(CONTENT_FILE, "$.mud_vehicle_definitions", problem)
     reward_counts = {}
     banker_ids = [row["npc_definition_id"] for row in content.get("mud_npc_banks", [])]
     if len(banker_ids) != len(set(banker_ids)):
@@ -766,6 +794,86 @@ def _housing_problems(content, start):
         if row.get("scope") == "property" and row.get("room_id") not in owner:
             problems.append(f"Storage point {row.get('id')} keeps owners' items, so it must be in a property room.")
     return problems
+
+
+TRANSPORT_VALIDATORS = {"mud_vehicle_definitions": ("vehicle", mud_transport.vehicle),
+                        "mud_transit_lines": ("transit line", mud_transport.line),
+                        "mud_transit_stops": ("transit stop", mud_transport.stop),
+                        "mud_fuel_stations": ("fuel station", mud_transport.station)}
+
+
+def _check_transport_row(table, row, room_ids, raw_ids):
+    """One vehicle, line, stop, or station row; normalized list fields are written back."""
+    label, validator = TRANSPORT_VALIDATORS[table]
+    try:
+        clean = validator(row)
+    except ValueError as problem:
+        raise WorldError(f"Invalid {label} {row.get('id')}: {problem}") from problem
+    for column in ("modes", "terrains"):
+        if column in row:
+            row[column] = clean[column]
+    for column in ("room_id", "interior_room_id", "cabin_room_id"):
+        required = column == "room_id" and column in CONTENT_TABLES[table]
+        if (row.get(column) is not None or required) and row.get(column) not in room_ids:
+            raise WorldError(f"{label.capitalize()} {row.get('id')} {column} must name a room in the world.")
+    if clean.get("fuel_item_id") and clean["fuel_item_id"] not in raw_ids("mud_item_definitions"):
+        raise WorldError(f"Vehicle {row.get('id')} fuel item must name an item in content.json.")
+    if table == "mud_transit_stops" and row.get("line_id") not in raw_ids("mud_transit_lines"):
+        raise WorldError("Transit stop must name a line in content.json.")
+
+
+def _transport_problems(content, clean_exits, start, wilderness):
+    """Package-wide vehicle and transit rules: (errors, warnings).
+
+    Vehicle interiors and line cabins are rooms reached only by boarding or
+    riding, so nothing else may lead into or use them.
+    """
+    errors, warnings = [], []
+    vehicles = content.get("mud_vehicle_definitions", [])
+    lines = content.get("mud_transit_lines", [])
+    for label, rows in (("vehicles", vehicles), ("transit lines", lines)):
+        names = [" ".join(str(row.get("name", "")).casefold().split()) for row in rows]
+        if len(names) != len(set(names)):
+            errors.append(f"Two {label} have the same name.")
+    private = [(row.get("interior_room_id"), f"Vehicle {row.get('id')} interior") for row in vehicles
+               if row.get("interior_room_id")]
+    private += [(row.get("cabin_room_id"), f"Line {row.get('id')} cabin") for row in lines if row.get("cabin_room_id")]
+    if len({room for room, _label in private}) != len(private):
+        errors.append("Each vehicle interior and line cabin needs a room of its own.")
+    property_rooms = {row.get("room_id") for row in content.get("mud_property_rooms", [])}
+    exit_rooms = {item["from"] for item in clean_exits} | {item["to"] for item in clean_exits}
+    used = {row.get("room_id") for table in ("mud_vehicle_placements", "mud_fuel_stations", "mud_transit_stops",
+                                              "mud_world_start_rules") for row in content.get(table, [])}
+    for room, label in private:
+        if room == start:
+            errors.append(f"{label} cannot be the start room.")
+        if room in exit_rooms:
+            errors.append(f"{label} ({room}) cannot have exits; riders reach it only by boarding.")
+        if room in property_rooms:
+            errors.append(f"{label} cannot be a property room.")
+        if room in used:
+            errors.append(f"{label} cannot also be a stop, placement, fuel station, or start rule room.")
+    for row in content.get("mud_vehicle_placements", []):
+        if row.get("room_id") in property_rooms:
+            errors.append(f"Vehicle placement {row.get('id')} cannot be in a property room.")
+    for line_row in lines:
+        stops = [row for row in content.get("mud_transit_stops", []) if row.get("line_id") == line_row.get("id")]
+        if len(stops) < 2:
+            errors.append(f"Line {line_row.get('id')} needs at least two stops.")
+    declared = set()
+    for row in vehicles:
+        declared |= mud_transport.word_set(row.get("modes") if isinstance(row.get("modes"), str) else "")
+    required = {item["requires_mode"] for item in clean_exits if item.get("requires_mode")}
+    presets = (wilderness or {}).get("presets", []) if isinstance(wilderness, dict) else []
+    required |= {preset.get("requires_mode") for preset in (presets if isinstance(presets, list) else [])
+                 if isinstance(preset, dict) and preset.get("requires_mode")}
+    for mode in sorted(required - declared):
+        warnings.append(f"Some ways require the {mode} mode, but no vehicle in this world travels by {mode}.")
+    placed = {row.get("vehicle_definition_id") for row in content.get("mud_vehicle_placements", [])}
+    for row in vehicles:
+        if row.get("return_seconds") and row.get("id") not in placed:
+            warnings.append(f"Vehicle {row.get('id')} has a return time but is never placed, so it never returns.")
+    return errors, warnings
 
 
 def _read_magic(docs, report):
@@ -1133,7 +1241,8 @@ def _insert_content(database, document, installation_key, skill_map=None, effect
                 fields[column] = value
             if table in {"mud_item_definitions", "mud_npc_definitions", "mud_conversations", "mud_quests",
                          "mud_world_destinations", "mud_world_factions", "mud_professions",
-                         "mud_world_start_rules", "mud_properties"}:
+                         "mud_world_start_rules", "mud_properties", "mud_vehicle_definitions",
+                         "mud_transit_lines"}:
                 fields["world_id"] = world_id
             names = list(fields)
             database.execute(
@@ -1581,10 +1690,12 @@ def _install_rows(database, document, payload, *, origin_mode=None, selected=Non
     room_refs = _room_references(document, installation_key)
     for ordinal, item in enumerate(document["exits"]):
         database.execute("INSERT INTO mud_world_exits(id,from_room_id,to_room_id,name,direction,pick_difficulty,"
-                         "conditions_json,conditions_message,local_id,hidden) VALUES(?,?,?,?,?,?,?,?,?,?)",
+                         "conditions_json,conditions_message,local_id,hidden,requires_mode,allow_vehicles) "
+                         "VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
                          (f"world:{world_id}:{installation_key}:exit:{ordinal}", room_refs[item["from"]],
                           room_refs[item["to"]], item["name"], item["direction"], item["pick_difficulty"],
-                          "[]", item["conditions_message"], item.get("id"), int(item.get("hidden", False))))
+                          "[]", item["conditions_message"], item.get("id"), int(item.get("hidden", False)),
+                          item.get("requires_mode"), int(item.get("allow_vehicles", True))))
     maps = _insert_content(database, document, installation_key, skill_map, effect_map)
 
     def shared(table):
@@ -1613,6 +1724,9 @@ def _install_rows(database, document, payload, *, origin_mode=None, selected=Non
             raise WorldError(f"Invalid dungeons.json: {problem}") from problem
     _install_triggers(database, document, installation_key, maps, exit_mapper)
     _install_origins(database, document, skill_map, ability_map, notes)
+    from . import mud
+    for placement in maps.get("mud_vehicle_placements", {}).values():
+        mud.spawn_placed_vehicle(database, placement)
     if origin_mode is None and selected is None:
         package_choice = _package_availability(database, document, skill_map, notes)
         if package_choice is not None:
@@ -1770,6 +1884,7 @@ def _upgrade_rows(database, document, payload, *, reset_world_state=False):
         "SELECT id FROM mud_world_rooms WHERE world_id=? AND kind='authored' ORDER BY id", (world_id,))],
         world_id, "room", "room")
     housing = _housing_snapshot(database, world_id)
+    transport = _transport_snapshot(database, world_id)
     database.execute("UPDATE mud_world_packages SET enabled=0 WHERE id=?", (world_id,))
     retired_id = _retire_rows(database, world_id, "This world was upgraded; start a new run.", keep_state=True)
     for table in ("mud_world_triggers", "mud_world_dungeon_templates", "mud_world_room_presets", "mud_world_regions",
@@ -1795,12 +1910,13 @@ def _upgrade_rows(database, document, payload, *, reset_world_state=False):
         return maps.get(table, {}).get(match.group("local")) if match and match.group("world") == world_id else None
 
     kept_copies = _restore_housing(database, housing, carried, old_rooms, new_rooms)
+    riders = _restore_transport(database, transport, carried, old_rooms, new_rooms, start)
     moved = 0
     for row in locations:
         if row["location_key"] in kept_copies:
             continue
         local = old_rooms.get(row["location_key"])
-        target = new_rooms.get(local) if local else None
+        target = riders.get(row["user_id"]) or (new_rooms.get(local) if local else None)
         if target is None:
             target, moved = start, moved + 1
         database.execute("UPDATE mud_player_locations SET location_key=? WHERE user_id=?", (target, row["user_id"]))
@@ -1949,6 +2065,55 @@ def _restore_housing(database, housing, carried, old_rooms, new_rooms):
     return copies
 
 
+def _transport_snapshot(database, world_id):
+    """Owned vehicles, and where riders and transit passengers should end up, saved before an upgrade."""
+    return {
+        "vehicles": [dict(row) for row in database.execute(
+            "SELECT * FROM mud_vehicles WHERE world_id=? AND owner_character_id IS NOT NULL", (world_id,))],
+        # Riders step off; they land where their vehicle stood.
+        "riders": [dict(row) for row in database.execute(
+            "SELECT c.user_id,v.room_id FROM mud_vehicle_riders r JOIN mud_vehicles v ON v.id=r.vehicle_id "
+            "JOIN mud_characters c ON c.id=r.character_id WHERE v.world_id=?", (world_id,))],
+        # Rides in progress finish at once at their destinations.
+        "trips": [dict(row) for row in database.execute(
+            "SELECT c.user_id,t.to_room_id FROM mud_transit_trips t JOIN mud_characters c ON c.id=t.character_id "
+            "WHERE t.world_id=?", (world_id,))],
+    }
+
+
+def _restore_transport(database, transport, carried, old_rooms, new_rooms, start):
+    """Put owned vehicles back on the upgraded content by local ID; returns user -> room for riders.
+
+    A vehicle whose definition is gone is lost with it; one whose room is gone
+    waits at the start room. Public vehicles come back from the new placements.
+    """
+    def room(old_id):
+        if old_id is None:
+            return None
+        if database.execute("SELECT 1 FROM mud_world_rooms WHERE id=?", (old_id,)).fetchone():
+            return old_id
+        return new_rooms.get(old_rooms.get(old_id))
+
+    for vehicle in transport["vehicles"]:
+        definition = carried(vehicle["definition_id"], "mud_vehicle_definitions")
+        capacity = database.execute("SELECT fuel_capacity FROM mud_vehicle_definitions WHERE id=?",
+                                    (definition,)).fetchone() if definition else None
+        if capacity is None:
+            continue
+        home = room(vehicle["home_room_id"]) or start
+        database.execute("INSERT OR IGNORE INTO mud_vehicles(id,world_id,definition_id,owner_character_id,room_id,"
+                         "home_room_id,fuel,created_at) VALUES(?,?,?,?,?,?,?,?)",
+                         (vehicle["id"], vehicle["world_id"], definition, vehicle["owner_character_id"],
+                          room(vehicle["room_id"]) or home, home, min(vehicle["fuel"], capacity[0]),
+                          vehicle["created_at"]))
+    landing = {}
+    for row in transport["riders"]:
+        landing[row["user_id"]] = room(row["room_id"]) or start
+    for row in transport["trips"]:
+        landing[row["user_id"]] = room(row["to_room_id"]) or start
+    return landing
+
+
 def _carried_availability(database, world_id, offered, old_links):
     """Keep a sysop's selection across an upgrade, minus definitions that are gone, plus new bundles."""
     from . import character_creation, mud_skills
@@ -2063,7 +2228,7 @@ def local_ids(global_ids, world_id, table, prefix, taken=None):
 def _export_content(database, world_id, room_map, exit_map=None, report=None):
     report = PackageReport() if report is None else report
     roots = {"mud_item_definitions", "mud_conversations", "mud_npc_definitions", "mud_quests", "mud_world_factions",
-             "mud_professions", "mud_properties"}
+             "mud_professions", "mud_properties", "mud_vehicle_definitions", "mud_transit_lines"}
     all_placed_items = [dict(row) for row in database.execute(
         "SELECT id,definition_id,room_id,container_id FROM mud_item_instances "
         "WHERE spawn_source_id IS NULL AND id NOT LIKE 'world:wild-item:%'"
@@ -2089,6 +2254,8 @@ def _export_content(database, world_id, room_map, exit_map=None, report=None):
         "SELECT e.key_item_id FROM mud_world_exits e JOIN mud_world_rooms r ON r.id=e.from_room_id WHERE r.world_id=? AND e.key_item_id IS NOT NULL", (world_id,))}
     needed_items |= {row["item_definition_id"] for row in database.execute(
         "SELECT s.item_definition_id FROM mud_shop_stock s JOIN mud_npc_definitions n ON n.id=s.npc_definition_id WHERE n.world_id=?", (world_id,))}
+    needed_items |= {row["fuel_item_id"] for row in database.execute(
+        "SELECT fuel_item_id FROM mud_vehicle_definitions WHERE world_id=? AND fuel_item_id IS NOT NULL", (world_id,))}
     for row in database.execute("SELECT map_items_json FROM mud_world_destinations WHERE world_id=?", (world_id,)):
         needed_items |= set(mud_wayfinding.map_items(row))
     for row in database.execute("SELECT a.tool_definition_id,a.objective_type,a.objective_target_id "
@@ -2158,8 +2325,10 @@ def _export_content(database, world_id, room_map, exit_map=None, report=None):
         "JOIN mud_world_rooms r ON r.id=d.room_id WHERE r.world_id=? "
         "UNION ALL SELECT conditions_json,'[]' FROM mud_properties WHERE world_id=? "
         "UNION ALL SELECT s.conditions_json,'[]' FROM mud_storage_points s "
-        "JOIN mud_world_rooms r ON r.id=s.room_id WHERE r.world_id=?",
-        (world_id, world_id, world_id, world_id, world_id, world_id, world_id, world_id),
+        "JOIN mud_world_rooms r ON r.id=s.room_id WHERE r.world_id=? "
+        "UNION ALL SELECT conditions_json,'[]' FROM mud_vehicle_definitions WHERE world_id=? "
+        "UNION ALL SELECT conditions_json,'[]' FROM mud_transit_lines WHERE world_id=?",
+        (world_id, world_id, world_id, world_id, world_id, world_id, world_id, world_id, world_id, world_id),
     ):
         named = list(mud_conditions.references(_stored_conditions(row["conditions_json"], "conditions_json"),
                                                _stored_conditions(row["outcomes_json"], "outcomes_json")))
@@ -2202,6 +2371,11 @@ def _export_content(database, world_id, room_map, exit_map=None, report=None):
             rows = [row for row in rows if row["room_id"] in room_map]
         elif table == "mud_property_rooms":
             rows = [row for row in rows if row["room_id"] in room_map and row["property_id"] in selected["mud_properties"]]
+        elif table in {"mud_vehicle_placements", "mud_fuel_stations"}:
+            rows = [row for row in rows if row["room_id"] in room_map and (
+                table == "mud_fuel_stations" or row["vehicle_definition_id"] in selected["mud_vehicle_definitions"])]
+        elif table == "mud_transit_stops":
+            rows = [row for row in rows if row["room_id"] in room_map and row["line_id"] in selected["mud_transit_lines"]]
         elif table == "mud_world_start_rules":
             rows = [row for row in rows if row["room_id"] in room_map]
             readable = [row for row in rows if _stored_conditions(row["spawn_conditions_json"],
@@ -2226,7 +2400,9 @@ def _export_content(database, world_id, room_map, exit_map=None, report=None):
                 "mud_world_destinations": "destination", "mud_world_factions": "faction",
                 "mud_faction_relations": "faction-relation", "mud_world_start_rules": "start-rule"}
     prefixes.update({"mud_professions": "profession", "mud_work_activities": "work",
-                     "mud_work_rewards": "work-reward", "mud_properties": "property", "mud_storage_points": "storage"})
+                     "mud_work_rewards": "work-reward", "mud_properties": "property", "mud_storage_points": "storage",
+                     "mud_vehicle_definitions": "vehicle", "mud_vehicle_placements": "vehicle-placement",
+                     "mud_fuel_stations": "fuel-station", "mud_transit_lines": "line", "mud_transit_stops": "stop"})
     maps = {"rooms": room_map, "exits": exit_map or {}}
     for table in ID_TABLES:
         maps[table] = local_ids(list(selected[table]), world_id, table, prefixes[table])
@@ -2244,6 +2420,10 @@ def _export_content(database, world_id, room_map, exit_map=None, report=None):
                     if value:
                         report.warning(CONTENT_FILE, f"$.{table}", f"A discovery reveals an object outside this "
                                        "world's rooms; the object link was left out.")
+                    value = None
+                elif column in {"interior_room_id", "cabin_room_id"} and value and value not in room_map:
+                    report.warning(CONTENT_FILE, f"$.{table}", f"{row['name']} uses a room outside this world "
+                                   "as its interior; the interior was left out.")
                     value = None
                 elif (table == "mud_world_factions" and column == "recruiter_npc_definition_id"
                       and value and value not in maps["mud_npc_definitions"]):
@@ -2380,7 +2560,8 @@ def export_document(database, world_id, *, origin_keys=None, skill_keys=None):
         raise WorldError("World starting room is missing.")
     exits = database.execute(
         "SELECT e.id,e.from_room_id,e.to_room_id,e.name,e.direction,e.key_item_id,e.pick_difficulty,"
-        "e.conditions_json,e.conditions_message,e.local_id,e.hidden FROM mud_world_exits e "
+        "e.conditions_json,e.conditions_message,e.local_id,e.hidden,e.requires_mode,e.allow_vehicles "
+        "FROM mud_world_exits e "
         "JOIN mud_world_rooms r ON r.id=e.from_room_id WHERE r.world_id=? ORDER BY e.id", (world_id,)
     ).fetchall()
     triggers = world_triggers(database, world_id)
@@ -2419,7 +2600,9 @@ def export_document(database, world_id, *, origin_keys=None, skill_keys=None):
                            **({"pick_difficulty": row["pick_difficulty"]} if row["pick_difficulty"] else {}),
                            **({"conditions": mud_conditions.validate_conditions(row["conditions_json"])}
                               if row["conditions_json"] not in (None, "", "[]") else {}),
-                           **({"conditions_message": row["conditions_message"]} if row["conditions_message"] else {})}
+                           **({"conditions_message": row["conditions_message"]} if row["conditions_message"] else {}),
+                           **({"requires_mode": row["requires_mode"]} if row["requires_mode"] else {}),
+                           **({"allow_vehicles": False} if not row["allow_vehicles"] else {})}
                           for row in exits if row["to_room_id"] in ids],
                 "content": content,
                 "layers": mud_wilderness.export_layer_names(database, world_id),
@@ -2514,7 +2697,11 @@ def export_document(database, world_id, *, origin_keys=None, skill_keys=None):
             if row.get(column) in (default, None):
                 row.pop(column, None)
     for table, defaults in (("mud_properties", mud_housing.PROPERTY_DEFAULTS),
-                            ("mud_storage_points", mud_housing.STORAGE_DEFAULTS)):
+                            ("mud_storage_points", mud_housing.STORAGE_DEFAULTS),
+                            ("mud_vehicle_definitions", mud_transport.VEHICLE_DEFAULTS),
+                            ("mud_fuel_stations", mud_transport.STATION_DEFAULTS),
+                            ("mud_transit_lines", mud_transport.LINE_DEFAULTS),
+                            ("mud_transit_stops", mud_transport.STOP_DEFAULTS)):
         for row in content.get(table, []):
             for column, default in defaults.items():
                 if row.get(column) in (default, None):
@@ -2678,6 +2865,9 @@ def _retire_rows(database, world_id, reason, *, keep_state=False):
     for item in items:
         database.execute("DELETE FROM mud_item_instances WHERE id=?", (item["id"],))
     database.execute("DELETE FROM mud_professions WHERE world_id=?", (world_id,))
+    # Vehicles go before their rooms, taking riders and interior copies with them.
+    for table in ("mud_vehicles", "mud_transit_trips", "mud_vehicle_definitions", "mud_transit_lines"):
+        database.execute(f"DELETE FROM {table} WHERE world_id=?", (world_id,))
     # Ending holdings hands stored items back to their owners before the rooms go.
     database.execute("DELETE FROM mud_property_holdings WHERE world_id=?", (world_id,))
     database.execute("DELETE FROM mud_properties WHERE world_id=?", (world_id,))

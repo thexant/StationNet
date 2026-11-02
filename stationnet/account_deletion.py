@@ -152,6 +152,7 @@ def delete_account(user_id):
         from . import mud
         for character in database.execute("SELECT id FROM mud_characters WHERE user_id=?", (user_id,)).fetchall():
             mud.character_leaving_holdings(database, character["id"])
+            mud.character_leaving_vehicles(database, character["id"])
 
         # Remove player-owned items and instances of definitions the player
         # authored. Containers must be emptied before their parent because

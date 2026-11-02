@@ -20,7 +20,7 @@ from flask import (Blueprint, abort, current_app, flash, g, jsonify, redirect, r
 
 from .auth import admin_required, login_required
 from .db import get_db
-from . import dungeons, character_creation, mud_abilities, mud_combat, mud_conditions, mud_quests, mud_effects, mud_progression, mud_firearms, mud_compat, mud_gathering, mud_housing, mud_work, mud_scope, mud_skills, mud_society, mud_start_rules, mud_triggers, mud_wayfinding, mud_wilderness, moderation
+from . import dungeons, character_creation, mud_abilities, mud_combat, mud_conditions, mud_quests, mud_effects, mud_progression, mud_firearms, mud_compat, mud_gathering, mud_housing, mud_work, mud_scope, mud_skills, mud_society, mud_start_rules, mud_transport, mud_triggers, mud_wayfinding, mud_wilderness, moderation
 from .security import validate_csrf
 
 bp = Blueprint("mud", __name__, url_prefix="/mud")
@@ -247,7 +247,7 @@ def _world_package(database, world=None):
 # Commands that belong to an optional world-life system, hidden from help while it is off.
 SOCIETY_ACTIONS = {"time": "clock", "relations": "relationships", "give": "relationships",
                    "reputation": "factions", "faction": "membership", "steal": "crime", "fines": "crime",
-                   "pay": "crime"}
+                   "pay": "crime", "board": "transport", "refuel": "transport", "ride": "transport"}
 # Commands that only exist to spend the resource; worlds without it hide them.
 RESOURCE_ACTIONS = frozenset({"spells", "cast"})
 RESOURCE_DISABLED_DESCRIPTIONS = {
@@ -279,7 +279,7 @@ def society_settings(database):
 def _hidden_actions(database, user_id):
     """World-life commands to leave out of help and suggestions for this player right now."""
     if _current_mode(database, user_id) != "traditional":
-        return set(SOCIETY_ACTIONS)
+        return set(SOCIETY_ACTIONS) | {"disembark", "vehicles"}
     enabled = {key for key, section in society_settings(database).items() if section["enabled"]}
     # The factions section switches membership; /reputation only needs a public faction.
     if "factions" in enabled:
@@ -292,6 +292,21 @@ def _hidden_actions(database, user_id):
     if not database.execute("SELECT 1 FROM mud_properties WHERE world_id=? LIMIT 1",
                             (_active_world(database),)).fetchone():
         hidden.add("house")
+    # Vehicle commands appear once a world has vehicles; /disembark and /vehicles
+    # stay while a player rides or owns one, even with transport switched off.
+    if not database.execute("SELECT 1 FROM mud_vehicle_definitions WHERE world_id=? LIMIT 1",
+                            (_active_world(database),)).fetchone():
+        hidden |= {"board", "refuel"}
+    if not database.execute("SELECT 1 FROM mud_transit_lines WHERE world_id=? LIMIT 1",
+                            (_active_world(database),)).fetchone():
+        hidden.add("ride")
+    if not database.execute("SELECT 1 FROM mud_characters c WHERE c.user_id=? AND c.world_key=? AND (EXISTS "
+                            "(SELECT 1 FROM mud_vehicle_riders r WHERE r.character_id=c.id) OR EXISTS "
+                            "(SELECT 1 FROM mud_vehicles v WHERE v.owner_character_id=c.id))",
+                            (user_id, _world())).fetchone():
+        hidden.add("disembark")
+        if "board" in hidden:
+            hidden.add("vehicles")
     return hidden
 
 
@@ -1006,6 +1021,7 @@ def _help_action(_database, _user, parameters):
             "give": '/give "Red Apple" to Baker', "steal": '/steal from "Fat Merchant"',
             "pay": '/pay "Town Watch"', "faction": '/faction join "Harbor Guild"',
             "house": '/house invite "Harbor Cottage" Bram', "storage": '/storage deposit "Red Apple" into "Oak Chest"',
+            "board": '/board "Red Cart"', "ride": '/ride "Coast Ferry" to "Port Vel"', "refuel": '/refuel 5',
         }
         body = f"/{name}: {_action_description(definition, resource)}\nAliases: " + ", ".join(f"/{alias}" for alias in aliases)
         if definition.key in examples:
@@ -1022,6 +1038,15 @@ def _help_action(_database, _user, parameters):
                      "and /travel stops where your way turns or when you arrive.")
         if definition.key in {"look", "get", "put", "open", "close"}:
             body += "\nQuote multiword targets. For duplicates use a number: Apple 2 or Apple (2)."
+        if definition.key in {"board", "disembark", "refuel", "vehicles"}:
+            body += ("\nWhile aboard, /go and /travel move your vehicle. Some ways need a vehicle that travels "
+                     "a certain way (by water, say), some are too narrow to ride through, and some vehicles keep "
+                     "to certain ground. Vehicles with fuel spend it on every move; /refuel at a fuel station or "
+                     "with the right item. Inside a vehicle, /look out shows where it stands.")
+        if definition.key == "ride":
+            body += ("\nTransit lines run between stops. /ride lists where lines go from here, their time and "
+                     "fare. You pay as you board and arrive after the trip time; waiting without a cabin, any "
+                     "move gives up the ride.")
         return [EventDraft(body)]
     lines = ["Available commands:"]
     hidden = _hidden_actions(_database, _user["id"])
@@ -1124,12 +1149,12 @@ def _home_room(database, user_id):
 
 def _world_room(database, room_id):
     """A world room as players see it; wilderness rooms take their text from their preset,
-    private housing copies from their template room."""
+    private housing copies and vehicle interiors from their template room."""
     row = mud_wilderness.room_row(database, room_id)
     if row is None:
         return None
-    if row["kind"] == "housing":
-        template = database.execute("SELECT c.template_room_id,c.holding_id,t.name,t.description "
+    if row["kind"] in ("housing", "vehicle"):
+        template = database.execute("SELECT c.template_room_id,c.holding_id,c.vehicle_id,t.name,t.description "
                                     "FROM mud_world_rooms c JOIN mud_world_rooms t ON t.id=c.template_room_id "
                                     "WHERE c.id=?", (room_id,)).fetchone()
         return {**dict(row), **(dict(template) if template else {})}
@@ -1161,6 +1186,8 @@ def _set_player_location(database, user_id, mode, location_type, location_key,
         "WHERE user_id=? AND world_key=?",
         (room_id, location_type, location_key, instance_id, user_id, world),
     )
+    # Whoever ends up anywhere but aboard is off their vehicle.
+    _leave_vehicle_if_moved(database, user_id, room_id)
 
 
 def _player_location(database, user_id):
@@ -1351,7 +1378,7 @@ def _room_exits(database, room_id, instance_id=None, viewer_id=None):
     room_id = _housing_template(database, room_id) or room_id
     rows = database.execute(
         "SELECT e.id,e.name,e.direction,e.to_room_id,e.key_item_id,e.pick_difficulty,"
-        "e.conditions_json,e.conditions_message,r.name AS destination_name,"
+        "e.conditions_json,e.conditions_message,e.requires_mode,e.allow_vehicles,r.name AS destination_name,"
         "COALESCE((SELECT s.state FROM mud_script_entity_states AS s WHERE s.entity_type='exit' "
         "AND s.entity_id=e.id AND s.scope_key=(SELECT id FROM mud_characters WHERE user_id=? AND world_key=?)),"
         "(SELECT s.state FROM mud_script_entity_states AS s WHERE s.entity_type='exit' "
@@ -1487,6 +1514,14 @@ def _player_exit_label(database, user_id, exit_row):
         return label + " [barred]"
     if _property_entry(database, user_id, exit_row["to_room_id"], create=False)[1]:
         return label + " [private]"
+    ride = _ride(database, user_id)
+    if ride and not _exit_field(exit_row, "allow_vehicles", 1):
+        return label + " [on foot]"
+    target = _world_room(database, exit_row["to_room_id"]) or {}
+    needed = _exit_field(exit_row, "requires_mode") or (target.get("requires_mode")
+                                                         if target.get("kind") == "wild" else None)
+    if needed and (ride is None or needed not in mud_transport.word_set(ride["modes"])):
+        return label + f" [needs {needed}]"
     if not _exit_locked(exit_row):
         return label
     if _exit_sealed(exit_row):
@@ -1892,6 +1927,9 @@ def _room_state(database, user_id):
             entry.update(status=encounter["status"], health=encounter["current_health"],
                          maximum_health=encounter["maximum_health"])
         npcs.append(entry)
+    transport = _transport_state(database, user_id, room)
+    # Riders inside a vehicle see and steer by the room it stands in.
+    outside = _movement_room(database, user_id) if transport["vehicle"] and transport["vehicle"]["interior"] else room
     exits = [
         {
             "id": exit_row["id"],
@@ -1900,9 +1938,9 @@ def _room_state(database, user_id):
             "destination_id": exit_row["to_room_id"],
             "destination_name": exit_row["destination_name"],
         }
-        for exit_row in _room_exits(database, room["id"], instance_id, user_id)
+        for exit_row in _room_exits(database, outside["id"], instance_id, user_id)
     ]
-    if not portal and not instance_id:
+    if not portal and not instance_id and outside is room:
         exits += [{"id": entrance["id"], "name": f"enter {entrance['name']}", "direction": None,
                    "destination_id": None, "destination_name": entrance["name"], "dungeon": True}
                   for entrance in _room_entrances(database, room["id"])]
@@ -1939,7 +1977,8 @@ def _room_state(database, user_id):
         "dialogue_responses": dialogue_responses,
         "storage": [{"id": point["id"], "name": point["name"], "scope": point["scope"]}
                     for point in _room_storage_points(database, room)] if not portal else [],
-        "wilderness": room.get("kind") == "wild" and not instance_id,
+        "wilderness": outside.get("kind") == "wild" and not instance_id,
+        **transport,
         "travel": travel_state(database, user_id),
         "wayfinding": None if instance_id or portal else wayfinding_state(database, user_id),
     }
@@ -1981,6 +2020,7 @@ def _describe_room(database, room, viewer_id=None):
         f"Exits: {routes}\nOther players: {people}\nNPCs: {npcs}\nItems: {items}"
         + (f"\nGathering: {gathering} (use /gather <name>)" if gathering else "")
         + "".join(f"\n{line}" for line in (_housing_lines(database, viewer_id, room)
+                                            + _vehicle_lines(database, viewer_id, room)
                                             if room["id"] != PORTAL_ROOM_ID else []))
     )
 
@@ -3378,6 +3418,762 @@ def process_housing(database, now=None):
     return handled
 
 
+# --- Vehicles and transit -------------------------------------------------------
+# A vehicle stands in one world room. One without an interior (a horse, a cart)
+# carries only its operator, who stands in that same room and rides it wherever
+# they go. One with an interior (a boat, a coach) carries everyone aboard in its
+# own private copy of the interior room while the operator steers it outside.
+# Any move other than driving (walking off, flight, teleports, death, a dungeon)
+# ends the ride through _set_player_location and leaves the vehicle standing.
+# Transit lines are services between stops: a rider pays, waits at the stop or
+# sits in the line's cabin, and the scheduled tick delivers them on arrival.
+
+VEHICLE_COLUMNS = ("v.*,d.name,d.description,d.modes,d.terrains,d.mode_only,d.speed,d.interior_room_id,"
+                   "d.fuel_capacity,d.fuel_per_move,d.fuel_item_id,d.fuel_per_item,d.shareable,d.return_seconds,"
+                   "d.conditions_json,d.conditions_message")
+
+
+def _transport_settings(database):
+    return society_settings(database)["transport"]
+
+
+def _vehicle(database, vehicle_id):
+    """A vehicle with its definition; one stranded by a deleted room is sent home first."""
+    row = database.execute(f"SELECT {VEHICLE_COLUMNS} FROM mud_vehicles v JOIN mud_vehicle_definitions d "
+                           "ON d.id=v.definition_id WHERE v.id=?", (vehicle_id,)).fetchone()
+    if row is None:
+        return None
+    vehicle = dict(row)
+    if vehicle["room_id"] is None:
+        home = vehicle["home_room_id"] or _start_room(database, vehicle["world_id"])["id"]
+        database.execute("UPDATE mud_vehicles SET room_id=?,home_room_id=? WHERE id=?", (home, home, vehicle["id"]))
+        vehicle.update(room_id=home, home_room_id=home)
+    return vehicle
+
+
+def _room_vehicles(database, room_id):
+    return [_vehicle(database, row["id"]) for row in database.execute(
+        "SELECT v.id FROM mud_vehicles v JOIN mud_vehicle_definitions d ON d.id=v.definition_id "
+        "WHERE v.room_id=? ORDER BY d.name COLLATE NOCASE,v.created_at,v.id", (room_id,))]
+
+
+def _vehicle_riders(database, vehicle_id):
+    """Everyone aboard, longest aboard first."""
+    return database.execute(
+        "SELECT r.character_id,r.role,c.user_id,COALESCE(c.display_name,u.callsign) AS name "
+        "FROM mud_vehicle_riders r JOIN mud_characters c ON c.id=r.character_id JOIN users u ON u.id=c.user_id "
+        "WHERE r.vehicle_id=? ORDER BY r.boarded_at,r.rowid", (vehicle_id,)).fetchall()
+
+
+def _interior_id(database, vehicle):
+    """The vehicle's own copy of its interior room, made the first time anyone boards; None without one."""
+    if not vehicle["interior_room_id"]:
+        return None
+    row = database.execute("SELECT id,template_room_id FROM mud_world_rooms WHERE vehicle_id=? AND kind='vehicle'",
+                           (vehicle["id"],)).fetchone()
+    if row is not None and row["template_room_id"] == vehicle["interior_room_id"]:
+        return row["id"]
+    template = database.execute("SELECT name,description,world_id FROM mud_world_rooms WHERE id=?",
+                                (vehicle["interior_room_id"],)).fetchone()
+    room_id = f"vehicle-room:{uuid.uuid4().hex}"
+    database.execute("INSERT INTO mud_world_rooms(id,name,description,world_id,kind,template_room_id,vehicle_id) "
+                     "VALUES(?,?,?,?,'vehicle',?,?)",
+                     (room_id, template["name"], template["description"], template["world_id"],
+                      vehicle["interior_room_id"], vehicle["id"]))
+    return room_id
+
+
+def _ride(database, user_id):
+    """The vehicle this player is aboard with their role and interior, or None.
+
+    A rider found anywhere but aboard (moved by something that bypasses
+    _set_player_location) is quietly taken off.
+    """
+    row = database.execute(
+        "SELECT r.vehicle_id,r.role,r.character_id FROM mud_vehicle_riders r JOIN mud_characters c "
+        "ON c.id=r.character_id WHERE c.user_id=? AND c.world_key=?", (user_id, _world())).fetchone()
+    if row is None:
+        return None
+    vehicle = _vehicle(database, row["vehicle_id"])
+    interior = _interior_id(database, vehicle) if vehicle else None
+    location = _player_location(database, user_id)
+    if (vehicle is None or location is None or location["location_type"] != "world_room"
+            or location["location_key"] != (interior or vehicle["room_id"])):
+        database.execute("DELETE FROM mud_vehicle_riders WHERE character_id=?", (row["character_id"],))
+        if vehicle is not None:
+            _settle_operator(database, vehicle["id"])
+        return None
+    return {**vehicle, "role": row["role"], "interior_id": interior}
+
+
+def _movement_room(database, user_id):
+    """Where this player's moves start: outside their vehicle when they ride inside one."""
+    ride = _ride(database, user_id)
+    if ride and ride["interior_id"]:
+        return _world_room(database, ride["room_id"])
+    return _current_room(database, user_id)
+
+
+def _leave_vehicle_if_moved(database, user_id, room_id):
+    """Called on every move: a rider who ends up anywhere but aboard is off, and a waiting rider gives up."""
+    character = database.execute("SELECT id FROM mud_characters WHERE user_id=? AND world_key=?",
+                                 (user_id, _world())).fetchone()
+    if character is None:
+        return
+    ride = database.execute(
+        "SELECT r.vehicle_id,v.room_id,d.interior_room_id FROM mud_vehicle_riders r "
+        "JOIN mud_vehicles v ON v.id=r.vehicle_id JOIN mud_vehicle_definitions d ON d.id=v.definition_id "
+        "WHERE r.character_id=?", (character["id"],)).fetchone()
+    if ride is not None:
+        aboard = (room_id is not None and room_id == ride["room_id"] and not ride["interior_room_id"]) or (
+            room_id is not None and database.execute("SELECT 1 FROM mud_world_rooms WHERE id=? AND vehicle_id=?",
+                                                     (room_id, ride["vehicle_id"])).fetchone())
+        if not aboard:
+            database.execute("DELETE FROM mud_vehicle_riders WHERE character_id=?", (character["id"],))
+            _settle_operator(database, ride["vehicle_id"])
+    database.execute("DELETE FROM mud_transit_trips WHERE character_id=? AND wait_room_id IS NOT ?",
+                     (character["id"], room_id))
+
+
+def _settle_operator(database, vehicle_id):
+    """After someone gets off: an owned vehicle without its owner unloads everyone; a public
+    one passes its controls to the longest-aboard passenger, or starts its trip home."""
+    vehicle = _vehicle(database, vehicle_id)
+    if vehicle is None:
+        return
+    riders = _vehicle_riders(database, vehicle_id)
+    if vehicle["owner_character_id"]:
+        if riders and all(rider["character_id"] != vehicle["owner_character_id"] for rider in riders):
+            _unload(database, vehicle, f"The {vehicle['name']}'s owner has left, so you step off at {{name}}.")
+        return
+    if riders and not any(rider["role"] == "operator" for rider in riders):
+        database.execute("UPDATE mud_vehicle_riders SET role='operator' WHERE character_id=?",
+                         (riders[0]["character_id"],))
+        _insert_event(database, _private(riders[0]["user_id"], f"You take the controls of the {vehicle['name']}.",
+                                         "movement"))
+    elif not riders and vehicle["return_seconds"] and vehicle["room_id"] != vehicle["home_room_id"]:
+        database.execute("UPDATE mud_vehicles SET return_due=? WHERE id=?",
+                         (_scheduled_now(datetime.now(timezone.utc) + timedelta(seconds=vehicle["return_seconds"])),
+                          vehicle_id))
+
+
+def _unload(database, vehicle, notice):
+    """Everyone off, stepping out where the vehicle stands; notice may use {name}."""
+    interior = database.execute("SELECT id FROM mud_world_rooms WHERE vehicle_id=? AND kind='vehicle'",
+                                (vehicle["id"],)).fetchall()
+    database.execute("DELETE FROM mud_vehicle_riders WHERE vehicle_id=?", (vehicle["id"],))
+    if interior:
+        outside = _world_room(database, vehicle["room_id"])
+        _move_room_occupants(database, [row["id"] for row in interior], outside, notice)
+
+
+def _remove_vehicle(database, vehicle_id, notice):
+    """Take a vehicle out of the world; its riders step off and anything left inside stays behind outside."""
+    vehicle = _vehicle(database, vehicle_id)
+    if vehicle is None:
+        return
+    _unload(database, vehicle, notice)
+    database.execute("UPDATE mud_item_instances SET room_id=? WHERE room_id IN "
+                     "(SELECT id FROM mud_world_rooms WHERE vehicle_id=?)", (vehicle["room_id"], vehicle_id))
+    database.execute("DELETE FROM mud_vehicles WHERE id=?", (vehicle_id,))
+
+
+def spawn_placed_vehicle(database, placement_id):
+    """The public vehicle an authored placement keeps in the world, made full of fuel."""
+    row = database.execute("SELECT p.id,p.room_id,d.id AS definition_id,d.world_id,d.fuel_capacity "
+                           "FROM mud_vehicle_placements p JOIN mud_vehicle_definitions d "
+                           "ON d.id=p.vehicle_definition_id WHERE p.id=?", (placement_id,)).fetchone()
+    if row is None or database.execute("SELECT 1 FROM mud_vehicles WHERE placement_id=?", (placement_id,)).fetchone():
+        return
+    database.execute("INSERT INTO mud_vehicles(id,world_id,definition_id,placement_id,room_id,home_room_id,fuel) "
+                     "VALUES(?,?,?,?,?,?,?)", (f"vehicle:{uuid.uuid4().hex}", row["world_id"], row["definition_id"],
+                                               row["id"], row["room_id"], row["room_id"], row["fuel_capacity"]))
+
+
+def _owned_vehicles(database, character_id):
+    return [_vehicle(database, row["id"]) for row in database.execute(
+        "SELECT v.id FROM mud_vehicles v JOIN mud_vehicle_definitions d ON d.id=v.definition_id "
+        "WHERE v.owner_character_id=? ORDER BY d.name COLLATE NOCASE,v.id", (character_id,))]
+
+
+def _grant_vehicle(database, user, definition):
+    """Give the character a vehicle of this kind, waiting where they stand (or at home); one of each."""
+    character_id = _character_id(database, user["id"])
+    if database.execute("SELECT 1 FROM mud_vehicles WHERE owner_character_id=? AND definition_id=?",
+                        (character_id, definition["id"])).fetchone():
+        return []
+    room = _movement_room(database, user["id"])
+    if (room.get("instance_id") or room.get("system_managed") or room.get("kind") not in ("authored", "wild")
+            or _room_property(database, room["id"])[0] is not None
+            or database.execute("SELECT 1 FROM mud_transit_lines WHERE cabin_room_id=?", (room["id"],)).fetchone()):
+        room = dict(_home_room(database, user["id"]))
+    database.execute("INSERT INTO mud_vehicles(id,world_id,definition_id,owner_character_id,room_id,home_room_id,"
+                     "fuel) VALUES(?,?,?,?,?,?,?)",
+                     (f"vehicle:{uuid.uuid4().hex}", _active_world(database), definition["id"], character_id,
+                      room["id"], room["id"], definition["fuel_capacity"]))
+    return [EventDraft(f"The {definition['name']} is yours. It waits at {room['name']} (/board {definition['name']}).",
+                       event_type="vehicle")]
+
+
+def _scripted_vehicle(database, user, kind, definition_id):
+    """A grant_vehicle or revoke_vehicle outcome; nothing happens when it would change nothing."""
+    definition = database.execute("SELECT * FROM mud_vehicle_definitions WHERE id=? AND world_id=?",
+                                  (definition_id, _active_world(database))).fetchone()
+    if definition is None:
+        return []
+    if kind == "grant_vehicle":
+        return _grant_vehicle(database, user, definition)
+    owned = database.execute("SELECT id FROM mud_vehicles WHERE owner_character_id=? AND definition_id=?",
+                             (_character_id(database, user["id"]), definition_id)).fetchone()
+    if owned is None:
+        return []
+    _remove_vehicle(database, owned["id"], f"The {definition['name']} is taken away; you step off at {{name}}.")
+    return [EventDraft(f"The {definition['name']} is no longer yours.", event_type="vehicle")]
+
+
+def character_leaving_vehicles(database, character_id):
+    """Before a character is deleted: its vehicles leave the world and its seat is given up."""
+    for row in database.execute("SELECT id,world_id FROM mud_vehicles WHERE owner_character_id=?",
+                                (character_id,)).fetchall():
+        with mud_scope.use(row["world_id"]):
+            _remove_vehicle(database, row["id"], "The vehicle you were aboard is gone; you step off at {name}.")
+    for row in database.execute("SELECT r.vehicle_id,v.world_id FROM mud_vehicle_riders r JOIN mud_vehicles v "
+                                "ON v.id=r.vehicle_id WHERE r.character_id=?", (character_id,)).fetchall():
+        with mud_scope.use(row["world_id"]):
+            database.execute("DELETE FROM mud_vehicle_riders WHERE character_id=?", (character_id,))
+            _settle_operator(database, row["vehicle_id"])
+
+
+def _exit_field(row, key, default=None):
+    """A stored exit column that dungeon and older exit rows may not have."""
+    return row[key] if key in row.keys() and row[key] is not None else default
+
+
+def _ground(room):
+    """(kind, terrain, required mode) of a room, as vehicle rules read it."""
+    return (room.get("kind"), room.get("terrain"), room.get("requires_mode")) if room else None
+
+
+def _move_problem(database, ride, chosen, source=None):
+    """Why this exit from source cannot be taken on foot (ride None) or aboard this vehicle, or None."""
+    target = _world_room(database, chosen["to_room_id"]) or {}
+    return mud_transport.passable(ride, exit_mode=_exit_field(chosen, "requires_mode"),
+                                  exit_allows=bool(_exit_field(chosen, "allow_vehicles", 1)),
+                                  target_kind=target.get("kind"), target_terrain=target.get("terrain"),
+                                  target_mode=target.get("requires_mode"), source=_ground(source))
+
+
+def _for_user(user_id, drafts):
+    """Address another player's private notes to them rather than to whoever acted."""
+    return [_private(user_id, draft.body, draft.event_type)
+            if draft.audience_type == "private" and not draft.recipient_ids and not draft.audience_key else draft
+            for draft in drafts]
+
+
+def _drive(database, user, ride, parameters, travel_step=None):
+    """Move the vehicle the player rides through one exit, with everyone aboard."""
+    name = ride["name"]
+    if ride["role"] != "operator":
+        operator = next((rider for rider in _vehicle_riders(database, ride["id"]) if rider["role"] == "operator"), None)
+        if ride["owner_character_id"] or (operator and _present(database, operator["user_id"])):
+            raise ActionError(f"Only the operator steers the {name}. Use /disembark to get off.")
+        database.execute("UPDATE mud_vehicle_riders SET role='passenger' WHERE vehicle_id=? AND role='operator'",
+                         (ride["id"],))
+        database.execute("UPDATE mud_vehicle_riders SET role='operator' WHERE character_id=?",
+                         (_character_id(database, user["id"]),))
+    outside = _world_room(database, ride["room_id"])
+    if not ride["interior_id"] and _active_hostiles(database, outside, user["id"]) and not _is_hidden(
+            database, user["id"]):
+        raise ActionError("A hostile enemy blocks your route. Fight or attempt to flee.", 409)
+    chosen = _choose_exit(database, user, outside, parameters)
+    if chosen is None:
+        raise ActionError(f"Leave the {name} first: /disembark, then go in on foot.")
+    if _room_property(database, chosen["to_room_id"])[0] is not None:
+        raise ActionError(f"Leave the {name} outside; /disembark to go in.")
+    problem = _move_problem(database, ride, chosen, outside)
+    if problem:
+        raise ActionError(problem)
+    cost = ride["fuel_per_move"] if ride["fuel_capacity"] else 0
+    # Every check is done: the fuel and the move are one conditional write.
+    if not database.execute("UPDATE mud_vehicles SET room_id=?,fuel=fuel-?,return_due=NULL WHERE id=? AND fuel>=?",
+                            (chosen["to_room_id"], cost, ride["id"], cost)).rowcount:
+        raise ActionError(f"The {name} is out of fuel. Use /refuel.")
+    if not ride["interior_id"]:
+        return _walk(database, user, outside, chosen, travel_step, ride)
+    arrived = _world_room(database, chosen["to_room_id"])
+    route = chosen["direction"] or chosen["name"]
+    riders = _vehicle_riders(database, ride["id"])
+    if travel_step is None:
+        events = [EventDraft(f"You steer the {name} {route}.", event_type="movement"),
+                  EventDraft(f"Outside the {name}: {_describe_room(database, arrived, user['id'])}", event_type="room")]
+    else:
+        events = [EventDraft(f"You steer the {name} {route} to {arrived['name']} "
+                             f"({travel_step} room{'s' if travel_step != 1 else ''}).", event_type="travel")]
+    others = tuple(rider["user_id"] for rider in riders if rider["user_id"] != user["id"])
+    if others:
+        events.append(EventDraft(f"The {name} travels {route} to {arrived['name']}.", "movement", "room",
+                                 ride["interior_id"], others))
+    events += [EventDraft(f"The {name} leaves {route}.", "departure", "room", outside["id"],
+                          _occupant_ids(database, outside["id"])),
+               EventDraft(f"The {name} arrives.", "arrival", "room", arrived["id"],
+                          _occupant_ids(database, arrived["id"]))]
+    for rider in riders:
+        rider_user = database.execute("SELECT * FROM users WHERE id=?", (rider["user_id"],)).fetchone()
+        events += _for_user(rider["user_id"], _set_objective_progress(database, rider_user, "visit_room", arrived["id"])
+                            + _discover_destinations(database, rider_user, arrived["id"]))
+    if travel_step is None:
+        events += _wayfinding_heading(database, user["id"], arrived, only_changes=True)
+    return events
+
+
+def _journey_interval(database, user_id, settings):
+    ride = _ride(database, user_id)
+    if ride is None or ride["role"] != "operator":
+        return settings["interval_seconds"]
+    return mud_transport.travel_interval(settings["interval_seconds"], ride["speed"])
+
+
+def _vehicle_line(database, vehicle, character_id, ride=None):
+    if vehicle["owner_character_id"] == character_id:
+        whose = "yours"
+    elif vehicle["owner_character_id"]:
+        owner = database.execute("SELECT display_name FROM mud_characters WHERE id=?",
+                                 (vehicle["owner_character_id"],)).fetchone()
+        whose = f"owned by {owner['display_name'] if owner else 'someone'}"
+    else:
+        whose = "public"
+    if ride and ride["id"] == vehicle["id"]:
+        whose += ", you are aboard"
+    elif not vehicle["interior_room_id"] and _vehicle_riders(database, vehicle["id"]):
+        whose += ", in use"
+    fuel = f", fuel {vehicle['fuel']}/{vehicle['fuel_capacity']}" if vehicle["fuel_capacity"] else ""
+    return f"{whose}{fuel}"
+
+
+def _fuel_station(database, room_id, ride=None):
+    """A fuel station here that serves this vehicle (any station when ride is None)."""
+    for station in database.execute("SELECT * FROM mud_fuel_stations WHERE room_id=? ORDER BY price,id", (room_id,)):
+        modes = mud_transport.word_set(station["modes"])
+        if ride is None or not modes or modes & mud_transport.word_set(ride["modes"]):
+            return station
+    return None
+
+
+def _line_stops(database, line_id):
+    return database.execute("SELECT s.*,r.name FROM mud_transit_stops s JOIN mud_world_rooms r ON r.id=s.room_id "
+                            "WHERE s.line_id=? ORDER BY s.sort_order,s.id", (line_id,)).fetchall()
+
+
+def _lines_here(database, room_id):
+    return database.execute("SELECT l.* FROM mud_transit_lines l JOIN mud_transit_stops s ON s.line_id=l.id "
+                            "WHERE s.room_id=? AND l.world_id=? ORDER BY l.name COLLATE NOCASE,l.id",
+                            (room_id, _active_world(database))).fetchall()
+
+
+def _duration_text(seconds):
+    if seconds < 60:
+        return f"{seconds}s"
+    minutes, rest = divmod(seconds, 60)
+    if minutes < 60:
+        return f"{minutes}m" + (f" {rest}s" if rest else "")
+    hours, minutes = divmod(minutes, 60)
+    return f"{hours}h" + (f" {minutes}m" if minutes else "")
+
+
+def _line_offers(database, line, room_id):
+    """(stop row, seconds, fare) for each stop a line reaches from room_id."""
+    stops = _line_stops(database, line["id"])
+    here = next((index for index, stop in enumerate(stops) if stop["room_id"] == room_id), None)
+    if here is None:
+        return []
+    offers = []
+    for index, stop in enumerate(stops):
+        if index != here:
+            seconds, segments = mud_transport.trip(stops, here, index)
+            offers.append((stop, seconds, mud_transport.fare(line, segments)))
+    return offers
+
+
+def _trip_row(database, user_id):
+    return database.execute("SELECT t.* FROM mud_transit_trips t JOIN mud_characters c ON c.id=t.character_id "
+                            "WHERE c.user_id=? AND c.world_key=?", (user_id, _world())).fetchone()
+
+
+def _vehicle_lines(database, user_id, room):
+    """What a room says about vehicles, fuel, and transit, or about the vehicle a rider sits in."""
+    if room.get("instance_id") or room.get("system_managed"):
+        return []
+    character_id = _character_id(database, user_id) if user_id else None
+    ride = _ride(database, user_id) if user_id else None
+    if room.get("kind") == "vehicle":
+        vehicle = ride if ride and ride["interior_id"] == room["id"] else _vehicle(database, room.get("vehicle_id"))
+        if vehicle is None:
+            return []
+        outside = _world_room(database, vehicle["room_id"])
+        role = (" - you steer" if ride and ride["role"] == "operator" else " - a passenger") if ride else ""
+        fuel = f", fuel {vehicle['fuel']}/{vehicle['fuel_capacity']}" if vehicle["fuel_capacity"] else ""
+        routes = ", ".join(_player_exit_label(database, user_id, item) if user_id else _exit_label(item)
+                           for item in _room_exits(database, outside["id"], None, user_id)) or "none"
+        return [f"Aboard the {vehicle['name']}{role}{fuel}.",
+                f"Outside: {outside['name']} - ways: {routes} (/look out, /disembark)."]
+    lines = []
+    vehicles = _room_vehicles(database, room["id"])
+    if vehicles:
+        lines.append("Vehicles: " + ", ".join(f"{label} ({_vehicle_line(database, vehicle, character_id, ride)})"
+                                              for vehicle, label in _numbered_items(vehicles))
+                     + ("." if ride else " (/board <vehicle>)."))
+    station = _fuel_station(database, room["id"])
+    if station:
+        lines.append(f"Fuel station: {station['price']} coin{'s' if station['price'] != 1 else ''} a unit (/refuel).")
+    for line in _lines_here(database, room["id"]):
+        offers = _line_offers(database, line, room["id"])
+        if offers:
+            lines.append(f"Transit - {line['name']}: " + "; ".join(
+                f"{stop['name']} ({_duration_text(seconds)}, {fare} coin{'s' if fare != 1 else ''})"
+                for stop, seconds, fare in offers) + " (/ride <stop>).")
+    trip = _trip_row(database, user_id) if user_id else None
+    if trip and trip["wait_room_id"] == room["id"]:
+        lines.append(f"You are waiting for the {trip['line_name']} (/ride status).")
+    return lines
+
+
+def _transport_state(database, user_id, room):
+    """The vehicle, boardable vehicles, transit offers, and ride in progress, for the client."""
+    if room.get("instance_id") or room.get("system_managed"):
+        return {"vehicle": None, "vehicles": [], "transit": [], "trip": None}
+    ride = _ride(database, user_id)
+    outside = _world_room(database, ride["room_id"]) if ride else room
+    character_id = _character_id(database, user_id)
+    vehicles = [] if ride else [
+        {"id": vehicle["id"], "name": vehicle["name"], "display_name": label,
+         "yours": vehicle["owner_character_id"] == character_id}
+        for vehicle, label in _numbered_items(_room_vehicles(database, room["id"]))]
+    transit = [] if ride else [
+        {"line": line["name"], "stop": stop["name"], "seconds": seconds, "fare": fare}
+        for line in _lines_here(database, room["id"]) for stop, seconds, fare in _line_offers(database, line, room["id"])]
+    trip = _trip_row(database, user_id)
+    return {
+        "vehicle": {"name": ride["name"], "role": ride["role"], "interior": bool(ride["interior_id"]),
+                    "fuel": ride["fuel"], "fuel_capacity": ride["fuel_capacity"], "outside": outside["name"],
+                    "station": bool(_fuel_station(database, outside["id"], ride))} if ride else None,
+        "vehicles": vehicles,
+        "transit": transit,
+        "trip": {"line": trip["line_name"], "due_at": trip["due_at"]} if trip else None,
+    }
+
+
+def _board_action(database, user, parameters):
+    if not _transport_settings(database)["enabled"]:
+        raise ActionError("Vehicles are not running in this world.")
+    ride = _ride(database, user["id"])
+    if ride:
+        raise ActionError(f"You are already aboard the {ride['name']}. Use /disembark first.")
+    if _trip_row(database, user["id"]):
+        raise ActionError("You are waiting for a ride. Use /ride cancel first.")
+    room = _current_room(database, user["id"])
+    if room.get("instance_id") or room.get("system_managed") or room.get("kind") not in ("authored", "wild"):
+        raise ActionError("There is nothing to board here.")
+    vehicles = _room_vehicles(database, room["id"])
+    if not vehicles:
+        raise ActionError("There is nothing to board here.")
+    target = _item_target(parameters)
+    if not target and len(vehicles) > 1:
+        raise ActionError("Board which vehicle? " + ", ".join(label for _, label in _numbered_items(vehicles)) + ".")
+    vehicle = _item_matches(vehicles, target) if target else vehicles[0]
+    if _active_hostiles(database, room, user["id"]) and not _is_hidden(database, user["id"]):
+        raise ActionError("A hostile enemy is too close to board anything.", 409)
+    name = vehicle["name"]
+    character_id = _character_id(database, user["id"])
+    riders = _vehicle_riders(database, vehicle["id"])
+    owner = vehicle["owner_character_id"]
+    if owner and owner != character_id:
+        if not vehicle["shareable"]:
+            raise ActionError(f"The {name} belongs to someone else.")
+        if all(rider["character_id"] != owner for rider in riders):
+            raise ActionError(f"The {name} takes passengers only while its owner is aboard.")
+    if not vehicle["interior_room_id"] and riders:
+        raise ActionError(f"Someone is already riding the {name}.")
+    if vehicle["conditions_json"] not in (None, "", "[]") and not mud_conditions.evaluate(
+            vehicle["conditions_json"], _ConditionContext(database, user["id"])):
+        raise ActionError(vehicle["conditions_message"] or f"You cannot board the {name}.")
+    operator = owner == character_id or (not owner and not any(rider["role"] == "operator" for rider in riders))
+    who = character_state(database, user["id"])["name"]
+    events = [EventDraft(f"You board the {name}." + (" You take the controls." if operator else ""), "movement")]
+    interior = _interior_id(database, vehicle)
+    if interior:
+        inside = tuple(rider["user_id"] for rider in riders)
+        _leave_combat(database, user["id"], "room", room["id"])
+        _set_player_location(database, user["id"], "traditional", "world_room", interior)
+        events.append(_room_entry_event(database, user))
+        if inside:
+            events.append(EventDraft(f"{who} comes aboard.", "arrival", "room", interior, inside))
+    database.execute("INSERT INTO mud_vehicle_riders(character_id,vehicle_id,role) VALUES(?,?,?)",
+                     (character_id, vehicle["id"], "operator" if operator else "passenger"))
+    database.execute("UPDATE mud_vehicles SET return_due=NULL WHERE id=?", (vehicle["id"],))
+    mud_wayfinding.drop_route(user["id"])
+    events.append(EventDraft(f"{who} boards the {name}.", "departure", "room", room["id"],
+                             _occupant_ids(database, room["id"], user["id"])))
+    return events
+
+
+def _disembark_action(database, user, _parameters):
+    ride = _ride(database, user["id"])
+    if ride is None:
+        raise ActionError("You are not aboard anything.")
+    name = ride["name"]
+    outside = _world_room(database, ride["room_id"])
+    who = character_state(database, user["id"])["name"]
+    events = []
+    if mud_transport.passable(None, target_kind=outside.get("kind"), target_mode=outside.get("requires_mode")):
+        # Nobody steps off into open water; a stranded rider is brought back instead.
+        stranded = ride["role"] != "operator" or (ride["fuel_capacity"] and ride["fuel"] < ride["fuel_per_move"])
+        if not stranded:
+            raise ActionError(f"There is only {outside['requires_mode']} around you. Steer the {name} somewhere "
+                              "you can stand first.")
+        home = _world_room(database, ride["home_room_id"]) if ride["home_room_id"] else None
+        landing = home if home and not mud_transport.passable(
+            None, target_kind=home.get("kind"), target_mode=home.get("requires_mode")) else dict(
+            _home_room(database, user["id"]))
+        if ride["role"] == "operator":
+            database.execute("UPDATE mud_vehicles SET room_id=? WHERE id=?", (landing["id"], ride["id"]))
+            ride = {**ride, "room_id": landing["id"]}
+            events.append(EventDraft(f"With no fuel left, the {name} is towed back to {landing['name']}.",
+                                     "movement"))
+        else:
+            events.append(EventDraft(f"You are brought ashore at {landing['name']}.", "movement"))
+        outside = landing
+    if ride["interior_id"]:
+        inside = tuple(rider["user_id"] for rider in _vehicle_riders(database, ride["id"])
+                       if rider["user_id"] != user["id"])
+        _set_player_location(database, user["id"], "traditional", "world_room", outside["id"])
+        if inside:
+            events.append(EventDraft(f"{who} leaves the {name}.", "departure", "room", ride["interior_id"], inside))
+    else:
+        database.execute("DELETE FROM mud_vehicle_riders WHERE character_id=?", (_character_id(database, user["id"]),))
+        if outside["id"] != _current_room(database, user["id"])["id"]:
+            _set_player_location(database, user["id"], "traditional", "world_room", outside["id"])
+        _settle_operator(database, ride["id"])
+    mud_wayfinding.drop_route(user["id"])
+    events = [EventDraft(f"You leave the {name}.", "movement")] + events + [_room_entry_event(database, user)]
+    events.append(EventDraft(f"{who} gets off the {name}.", "arrival", "room", outside["id"],
+                             _occupant_ids(database, outside["id"], user["id"])))
+    return events
+
+
+def _vehicles_action(database, user, _parameters):
+    character_id = _character_id(database, user["id"])
+    ride = _ride(database, user["id"])
+    lines = []
+    if ride:
+        role = "steering" if ride["role"] == "operator" else "a passenger on"
+        lines.append(f"You are {role} the {ride['name']} at {_world_room(database, ride['room_id'])['name']}"
+                     + (f", fuel {ride['fuel']}/{ride['fuel_capacity']}." if ride["fuel_capacity"] else "."))
+    owned = _owned_vehicles(database, character_id)
+    if owned:
+        lines.append("Your vehicles:")
+        lines += [f"  {vehicle['name']} - at {_world_room(database, vehicle['room_id'])['name']}"
+                  + (f", fuel {vehicle['fuel']}/{vehicle['fuel_capacity']}" if vehicle["fuel_capacity"] else "")
+                  for vehicle in owned]
+    room = _movement_room(database, user["id"])
+    here = [] if room.get("instance_id") or room.get("system_managed") else _room_vehicles(database, room["id"])
+    if here and not ride:
+        lines.append("Here: " + ", ".join(f"{label} ({_vehicle_line(database, vehicle, character_id)})"
+                                          for vehicle, label in _numbered_items(here)))
+    trip = _trip_row(database, user["id"])
+    if trip:
+        lines.append(f"You are riding the {trip['line_name']} (/ride status).")
+    return [EventDraft("\n".join(lines) if lines else "You have no vehicles, and there are none here.", "vehicle")]
+
+
+def _refuel_action(database, user, parameters):
+    if not _transport_settings(database)["enabled"]:
+        raise ActionError("Vehicles are not running in this world.")
+    ride = _ride(database, user["id"])
+    if ride is None:
+        raise ActionError("Board the vehicle you want to refuel.")
+    name = ride["name"]
+    if ride["role"] != "operator":
+        raise ActionError(f"Only the operator refuels the {name}.")
+    if not ride["fuel_capacity"]:
+        raise ActionError(f"The {name} needs no fuel.")
+    missing = ride["fuel_capacity"] - ride["fuel"]
+    if missing <= 0:
+        raise ActionError(f"The {name} is already full.")
+    arguments = [str(item).casefold() for item in parameters.get("arguments", [])]
+    station = None if arguments[:1] == ["item"] else _fuel_station(database, ride["room_id"], ride)
+    character_id = _character_id(database, user["id"])
+    if station is None:
+        if not ride["fuel_item_id"]:
+            raise ActionError(f"There is nowhere to refuel the {name} here.")
+        item = _handover_items(database, user, ride["fuel_item_id"], 1)[0]
+        added = min(missing, ride["fuel_per_item"])
+        database.execute("DELETE FROM mud_item_instances WHERE id=? AND owner_character_id=?",
+                         (item["id"], character_id))
+        text = f"You use {item['name']} to refuel the {name}"
+    else:
+        if arguments and arguments[0] != "item":
+            if not arguments[0].isdigit() or int(arguments[0]) < 1:
+                raise ActionError("Refuel how much? Use /refuel, /refuel <units>, or /refuel item.")
+            added = min(missing, int(arguments[0]))
+        else:
+            added = missing
+        cost = station["price"] * added
+        _pay_coins(database, character_id, cost, f"{added} fuel costs {cost} coins.")
+        text = f"You pay {cost} coin{'s' if cost != 1 else ''} to refuel the {name}"
+    database.execute("UPDATE mud_vehicles SET fuel=MIN(fuel+?,?) WHERE id=?", (added, ride["fuel_capacity"], ride["id"]))
+    return [EventDraft(f"{text} (fuel {min(ride['fuel'] + added, ride['fuel_capacity'])}/{ride['fuel_capacity']}).",
+                       "vehicle")]
+
+
+def _ride_action(database, user, parameters):
+    words = [str(item) for item in parameters.get("arguments", [])]
+    text = " ".join(words).strip()
+    key = " ".join(text.casefold().split())
+    trip = _trip_row(database, user["id"])
+    if key in ("status", "") and trip:
+        due = mud_housing.parse_time(trip["due_at"])
+        left = max(0, int((due - datetime.now(timezone.utc)).total_seconds()))
+        target = _world_room(database, trip["to_room_id"]) if trip["to_room_id"] else None
+        return [EventDraft(f"You are riding the {trip['line_name']} to {target['name'] if target else 'its end'}; "
+                           f"arrival in about {_duration_text(left)}.", "travel")]
+    if key == "cancel":
+        if trip is None:
+            raise ActionError("You are not waiting for a ride.")
+        if trip["wait_room_id"] != _current_room(database, user["id"])["id"] or database.execute(
+                "SELECT 1 FROM mud_transit_lines WHERE cabin_room_id=?", (trip["wait_room_id"],)).fetchone():
+            raise ActionError(f"The {trip['line_name']} is already under way.")
+        database.execute("DELETE FROM mud_transit_trips WHERE character_id=?", (trip["character_id"],))
+        return [EventDraft(f"You stop waiting for the {trip['line_name']}. The fare is not refunded.", "travel")]
+    if trip:
+        raise ActionError(f"You are already riding the {trip['line_name']} (/ride status).")
+    room = _current_room(database, user["id"])
+    if room.get("instance_id") or room.get("system_managed"):
+        raise ActionError("No transit line stops here.")
+    lines = _lines_here(database, room["id"])
+    if not lines:
+        raise ActionError("No transit line stops here.")
+    if key in ("", "status"):
+        listing = [f"{line['name']}: " + "; ".join(
+            f"{stop['name']} ({_duration_text(seconds)}, {fare} coin{'s' if fare != 1 else ''})"
+            for stop, seconds, fare in _line_offers(database, line, room["id"])) for line in lines]
+        return [EventDraft("Transit from here:\n" + "\n".join(listing) + "\nUse /ride <stop> or /ride <line> to <stop>.",
+                           "travel")]
+    if not _transport_settings(database)["enabled"]:
+        raise ActionError("Transit is not running in this world.")
+    ride = _ride(database, user["id"])
+    if ride:
+        raise ActionError(f"You are aboard the {ride['name']}. Use /disembark first.")
+    if _active_hostiles(database, room, user["id"]) and not _is_hidden(database, user["id"]):
+        raise ActionError("A hostile enemy is too close to wait for a ride.", 409)
+    match = re.match(r"^(.+?)\s+to\s+(.+)$", text, flags=re.I)
+    if match and any(" ".join(line["name"].casefold().split()) == " ".join(match.group(1).casefold().split())
+                     for line in lines):
+        lines = [_match_property(lines, match.group(1), "line")]
+        text = match.group(2)
+    offers = [(line, stop, seconds, fare) for line in lines
+              for stop, seconds, fare in _line_offers(database, line, room["id"])]
+    wanted = " ".join(text.casefold().split())
+    named = lambda offer: " ".join(offer[1]["name"].casefold().split())  # noqa: E731
+    matches = [offer for offer in offers if named(offer) == wanted] or [
+        offer for offer in offers if named(offer).startswith(wanted)]
+    if not matches:
+        raise ActionError(f'No stop matches "{text}". Use /ride to list where lines go from here.')
+    if len(matches) > 1:
+        raise ActionError(f'More than one ride matches "{text}". Use /ride <line> to <stop>.')
+    line, stop, seconds, fare = matches[0]
+    if line["conditions_json"] not in (None, "", "[]") and not mud_conditions.evaluate(
+            line["conditions_json"], _ConditionContext(database, user["id"])):
+        raise ActionError(line["conditions_message"] or f"The {line['name']} is not running for you right now.")
+    character_id = _character_id(database, user["id"])
+    _pay_coins(database, character_id, fare, f"The {line['name']} to {stop['name']} costs {fare} coins.")
+    events = [EventDraft(f"You {'pay ' + str(fare) + ' coins and ' if fare else ''}take the {line['name']} "
+                         f"to {stop['name']}; arrival in about {_duration_text(seconds)}.", "travel")]
+    who = character_state(database, user["id"])["name"]
+    wait_room = room["id"]
+    if line["cabin_room_id"]:
+        _leave_combat(database, user["id"], "room", room["id"])
+        _set_player_location(database, user["id"], "traditional", "world_room", line["cabin_room_id"])
+        wait_room = line["cabin_room_id"]
+        events += [_room_entry_event(database, user),
+                   EventDraft(f"{who} boards the {line['name']}.", "departure", "room", room["id"],
+                              _occupant_ids(database, room["id"], user["id"]))]
+    database.execute("INSERT INTO mud_transit_trips(character_id,world_id,line_id,line_name,to_room_id,wait_room_id,"
+                     "due_at) VALUES(?,?,?,?,?,?,?)",
+                     (character_id, _active_world(database), line["id"], line["name"], stop["room_id"], wait_room,
+                      _scheduled_now(datetime.now(timezone.utc) + timedelta(seconds=seconds))))
+    return events
+
+
+def _finish_trip(database, trip):
+    """Deliver one rider to their stop (or home, if the stop is gone); returns drafts."""
+    database.execute("DELETE FROM mud_transit_trips WHERE character_id=?", (trip["character_id"],))
+    user = database.execute("SELECT u.* FROM users u JOIN mud_characters c ON c.user_id=u.id WHERE c.id=?",
+                            (trip["character_id"],)).fetchone()
+    if user is None:
+        return []
+    target = _world_room(database, trip["to_room_id"]) if trip["to_room_id"] else None
+    target = target or dict(_home_room(database, user["id"]))
+    drafts = [_private(user["id"], f"The {trip['line_name']} arrives at {target['name']}.", "travel")]
+    return drafts + _for_user(user["id"], _trigger_teleport(database, user, target["id"],
+                                                            departure=f"gets off the {trip['line_name']}",
+                                                            arrival=f"arrives on the {trip['line_name']}"))
+
+
+def _return_vehicle(database, vehicle_id):
+    vehicle = _vehicle(database, vehicle_id)
+    if vehicle is None or _vehicle_riders(database, vehicle_id) or not vehicle["home_room_id"]:
+        database.execute("UPDATE mud_vehicles SET return_due=NULL WHERE id=?", (vehicle_id,))
+        return
+    database.execute("UPDATE mud_vehicles SET room_id=home_room_id,fuel=?,return_due=NULL WHERE id=?",
+                     (vehicle["fuel_capacity"], vehicle_id))
+    if vehicle["room_id"] == vehicle["home_room_id"]:
+        return
+    for room_id, text in ((vehicle["room_id"], f"The {vehicle['name']} is taken away."),
+                          (vehicle["home_room_id"], f"The {vehicle['name']} is brought back.")):
+        recipients = _occupant_ids(database, room_id)
+        if recipients:
+            _insert_event(database, EventDraft(text, "world", "room", room_id, recipients))
+
+
+def process_transport(database, now=None, limit=50):
+    """Deliver riders whose trips are due, return unattended public vehicles, and free anyone stuck
+    in a cabin or vehicle interior they no longer belong to. Call inside a write transaction."""
+    now = now or datetime.now(timezone.utc)
+    stamp = _scheduled_now(now)
+    enabled = _enabled_world_keys(database)
+    for trip in database.execute("SELECT * FROM mud_transit_trips WHERE due_at<=? ORDER BY due_at LIMIT ?",
+                                 (stamp, limit)).fetchall():
+        if trip["world_id"] not in enabled:
+            continue
+        with mud_scope.use(trip["world_id"]):
+            for draft in _finish_trip(database, trip):
+                _insert_event(database, draft, default_user_id=draft.recipient_ids[0] if draft.recipient_ids else None)
+    for row in database.execute("SELECT v.id,v.world_id FROM mud_vehicles v WHERE (v.return_due<=? AND NOT EXISTS "
+                                "(SELECT 1 FROM mud_vehicle_riders r WHERE r.vehicle_id=v.id)) OR v.room_id IS NULL "
+                                "LIMIT ?", (stamp, limit)).fetchall():
+        with mud_scope.use(row["world_id"]):
+            if _vehicle(database, row["id"])["return_due"]:
+                _return_vehicle(database, row["id"])
+    for row in database.execute(
+            "SELECT l.user_id,l.world_key,l.location_key,r.kind FROM mud_player_locations l JOIN mud_world_rooms r "
+            "ON r.id=l.location_key WHERE l.location_type='world_room' AND (r.kind='vehicle' OR r.id IN "
+            "(SELECT cabin_room_id FROM mud_transit_lines WHERE cabin_room_id IS NOT NULL)) LIMIT ?",
+            (limit,)).fetchall():
+        if row["world_key"] not in enabled:
+            continue
+        with mud_scope.use(row["world_key"]):
+            if row["kind"] == "vehicle":
+                if _ride(database, row["user_id"]) is None:
+                    vehicle = database.execute("SELECT vehicle_id FROM mud_world_rooms WHERE id=?",
+                                               (row["location_key"],)).fetchone()
+                    found = _vehicle(database, vehicle["vehicle_id"]) if vehicle else None
+                    target = found["room_id"] if found else _home_room(database, row["user_id"])["id"]
+                    _set_player_location(database, row["user_id"], "traditional", "world_room", target)
+            elif _trip_row(database, row["user_id"]) is None:
+                _set_player_location(database, row["user_id"], "traditional", "world_room",
+                                     _home_room(database, row["user_id"])["id"])
+
+
 def _settle_run_loot(database, user_id, run_id, keep):
     character = _character_row(database, user_id)
     if keep:
@@ -4227,6 +5023,16 @@ class _ConditionContext:
             return False
         holding = _character_holding(self.database, self._character()["id"], property_id)
         return holding is not None and (role == "owner" or holding["role"] == "primary")
+
+    def aboard(self, vehicle_id, mode):
+        ride = None if self.dungeon else _ride(self.database, self.user_id)
+        return ride is not None and (vehicle_id is None or ride["definition_id"] == vehicle_id) and (
+            mode is None or mode in mud_transport.word_set(ride["modes"]))
+
+    def has_vehicle(self, vehicle_id):
+        return not self.dungeon and self.database.execute(
+            "SELECT 1 FROM mud_vehicles WHERE owner_character_id=? AND definition_id=?",
+            (self._character()["id"], vehicle_id)).fetchone() is not None
 
     def game_hour(self):
         moment = None if self.dungeon else _game_time(self.database)
@@ -5497,11 +6303,16 @@ def _flee_action(database, user, _parameters):
         drafts.append(EventDraft(f"You flee {chosen['direction']}.", event_type="movement"))
         return drafts + [_room_entry_event(database, user)] + _entry_triggers(database, user) + \
             _entry_attack(database, user)
+    # Whoever flees goes on foot, so only ways a walker can take will do.
     exits = [exit_row for exit_row in _room_exits(database, room["id"], viewer_id=user["id"])
-             if not _property_entry(database, user["id"], exit_row["to_room_id"], create=False)[1]]
+             if not _property_entry(database, user["id"], exit_row["to_room_id"], create=False)[1]
+             and not _move_problem(database, None, exit_row)]
     if not exits:
         return drafts
     chosen = exits[0]
+    ride = _ride(database, user["id"])
+    if ride:
+        drafts.append(EventDraft(f"You abandon the {ride['name']} as you flee.", event_type="movement"))
     _leave_combat(database, user["id"], "room", room["id"])
     _set_player_location(database, user["id"], "traditional", "world_room",
                          _property_entry(database, user["id"], chosen["to_room_id"])[0])
@@ -5662,6 +6473,12 @@ def _look_action(database, user, parameters):
     if arguments:
         target = " ".join(str(item) for item in arguments).strip()
     room = _current_room(database, user["id"])
+    if room.get("kind") == "vehicle" and " ".join(str(target).casefold().split()) in ("out", "outside"):
+        ride = _ride(database, user["id"])
+        if ride:
+            return [EventDraft(f"Outside the {ride['name']}: "
+                               + _describe_room(database, _world_room(database, ride["room_id"]), user["id"]),
+                               event_type="room")]
     description = examinations.resolve(database, user, room, str(target).strip())
     return [EventDraft(description, event_type="room")]
 
@@ -5672,7 +6489,7 @@ MAP_HEIGHT = 9
 
 def _map_action(database, user, parameters):
     """An ASCII view of the current layer around the player; other layers never show."""
-    room = _current_room(database, user["id"])
+    room = _movement_room(database, user["id"])
     if room.get("instance_id") or room.get("system_managed") or room.get("x") is None:
         return [EventDraft("No map is available here.", event_type="room")]
     window = mud_wilderness.map_window(database, room["world_id"], room["x"], room["y"], room["z"],
@@ -5829,6 +6646,9 @@ def _drop_action(database, user, parameters):
         raise ActionError("Items cannot be dropped in protected procedural locations.")
     if _room_property(database, room["id"])[0] is not None:
         raise ActionError("Keep belongings in this property's storage (/storage); the floor is not kept for you.")
+    if room.get("kind") == "vehicle" or database.execute("SELECT 1 FROM mud_transit_lines WHERE cabin_room_id=?",
+                                                         (room["id"],)).fetchone():
+        raise ActionError("Nothing left loose aboard is kept; hold on to it.")
     database.execute("DELETE FROM mud_character_equipment WHERE item_instance_id=?", (item["id"],))
     database.execute("UPDATE mud_item_instances SET room_id=?,owner_character_id=NULL,container_id=NULL,equipped_slot=NULL,updated_at=CURRENT_TIMESTAMP WHERE id=?", (room["id"], item["id"]))
     return [EventDraft(f"You drop {item['name']}.", event_type="item"),
@@ -6354,6 +7174,8 @@ def _settle_outcomes(database, user, outcomes, claim=None, event_type="dialogue"
             events += _scripted_membership(database, user, outcome["type"], outcome["faction"])
         elif outcome["type"] in ("grant_property", "revoke_property"):
             events += _scripted_property(database, user, outcome["type"], outcome["property"])
+        elif outcome["type"] in ("grant_vehicle", "revoke_vehicle"):
+            events += _scripted_vehicle(database, user, outcome["type"], outcome["vehicle"])
         elif outcome["type"] == "disposition" and (outcome.get("npc") or npc_definition_id):
             events += _change_disposition(database, user, outcome.get("npc") or npc_definition_id, outcome["amount"])
     return events
@@ -6645,7 +7467,7 @@ def _deliver_quest_item(database, user, item, npc_definition_id=None):
 def _exits_action(database, user, parameters):
     if parameters.get("arguments"):
         raise ActionError("The exits command does not accept arguments.")
-    room = _current_room(database, user["id"])
+    room = _movement_room(database, user["id"])
     exits = _room_state(database, user["id"])["exits"]
     if not exits:
         body = f"There are no visible exits from {room['name']}."
@@ -7537,14 +8359,34 @@ def _pick_action(database, user, parameters):
 
 def _go_action(database, user, parameters, *, travel_step=None):
     """Move through one exit; travel_step swaps the full room view for a one-line progress note."""
-    character = character_state(database, user["id"])
+    ride = _ride(database, user["id"])
+    if ride:
+        return _drive(database, user, ride, parameters, travel_step)
     room = _current_room(database, user["id"])
+    instance_id = room.get("instance_id") if isinstance(room, dict) else None
+    if _active_hostiles(database, room, user["id"]) and not _is_hidden(database, user["id"]):
+        raise ActionError("A hostile enemy blocks your route. Fight or attempt to flee.", 409)
+    chosen = _choose_exit(database, user, room, parameters)
+    if chosen is None:
+        destination = " ".join(str(item) for item in parameters.get("arguments", [])).strip()
+        return _enter_dungeon_action(database, user, {"arguments": [destination]})
+    if not instance_id:
+        problem = _move_problem(database, None, chosen)
+        if problem:
+            raise ActionError(problem)
+        target, barrier = _property_entry(database, user["id"], chosen["to_room_id"])
+        if barrier:
+            raise ActionError(barrier)
+        chosen = {**dict(chosen), "to_room_id": target}
+    return _walk(database, user, room, chosen, travel_step)
+
+
+def _choose_exit(database, user, room, parameters):
+    """The exit a move names from room, checked for conditions and locks; None when it names a dungeon entrance."""
     exit_id = str(parameters.get("exit_id", "")).strip()
     arguments = parameters.get("arguments", [])
     destination = " ".join(str(item) for item in arguments).strip() if arguments else ""
     instance_id = room.get("instance_id") if isinstance(room, dict) else None
-    if _active_hostiles(database, room, user["id"]) and not _is_hidden(database, user["id"]):
-        raise ActionError("A hostile enemy blocks your route. Fight or attempt to flee.", 409)
     if exit_id:
         matches = [item for item in _room_exits(database, room["id"], instance_id, user["id"])
                    if item["id"] == exit_id]
@@ -7563,7 +8405,7 @@ def _go_action(database, user, parameters, *, travel_step=None):
     if not matches:
         if (destination and not instance_id and room["id"] != PORTAL_ROOM_ID
                 and _entrance_match(database, room["id"], destination, required=False)):
-            return _enter_dungeon_action(database, user, {"arguments": [destination]})
+            return None
         raise ActionError(f'There is no exit matching "{destination or exit_id}" from here.')
     if len(matches) > 1:
         raise ActionError(f'More than one exit matches "{destination}". Use an exit name or direction.')
@@ -7577,11 +8419,13 @@ def _go_action(database, user, parameters, *, travel_step=None):
                                     (_character_row(database, user["id"])["id"], chosen["id"])).fetchone()
         if not unlocked:
             raise ActionError("That exit is locked. " + _locked_hint(chosen).removeprefix("Locked. "))
-    if not instance_id:
-        target, barrier = _property_entry(database, user["id"], chosen["to_room_id"])
-        if barrier:
-            raise ActionError(barrier)
-        chosen = {**dict(chosen), "to_room_id": target}
+    return chosen
+
+
+def _walk(database, user, room, chosen, travel_step=None, ride=None):
+    """Step through a chosen, checked exit; a rider without an interior takes their vehicle along."""
+    character = character_state(database, user["id"])
+    instance_id = room.get("instance_id") if isinstance(room, dict) else None
     old_recipients = _occupant_ids(database, room["id"], user["id"], instance_id)
     _leave_combat(database, user["id"], "instance" if instance_id else "room",
                   instance_id or room["id"])
@@ -7599,20 +8443,22 @@ def _go_action(database, user, parameters, *, travel_step=None):
     new_recipients = _occupant_ids(database, destination_room["id"], user["id"], instance_id)
     audience_type = "instance" if instance_id else "room"
     audience_key = instance_id or room["id"]
+    riding = f" on the {ride['name']}" if ride else ""
     if travel_step is None:
-        events = [EventDraft(f"You go {route}.", event_type="movement"), _room_entry_event(database, user)]
+        events = [EventDraft(f"You {'ride the ' + ride['name'] if ride else 'go'} {route}.", event_type="movement"),
+                  _room_entry_event(database, user)]
     else:
         note = f" You notice {', '.join(found)}." if found else ""
-        events = [EventDraft(f"You travel {route} to {destination_room['name']} "
+        events = [EventDraft(f"You {'ride' if ride else 'travel'} {route} to {destination_room['name']} "
                              f"({travel_step} room{'s' if travel_step != 1 else ''}).{note}", event_type="travel")]
     events += [
         EventDraft(
-            f"{character['name']} leaves via {route}.",
+            f"{character['name']} {'rides away' if ride else 'leaves via'} {route}{riding}.",
             event_type="departure", audience_type=audience_type, audience_key=audience_key,
             recipient_ids=old_recipients,
         ),
         EventDraft(
-            f"{character['name']} arrives.",
+            f"{character['name']} arrives{riding}.",
             event_type="arrival", audience_type=audience_type,
             audience_key=instance_id or destination_room["id"], recipient_ids=new_recipients,
         ),
@@ -7659,6 +8505,7 @@ TRAVEL_SAFE_ACTIONS = frozenset({
     "travel", "stop", "look", "exits", "map", "say", "emote", "tell", "reply_player", "who",
     "help", "status", "character", "inventory", "quests", "skills", "spells", "description",
     "block", "unblock", "directions", "destinations", "time", "relations", "reputation", "fines",
+    "vehicles",
 })
 
 
@@ -7710,6 +8557,17 @@ def _travel_barrier(database, user_id, room, direction):
             "SELECT 1 FROM mud_exit_unlocks WHERE character_id=? AND exit_id=?",
             (_character_row(database, user_id)["id"], chosen["id"])).fetchone():
         return f"The way {direction} is locked."
+    ride = _ride(database, user_id)
+    problem = _move_problem(database, ride, chosen, room)
+    if problem:
+        return problem
+    if ride:
+        if ride["role"] != "operator":
+            return f"Only the operator steers the {ride['name']}."
+        if ride["fuel_capacity"] and ride["fuel"] < ride["fuel_per_move"]:
+            return f"The {ride['name']} is out of fuel."
+        if _room_property(database, chosen["to_room_id"])[0] is not None:
+            return f"You cannot take the {ride['name']} in there."
     return _property_entry(database, user_id, chosen["to_room_id"], create=False)[1]
 
 
@@ -7720,12 +8578,13 @@ def _travel_action(database, user, parameters):
         if row is None:
             return [EventDraft("You are not travelling. Use /travel <direction> in the wilderness.", "travel")]
         return [EventDraft(f"Travelling {row['direction']}: {row['steps']} room{'s' if row['steps'] != 1 else ''} "
-                           f"so far, one every {_travel_settings(database)['interval_seconds']} seconds. "
+                           f"so far, one every {_journey_interval(database, user['id'], _travel_settings(database))} "
+                           "seconds. "
                            "Use /stop to halt.", "travel")]
     direction = DIRECTION_ALIASES.get(arguments[0])
     if direction is None or len(arguments) > 1:
         raise ActionError("Travel which way? Use /travel <direction>, such as /travel north.")
-    room = _current_room(database, user["id"])
+    room = _movement_room(database, user["id"])
     if room.get("instance_id") or room.get("system_managed") or room.get("kind") != "wild":
         raise ActionError("Long-distance travel is only possible in the wilderness.")
     if mud_wilderness.effective_for_room(database, room) is None:
@@ -7740,7 +8599,8 @@ def _travel_action(database, user, parameters):
         "ON CONFLICT(user_id,world_key) DO UPDATE SET direction=excluded.direction,room_id=excluded.room_id,"
         "preset_id=excluded.preset_id,steps=0,next_due=excluded.next_due,started_at=CURRENT_TIMESTAMP",
         (user["id"], _world(), direction, room["id"], room.get("preset_id"),
-         _scheduled_now(datetime.now(timezone.utc) + timedelta(seconds=settings["interval_seconds"]))),
+         _scheduled_now(datetime.now(timezone.utc)
+                        + timedelta(seconds=_journey_interval(database, user["id"], settings)))),
     )
     verb = "turn and head" if replaced else "set off"
     return [EventDraft(f"You {verb} {direction} across the {_preset_name(database, room)}. "
@@ -7804,9 +8664,9 @@ def _travel_step(database, journey, settings, now):
         return []
     location = _player_location(database, user_id)
     if (location is None or location["location_type"] != "world_room"
-            or location["location_key"] != journey["room_id"]):
+            or _movement_room(database, user_id)["id"] != journey["room_id"]):
         return _cancel_travel(database, user_id, "Your journey ends here.")
-    room = _current_room(database, user_id)
+    room = _movement_room(database, user_id)
     direction = journey["direction"]
     barrier = _travel_barrier(database, user_id, room, direction)
     if barrier:
@@ -7817,15 +8677,15 @@ def _travel_step(database, journey, settings, now):
     except ActionError as problem:
         return _cancel_travel(database, user_id, str(problem)) + _wayfinding_heading(database, user_id, room)
     drafts += _npc_reactions(database, user, "go")
-    room = _current_room(database, user_id)
+    room = _movement_room(database, user_id)
     reason = _travel_interruption(database, user_id, journey, room, direction, step, settings)
     if reason:
         return (drafts + _cancel_travel(database, user_id, reason) + [_room_entry_event(database, user)]
                 + _wayfinding_heading(database, user_id, room))
     database.execute(
         "UPDATE mud_travel SET room_id=?,steps=?,next_due=? WHERE user_id=? AND world_key=?",
-        (room["id"], step, _scheduled_now(now + timedelta(seconds=settings["interval_seconds"])), user_id,
-         _world()),
+        (room["id"], step, _scheduled_now(now + timedelta(seconds=_journey_interval(database, user_id, settings))),
+         user_id, _world()),
     )
     return drafts
 
@@ -7923,6 +8783,18 @@ def _route_exit_check(database, user_id):
     return allowed
 
 
+def _route_rules(database, user_id):
+    """(allowed, enter) for a route this player could take: on foot, or aboard what they ride."""
+    ride = _ride(database, user_id)
+
+    def enter(item, source, target):
+        return mud_transport.passable(
+            ride, exit_mode=item.requires_mode if item else None, exit_allows=item.allow_vehicles if item else True,
+            target_kind=target[0], target_terrain=target[1], target_mode=target[2], source=source) is None
+
+    return _route_exit_check(database, user_id), enter
+
+
 def _room_position(room):
     return (room["x"], room["y"], room["z"]) if room.get("x") is not None else None
 
@@ -7935,8 +8807,8 @@ def _route_to(database, user_id, room, destination, fresh=False):
         spot = tracked.locate(room["id"], _room_position(room)) if tracked else None
         if spot is not None:
             return tracked, spot, "ok"
-    route = mud_wayfinding.find_route(database, world_id, room["id"], destination["room_id"],
-                                      _route_exit_check(database, user_id))
+    allowed, enter = _route_rules(database, user_id)
+    route = mud_wayfinding.find_route(database, world_id, room["id"], destination["room_id"], allowed, enter=enter)
     if route.status != "ok":
         mud_wayfinding.drop_route(user_id)
         return None, None, route.status
@@ -8003,7 +8875,7 @@ def _wayfinding_heading(database, user_id, room=None, *, only_changes=False):
     selected = _selected_destination(database, user_id)
     if selected is None:
         return []
-    room = room or _current_room(database, user_id)
+    room = room or _movement_room(database, user_id)
     if room.get("instance_id") or room.get("system_managed"):
         return []
     if room["id"] == selected["room_id"]:
@@ -8053,7 +8925,7 @@ def _directions_action(database, user, parameters):
         _clear_destination(database, user["id"])
         return [EventDraft(f"You stop heading for {selected['name']}." if selected
                            else "You have no destination chosen.", "travel")]
-    room = _current_room(database, user["id"])
+    room = _movement_room(database, user["id"])
     if room.get("instance_id") or room.get("system_managed"):
         raise ActionError("You cannot get your bearings here.")
     available = _destination_access(database, user["id"])
@@ -8938,6 +9810,8 @@ def _trigger_action(database, user, trigger, index, realm, instance_id=None):
                 return _scripted_property(database, user, kind, action["property"])
             except ActionError as problem:
                 return [_private(user_id, str(problem), "world")]
+        if kind in ("grant_vehicle", "revoke_vehicle"):
+            return _scripted_vehicle(database, user, kind, action["vehicle"])
         if kind == "fine":
             mud_society.record_crime(database, _character_row(database, user_id)["id"], _active_world(database),
                                      action["faction"], "other", action["amount"], 0)
@@ -8983,7 +9857,7 @@ def _trigger_spawn(database, trigger, index, action):
     return [EventDraft(f"{definition['name']} appears.", "npc", "room", room["id"], recipients)] if recipients else []
 
 
-def _trigger_teleport(database, user, room_id):
+def _trigger_teleport(database, user, room_id, *, departure="vanishes", arrival="appears"):
     """Move a player between rooms of the current world, as if they had walked in."""
     current = _current_room(database, user["id"])
     destination = database.execute("SELECT id FROM mud_world_rooms WHERE id=? AND world_id=?",
@@ -8997,12 +9871,14 @@ def _trigger_teleport(database, user, room_id):
         return []
     name = character_state(database, user["id"])["name"]
     old_recipients = _occupant_ids(database, current["id"], user["id"])
+    ride = _ride(database, user["id"])
     _leave_combat(database, user["id"], "room", current["id"])
     _set_player_location(database, user["id"], "traditional", "world_room", room_id)
-    drafts = [_room_entry_event(database, user),
-              EventDraft(f"{name} vanishes.", "departure", "room", current["id"], old_recipients),
-              EventDraft(f"{name} appears.", "arrival", "room", room_id,
-                         _occupant_ids(database, room_id, user["id"]))]
+    drafts = [_private(user["id"], f"You leave the {ride['name']} behind.", "movement")] if ride else []
+    drafts += [_room_entry_event(database, user),
+               EventDraft(f"{name} {departure}.", "departure", "room", current["id"], old_recipients),
+               EventDraft(f"{name} {arrival}.", "arrival", "room", room_id,
+                          _occupant_ids(database, room_id, user["id"]))]
     drafts += _set_objective_progress(database, user, "visit_room", room_id)
     return drafts + _entry_triggers(database, user)
 
@@ -9647,6 +10523,11 @@ actions.register(ActionDefinition(key="shop", label="SHOP", description="Browse,
 actions.register(ActionDefinition(key="bank", label="BANK", description="Check, deposit, or withdraw coins at a bank in an authored world.", commands=("bank",), handler=_bank_action, group="HUB", show_context=False))
 actions.register(ActionDefinition(key="storage", label="STORAGE", description="Deposit or withdraw items: personal storage in the portal room, or a world's lockers, chests, and property storage.", commands=("storage", "stash"), handler=_storage_action, group="HUB", show_context=False))
 actions.register(ActionDefinition(key="house", label="HOUSING", description="See, acquire, share, pay rent for, or give up property: /house info|buy|claim|pay|invite|accept|leave <property>.", commands=("house", "property"), handler=_house_action, group="CHARACTER", show_context=False))
+actions.register(ActionDefinition(key="board", label="BOARD", description="Board a vehicle here: /board <vehicle>. Also /mount, /embark.", commands=("board", "mount", "embark"), handler=_board_action, group="NAVIGATION", show_context=False))
+actions.register(ActionDefinition(key="disembark", label="DISEMBARK", description="Get off the vehicle you are aboard.", commands=("disembark", "dismount", "unboard"), handler=_disembark_action, group="NAVIGATION", show_context=False))
+actions.register(ActionDefinition(key="vehicles", label="VEHICLES", description="List your vehicles, the one you ride, and those here.", commands=("vehicles", "vehicle", "garage"), handler=_vehicles_action, group="NAVIGATION", show_context=False))
+actions.register(ActionDefinition(key="refuel", label="REFUEL", description="Refuel the vehicle you steer: /refuel [units|item].", commands=("refuel", "fuel"), handler=_refuel_action, group="NAVIGATION", show_context=False))
+actions.register(ActionDefinition(key="ride", label="RIDE", description="Take a transit line: /ride, /ride <stop>, /ride <line> to <stop>, /ride status|cancel.", commands=("ride", "transit"), handler=_ride_action, group="NAVIGATION", show_context=False))
 actions.register(ActionDefinition(key="talk", label="TALK", description="Talk to a nearby NPC.", commands=("talk", "speak"), handler=_talk_action, group="NPCS", show_context=False))
 actions.register(ActionDefinition(key="respond", label="RESPOND", description="Choose a response in your current NPC conversation.", commands=("respond",), handler=_respond_action, group="DIALOGUE", show_context=False))
 actions.register(ActionDefinition(key="reply_player", label="REPLY", description="Reply to your latest private message; numeric replies still work in NPC dialogue.", commands=("reply",), handler=_reply_player_action, group="SOCIAL", show_context=False))
@@ -10270,6 +11151,7 @@ def run_scheduled_tick(app, now=None):
             count = process_scheduled_events(database, now)
             count += process_travel(database, now)
             count += process_housing(database, now)
+            process_transport(database, now)
             database.commit()
             return count
         except Exception:
@@ -10752,6 +11634,7 @@ def delete_character():
                 )
                 # A co-owner takes over each property this character ran, or it ends.
                 character_leaving_holdings(database, character["id"])
+                character_leaving_vehicles(database, character["id"])
                 # Contained items have no owner_id. Remove them before their
                 # containers so the location CHECK remains satisfied.
                 owned_items = database.execute(
@@ -10938,7 +11821,21 @@ def _valid_exit_fields(database, exit_id=None):
     if len(message) > 200:
         return None, "The barred-exit message cannot exceed 200 characters."
     hidden = int(request.form.get("hidden") == "1")
-    return (from_room_id, to_room_id, name, direction, key_item_id, pick_difficulty, conditions, message, hidden), None
+    try:
+        requires_mode = mud_transport.mode(request.form.get("requires_mode", ""))
+    except ValueError as problem:
+        return None, str(problem)
+    # Builder forms send the box only when it is ticked, so "on foot only" arrives as a flag.
+    allow_vehicles = int(request.form.get("on_foot") != "1")
+    if requires_mode and not allow_vehicles:
+        return None, "An exit cannot both need a vehicle mode and be on foot only."
+    if database.execute("SELECT 1 FROM mud_vehicle_definitions WHERE interior_room_id IN (?,?) UNION ALL "
+                        "SELECT 1 FROM mud_transit_lines WHERE cabin_room_id IN (?,?)",
+                        (from_room_id, to_room_id, from_room_id, to_room_id)).fetchone():
+        return None, "Vehicle interiors and line cabins cannot have exits."
+    # New fields go last: the exit routes read this tuple by position.
+    return (from_room_id, to_room_id, name, direction, key_item_id, pick_difficulty, conditions, message, hidden,
+            requires_mode, allow_vehicles), None
 
 
 @bp.get("/w/<world_key>/builder")
@@ -11101,6 +11998,7 @@ def builder():
             "SELECT * FROM mud_work_rewards WHERE activity_id=? ORDER BY id", (row["id"],))]
     dungeon_context = _builder_dungeon_context(database)
     housing_context = _builder_housing_context(database)
+    transport_context = _builder_transport_context(database)
     trigger_context = _builder_trigger_context(database, rooms, exits_by_room, items_by_room, npcs_by_room,
                                                nodes_by_conversation, responses_by_node, conversations)
     return render_template(
@@ -11113,7 +12011,7 @@ def builder():
         npcs_by_room=npcs_by_room, quests=quests, objectives_by_quest=objectives_by_quest,
         rewards_by_quest=rewards_by_quest, givers_by_quest=givers_by_quest,
         professions=professions, work_by_profession=work_by_profession, rewards_by_work=rewards_by_work,
-        **housing_context,
+        **housing_context, **transport_context,
         npc_equipment=npc_equipment, npc_combat_rewards=npc_combat_rewards,
         npc_shops=npc_shops, npc_banks=npc_banks, shop_stock=shop_stock, discoveries_by_room=discoveries_by_room,
         world_destinations=world_destinations, destinations_by_room=destinations_by_room,
@@ -11920,8 +12818,8 @@ def builder_update_property(property_id):
     if removed and found["kind"] == "instanced":
         # Private copies of templates that left the property go; their occupants step outside.
         copies = [row["id"] for row in database.execute(
-            f"SELECT id FROM mud_world_rooms WHERE template_room_id IN ({','.join('?' * len(removed))})",
-            tuple(removed))]
+            f"SELECT id FROM mud_world_rooms WHERE kind='housing' AND template_room_id IN "
+            f"({','.join('?' * len(removed))})", tuple(removed))]
         if copies:
             _move_room_occupants(database, copies, _world_room(database, fields["entrance_room_id"]),
                                  "You step outside to {name}.")
@@ -11952,6 +12850,384 @@ def builder_release_holding(holding_id):
     database.commit()
     flash(f"{holding['name']} released; stored items went back to their owners.", "success")
     return _housing_builder_redirect()
+
+
+def _transport_builder_redirect():
+    return redirect(url_for("mud.builder", _anchor="transport-heading"))
+
+
+def _builder_transport_context(database):
+    """Vehicles with their placements and live instances, fuel stations, and transit lines with stops."""
+    world = _active_world(database)
+    vehicles = [dict(row) for row in database.execute(
+        "SELECT * FROM mud_vehicle_definitions WHERE world_id=? ORDER BY name COLLATE NOCASE,id", (world,))]
+    for entry in vehicles:
+        entry["terrain_list"] = sorted(mud_transport.word_set(entry["terrains"]))
+        entry["placements"] = [dict(row) for row in database.execute(
+            "SELECT p.*,r.name AS room_name FROM mud_vehicle_placements p JOIN mud_world_rooms r ON r.id=p.room_id "
+            "WHERE p.vehicle_definition_id=? ORDER BY r.name COLLATE NOCASE,p.id", (entry["id"],))]
+        entry["instances"] = [
+            {**dict(row), "room_name": (_world_room(database, row["room_id"]) or {}).get("name", "nowhere"),
+             "riders": len(_vehicle_riders(database, row["id"]))}
+            for row in database.execute(
+                "SELECT v.*,c.display_name AS owner_name FROM mud_vehicles v LEFT JOIN mud_characters c "
+                "ON c.id=v.owner_character_id WHERE v.definition_id=? ORDER BY v.owner_character_id IS NOT NULL,"
+                "c.display_name COLLATE NOCASE,v.id", (entry["id"],))]
+    lines = [dict(row) for row in database.execute(
+        "SELECT l.*,(SELECT COUNT(*) FROM mud_transit_trips t WHERE t.line_id=l.id) AS riding "
+        "FROM mud_transit_lines l WHERE l.world_id=? ORDER BY l.name COLLATE NOCASE,l.id", (world,))]
+    for entry in lines:
+        entry["stops"] = [dict(row) for row in _line_stops(database, entry["id"])]
+    stations = [dict(row) for row in database.execute(
+        "SELECT s.*,r.name AS room_name FROM mud_fuel_stations s JOIN mud_world_rooms r ON r.id=s.room_id "
+        "WHERE r.world_id=? ORDER BY r.name COLLATE NOCASE,s.id", (world,))]
+    return {"vehicle_definitions": vehicles, "transit_lines": lines, "fuel_stations": stations,
+            "vehicle_terrains": mud_wilderness.TERRAINS}
+
+
+def _private_room_problem(database, room_id, label, own_column=None, own_id=None):
+    """Why room_id cannot be a vehicle interior or line cabin, or None; riders reach it only by boarding."""
+    world = _active_world(database)
+    if not database.execute("SELECT 1 FROM mud_world_rooms WHERE id=? AND world_id=? AND kind='authored'",
+                            (room_id, world)).fetchone():
+        return f"Choose a room of this world for the {label}."
+    if room_id == _start_room(database)["id"]:
+        return f"The start room cannot be a {label}."
+    if database.execute("SELECT 1 FROM mud_world_exits WHERE from_room_id=? OR to_room_id=?",
+                        (room_id, room_id)).fetchone():
+        return f"A {label} cannot have exits; remove its exits first."
+    if database.execute("SELECT 1 FROM mud_property_rooms WHERE room_id=?", (room_id,)).fetchone():
+        return f"A property room cannot be a {label}."
+    used = database.execute(
+        "SELECT 1 FROM mud_vehicle_definitions WHERE interior_room_id=? AND world_id=? AND id IS NOT ? "
+        "UNION ALL SELECT 1 FROM mud_transit_lines WHERE cabin_room_id=? AND world_id=? AND id IS NOT ? "
+        "UNION ALL SELECT 1 FROM mud_transit_stops WHERE room_id=? UNION ALL SELECT 1 FROM mud_vehicle_placements "
+        "WHERE room_id=? UNION ALL SELECT 1 FROM mud_fuel_stations WHERE room_id=? UNION ALL SELECT 1 FROM "
+        "mud_world_start_rules WHERE room_id=?",
+        (room_id, world, own_id if own_column == "interior" else None, room_id, world,
+         own_id if own_column == "cabin" else None, room_id, room_id, room_id, room_id)).fetchone()
+    if used:
+        return "That room is already used by another vehicle, line, stop, fuel station, or start rule."
+    return None
+
+
+def _public_room_problem(database, room_id):
+    """Why a placement, stop, or fuel station cannot stand in room_id, or None."""
+    if not database.execute("SELECT 1 FROM mud_world_rooms WHERE id=? AND world_id=? AND kind='authored'",
+                            (room_id, _active_world(database))).fetchone():
+        return "Choose a room of this world."
+    if database.execute("SELECT 1 FROM mud_vehicle_definitions WHERE interior_room_id=? UNION ALL "
+                        "SELECT 1 FROM mud_transit_lines WHERE cabin_room_id=?", (room_id, room_id)).fetchone():
+        return "That room is a vehicle interior or line cabin."
+    if database.execute("SELECT 1 FROM mud_property_rooms WHERE room_id=?", (room_id,)).fetchone():
+        return "That room belongs to a property."
+    return None
+
+
+def _builder_vehicle(database, vehicle_id=None):
+    """Clean vehicle definition fields from the builder form, or an error message."""
+    conditions, error = _builder_rules(database, "conditions_json", mud_conditions.validate_conditions)
+    if error:
+        return None, error
+    number = lambda key: request.form.get(key, mud_transport.VEHICLE_DEFAULTS[key], type=int)  # noqa: E731
+    row = {"name": request.form.get("name"), "description": request.form.get("description", ""),
+           "modes": request.form.get("modes", ""), "terrains": request.form.getlist("terrains"),
+           "mode_only": int(request.form.get("mode_only") == "1"), "shareable": int(request.form.get("shareable") == "1"),
+           "interior_room_id": request.form.get("interior_room_id", "").strip() or None,
+           "fuel_item_id": request.form.get("fuel_item_id", "").strip() or None,
+           **{key: number(key) for key in ("speed", "fuel_capacity", "fuel_per_move", "fuel_per_item",
+                                           "return_seconds")},
+           "conditions_json": conditions, "conditions_message": request.form.get("conditions_message", "")}
+    try:
+        clean = mud_transport.vehicle(row)
+    except ValueError as problem:
+        return None, str(problem)
+    world = _active_world(database)
+    if clean["interior_room_id"]:
+        problem = _private_room_problem(database, clean["interior_room_id"], "vehicle interior", "interior", vehicle_id)
+        if problem:
+            return None, problem
+    if clean["fuel_item_id"] and not database.execute("SELECT 1 FROM mud_item_definitions WHERE id=? AND world_id=?",
+                                                      (clean["fuel_item_id"], world)).fetchone():
+        return None, "Choose a fuel item from this world."
+    if database.execute("SELECT 1 FROM mud_vehicle_definitions WHERE world_id=? AND name=? COLLATE NOCASE "
+                        "AND id IS NOT ?", (world, clean["name"], vehicle_id)).fetchone():
+        return None, "A vehicle with that name already exists."
+    return {**clean, "conditions_json": conditions}, None
+
+
+@bp.post("/w/<world_key>/builder/vehicles")
+@builder_required
+def builder_create_vehicle():
+    validate_csrf()
+    database = get_db()
+    fields, error = _builder_vehicle(database)
+    if error:
+        flash(error, "error"); return _transport_builder_redirect()
+    names = list(fields)
+    database.execute(f"INSERT INTO mud_vehicle_definitions(id,world_id,{','.join(names)}) "
+                     f"VALUES(?,?,{','.join('?' * len(names))})",
+                     (f"world:vehicle:{uuid.uuid4().hex}", _active_world(database), *fields.values()))
+    database.commit()
+    flash(f"Vehicle {fields['name']} created. Place it in a room, or grant it with an outcome.", "success")
+    return _transport_builder_redirect()
+
+
+def _vehicle_definition(database, vehicle_id):
+    found = database.execute("SELECT * FROM mud_vehicle_definitions WHERE id=? AND world_id=?",
+                             (vehicle_id, _active_world(database))).fetchone()
+    if found is None:
+        abort(404)
+    return found
+
+
+@bp.post("/w/<world_key>/builder/vehicles/<path:vehicle_id>/delete")
+@builder_required
+def builder_delete_vehicle(vehicle_id):
+    validate_csrf()
+    database = get_db()
+    found = _vehicle_definition(database, vehicle_id)
+    if request.form.get("confirmation") != "delete":
+        flash("Vehicle removal was not confirmed.", "error"); return _transport_builder_redirect()
+    for row in database.execute("SELECT id FROM mud_vehicles WHERE definition_id=?", (vehicle_id,)).fetchall():
+        _remove_vehicle(database, row["id"], f"The {found['name']} was removed from the world; you step off at {{name}}.")
+    database.execute("DELETE FROM mud_vehicle_definitions WHERE id=?", (vehicle_id,))
+    database.commit()
+    flash(f"Vehicle {found['name']} removed, with every one in the world.", "success")
+    return _transport_builder_redirect()
+
+
+@bp.post("/w/<world_key>/builder/vehicles/<path:vehicle_id>")
+@builder_required
+def builder_update_vehicle(vehicle_id):
+    validate_csrf()
+    database = get_db()
+    found = _vehicle_definition(database, vehicle_id)
+    fields, error = _builder_vehicle(database, vehicle_id)
+    if error:
+        flash(error, "error"); return _transport_builder_redirect()
+    if fields["interior_room_id"] != found["interior_room_id"]:
+        # Riders of the old layout step outside before its copies go.
+        for row in database.execute("SELECT id FROM mud_vehicles WHERE definition_id=?", (vehicle_id,)).fetchall():
+            _unload(database, _vehicle(database, row["id"]), f"The {found['name']} is refitted; you step off at {{name}}.")
+            database.execute("DELETE FROM mud_world_rooms WHERE vehicle_id=? AND kind='vehicle'", (row["id"],))
+    elif not fields["shareable"] and found["shareable"]:
+        for row in database.execute("SELECT id FROM mud_vehicles WHERE definition_id=? AND owner_character_id "
+                                    "IS NOT NULL", (vehicle_id,)).fetchall():
+            _unload(database, _vehicle(database, row["id"]), "The vehicle no longer takes passengers; "
+                                                             "you step off at {name}.")
+    database.execute(f"UPDATE mud_vehicle_definitions SET {','.join(f'{key}=?' for key in fields)} WHERE id=?",
+                     (*fields.values(), vehicle_id))
+    database.execute("UPDATE mud_vehicles SET fuel=MIN(fuel,?) WHERE definition_id=?",
+                     (fields["fuel_capacity"], vehicle_id))
+    database.commit()
+    flash("Vehicle updated.", "success")
+    return _transport_builder_redirect()
+
+
+@bp.post("/w/<world_key>/builder/vehicle-placements")
+@builder_required
+def builder_create_vehicle_placement():
+    validate_csrf()
+    database = get_db()
+    found = _vehicle_definition(database, request.form.get("vehicle_definition_id", ""))
+    room_id = request.form.get("room_id", "")
+    problem = _public_room_problem(database, room_id)
+    if problem:
+        flash(problem, "error"); return _transport_builder_redirect()
+    placement_id = f"world:vehicle-placement:{uuid.uuid4().hex}"
+    database.execute("INSERT INTO mud_vehicle_placements(id,vehicle_definition_id,room_id) VALUES(?,?,?)",
+                     (placement_id, found["id"], room_id))
+    spawn_placed_vehicle(database, placement_id)
+    database.commit()
+    flash(f"A public {found['name']} now stands in {_world_room(database, room_id)['name']}.", "success")
+    return _transport_builder_redirect()
+
+
+@bp.post("/w/<world_key>/builder/vehicle-placements/<path:placement_id>/delete")
+@builder_required
+def builder_delete_vehicle_placement(placement_id):
+    validate_csrf()
+    database = get_db()
+    placement = database.execute("SELECT p.id,d.name FROM mud_vehicle_placements p JOIN mud_vehicle_definitions d "
+                                 "ON d.id=p.vehicle_definition_id WHERE p.id=? AND d.world_id=?",
+                                 (placement_id, _active_world(database))).fetchone()
+    if placement is None:
+        abort(404)
+    for row in database.execute("SELECT id FROM mud_vehicles WHERE placement_id=?", (placement_id,)).fetchall():
+        _remove_vehicle(database, row["id"], f"The {placement['name']} is taken away; you step off at {{name}}.")
+    database.execute("DELETE FROM mud_vehicle_placements WHERE id=?", (placement_id,))
+    database.commit()
+    flash(f"Public {placement['name']} removed.", "success")
+    return _transport_builder_redirect()
+
+
+def _world_vehicle(database, vehicle_id):
+    found = database.execute("SELECT id FROM mud_vehicles WHERE id=? AND world_id=?",
+                             (vehicle_id, _active_world(database))).fetchone()
+    if found is None:
+        abort(404)
+    return _vehicle(database, vehicle_id)
+
+
+@bp.post("/w/<world_key>/builder/vehicle-instances/<path:vehicle_id>/home")
+@builder_required
+def builder_vehicle_home(vehicle_id):
+    validate_csrf()
+    database = get_db()
+    vehicle = _world_vehicle(database, vehicle_id)
+    _unload(database, vehicle, f"The {vehicle['name']} is called home; you step off at {{name}}.")
+    database.execute("UPDATE mud_vehicles SET room_id=home_room_id,return_due=NULL WHERE id=?", (vehicle_id,))
+    database.commit()
+    flash(f"The {vehicle['name']} was sent home.", "success")
+    return _transport_builder_redirect()
+
+
+@bp.post("/w/<world_key>/builder/vehicle-instances/<path:vehicle_id>/delete")
+@builder_required
+def builder_delete_vehicle_instance(vehicle_id):
+    validate_csrf()
+    database = get_db()
+    vehicle = _world_vehicle(database, vehicle_id)
+    if request.form.get("confirmation") != "delete":
+        flash("Vehicle removal was not confirmed.", "error"); return _transport_builder_redirect()
+    _remove_vehicle(database, vehicle_id, f"The {vehicle['name']} is taken away; you step off at {{name}}.")
+    database.commit()
+    flash(f"The {vehicle['name']} was removed.", "success")
+    return _transport_builder_redirect()
+
+
+@bp.post("/w/<world_key>/builder/fuel-stations")
+@builder_required
+def builder_create_fuel_station():
+    validate_csrf()
+    database = get_db()
+    room_id = request.form.get("room_id", "")
+    problem = _public_room_problem(database, room_id)
+    try:
+        clean = mud_transport.station({"price": request.form.get("price", 1, type=int),
+                                       "modes": request.form.get("modes", "")})
+    except ValueError as error:
+        problem = problem or str(error)
+    if problem:
+        flash(problem, "error"); return _transport_builder_redirect()
+    database.execute("INSERT INTO mud_fuel_stations(id,room_id,price,modes) VALUES(?,?,?,?)",
+                     (f"world:fuel-station:{uuid.uuid4().hex}", room_id, clean["price"], clean["modes"]))
+    database.commit()
+    flash("Fuel station added.", "success")
+    return _transport_builder_redirect()
+
+
+@bp.post("/w/<world_key>/builder/fuel-stations/<path:station_id>/delete")
+@builder_required
+def builder_delete_fuel_station(station_id):
+    validate_csrf()
+    database = get_db()
+    if not database.execute("DELETE FROM mud_fuel_stations WHERE id=? AND room_id IN (SELECT id FROM mud_world_rooms "
+                            "WHERE world_id=?)", (station_id, _active_world(database))).rowcount:
+        abort(404)
+    database.commit()
+    flash("Fuel station removed.", "success")
+    return _transport_builder_redirect()
+
+
+def _builder_line(database, line_id=None):
+    """Clean line fields and its ordered stops [(room, seconds)] from the builder form, or an error."""
+    conditions, error = _builder_rules(database, "conditions_json", mud_conditions.validate_conditions)
+    if error:
+        return None, None, error
+    try:
+        clean = mud_transport.line({
+            "name": request.form.get("name"), "description": request.form.get("description", ""),
+            "fare": request.form.get("fare", 0, type=int), "fare_per_stop": request.form.get("fare_per_stop", 0, type=int),
+            "cabin_room_id": request.form.get("cabin_room_id", "").strip() or None, "conditions_json": conditions,
+            "conditions_message": request.form.get("conditions_message", "")})
+        stops = [(room_id, mud_transport.stop({"travel_seconds": int(seconds or 60)})["travel_seconds"])
+                 for room_id, seconds in zip(request.form.getlist("stop_room_id"),
+                                             request.form.getlist("stop_seconds")) if room_id]
+    except ValueError as problem:
+        return None, None, str(problem)
+    if len(stops) < 2 or len({room_id for room_id, _seconds in stops}) != len(stops):
+        return None, None, "A line needs at least two different stops."
+    for room_id, _seconds in stops:
+        problem = _public_room_problem(database, room_id)
+        if problem:
+            return None, None, f"Stop: {problem}"
+    if clean["cabin_room_id"]:
+        problem = _private_room_problem(database, clean["cabin_room_id"], "line cabin", "cabin", line_id)
+        if problem:
+            return None, None, problem
+    if database.execute("SELECT 1 FROM mud_transit_lines WHERE world_id=? AND name=? COLLATE NOCASE AND id IS NOT ?",
+                        (_active_world(database), clean["name"], line_id)).fetchone():
+        return None, None, "A line with that name already exists."
+    return {**clean, "conditions_json": conditions}, stops, None
+
+
+def _save_line_stops(database, line_id, stops):
+    database.execute("DELETE FROM mud_transit_stops WHERE line_id=?", (line_id,))
+    database.executemany("INSERT INTO mud_transit_stops(id,line_id,room_id,sort_order,travel_seconds) "
+                         "VALUES(?,?,?,?,?)", ((f"world:stop:{uuid.uuid4().hex}", line_id, room_id, index, seconds)
+                                               for index, (room_id, seconds) in enumerate(stops)))
+
+
+@bp.post("/w/<world_key>/builder/transit-lines")
+@builder_required
+def builder_create_transit_line():
+    validate_csrf()
+    database = get_db()
+    fields, stops, error = _builder_line(database)
+    if error:
+        flash(error, "error"); return _transport_builder_redirect()
+    line_id = f"world:line:{uuid.uuid4().hex}"
+    names = list(fields)
+    database.execute(f"INSERT INTO mud_transit_lines(id,world_id,{','.join(names)}) "
+                     f"VALUES(?,?,{','.join('?' * len(names))})", (line_id, _active_world(database), *fields.values()))
+    _save_line_stops(database, line_id, stops)
+    database.commit()
+    flash(f"Line {fields['name']} created.", "success")
+    return _transport_builder_redirect()
+
+
+def _world_line(database, line_id):
+    found = database.execute("SELECT * FROM mud_transit_lines WHERE id=? AND world_id=?",
+                             (line_id, _active_world(database))).fetchone()
+    if found is None:
+        abort(404)
+    return found
+
+
+@bp.post("/w/<world_key>/builder/transit-lines/<path:line_id>/delete")
+@builder_required
+def builder_delete_transit_line(line_id):
+    validate_csrf()
+    database = get_db()
+    found = _world_line(database, line_id)
+    if request.form.get("confirmation") != "delete":
+        flash("Line removal was not confirmed.", "error"); return _transport_builder_redirect()
+    # Anyone riding arrives now rather than waiting on a line that is gone.
+    for trip in database.execute("SELECT * FROM mud_transit_trips WHERE line_id=?", (line_id,)).fetchall():
+        _deliver_builder_drafts(database, _finish_trip(database, trip))
+    database.execute("DELETE FROM mud_transit_lines WHERE id=?", (line_id,))
+    database.commit()
+    flash(f"Line {found['name']} removed; its riders were delivered.", "success")
+    return _transport_builder_redirect()
+
+
+@bp.post("/w/<world_key>/builder/transit-lines/<path:line_id>")
+@builder_required
+def builder_update_transit_line(line_id):
+    validate_csrf()
+    database = get_db()
+    _world_line(database, line_id)
+    fields, stops, error = _builder_line(database, line_id)
+    if error:
+        flash(error, "error"); return _transport_builder_redirect()
+    database.execute(f"UPDATE mud_transit_lines SET {','.join(f'{key}=?' for key in fields)} WHERE id=?",
+                     (*fields.values(), line_id))
+    _save_line_stops(database, line_id, stops)
+    database.commit()
+    flash("Line updated; rides already under way keep their destinations.", "success")
+    return _transport_builder_redirect()
 
 
 def _builder_storage(database, room_id):
@@ -13069,7 +14345,8 @@ def builder_create_exit():
     exit_id = f"world:exit:{uuid.uuid4().hex}"
     database.execute(
         "INSERT INTO mud_world_exits(id,from_room_id,to_room_id,name,direction,key_item_id,pick_difficulty,"
-        "conditions_json,conditions_message,hidden) VALUES(?,?,?,?,?,?,?,?,?,?)", (exit_id, *fields),
+        "conditions_json,conditions_message,hidden,requires_mode,allow_vehicles) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
+        (exit_id, *fields),
     )
     database.commit()
     flash(f"Exit {fields[2]} created.", "success")
@@ -13094,7 +14371,8 @@ def builder_update_exit(exit_id):
         return _builder_redirect(existing["from_room_id"])
     database.execute(
         "UPDATE mud_world_exits SET from_room_id=?,to_room_id=?,name=?,direction=?,key_item_id=?,"
-        "pick_difficulty=?,conditions_json=?,conditions_message=?,hidden=? WHERE id=?",
+        "pick_difficulty=?,conditions_json=?,conditions_message=?,hidden=?,requires_mode=?,allow_vehicles=? "
+        "WHERE id=?",
         (*fields, exit_id),
     )
     if (existing["key_item_id"] != fields[4] or existing["pick_difficulty"] != fields[5]

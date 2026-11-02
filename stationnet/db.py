@@ -1520,6 +1520,7 @@ def init_db():
     _migrate_mud_start_rules(database)
     _migrate_mud_quest_failure(database)
     _migrate_mud_housing(database)
+    _migrate_mud_transport(database)
     database.execute("INSERT OR IGNORE INTO mud_portal_settings(id) VALUES(1)")
     database.execute("INSERT OR IGNORE INTO mud_travel_settings(id) VALUES(1)")
     database.execute(
@@ -3315,6 +3316,109 @@ def _migrate_mud_housing(database):
                          "REFERENCES mud_property_holdings(id) ON DELETE CASCADE")
     database.execute("CREATE INDEX IF NOT EXISTS idx_mud_character_storage_point "
                      "ON mud_character_storage(storage_point_id,holding_id)")
+
+
+def _migrate_mud_transport(database):
+    """Authored vehicles, fuel stations, and transit lines; vehicles in the world, their riders, and rides in progress."""
+    _rebuild_with_check(database, "mud_world_rooms", "'vehicle'",
+                        "CHECK(kind IN ('authored','wild','housing'))",
+                        "CHECK(kind IN ('authored','wild','housing','vehicle'))")
+    database.executescript("""
+    CREATE TABLE IF NOT EXISTS mud_vehicle_definitions (
+      id TEXT PRIMARY KEY,
+      world_id TEXT,
+      name TEXT NOT NULL COLLATE NOCASE,
+      description TEXT NOT NULL DEFAULT '',
+      modes TEXT NOT NULL DEFAULT '',
+      terrains TEXT NOT NULL DEFAULT '',
+      mode_only INTEGER NOT NULL DEFAULT 0 CHECK(mode_only IN (0,1)),
+      speed INTEGER NOT NULL DEFAULT 100 CHECK(speed BETWEEN 25 AND 400),
+      interior_room_id TEXT REFERENCES mud_world_rooms(id) ON DELETE SET NULL,
+      fuel_capacity INTEGER NOT NULL DEFAULT 0 CHECK(fuel_capacity BETWEEN 0 AND 100000),
+      fuel_per_move INTEGER NOT NULL DEFAULT 1 CHECK(fuel_per_move BETWEEN 1 AND 1000),
+      fuel_item_id TEXT REFERENCES mud_item_definitions(id) ON DELETE SET NULL,
+      fuel_per_item INTEGER NOT NULL DEFAULT 10 CHECK(fuel_per_item BETWEEN 1 AND 100000),
+      shareable INTEGER NOT NULL DEFAULT 0 CHECK(shareable IN (0,1)),
+      return_seconds INTEGER NOT NULL DEFAULT 0 CHECK(return_seconds BETWEEN 0 AND 604800),
+      conditions_json TEXT NOT NULL DEFAULT '[]',
+      conditions_message TEXT NOT NULL DEFAULT '',
+      created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);
+    CREATE INDEX IF NOT EXISTS idx_mud_vehicle_definitions_world ON mud_vehicle_definitions(world_id,name);
+    CREATE TABLE IF NOT EXISTS mud_vehicle_placements (
+      id TEXT PRIMARY KEY,
+      vehicle_definition_id TEXT NOT NULL REFERENCES mud_vehicle_definitions(id) ON DELETE CASCADE,
+      room_id TEXT NOT NULL REFERENCES mud_world_rooms(id) ON DELETE CASCADE);
+    CREATE INDEX IF NOT EXISTS idx_mud_vehicle_placements_room ON mud_vehicle_placements(room_id);
+    CREATE TABLE IF NOT EXISTS mud_fuel_stations (
+      id TEXT PRIMARY KEY,
+      room_id TEXT NOT NULL REFERENCES mud_world_rooms(id) ON DELETE CASCADE,
+      price INTEGER NOT NULL DEFAULT 1 CHECK(price BETWEEN 0 AND 100000),
+      modes TEXT NOT NULL DEFAULT '');
+    CREATE INDEX IF NOT EXISTS idx_mud_fuel_stations_room ON mud_fuel_stations(room_id);
+    CREATE TABLE IF NOT EXISTS mud_transit_lines (
+      id TEXT PRIMARY KEY,
+      world_id TEXT,
+      name TEXT NOT NULL COLLATE NOCASE,
+      description TEXT NOT NULL DEFAULT '',
+      fare INTEGER NOT NULL DEFAULT 0 CHECK(fare BETWEEN 0 AND 100000),
+      fare_per_stop INTEGER NOT NULL DEFAULT 0 CHECK(fare_per_stop BETWEEN 0 AND 100000),
+      cabin_room_id TEXT REFERENCES mud_world_rooms(id) ON DELETE SET NULL,
+      conditions_json TEXT NOT NULL DEFAULT '[]',
+      conditions_message TEXT NOT NULL DEFAULT '');
+    CREATE INDEX IF NOT EXISTS idx_mud_transit_lines_world ON mud_transit_lines(world_id,name);
+    CREATE TABLE IF NOT EXISTS mud_transit_stops (
+      id TEXT PRIMARY KEY,
+      line_id TEXT NOT NULL REFERENCES mud_transit_lines(id) ON DELETE CASCADE,
+      room_id TEXT NOT NULL REFERENCES mud_world_rooms(id) ON DELETE CASCADE,
+      sort_order INTEGER NOT NULL DEFAULT 0,
+      travel_seconds INTEGER NOT NULL DEFAULT 60 CHECK(travel_seconds BETWEEN 5 AND 86400),
+      UNIQUE(line_id,room_id));
+    CREATE INDEX IF NOT EXISTS idx_mud_transit_stops_room ON mud_transit_stops(room_id);
+    CREATE TABLE IF NOT EXISTS mud_vehicles (
+      id TEXT PRIMARY KEY,
+      world_id TEXT NOT NULL,
+      definition_id TEXT NOT NULL REFERENCES mud_vehicle_definitions(id) ON DELETE CASCADE,
+      placement_id TEXT REFERENCES mud_vehicle_placements(id) ON DELETE SET NULL,
+      owner_character_id TEXT REFERENCES mud_characters(id) ON DELETE CASCADE,
+      room_id TEXT REFERENCES mud_world_rooms(id) ON DELETE SET NULL,
+      home_room_id TEXT REFERENCES mud_world_rooms(id) ON DELETE SET NULL,
+      fuel INTEGER NOT NULL DEFAULT 0 CHECK(fuel>=0),
+      return_due TEXT,
+      created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      UNIQUE(owner_character_id,definition_id));
+    CREATE INDEX IF NOT EXISTS idx_mud_vehicles_room ON mud_vehicles(room_id);
+    CREATE INDEX IF NOT EXISTS idx_mud_vehicles_return ON mud_vehicles(return_due) WHERE return_due IS NOT NULL;
+    CREATE TABLE IF NOT EXISTS mud_vehicle_riders (
+      character_id TEXT PRIMARY KEY REFERENCES mud_characters(id) ON DELETE CASCADE,
+      vehicle_id TEXT NOT NULL REFERENCES mud_vehicles(id) ON DELETE CASCADE,
+      role TEXT NOT NULL CHECK(role IN ('operator','passenger')),
+      boarded_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_mud_vehicle_riders_operator
+      ON mud_vehicle_riders(vehicle_id) WHERE role='operator';
+    CREATE INDEX IF NOT EXISTS idx_mud_vehicle_riders_vehicle ON mud_vehicle_riders(vehicle_id,boarded_at);
+    CREATE TABLE IF NOT EXISTS mud_transit_trips (
+      character_id TEXT PRIMARY KEY REFERENCES mud_characters(id) ON DELETE CASCADE,
+      world_id TEXT NOT NULL,
+      line_id TEXT,
+      line_name TEXT NOT NULL,
+      to_room_id TEXT REFERENCES mud_world_rooms(id) ON DELETE SET NULL,
+      wait_room_id TEXT NOT NULL,
+      due_at TEXT NOT NULL,
+      started_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);
+    CREATE INDEX IF NOT EXISTS idx_mud_transit_trips_due ON mud_transit_trips(due_at);
+    """)
+    rooms = {row["name"] for row in database.execute("PRAGMA table_info(mud_world_rooms)")}
+    if "vehicle_id" not in rooms:
+        database.execute("ALTER TABLE mud_world_rooms ADD COLUMN vehicle_id TEXT "
+                         "REFERENCES mud_vehicles(id) ON DELETE CASCADE")
+    database.execute("CREATE INDEX IF NOT EXISTS idx_mud_world_rooms_vehicle "
+                     "ON mud_world_rooms(vehicle_id) WHERE vehicle_id IS NOT NULL")
+    exits = {row["name"] for row in database.execute("PRAGMA table_info(mud_world_exits)")}
+    if "requires_mode" not in exits:
+        database.execute("ALTER TABLE mud_world_exits ADD COLUMN requires_mode TEXT")
+    if "allow_vehicles" not in exits:
+        database.execute("ALTER TABLE mud_world_exits ADD COLUMN allow_vehicles INTEGER NOT NULL DEFAULT 1 "
+                         "CHECK(allow_vehicles IN (0,1))")
 
 
 def _migrate_mud_package_definitions(database):

@@ -33,6 +33,12 @@ function available(command, state) {
     case "get": return (room.items || []).length > 0 || (room.items || []).some(item => item.contents?.length);
     case "drop": case "equip": case "use": return (state.inventory?.inventory || []).length > 0;
     case "unequip": return (state.inventory?.equipment || []).length > 0;
+    case "board": return !room.vehicle && (room.vehicles || []).length > 0;
+    case "disembark": return Boolean(room.vehicle);
+    case "refuel": return Boolean(room.vehicle && room.vehicle.fuel_capacity > 0
+      && room.vehicle.fuel < room.vehicle.fuel_capacity && room.vehicle.role === "operator");
+    case "ride": return (room.transit || []).length > 0 || Boolean(room.trip);
+    case "vehicles": return Boolean(room.vehicle || (room.vehicles || []).length);
     default: return true;
   }
 }
@@ -103,6 +109,12 @@ export function commandSuggestions(value, state, catalog, limit = 6) {
       add(`/storage deposit ${targetName(item)}`, "Personal storage");
     }
     for (const item of state.hub?.storage || []) add(`/storage withdraw ${item.name}`, "Personal storage");
+  }
+  for (const vehicle of room.vehicles || []) add(`/board ${targetName(vehicle)}`, vehicle.yours ? "Your vehicle" : "Vehicle here");
+  for (const offer of room.transit || []) add(`/ride ${offer.stop}`, `${offer.line}, ${offer.fare} coin${offer.fare === 1 ? "" : "s"}`);
+  if (room.vehicle) {
+    add("/disembark", `Get off the ${room.vehicle.name}`);
+    if (room.vehicle.interior) add("/look out", `Outside: ${room.vehicle.outside}`);
   }
   const points = room.id === PORTAL ? [] : room.storage || [];
   for (const point of points) {

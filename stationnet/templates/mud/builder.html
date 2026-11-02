@@ -11,6 +11,38 @@
   <label>Search difficulty (0 = always found)<input type="number" name="difficulty" min="0" max="200" value="{{ discovery.difficulty if discovery else 0 }}"></label>
   <label>Conditions (JSON, optional)<textarea name="conditions_json" rows="2" spellcheck="false" placeholder='[{"type":"attribute","attribute":"intellect","min":12}]'>{{ discovery.conditions_json if discovery and discovery.conditions_json != '[]' else '' }}</textarea></label>
 {% endmacro %}
+{% macro vehicle_fields(entry=None) %}
+<label>Name<input name="name" minlength="2" maxlength="80" value="{{ entry.name if entry else '' }}" placeholder="Rowboat" required></label>
+<label>Description<textarea name="description" rows="2" maxlength="2000">{{ entry.description if entry else '' }}</textarea></label>
+<label>Modes (comma words such as water, rail, air; exits and land may require one)<input name="modes" maxlength="200" value="{{ entry.modes.replace(',', ', ') if entry else '' }}" placeholder="water"></label>
+<label>Wilderness terrain it can cross (none ticked = any)<select name="terrains" multiple size="4">{% for terrain in vehicle_terrains %}<option value="{{ terrain }}" {% if entry and terrain in entry.terrain_list %}selected{% endif %}>{{ terrain }}</option>{% endfor %}</select></label>
+<label class="check"><input type="checkbox" name="mode_only" value="1" {% if entry and entry.mode_only %}checked{% endif %}> Keeps to its own ways: only exits needing its modes, its terrain, and rooms beside them (a boat)</label>
+<label>Speed (% of walking pace for /travel)<input name="speed" type="number" min="25" max="400" value="{{ entry.speed if entry else 100 }}"></label>
+<label>Interior room (blank = carries only its rider; a room with no exits)<select name="interior_room_id"><option value="">No interior</option>{% for room in rooms %}<option value="{{ room.id }}" {% if entry and entry.interior_room_id == room.id %}selected{% endif %}>{{ room.name }}</option>{% endfor %}</select></label>
+<label class="check"><input type="checkbox" name="shareable" value="1" {% if entry and entry.shareable %}checked{% endif %}> Owners may take passengers (needs an interior)</label>
+<label>Fuel capacity (0 = needs no fuel)<input name="fuel_capacity" type="number" min="0" max="100000" value="{{ entry.fuel_capacity if entry else 0 }}"></label>
+<label>Fuel per move<input name="fuel_per_move" type="number" min="1" max="1000" value="{{ entry.fuel_per_move if entry else 1 }}"></label>
+<label>Fuel item (optional; /refuel item uses one)<select name="fuel_item_id"><option value="">None</option>{% for item in definitions %}<option value="{{ item.id }}" {% if entry and entry.fuel_item_id == item.id %}selected{% endif %}>{{ item.name }}</option>{% endfor %}</select></label>
+<label>Fuel per item<input name="fuel_per_item" type="number" min="1" max="100000" value="{{ entry.fuel_per_item if entry else 10 }}"></label>
+<label>Public vehicles return home after (seconds unattended; 0 = never)<input name="return_seconds" type="number" min="0" max="604800" value="{{ entry.return_seconds if entry else 0 }}"></label>
+<label>Who may board (conditions JSON)<textarea name="conditions_json" rows="1">{{ entry.conditions_json if entry else '[]' }}</textarea></label>
+<label>Refusal message<input name="conditions_message" maxlength="300" value="{{ entry.conditions_message if entry else '' }}" placeholder="You need a riding licence."></label>
+{% endmacro %}
+{% macro line_fields(entry=None) %}
+<label>Name<input name="name" minlength="2" maxlength="80" value="{{ entry.name if entry else '' }}" placeholder="Coast Ferry" required></label>
+<label>Description<textarea name="description" rows="2" maxlength="2000">{{ entry.description if entry else '' }}</textarea></label>
+<label>Fare (coins)<input name="fare" type="number" min="0" max="100000" value="{{ entry.fare if entry else 0 }}"></label>
+<label>Extra fare per stop travelled<input name="fare_per_stop" type="number" min="0" max="100000" value="{{ entry.fare_per_stop if entry else 0 }}"></label>
+<label>Cabin room (blank = riders wait at the stop; a room with no exits)<select name="cabin_room_id"><option value="">No cabin</option>{% for room in rooms %}<option value="{{ room.id }}" {% if entry and entry.cabin_room_id == room.id %}selected{% endif %}>{{ room.name }}</option>{% endfor %}</select></label>
+<label>Runs for (conditions JSON; a time condition sets hours)<textarea name="conditions_json" rows="1">{{ entry.conditions_json if entry else '[]' }}</textarea></label>
+<label>Refusal message<input name="conditions_message" maxlength="300" value="{{ entry.conditions_message if entry else '' }}" placeholder="The ferry runs by day."></label>
+<fieldset class="form-grid"><legend>Stops in order (seconds from the stop before; the first is ignored)</legend>
+{% set stops = entry.stops if entry else [] %}
+{% for index in range((stops|length) + 2 if stops else 4) %}{% set stop = stops[index] if index < stops|length else none %}
+<label>Stop {{ index + 1 }}<select name="stop_room_id"><option value="">No stop</option>{% for room in rooms %}<option value="{{ room.id }}" {% if stop and stop.room_id == room.id %}selected{% endif %}>{{ room.name }}</option>{% endfor %}</select></label>
+<label>Seconds<input name="stop_seconds" type="number" min="5" max="86400" value="{{ stop.travel_seconds if stop else 60 }}"></label>
+{% endfor %}</fieldset>
+{% endmacro %}
 {% macro storage_fields(point=None) %}
 <label>Name<input name="name" minlength="2" maxlength="80" value="{{ point.name if point else '' }}" placeholder="Oak Chest" required></label>
 <label>Description<input name="description" maxlength="1000" value="{{ point.description if point else '' }}"></label>
@@ -146,6 +178,13 @@
       <label for="housing-limit">Properties a character may hold or share</label>
       <input id="housing-limit" name="max_holdings" type="number" min="1" max="20" value="{{ society.housing.max_holdings }}">
       <button>SAVE HOUSING</button>
+    </form>
+    <h3>Vehicles and transit</h3>
+    <p class="muted">Nothing happens until you add vehicles or lines below. Switched off, nobody can board, refuel, or buy a ride; riders can still drive, get off, and arrive.</p>
+    <form method="post" action="{{ url_for('mud.builder_set_society', section='transport') }}" class="builder-inline-form">
+      <input type="hidden" name="csrf_token" value="{{ session.csrf_token }}">
+      <label class="check"><input type="checkbox" name="enabled" value="1" {% if society.transport.enabled %}checked{% endif %}> Vehicles and transit run</label>
+      <button>SAVE TRANSPORT</button>
     </form>
   </section>
 
@@ -484,7 +523,7 @@ Condition: {"type":"knows_destination","destination":"DESTINATION ID"}   Dialogu
           </label>
           <label>Key (optional)<select name="key_item_id"><option value="">Unlocked</option>{% for item in definitions if item.item_type=='key' %}<option value="{{ item.id }}" {% if exit.key_item_id==item.id %}selected{% endif %}>{{ item.name }}</option>{% endfor %}</select></label><label>Lock difficulty (blank = not pickable)<input type="number" name="pick_difficulty" min="1" max="200" value="{{ exit.pick_difficulty or '' }}"></label>
           <label>Conditions (JSON, optional)<input name="conditions_json" maxlength="4000" value="{{ exit.conditions_json if exit.conditions_json and exit.conditions_json != '[]' else '' }}" placeholder='[{"type":"tag","keys":["darkvision"]}]'></label>
-          <label>Barred message<input name="conditions_message" maxlength="200" value="{{ exit.conditions_message or '' }}" placeholder="Only those who see in the dark dare enter."></label><label class="check"><input type="checkbox" name="hidden" value="1" {% if exit.hidden %}checked{% endif %}> Hidden until revealed by a trigger or discovery</label><label>Destination
+          <label>Barred message<input name="conditions_message" maxlength="200" value="{{ exit.conditions_message or '' }}" placeholder="Only those who see in the dark dare enter."></label><label class="check"><input type="checkbox" name="hidden" value="1" {% if exit.hidden %}checked{% endif %}> Hidden until revealed by a trigger or discovery</label><label>Needs a vehicle mode (optional)<input name="requires_mode" maxlength="32" value="{{ exit.requires_mode or '' }}" placeholder="water"></label><label class="check"><input type="checkbox" name="on_foot" value="1" {% if exit.allow_vehicles == 0 %}checked{% endif %}> On foot only (too narrow for vehicles)</label><label>Destination
             <select name="to_room_id" required>{% for option in rooms %}<option value="{{ option.id }}" {% if option.id==exit.to_room_id %}selected{% endif %}>{{ option.name }}</option>{% endfor %}</select>
           </label>
           <div class="button-row"><button class="secondary">SAVE EXIT</button></div>
@@ -504,7 +543,7 @@ Condition: {"type":"knows_destination","destination":"DESTINATION ID"}   Dialogu
           </label>
           <label>Key (optional)<select name="key_item_id"><option value="">Unlocked</option>{% for item in definitions if item.item_type=='key' %}<option value="{{ item.id }}">{{ item.name }}</option>{% endfor %}</select></label><label>Lock difficulty (blank = not pickable)<input type="number" name="pick_difficulty" min="1" max="200" placeholder="e.g. 30"></label>
           <label>Conditions (JSON, optional)<input name="conditions_json" maxlength="4000" placeholder='[{"type":"race","keys":["dwarf"]}]'></label>
-          <label>Barred message<input name="conditions_message" maxlength="200" placeholder="Shown when conditions fail"></label><label class="check"><input type="checkbox" name="hidden" value="1"> Hidden until revealed by a trigger or discovery</label><label>Destination
+          <label>Barred message<input name="conditions_message" maxlength="200" placeholder="Shown when conditions fail"></label><label class="check"><input type="checkbox" name="hidden" value="1"> Hidden until revealed by a trigger or discovery</label><label>Needs a vehicle mode (optional)<input name="requires_mode" maxlength="32" placeholder="water"></label><label class="check"><input type="checkbox" name="on_foot" value="1"> On foot only (too narrow for vehicles)</label><label>Destination
             <select name="to_room_id"><option value="" selected>Choose a room</option>{% for option in rooms %}<option value="{{ option.id }}">{{ option.name }}</option>{% endfor %}</select>
           </label>
           <label>Or to the room at x,y,z<input name="to_cell" placeholder="4,-2,-1" pattern="-?\d+,-?\d+,-?\d+"></label>
@@ -613,5 +652,28 @@ Condition: {"type":"knows_destination","destination":"DESTINATION ID"}   Dialogu
     <h3>Holdings</h3>{% for holding in entry.holdings %}<form method="post" action="{{ url_for('mud.builder_release_holding', holding_id=holding.id) }}" data-confirm="Release this holding? Owners lose it and stored items go back to them." class="builder-inline-form"><input type="hidden" name="csrf_token" value="{{ session.csrf_token }}"><input type="hidden" name="confirmation" value="release"><span>{% for owner in holding.owners %}{{ owner.display_name }}{% if owner.role == 'primary' %} (primary){% endif %}{% if entry.rent %} paid until {{ owner.paid_until or 'now' }}{% endif %}{{ ', ' if not loop.last }}{% endfor %} · {{ holding.stored }} stored item{{ '' if holding.stored == 1 else 's' }}</span><button class="danger">RELEASE</button></form>{% else %}<p class="muted">Nobody holds this property.</p>{% endfor %}
     <form method="post" action="{{ url_for('mud.builder_delete_property', property_id=entry.id) }}" data-confirm="Remove {{ entry.name }}? Every holding ends and stored items go back to their owners."><input type="hidden" name="csrf_token" value="{{ session.csrf_token }}"><input type="hidden" name="confirmation" value="delete"><button class="danger">REMOVE PROPERTY</button></form>
   </details>{% else %}<p class="muted">No properties yet.</p>{% endfor %}
+</section>
+<section class="terminal-card builder-create" aria-labelledby="transport-heading">
+  <p class="eyebrow">GETTING AROUND</p><h2 id="transport-heading">Vehicles and transit</h2>
+  <p class="muted">Players /board a vehicle and then /go and /travel move it. A vehicle without an interior carries its rider alone; one with an interior carries everyone aboard inside a private copy of that room while the operator steers. Exits can need a mode (water, rail, air - your own words) or be on foot only, and wilderness presets can need a mode too. Public vehicles stand where you place them; owned ones come from a grant_vehicle outcome, so a dialogue can sell one. Lines carry riders between stops for a fare after a set time.</p>
+  <form method="post" action="{{ url_for('mud.builder_create_vehicle') }}" class="form-grid"><input type="hidden" name="csrf_token" value="{{ session.csrf_token }}">{{ vehicle_fields() }}<button>CREATE VEHICLE</button></form>
+  {% for entry in vehicle_definitions %}<details class="builder-exits"><summary>{{ entry.name }}{% if entry.modes %} · {{ entry.modes.replace(',', ', ') }}{% endif %} · {{ entry.instances|length }} in the world</summary>
+    <form method="post" action="{{ url_for('mud.builder_update_vehicle', vehicle_id=entry.id) }}" class="form-grid"><input type="hidden" name="csrf_token" value="{{ session.csrf_token }}">{{ vehicle_fields(entry) }}<button class="secondary">SAVE VEHICLE</button></form>
+    <h3>Public placements</h3>{% for placement in entry.placements %}<form method="post" action="{{ url_for('mud.builder_delete_vehicle_placement', placement_id=placement.id) }}" class="builder-inline-form"><input type="hidden" name="csrf_token" value="{{ session.csrf_token }}"><span>{{ placement.room_name }}</span><button class="danger">REMOVE</button></form>{% else %}<p class="muted">Not placed; only granted ones exist.</p>{% endfor %}
+    <form method="post" action="{{ url_for('mud.builder_create_vehicle_placement') }}" class="builder-inline-form"><input type="hidden" name="csrf_token" value="{{ session.csrf_token }}"><input type="hidden" name="vehicle_definition_id" value="{{ entry.id }}"><label>Place a public one in<select name="room_id">{% for room in rooms %}<option value="{{ room.id }}">{{ room.name }}</option>{% endfor %}</select></label><button>PLACE</button></form>
+    <h3>In the world</h3>{% for vehicle in entry.instances %}<div class="builder-inline-form"><span>{{ vehicle.owner_name or 'Public' }} · at {{ vehicle.room_name }}{% if entry.fuel_capacity %} · fuel {{ vehicle.fuel }}/{{ entry.fuel_capacity }}{% endif %} · {{ vehicle.riders }} aboard</span>
+      <form method="post" action="{{ url_for('mud.builder_vehicle_home', vehicle_id=vehicle.id) }}"><input type="hidden" name="csrf_token" value="{{ session.csrf_token }}"><button class="secondary">SEND HOME</button></form>
+      <form method="post" action="{{ url_for('mud.builder_delete_vehicle_instance', vehicle_id=vehicle.id) }}" data-confirm="Remove this {{ entry.name }}? Riders step off where it stands."><input type="hidden" name="csrf_token" value="{{ session.csrf_token }}"><input type="hidden" name="confirmation" value="delete"><button class="danger">REMOVE</button></form></div>{% else %}<p class="muted">None yet.</p>{% endfor %}
+    <form method="post" action="{{ url_for('mud.builder_delete_vehicle', vehicle_id=entry.id) }}" data-confirm="Remove {{ entry.name }}? Every one in the world goes and riders step off."><input type="hidden" name="csrf_token" value="{{ session.csrf_token }}"><input type="hidden" name="confirmation" value="delete"><button class="danger">REMOVE VEHICLE</button></form>
+  </details>{% else %}<p class="muted">No vehicles yet.</p>{% endfor %}
+  <h3>Fuel stations</h3>
+  {% for station in fuel_stations %}<form method="post" action="{{ url_for('mud.builder_delete_fuel_station', station_id=station.id) }}" class="builder-inline-form"><input type="hidden" name="csrf_token" value="{{ session.csrf_token }}"><span>{{ station.room_name }} · {{ station.price }} coins a unit{% if station.modes %} · {{ station.modes.replace(',', ', ') }} only{% endif %}</span><button class="danger">REMOVE</button></form>{% endfor %}
+  <form method="post" action="{{ url_for('mud.builder_create_fuel_station') }}" class="builder-inline-form"><input type="hidden" name="csrf_token" value="{{ session.csrf_token }}"><label>Room<select name="room_id">{% for room in rooms %}<option value="{{ room.id }}">{{ room.name }}</option>{% endfor %}</select></label><label>Price per unit<input name="price" type="number" min="0" max="100000" value="1"></label><label>Only for modes (blank = any)<input name="modes" maxlength="200" placeholder="water"></label><button>ADD FUEL STATION</button></form>
+  <h3>Transit lines</h3>
+  <form method="post" action="{{ url_for('mud.builder_create_transit_line') }}" class="form-grid"><input type="hidden" name="csrf_token" value="{{ session.csrf_token }}">{{ line_fields() }}<button>CREATE LINE</button></form>
+  {% for entry in transit_lines %}<details class="builder-exits"><summary>{{ entry.name }} · {{ entry.stops|map(attribute='name')|join(' - ') }} · {{ entry.riding }} riding</summary>
+    <form method="post" action="{{ url_for('mud.builder_update_transit_line', line_id=entry.id) }}" class="form-grid"><input type="hidden" name="csrf_token" value="{{ session.csrf_token }}">{{ line_fields(entry) }}<button class="secondary">SAVE LINE</button></form>
+    <form method="post" action="{{ url_for('mud.builder_delete_transit_line', line_id=entry.id) }}" data-confirm="Remove {{ entry.name }}? Anyone riding arrives at once."><input type="hidden" name="csrf_token" value="{{ session.csrf_token }}"><input type="hidden" name="confirmation" value="delete"><button class="danger">REMOVE LINE</button></form>
+  </details>{% else %}<p class="muted">No lines yet.</p>{% endfor %}
 </section>
 {% endblock %}

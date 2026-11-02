@@ -142,7 +142,8 @@ def _creatures(value, label):
 def validate_preset(value):
     """Return a preset in canonical form; unknown fields and out-of-range values are refused."""
     preset = _object(value, "A room preset", ("key", "name", "terrain", "glyph", "links", "names",
-                                               "descriptions", "environment", "encounters", "resources"))
+                                               "descriptions", "environment", "encounters", "resources",
+                                               "requires_mode"))
     if not preset:
         raise WildernessError("A room preset must be an object.")
     key = preset.get("key")
@@ -154,6 +155,9 @@ def validate_preset(value):
     glyph = preset.get("glyph", ".")
     if not isinstance(glyph, str) or len(glyph) != 1 or not glyph.isprintable() or glyph in RESERVED_GLYPHS:
         raise WildernessError("Preset glyph must be one printable character other than a space, @, *, P, <, > or &.")
+    requires_mode = preset.get("requires_mode") or None
+    if requires_mode is not None and (not isinstance(requires_mode, str) or not KEY_RE.fullmatch(requires_mode)):
+        raise WildernessError("Preset requires_mode must be a short lowercase word such as water.")
     links = str(preset.get("links", "4"))
     if links not in ("4", "8"):
         raise WildernessError('Preset links must be "4" (north, east, south, west) or "8" (adds diagonals).')
@@ -200,6 +204,8 @@ def validate_preset(value):
                                                 60, 86400, 3600),
                       "max_per_room": _whole(resources.get("max_per_room"), "Resource max_per_room", 0, 5, 2),
                       "items": clean_items},
+        # Only when set, so presets that never mention vehicles keep their canonical form.
+        **({"requires_mode": requires_mode} if requires_mode else {}),
     }
 
 
@@ -464,7 +470,8 @@ def resolve_room(database, row):
     description = _weighted(_seeded(*position, "description"), preset["descriptions"])["text"]
     if preset["environment"]["lines"]:
         description += " " + _weighted(_seeded(*position, "environment"), preset["environment"]["lines"])["text"]
-    room.update(name=name, description=description, terrain=preset["terrain"], glyph=preset["glyph"])
+    room.update(name=name, description=description, terrain=preset["terrain"], glyph=preset["glyph"],
+                requires_mode=preset.get("requires_mode"))
     return room
 
 
@@ -523,7 +530,8 @@ def grid_exits(database, room_id, taken_directions=()):
             continue
         result.append({"id": f"grid:{room_id}:{direction}", "name": direction, "direction": direction,
                        "to_room_id": other["id"], "key_item_id": None, "pick_difficulty": None,
-                       "conditions_json": "[]", "conditions_message": "",
+                       "conditions_json": "[]", "conditions_message": "", "requires_mode": None,
+                       "allow_vehicles": 1,
                        "destination_name": resolve_room(database, other)["name"], "script_state": ""})
     return result
 

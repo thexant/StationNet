@@ -34,20 +34,22 @@ QUEST_STATUSES = ("not_started", "active", "ready", "completed", "failed", "aban
 OUTCOME_KEY_RE = re.compile(r"^[a-z][a-z0-9-]{0,39}$")
 CONDITION_TYPES = ("level", "race", "class", "tag", "has_item", "coins", "attribute", "skill",
                    "quest", "objective", "state", "claimed", "flag", "object_state", "in_room",
-                   "knows_destination", "time", "disposition", "reputation", "wanted", "member", "owns_property")
+                   "knows_destination", "time", "disposition", "reputation", "wanted", "member", "owns_property",
+                   "aboard", "has_vehicle")
 OUTCOME_TYPES = ("give_item", "take_item", "experience", "coins", "take_coins", "learn_destination", "disposition",
-                 "reputation", "join_faction", "leave_faction", "grant_property", "revoke_property")
+                 "reputation", "join_faction", "leave_faction", "grant_property", "revoke_property",
+                 "grant_vehicle", "revoke_vehicle")
 # Condition types that only make sense in traditional worlds, where quests and
 # placed objects, rooms and wayfinding destinations exist.
 QUEST_CONDITION_TYPES = ("quest", "objective", "object_state", "in_room", "knows_destination", "time",
-                         "disposition", "reputation", "wanted", "member", "owns_property")
+                         "disposition", "reputation", "wanted", "member", "owns_property", "aboard", "has_vehicle")
 # All a character being created can be tested on; nothing else exists yet.
 START_CONDITION_TYPES = ("level", "race", "class", "tag", "attribute", "skill")
 # What a start rule may test: the finished origins and the faction chosen with them.
 START_RULE_CONDITION_TYPES = ("race", "class", "member")
 # Outcomes that teach world knowledge; procedural dungeons have no destinations.
 WORLD_OUTCOME_TYPES = ("learn_destination", "disposition", "reputation", "join_faction", "leave_faction",
-                       "grant_property", "revoke_property")
+                       "grant_property", "revoke_property", "grant_vehicle", "revoke_vehicle")
 # owns_property role: any active owner, or only the primary owner who manages it.
 PROPERTY_ROLES = ("owner", "primary")
 REPUTATION_LIMIT = 1000
@@ -71,6 +73,9 @@ _REFERENCE_FIELDS = {
     "join_faction": ("faction", "faction"), "leave_faction": ("faction", "faction"),
     "owns_property": ("property", "property"),
     "grant_property": ("property", "property"), "revoke_property": ("property", "property"),
+    # Optional for aboard: without a vehicle it means aboard anything.
+    "aboard": ("vehicle", "vehicle"), "has_vehicle": ("vehicle", "vehicle"),
+    "grant_vehicle": ("vehicle", "vehicle"), "revoke_vehicle": ("vehicle", "vehicle"),
 }
 
 
@@ -244,6 +249,17 @@ def _condition(raw, allowed, nested):
     elif kind == "member":
         fields |= {"faction"}
         result["faction"] = _identifier(raw.get("faction"), "member faction")
+    elif kind == "aboard":
+        fields |= {"vehicle", "mode"}
+        if "vehicle" in raw:
+            result["vehicle"] = _identifier(raw["vehicle"], "aboard vehicle")
+        if "mode" in raw:
+            if not isinstance(raw["mode"], str) or not KEY_RE.fullmatch(raw["mode"]):
+                raise ValueError("aboard mode must be a short lowercase word such as water.")
+            result["mode"] = raw["mode"]
+    elif kind == "has_vehicle":
+        fields |= {"vehicle"}
+        result["vehicle"] = _identifier(raw.get("vehicle"), "has_vehicle vehicle")
     elif kind == "owns_property":
         fields |= {"property", "role"}
         result["property"] = _identifier(raw.get("property"), "owns_property property")
@@ -374,6 +390,10 @@ def validate_outcomes(value, *, allow_world=True):
             if set(raw) - {"type", "property"}:
                 raise ValueError(f"{kind} outcomes accept only property.")
             result.append({"type": kind, "property": _identifier(raw.get("property"), f"{kind} property")})
+        elif kind in ("grant_vehicle", "revoke_vehicle"):
+            if set(raw) - {"type", "vehicle"}:
+                raise ValueError(f"{kind} outcomes accept only vehicle.")
+            result.append({"type": kind, "vehicle": _identifier(raw.get("vehicle"), f"{kind} vehicle")})
         elif kind in ("join_faction", "leave_faction"):
             if set(raw) - {"type", "faction"}:
                 raise ValueError(f"{kind} outcomes accept only faction.")
@@ -506,6 +526,11 @@ def _holds(condition, context):
         return condition.get("min", -REPUTATION_LIMIT) <= value <= condition.get("max", REPUTATION_LIMIT)
     if kind == "member":
         return bool(getattr(context, "member", lambda faction: False)(condition["faction"]))
+    if kind == "aboard":
+        return bool(getattr(context, "aboard", lambda vehicle, mode: False)(condition.get("vehicle"),
+                                                                            condition.get("mode")))
+    if kind == "has_vehicle":
+        return bool(getattr(context, "has_vehicle", lambda vehicle: False)(condition["vehicle"]))
     if kind == "owns_property":
         owns = getattr(context, "owns_property", lambda property_id, role: False)
         return bool(owns(condition["property"], condition.get("role", "owner")))

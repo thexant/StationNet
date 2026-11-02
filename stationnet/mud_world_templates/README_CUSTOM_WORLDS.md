@@ -253,6 +253,13 @@ Barred exits stay visible and are marked `[barred]` for that player:
  "conditions_message": "The stair vanishes into perfect darkness."}
 ```
 
+Two optional fields matter only in worlds with
+[vehicles](#5h-vehicles-and-transportation). `"requires_mode": "water"` makes
+the way passable only aboard a vehicle that travels by that mode (a sea
+crossing, a rail line, a flight path); it shows as `[needs water]` to anyone
+without one. `"allow_vehicles": false` makes it on foot only (a narrow door,
+a ladder); riders must `/disembark` first. An exit cannot have both.
+
 ### Map layers: going up and down
 
 A world can be built as a stack of separate maps called **layers**. Every room
@@ -541,6 +548,7 @@ The supported arrays are:
 | `mud_world_factions` | Factions players earn standing with; see [factions](#factions-and-reputation) | `id` |
 | `mud_faction_relations` | How a change with one faction passes to another | `faction_id`, `other_faction_id` |
 | `mud_properties` | Homes and other property players can hold; see [housing](#5g-player-housing-and-storage) | `entrance_room_id`, optional `agent_npc_definition_id` |
+| `mud_vehicle_definitions`, `mud_vehicle_placements`, `mud_fuel_stations`, `mud_transit_lines`, `mud_transit_stops` | Vehicles, where public ones stand, fuel, and transit services; see [vehicles](#5h-vehicles-and-transportation) | `interior_room_id`, `fuel_item_id`, `vehicle_definition_id`, `room_id`, `cabin_room_id`, `line_id` |
 | `mud_property_rooms` | Which rooms belong to a property | `room_id`, `property_id` |
 | `mud_storage_points` | Lockers, chests, and owners' storage | `room_id` |
 
@@ -773,11 +781,13 @@ its entries holds; groups cannot be nested. A list holds up to 20 entries.
 | `disposition` | optional `npc` (definition), and `tier` (one or a list of `hostile`, `unfriendly`, `neutral`, `friendly`, `trusted`) or `min`/`max` (-100 to 100) | That NPC's [regard](#relationships) for the character matches. Without `npc` it means the NPC being spoken to. Never holds while relationships are off. |
 | `time` | `from`, `to` (hours 0–23) | The [world clock](#world-clock) reads an hour from `from` up to, but not including, `to`. `{"from": 20, "to": 4}` wraps past midnight. Never holds while the clock is off. |
 | `owns_property` | `property`, optional `role`: `owner` (default; primary or co-owner) or `primary` | The character holds or shares that [property](#5g-player-housing-and-storage). |
+| `aboard` | optional `vehicle`, optional `mode` | The character is aboard a [vehicle](#5h-vehicles-and-transportation): any, that kind, or one that travels by that mode. |
+| `has_vehicle` | `vehicle` | The character owns a vehicle of that kind. |
 
 Flag keys are 1 to 80 lowercase letters, digits, and `. _ : -`, such as
 `gate.open` or `rats_slain`. Inside a procedural dungeon, `world` flags belong
 to that run. `object_state`, `in_room`, `knows_destination`, `time`,
-`disposition`, `reputation`, `wanted`, `member`, and `owns_property` are not available in dungeon templates.
+`disposition`, `reputation`, `wanted`, `member`, `owns_property`, `aboard`, and `has_vehicle` are not available in dungeon templates.
 
 ### Outcomes
 
@@ -799,6 +809,7 @@ nothing is granted.
 | `join_faction`, `leave_faction` | `faction` | Adds or removes the player's [membership](#faction-membership). Not available in dungeon templates. |
 | `disposition` | `amount` (-100 to 100, not 0), optional `npc` | Changes an NPC's [regard](#relationships) for the player; the NPC being spoken to unless `npc` names another. Not available in dungeon templates. |
 | `grant_property`, `revoke_property` | `property` | Gives the player a new holding of a [property](#5g-player-housing-and-storage) free of price and requirements (the first rent period is free too), or takes theirs away. Granting does nothing if they already have it. Not available in dungeon templates. |
+| `grant_vehicle`, `revoke_vehicle` | `vehicle` | Gives the player their own [vehicle](#5h-vehicles-and-transportation) of that kind, full of fuel and waiting where they stand (or at their home room), or takes theirs away (anyone aboard steps off). A character owns at most one of each kind, so granting twice does nothing. Not available in dungeon templates. |
 
 Item, quest, and objective IDs inside conditions and outcomes are local package
 IDs, like other references, and must exist in the package.
@@ -1320,6 +1331,7 @@ left the world, or the dungeon run, by the time it is due.
 | `reputation` | `faction`, `amount` (-1000 to 1000, not 0) | Changes the player's [standing](#factions-and-reputation) with a faction. |
 | `join_faction`, `leave_faction` | `faction` | Adds or removes the player's [membership](#faction-membership). |
 | `grant_property`, `revoke_property` | `property` | As in dialogue [outcomes](#outcomes). A refused grant only tells the player. |
+| `grant_vehicle`, `revoke_vehicle` | `vehicle` | As in dialogue [outcomes](#outcomes). |
 | `fine` | `faction`, `amount` (1–100,000) | Fines the player, as a [crime](#crime-and-consequences) would, without changing standing. |
 | `clear_fines` | optional `faction` | Pardons the player's unpaid fines, to that faction or to all. |
 | `apply_effect` | `effect`, optional `potency` (1–1,000, default 1) and `duration` (1–100 turns, default 3) | Puts a timed effect on the player: a built-in key or one of the world's own effects. Harmful effects are weakened by matching race, class, and gear resistances. Also allowed in dungeon triggers. |
@@ -1456,6 +1468,7 @@ separate map. Neighbouring squares on the same layer link automatically:
 | `environment` | Optional `light` (`bright`, `dim`, `dark`), `exposure` (`open`, `sheltered`), up to 20 `tags`, and up to 20 `lines` of ambient text added after the description. |
 | `encounters` | Optional. `chance` is the percentage (0–100) rolled each time a player enters; `max_live` (0–5) caps creatures per room; `despawn_seconds` (10–86400) removes them later. Each creature names an NPC definition and may limit itself to a danger range (1–10). |
 | `resources` | Optional. When a player enters, each item rolls its `chance` and places 1–5 copies, up to `max_per_room` (0–5). The room then waits `respawn_seconds` (60–86400) before gathering again. |
+| `requires_mode` | Optional. A vehicle mode such as `water`: only a [vehicle](#5h-vehicles-and-transportation) that travels by it may enter these rooms, by any route. Use it for open sea, deep snow, or the sky. |
 
 Each room picks its name, description and ambient line from its own position, so
 **the same room reads the same on every visit** while its neighbours vary.
@@ -2112,6 +2125,196 @@ belongs to a property, or is a property's entrance, cannot be deleted until the
 property no longer uses it, and a property cannot switch between unique and
 instanced while anyone holds it. Upgrading a world keeps holdings, co-owners,
 private copies, and stored items by local ID.
+
+## 5h. Vehicles and transportation
+
+Vehicles let players ride: a horse, a bicycle, a car, a rowboat, a stagecoach,
+a hover-sled, a salvaged truck. Transit lines carry them between stops for a
+fare: a ferry, a tram, a mail coach, a caravan. Both are optional and
+independent: a world may have only public buses, only a horse for sale, or
+neither. Nothing changes in a world that defines none of these tables.
+
+### How riding works
+
+`/board <vehicle>` in the room where it stands. While aboard, `/go` and
+`/travel` move the vehicle, and `/disembark` (or `/dismount`) gets off. There
+are two shapes of vehicle:
+
+- **Without an interior** (a horse, a bike, a cart): it carries one rider, who
+  stays in the room the vehicle is in and sees that room as usual. Others see
+  "Ada rides away north on the Horse."
+- **With an interior** (a boat, a coach, a train car): everyone aboard sits in
+  a private copy of the interior room, so they can talk and see each other.
+  The **operator** steers; passengers ride along. Riders see where the vehicle
+  arrives, and `/look out` shows the room outside. People outside see "The
+  Rowboat leaves east."
+
+Any other way of moving ends a ride and leaves the vehicle where it stands:
+fleeing, a `teleport` trigger, entering a dungeon, dying, or being moved by a
+builder. Vehicles never enter dungeons or property rooms. Riders inside an
+interior do not set off `enter_room` triggers or meet wilderness creatures in
+the rooms the vehicle passes, but they do complete `visit_room` objectives and
+learn destinations there. Nobody can drop items aboard.
+
+### Defining vehicles
+
+```json
+"mud_vehicle_definitions": [
+  {"id": "rowboat", "name": "Rowboat", "description": "A tarred boat with two oars.",
+   "modes": ["water"], "terrains": ["water"], "mode_only": true, "interior_room_id": "rowboat-deck",
+   "fuel_capacity": 20, "return_seconds": 600},
+  {"id": "horse", "name": "Horse", "description": "A bay mare.", "terrains": ["grassland", "road", "hills"],
+   "speed": 200, "fuel_capacity": 30, "fuel_item_id": "oats", "fuel_per_item": 10},
+  {"id": "car", "name": "Old Sedan", "description": "Rust and stubbornness.", "modes": ["road"],
+   "terrains": ["road"], "speed": 300, "fuel_capacity": 40, "fuel_per_move": 2,
+   "conditions_json": [{"type": "has_item", "item": "driving-licence"}],
+   "conditions_message": "You need a licence to drive."},
+  {"id": "coach", "name": "Family Coach", "description": "Four seats and a roof.",
+   "interior_room_id": "coach-seat", "shareable": true}
+],
+"mud_vehicle_placements": [
+  {"id": "harbor-boat", "vehicle_definition_id": "rowboat", "room_id": "harbor"}
+]
+```
+
+| Field | Default | Meaning |
+| --- | --- | --- |
+| `name` | required | 2–80 characters, used with `/board`. Unique within a world. |
+| `description` | `""` | Up to 2000 characters. |
+| `modes` | none | Up to 8 words of your own (`water`, `rail`, `air`, `road`, `snow`), each a short lowercase key. Exits and presets can require one. |
+| `terrains` | any | Wilderness terrains it can cross (`grassland`, `forest`, `dense-forest`, `hills`, `mountains`, `desert`, `swamp`, `tundra`, `water`, `road`, `custom`). Leave it out to go anywhere a walker can. |
+| `mode_only` | `false` | It keeps to its own ways: exits that need one of its modes, wilderness of its terrains, and authored rooms right beside that wilderness (a dock or a station). A boat cannot roll down the high street. Needs `modes` or `terrains`. |
+| `speed` | 100 | Percent of walking pace for `/travel` (25–400). 200 moves twice as fast; one step every two seconds is the limit. |
+| `interior_room_id` | none | A room in `rooms.json` that every vehicle of this kind copies for its riders. It must have no exits and not be the start room, a property, a stop, or used by anything else. |
+| `shareable` | `false` | An owned vehicle with an interior may take passengers while its owner is aboard. |
+| `fuel_capacity` | 0 | Fuel it holds; 0 means it needs none. |
+| `fuel_per_move` | 1 | Fuel each move costs. A vehicle out of fuel cannot move until refuelled. |
+| `fuel_item_id` | none | An item that `/refuel item` turns into fuel anywhere, e.g. oats or a fuel can. |
+| `fuel_per_item` | 10 | Fuel one item gives. |
+| `return_seconds` | 0 | A public vehicle left with nobody aboard goes back home, refuelled, after this long (up to a week). 0 leaves it where it was left. |
+| `conditions_json` | `[]` | [Conditions](#conditions) to board it, for a licence, a skill, a faction, or a time of day. |
+| `conditions_message` | `""` | Shown to anyone refused. |
+
+**Public vehicles** come from `mud_vehicle_placements`: each placement keeps
+one vehicle of that kind in its room, full of fuel, for anyone who meets the
+conditions. The first to board is the operator. When the operator gets off,
+the longest-aboard passenger takes over, and a passenger may take the
+controls from an operator who has gone offline.
+
+**Owned vehicles** come from a `grant_vehicle` [outcome](#outcomes) or trigger
+action. Only the owner may board an owned vehicle, and they always steer. A
+`shareable` one takes passengers while its owner is aboard, and when the owner
+gets off everyone else steps off with them. To sell a vehicle, give a merchant
+a dialogue response:
+
+```json
+{"id": "buy-horse", "node_id": "stable-hello", "response_text": "Buy the bay mare (120 coins).",
+ "conditions_json": [{"type": "coins", "min": 120}, {"type": "has_vehicle", "vehicle": "horse", "negate": true}],
+ "outcomes_json": [{"type": "take_coins", "amount": 120}, {"type": "grant_vehicle", "vehicle": "horse"}]}
+```
+
+Worlds that only need buses or ferries never have to use ownership.
+
+### Ways that need a vehicle
+
+An exit with `"requires_mode"` admits only riders whose vehicle travels by
+that mode; an exit with `"allow_vehicles": false` admits only walkers (see
+[Connect rooms](#3-connect-rooms)). A wilderness preset with `"requires_mode"`
+does the same for every room of that preset, so open sea or the sky needs a
+boat or a balloon however it is reached. Exits show `[needs water]` or
+`[on foot]` to each player as it applies to them.
+
+These rules are the same everywhere a player can move: walking, `/travel`,
+fleeing, `/directions` and destination headings, which plan routes for what
+the player is riding at the moment. A boat can be routed across the bay; a
+walker cannot.
+
+### Fuel
+
+Vehicles with a `fuel_capacity` spend `fuel_per_move` on every move,
+including each `/travel` step, and stop when they run dry. Refuel with
+`/refuel` at a fuel station, buying all that is missing or `/refuel <units>`,
+or with `/refuel item` anywhere, using one `fuel_item_id` item:
+
+```json
+"mud_fuel_stations": [
+  {"id": "pump", "room_id": "garage", "price": 3},
+  {"id": "boathouse", "room_id": "harbor", "price": 1, "modes": ["water"]}
+]
+```
+
+`price` (0–100,000) is coins per unit; `modes`, when given, limits a station to
+vehicles of those modes. A rider out of fuel somewhere they cannot step off
+(open sea) can still `/disembark`: the vehicle is towed home and they land
+there.
+
+### Transit lines
+
+A line is a service between stops. Riders do not steer anything: they pay,
+wait out the trip, and arrive.
+
+```json
+"mud_transit_lines": [
+  {"id": "ferry", "name": "Coast Ferry", "description": "Twice a day across the bay.",
+   "fare": 5, "fare_per_stop": 2, "cabin_room_id": "ferry-cabin",
+   "conditions_json": [{"type": "time", "from": 6, "to": 20}],
+   "conditions_message": "The ferry runs from dawn to dusk."},
+  {"id": "tram", "name": "Street Tram", "description": "Clanks along Main Street.", "fare": 1}
+],
+"mud_transit_stops": [
+  {"id": "ferry-harbor", "line_id": "ferry", "room_id": "harbor", "sort_order": 0},
+  {"id": "ferry-isle", "line_id": "ferry", "room_id": "isle", "sort_order": 1, "travel_seconds": 300},
+  {"id": "tram-1", "line_id": "tram", "room_id": "market", "sort_order": 0},
+  {"id": "tram-2", "line_id": "tram", "room_id": "museum", "sort_order": 1, "travel_seconds": 40},
+  {"id": "tram-3", "line_id": "tram", "room_id": "depot", "sort_order": 2, "travel_seconds": 40}
+]
+```
+
+| Field | Default | Meaning |
+| --- | --- | --- |
+| `fare` | 0 | Coins for any trip. |
+| `fare_per_stop` | 0 | Extra coins for each stop travelled. |
+| `cabin_room_id` | none | A room riders sit in during the trip, shared by everyone on the line. Same rules as a vehicle interior. Without one, riders wait where they boarded, and any move gives up the ride without a refund. |
+| `conditions_json` | `[]` | [Conditions](#conditions) to ride. A `time` condition gives the line operating hours. |
+| `conditions_message` | `""` | Shown to anyone refused. |
+| stop `sort_order` | 0 | The order of stops along the line. Lines run both ways. |
+| stop `travel_seconds` | 60 | Seconds from the stop before this one (5–86,400); the first stop's is ignored. |
+
+Players see the lines at a stop when they look. `/ride` lists where each line
+goes from here with its time and fare; `/ride <stop>` or
+`/ride <line> to <stop>` pays and departs; `/ride status` tells how long is
+left; `/ride cancel` stops waiting where there is no cabin. Riders arrive even
+if they log off, and arriving counts as entering the room (objectives, room
+triggers, private property rules).
+
+### Rules checked on import
+
+Vehicle and line names are unique within a world. Interior and cabin rooms
+belong to exactly one vehicle or line, have no exits, and are not the start
+room, a property room, a stop, a placement, a fuel station, or a start rule's
+room. A line needs at least two stops. Fuel items must exist. A warning notes
+modes that ways require but no vehicle in the world provides.
+
+### World switch
+
+The `transport` manifest section (or **World Builder → World life → Vehicles
+and transit**) controls the system:
+
+```json
+"transport": {"enabled": true}
+```
+
+Switched off, nobody can board, refuel, or buy a ride; anyone already aboard
+can still drive and get off, and rides under way still arrive.
+
+In the World Builder, **Vehicles and transit** creates vehicles, places public
+ones, lists every vehicle in the world (send one home or remove it), adds fuel
+stations, and edits lines with their stops; each exit has **Needs a vehicle
+mode** and **On foot only**. Removing a vehicle kind or a placement lets its
+riders off where it stands, and removing a line delivers its riders at once.
+Upgrading a world keeps owned vehicles where they stood, by local ID: riders
+step off beside them, rides under way arrive at their stops, and public
+vehicles return to their placements.
 
 ## 6. Import, edit, export, and remove
 
