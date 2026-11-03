@@ -55,6 +55,11 @@ CORE_RE = re.compile(r"^[a-z][a-z0-9_]*$")
 # SharedArrayBuffer, so its pages are served cross-origin isolated.
 THREADED_CORES = frozenset({"ppsspp"})
 CORE_FILES = {"ppsspp": ("ppsspp-thread-wasm.data", "ppsspp-assets.zip")}
+# The 4.2.3 PPSSPP build is far too slow for 3D games, so PPSSPP runs on a
+# separate EmulatorJS 4.3.0-pre player. Its cores are bundled only: 4.3 cores
+# are not on npm, and npm 4.2.3 cores are incompatible with that player.
+NEXT_ASSETS = Path(__file__).parent / "static" / "emulatorjs-next" / "data"
+NEXT_CORES = frozenset({"ppsspp"})
 
 
 def _core_files(core):
@@ -104,6 +109,8 @@ def _preferred_core(platform):
 
 
 def _core_file(name):
+    if CORE_FILE_NAMES[name] in NEXT_CORES:
+        return NEXT_ASSETS / "cores" / name
     installed = _root() / "cores" / name
     return installed if installed.is_file() else ASSETS / "cores" / name
 
@@ -273,7 +280,8 @@ def player(game_id):
         abort(404)
     g.arcade_isolated = core in THREADED_CORES
     return render_template("arcade/player.html", game=game, core=core,
-                           threads=g.arcade_isolated)
+                           threads=g.arcade_isolated,
+                           asset_endpoint="arcade.asset_next" if core in NEXT_CORES else "arcade.asset")
 
 
 @bp.get("/<int:game_id>/rom")
@@ -309,23 +317,32 @@ def cover(game_id):
 
 @bp.get("/emulatorjs/data/<path:asset>")
 def asset(asset):
+    return _send_asset(ASSETS, AVAILABLE_CORES - NEXT_CORES, asset)
+
+
+@bp.get("/emulatorjs-next/data/<path:asset>")
+def asset_next(asset):
+    return _send_asset(NEXT_ASSETS, NEXT_CORES, asset)
+
+
+def _send_asset(root, cores, asset):
     # Only packaged player resources and exact allowlisted core files are served.
     if asset.startswith("cores/reports/"):
         name = asset.removeprefix("cores/reports/")
-        if name.endswith(".json") and name[:-5] in AVAILABLE_CORES:
+        if name.endswith(".json") and name[:-5] in cores:
             installed = _root() / "cores" / "reports" / name
-            if installed.is_file():
+            if name[:-5] not in NEXT_CORES and installed.is_file():
                 return send_file(installed, mimetype="application/json", conditional=True)
-            return send_from_directory(ASSETS / "cores" / "reports", name)
+            return send_from_directory(root / "cores" / "reports", name)
         abort(404)
     if asset.startswith("cores/"):
         name = asset.removeprefix("cores/")
-        if name in CORE_FILE_NAMES:
+        if CORE_FILE_NAMES.get(name) in cores:
             path = _core_file(name)
             if path.is_file():
                 return send_file(path, mimetype="application/octet-stream", conditional=True)
         abort(404)
-    return send_from_directory(ASSETS, asset)
+    return send_from_directory(root, asset)
 
 
 @bp.route("/upload", methods=("GET", "POST"))
@@ -506,7 +523,7 @@ def install_core():
         abort(403)
     validate_csrf()
     core = request.form.get("core", "")
-    if not CORE_RE.fullmatch(core) or core not in AVAILABLE_CORES:
+    if not CORE_RE.fullmatch(core) or core not in AVAILABLE_CORES or core in NEXT_CORES:
         abort(400)
     folder = _root() / "cores"
     folder.mkdir(parents=True, exist_ok=True)

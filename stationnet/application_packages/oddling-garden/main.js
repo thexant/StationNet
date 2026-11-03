@@ -492,7 +492,8 @@ StationNet.start(async (ui) => {
     if (stage(p) === "Egg") return "A soft scratching sound comes from inside the shell.";
     if (p.health < 35) return "Seriously ill! Treat low needs now and give medicine.";
     if (p.health < 60) return "Feeling unwell. Keep all needs satisfied to recover.";
-    if (p.sleeping) return p.name + " is snoozing peacefully.";
+    if (p.sleeping) return p.energy >= 98 ? p.name + " is fully rested. Wake them up when you're ready."
+      : p.name + " is snoozing peacefully.";
     if (p.hunger < 25) return "Tiny tummy noises. Definitely time for food.";
     if (p.clean < 25) return "A rather questionable smell surrounds the nest.";
     if (p.energy < 25) return "Those eyelids are getting very heavy.";

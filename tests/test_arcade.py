@@ -9,7 +9,8 @@ import zipfile
 from PIL import Image
 
 from stationnet import create_app
-from stationnet.arcade import ASSETS, AVAILABLE_CORES, DEFAULT_CORES, PLATFORMS, _core_files
+from stationnet.arcade import (ASSETS, AVAILABLE_CORES, DEFAULT_CORES, NEXT_ASSETS, NEXT_CORES,
+                               PLATFORMS, _core_files)
 from stationnet.account_deletion import delete_account
 from stationnet.db import get_db
 
@@ -56,14 +57,20 @@ def _upload(client, title, platform, genre, *, station=False, cover=False):
 
 def test_default_cores_are_bundled_for_offline_play():
     bundled_defaults = {core for platform, core in DEFAULT_CORES.items() if platform != "arcade"}
-    assert "ppsspp" in bundled_defaults
+    assert "ppsspp" in bundled_defaults and "ppsspp" in NEXT_CORES
     for core in bundled_defaults:
+        root = NEXT_ASSETS if core in NEXT_CORES else ASSETS
         for name in _core_files(core):
-            assert (ASSETS / "cores" / name).is_file()
-        assert (ASSETS / "cores" / "reports" / (core + ".json")).is_file()
+            assert (root / "cores" / name).is_file()
+        assert (root / "cores" / "reports" / (core + ".json")).is_file()
     for asset in ("loader.js", "emulator.css", "src/emulator.js",
                   "src/gamepad.js", "compression/extractzip.js"):
         assert (ASSETS / asset).is_file()
+    for asset in ("loader.js", "emulator.css", "src/emulator.js", "src/GameManager.js",
+                  "src/vendor/nipplejs.js", "compression/extractzip.js"):
+        assert (NEXT_ASSETS / asset).is_file()
+    # The slow 4.2.3 PPSSPP build is no longer bundled.
+    assert not (ASSETS / "cores" / "ppsspp-thread-wasm.data").exists()
 
 
 def test_mame_arcade_platform_offers_downloadable_cores():
@@ -229,15 +236,24 @@ def test_psp_pages_are_cross_origin_isolated_and_threaded(tmp_path):
     assert b"ejs_threads: 'enabled'" in player.data
     # Debug mode makes PPSSPP log verbosely and disables caching.
     assert b"EJS_DEBUG_XX" not in player.data and b"window.EJS_sourceFiles = true;" in player.data
+    # PSP runs on the separate EmulatorJS 4.3.0-pre player.
+    assert b'EJS_pathtodata = "/arcade/emulatorjs-next/data/"' in player.data
+    assert b'src="/arcade/emulatorjs-next/data/loader.js"' in player.data
+    assert client.get("/arcade/emulatorjs-next/data/loader.js").status_code == 200
+    assert client.get("/arcade/emulatorjs-next/data/src/emulator.js").mimetype == "text/javascript"
     for name in ("ppsspp-thread-wasm.data", "ppsspp-assets.zip", "reports/ppsspp.json"):
-        assert client.get("/arcade/emulatorjs/data/cores/" + name).status_code == 200
-    assert client.get("/arcade/emulatorjs/data/cores/ppsspp-wasm.data").status_code == 404
+        assert client.get("/arcade/emulatorjs-next/data/cores/" + name).status_code == 200
+        assert client.get("/arcade/emulatorjs/data/cores/" + name).status_code == 404
+    assert client.get("/arcade/emulatorjs-next/data/cores/ppsspp-wasm.data").status_code == 404
+    assert client.get("/arcade/emulatorjs-next/data/cores/gambatte-wasm.data").status_code == 404
+    assert client.get("/arcade/emulatorjs-next/data/cores/../../secret.key").status_code == 404
     gb_view = client.get("/arcade/2")
     assert "Cross-Origin-Opener-Policy" not in gb_view.headers
     assert "data-requires-isolation" not in gb_view.get_data(as_text=True)
     gb_player = client.get("/arcade/2/player")
     assert "Cross-Origin-Embedder-Policy" not in gb_player.headers
     assert b"EJS_threads" not in gb_player.data and b"ejs_threads: 'disabled'" in gb_player.data
+    assert b'EJS_pathtodata = "/arcade/emulatorjs/data/"' in gb_player.data
     assert b"EJS_DEBUG_XX" not in gb_player.data and b"window.EJS_sourceFiles = true;" in gb_player.data
 
 
@@ -278,29 +294,22 @@ def test_psp_upload_limit_is_configurable_and_zip_checked(tmp_path):
     assert b"Max PSP upload size" in rejected.data
 
 
-def test_ppsspp_core_install_fetches_thread_build_and_assets(tmp_path, monkeypatch):
+def test_ppsspp_core_is_bundled_only(tmp_path, monkeypatch):
     app, client, admin, member = _setup(tmp_path)
     _enable(app)
     _signin(client, admin)
-    package = BytesIO()
-    with tarfile.open(fileobj=package, mode="w:gz") as archive:
-        for name, data in (("ppsspp-thread-wasm.data", b"core" * 512),
-                           ("ppsspp-assets.zip", b"assets" * 512),
-                           ("reports/ppsspp.json", b'{"core":"ppsspp","buildStart":"test"}')):
-            entry = tarfile.TarInfo("package/" + name)
-            entry.size = len(data)
-            archive.addfile(entry, BytesIO(data))
-    blob = package.getvalue()
-    package_url = "https://registry.npmjs.org/@emulatorjs/core-ppsspp/-/core-ppsspp-4.2.3.tgz"
-    metadata = {"dist": {"tarball": package_url,
-                         "integrity": "sha512-" + base64.b64encode(hashlib.sha512(blob).digest()).decode()}}
 
     def fake_open(url, timeout):
-        return BytesIO(json.dumps(metadata).encode() if url.endswith("/4.2.3") else blob)
+        raise AssertionError("PPSSPP must not be downloaded from npm")
 
     monkeypatch.setattr("stationnet.arcade.urllib.request.urlopen", fake_open)
-    result = client.post("/arcade/cores/install", data={"csrf_token": "arcade-test",
-                            "core": "ppsspp"}, follow_redirects=True)
-    assert b"installed locally" in result.data
-    assert client.get("/arcade/emulatorjs/data/cores/ppsspp-assets.zip").data == b"assets" * 512
-    assert client.get("/arcade/emulatorjs/data/cores/ppsspp-thread-wasm.data").data == b"core" * 512
+    result = client.post("/arcade/cores/install", data={"csrf_token": "arcade-test", "core": "ppsspp"})
+    assert result.status_code == 400
+    # A previously installed npm 4.2.3 PPSSPP core must not shadow the bundled build.
+    stale = tmp_path / "arcade" / "cores"
+    (stale / "reports").mkdir(parents=True)
+    (stale / "ppsspp-thread-wasm.data").write_bytes(b"core" * 512)
+    (stale / "reports" / "ppsspp.json").write_text('{"core":"ppsspp","buildStart":"stale"}')
+    bundled = (NEXT_ASSETS / "cores" / "ppsspp-thread-wasm.data").read_bytes()
+    assert client.get("/arcade/emulatorjs-next/data/cores/ppsspp-thread-wasm.data").data == bundled
+    assert b"stale" not in client.get("/arcade/emulatorjs-next/data/cores/reports/ppsspp.json").data

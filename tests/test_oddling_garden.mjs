@@ -226,6 +226,17 @@ try {
     assert.equal(app.writes.at(-1).pet.death.cause, "neglect");
     assert.match(app.writes.at(-1).pet.death.reason, /fullness/);
   }
+  {
+    const createdAt = now - 2 * 86400000;
+    const app = await launch({ saved: { version: 1, pet: pet({ createdAt, hatchAt: createdAt + 120000,
+      lastUpdate: now - 12 * 3600000, energy: 30, hunger: 90, sleeping: true }), memorials: [] } });
+    const saved = app.writes.at(-1).pet;
+    assert.equal(saved.sleeping, true, "a rested pet stays asleep until woken manually");
+    assert.equal(saved.energy, 100);
+    assert.ok(saved.hunger < 90, "needs still decay while asleep");
+    await app.key("KeyS");
+    assert.equal(app.writes.at(-1).pet.sleeping, false);
+  }
   console.log("Oddling Garden checks passed");
 } finally {
   globalThis.Date = OriginalDate;

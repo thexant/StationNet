@@ -4,7 +4,7 @@ window.EJS_core = {{ core|tojson }};
 window.EJS_gameName = {{ game.title|tojson }};
 window.EJS_gameID = {{ game.id }};
 window.EJS_gameUrl = {{ (url_for('arcade.named_rom',game_id=game.id,filename=game.original_name) if game.platform == 'arcade' else url_for('arcade.rom',game_id=game.id))|tojson }};
-window.EJS_pathtodata = {{ url_for('arcade.asset',asset='')|tojson }};
+window.EJS_pathtodata = {{ url_for(asset_endpoint,asset='')|tojson }};
 window.EJS_startOnLoaded = true;
 window.EJS_sourceFiles = true;
 window.EJS_disableAutoLang = true;
@@ -16,4 +16,4 @@ window.EJS_disableLocalStorage = true;
   'mame2003-plus_skip_warnings': 'enabled',
   'mame2003-plus_skip_disclaimer': 'enabled'
 };
-</script><script src="{{ url_for('arcade.asset',asset='loader.js') }}"></script></body></html>
+</script><script src="{{ url_for(asset_endpoint,asset='loader.js') }}"></script></body></html>

@@ -58,7 +58,6 @@ export function advancePet(p, now, onDeath) {
       p.social = clamp(p.social - 1.65 * species.social * dt);
       p.energy = clamp(p.energy + (p.sleeping ? 13 : -4.8 * species.energy) * dt);
       if (p.energy <= 12) p.sleeping = true;
-      if (p.energy >= 98) p.sleeping = false;
       const neglected = [p.hunger, p.clean, p.fun, p.social].filter(value => value < 18).length;
       p.health = clamp(p.health + (neglected ? -1.3 * neglected : .40) * dt);
       p.happyWeighted += mood(p) * (n - t);
