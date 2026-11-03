@@ -1,0 +1,16 @@
+{% extends 'base.html' %}
+{% block title %}Edit {{ book.title }}{% endblock %}
+{% block content %}
+<p><a href="{{ url_for('library.view',book_id=book.id) }}">RETURN TO BOOK</a></p>
+<section class="narrow terminal-card"><p class="eyebrow">LIBRARY / EDIT DETAILS</p><h1>Edit book details</h1><p>Correct details that were missing or wrong in the {{ book.format|upper }} file. The file itself is not changed.</p>
+<form method="post" class="form-grid"><input type="hidden" name="csrf_token" value="{{ session.csrf_token }}">
+  <label>Title<input name="title" value="{{ book.title }}" maxlength="150" required></label>
+  <label>Author<input name="author" value="{{ book.author }}" maxlength="150"></label>
+  <label>Description<textarea name="description" rows="6" maxlength="5000">{{ book.description }}</textarea></label>
+  <label>Publisher<input name="publisher" value="{{ book.publisher }}" maxlength="150"></label>
+  <label>Language<input name="language" value="{{ book.language }}" maxlength="80"></label>
+  <label>Identifier<input name="identifier" value="{{ book.identifier }}" maxlength="250"></label>
+  <label>Category<select name="category_id"><option value="">Uncategorized</option>{% if book.category_id and book.category_id not in categories|map(attribute='id')|list %}<option value="{{ book.category_id }}" selected>{{ book.category_name }} (disabled)</option>{% endif %}{% for category in categories %}<option value="{{ category.id }}" {% if book.category_id == category.id %}selected{% endif %}>{{ category.name }}</option>{% endfor %}</select></label>
+  <div class="button-row"><button>SAVE DETAILS</button><a class="button secondary" href="{{ url_for('library.view',book_id=book.id) }}">CANCEL</a></div>
+</form></section>
+{% endblock %}

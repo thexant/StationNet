@@ -1,6 +1,6 @@
 {% extends "base.html" %}
 {% block title %}TV{% endblock %}
-{% block extra_styles %}<link rel="stylesheet" href="{{ url_for('static',filename='tv.css',v='1') }}">{% endblock %}
+{% block extra_styles %}<link rel="stylesheet" href="{{ url_for('static',filename='tv.css',v='2') }}">{% endblock %}
 {% block content %}
 <section class="tv-set" data-tv data-now-url="{{ url_for('tv.now_playing') }}" data-guide-url="{{ url_for('tv.guide') }}"
          data-channels='{{ channels|tojson }}' data-default-channel="{{ default_channel_id or '' }}"
@@ -30,7 +30,7 @@
       <div class="tv-osd-hint" data-tv-hint hidden></div>
       <div class="tv-osd-volume" data-tv-osd-volume hidden><span data-tv-volume-label>VOLUME</span><b data-tv-volume-bar></b></div>
       <div class="tv-osd" data-tv-osd hidden>
-        <div class="tv-osd-head"><img data-tv-osd-logo alt="" hidden><span class="tv-osd-channel" data-tv-osd-channel></span><span class="tv-osd-clock" data-tv-osd-clock></span></div>
+        <div class="tv-osd-head"><img data-tv-osd-logo alt="" hidden><span class="tv-osd-channel" data-tv-osd-channel></span><span class="tv-osd-clock" data-tv-osd-clock></span><button type="button" class="tv-osd-exit" data-tv-exit-fullscreen aria-label="Exit fullscreen" hidden>&#x2715; EXIT FULLSCREEN</button></div>
         <div class="tv-osd-now"><span class="tv-osd-tag">NOW</span><strong data-tv-osd-title></strong><span class="tv-osd-time" data-tv-osd-time></span></div>
         <div class="tv-osd-progress"><i data-tv-osd-progress></i></div>
         <p class="tv-osd-description" data-tv-osd-description hidden></p>
@@ -74,5 +74,5 @@
   </div>
   <p class="muted tv-help">KEYS: 0&ndash;9 CHANNEL &middot; &uarr;&darr;/PGUP PGDN CHANNEL &middot; [ ] VOLUME &middot; M MUTE &middot; G GUIDE &middot; I INFO &middot; F FULLSCREEN &middot; ESC CLOSE</p>
 </section>
-<script src="{{ url_for('static',filename='tv.js',v='1') }}" defer></script>
+<script src="{{ url_for('static',filename='tv.js',v='2') }}" defer></script>
 {% endblock %}

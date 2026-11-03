@@ -53,7 +53,7 @@ html { min-height: 100%; background: var(--black); }
 }
 body { margin: 0; min-height: 100vh; color: var(--green); background: var(--black); line-height: 1.6; }
 body::after { content: ""; position: fixed; inset: 0; z-index: 20; pointer-events: none; opacity: .045; background: repeating-linear-gradient(0deg, transparent 0 2px, #fff 2px 3px); }
-html[data-vfx-enabled="false"] body::after { display: none; }
+html:not([data-vfx-enabled="true"]) body::after { display: none; }
 ::selection { color: #000; background: var(--green); }
 a { color: var(--cyan); text-underline-offset: .2em; }
 a:hover { color: var(--magenta); }
@@ -569,6 +569,11 @@ button:focus-visible, .button:focus-visible, a:focus-visible, summary:focus-visi
 .moderation-actions[open] > summary span { transform: rotate(180deg); }
 .moderation-actions > form, .moderation-actions > .button-row { margin: 0; }
 .moderation-actions .danger { margin-top: 0; }
+.report-panel > summary { display: inline-flex; align-items: center; justify-content: center; width: 1.8rem; height: 1.8rem; padding: 0; border: 1px solid var(--green-dim); color: var(--cyan); background: var(--surface-small); list-style: none; cursor: pointer; }
+.report-panel > summary::-webkit-details-marker { display: none; }
+.report-panel > summary::marker { content: ''; }
+.report-panel > summary svg { width: 1rem; height: 1rem; }
+.report-panel[open] > summary { border-color: var(--cyan); }
 .presence { color: var(--grey); font-size: var(--text-xs); }
 .presence.online { color: var(--green-bright); text-shadow: 0 0 .45rem var(--green); }
 

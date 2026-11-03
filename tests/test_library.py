@@ -403,3 +403,52 @@ def test_library_categories_filters_sorting_and_curated_mode(tmp_path):
     assert client.post(f"/sysop/library/categories/{fantasy}/availability", data={
         "csrf_token": "library-test", "enabled": "1"}).status_code == 302
     assert b"Fantasy" in client.get("/library").data.split(b'All categories</option>')[1].split(b'</select>')[0]
+
+
+def test_library_metadata_edit_permissions_and_audit(tmp_path):
+    app = create_app({"TESTING": True, "DATA_DIR": str(tmp_path)})
+    with app.app_context():
+        db = get_db()
+        db.execute("INSERT INTO station(name,description,callsign,library_enabled) VALUES('Test','Test','TST-1',1)")
+        admin = db.execute("INSERT INTO users(username,callsign,password_hash,is_admin) VALUES('admin','ADM-1','unused',1)").lastrowid
+        member = db.execute("INSERT INTO users(username,callsign,password_hash) VALUES('member','MEM-1','unused')").lastrowid
+        other = db.execute("INSERT INTO users(username,callsign,password_hash) VALUES('other','OTH-1','unused')").lastrowid
+        fantasy = db.execute("SELECT id FROM library_categories WHERE name='Fantasy'").fetchone()[0]
+        db.commit()
+    client = app.test_client()
+    sign_in(client, member)
+    assert client.post("/library/upload", data={"csrf_token": "library-test", "category_id": str(fantasy),
+        "file": (io.BytesIO(pdf()), "manual.pdf")}, content_type="multipart/form-data").status_code == 302
+    assert b"EDIT DETAILS" in client.get("/library/1").data
+    assert client.get("/library/1/edit").status_code == 200
+    fields = {"csrf_token": "library-test", "title": "  Field   Guide ", "author": "Grace Hopper",
+              "description": "Line one\nLine two", "publisher": "Station Press", "language": "en",
+              "identifier": "x" * 300, "category_id": str(fantasy)}
+    assert client.post("/library/1/edit", data=fields).status_code == 302
+    with app.app_context():
+        book = get_db().execute("SELECT * FROM library_books WHERE id=1").fetchone()
+        assert (book["title"], book["author"], book["description"], book["publisher"], book["language"]) == \
+            ("Field Guide", "Grace Hopper", "Line one\nLine two", "Station Press", "en")
+        assert len(book["identifier"]) == 250 and book["category_id"] == fantasy
+        assert get_db().execute("SELECT COUNT(*) FROM moderation_audit").fetchone()[0] == 0
+    assert b"Grace Hopper" in client.get("/library/1").data
+    assert b"Field Guide" in client.get("/library?q=hopper").data
+    blank = client.post("/library/1/edit", data={**fields, "title": "   "}, follow_redirects=True)
+    assert b"Enter a title" in blank.data
+    sign_in(client, other)
+    assert b"EDIT DETAILS" not in client.get("/library/1").data
+    assert client.get("/library/1/edit").status_code == 403
+    assert client.post("/library/1/edit", data={**fields, "title": "Hijacked"}).status_code == 403
+    sign_in(client, admin)
+    assert client.post(f"/sysop/library/categories/{fantasy}/availability", data={
+        "csrf_token": "library-test", "enabled": "0"}).status_code == 302
+    assert b"SYSOP EDIT DETAILS" in client.get("/library/1").data
+    assert b"Fantasy (disabled)" in client.get("/library/1/edit").data
+    assert client.post("/library/1/edit", data={**fields, "title": "Admin Title"}).status_code == 302
+    with app.app_context():
+        db = get_db()
+        book = db.execute("SELECT title,category_id FROM library_books WHERE id=1").fetchone()
+        assert (book["title"], book["category_id"]) == ("Admin Title", fantasy)
+        entry = db.execute("SELECT * FROM moderation_audit").fetchone()
+        assert (entry["actor_id"], entry["user_id"], entry["action"], entry["target_id"]) == \
+            (admin, member, "edit_book", 1)

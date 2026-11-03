@@ -24,6 +24,7 @@ class Item:
     duration: float | None
     description: str = ""
     available: bool = True
+    interstitial: bool = False
 
 
 @dataclass(frozen=True)
@@ -52,6 +53,7 @@ class Airing:
     media_offset: float = 0.0
     block_id: int | None = None
     block_title: str = ""
+    interstitial: bool = False
 
     @property
     def seconds(self):
@@ -128,7 +130,7 @@ def layout(block, start, end):
             finish = min(end, moment + timedelta(seconds=item.duration))
             result.append(Airing(
                 moment, finish, "program" if item.available else "standby", item.title,
-                item.description, item.media_id, 0.0, block.id, block.title))
+                item.description, item.media_id, 0.0, block.id, block.title, item.interstitial))
             moment = finish
         if not block.loop_until:
             break
@@ -248,6 +250,28 @@ def merge(airings):
                 continue
         merged.append(airing)
     return merged
+
+
+def fold_interstitials(airings):
+    """Guide view: commercials, bumpers and idents inside a block join the programme they surround.
+
+    A block made only of interstitials keeps its own entries.
+    """
+    blocks_with_programmes = {a.block_id for a in airings
+                              if a.block_id is not None and a.kind in {"program", "standby"} and not a.interstitial}
+    folded = []
+    for airing in airings:
+        if airing.interstitial and airing.block_id in blocks_with_programmes:
+            if folded and folded[-1].block_id == airing.block_id and folded[-1].end == airing.start:
+                folded[-1] = replace(folded[-1], end=airing.end)
+                continue
+        elif (folded and folded[-1].interstitial and folded[-1].block_id == airing.block_id
+              and airing.block_id in blocks_with_programmes and not airing.interstitial):
+            # Interstitials opening a block are absorbed by the programme that follows.
+            lead = folded.pop()
+            airing = replace(airing, start=lead.start)
+        folded.append(airing)
+    return folded
 
 
 def at(airings, moment):

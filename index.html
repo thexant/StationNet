@@ -158,7 +158,7 @@
     }
   </style>
 </head>
-<body>
+<body class="no-vfx">
   <a class="skip-link" href="#main">Skip to content</a>
   <div class="shell" id="top">
     <header>
@@ -173,7 +173,7 @@
       <div class="node-line">
         <span>NODE: <b>STATIONNET</b></span>
         <span>MODE: <b>WELCOME</b></span>
-        <button class="vfx-toggle" type="button" id="vfx-toggle" aria-pressed="true" aria-label="Disable scanline effect">VFX: ON</button>
+        <button class="vfx-toggle" type="button" id="vfx-toggle" aria-pressed="false" aria-label="Enable scanline effect">VFX: OFF</button>
       </div>
       <nav class="service-nav" aria-label="Page sections">
         <a href="#about">ABOUT</a><i aria-hidden="true">*</i>
@@ -293,8 +293,8 @@
   <script>
     (() => {
       const toggle = document.getElementById('vfx-toggle');
-      let enabled = true;
-      try { enabled = localStorage.getItem('stationnet-site-vfx') !== 'off'; } catch (_) {}
+      let enabled = false;
+      try { enabled = localStorage.getItem('stationnet-site-vfx') === 'on'; } catch (_) {}
       function update() {
         document.body.classList.toggle('no-vfx', !enabled);
         toggle.setAttribute('aria-pressed', String(enabled));

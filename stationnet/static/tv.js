@@ -84,6 +84,7 @@
     volume: $("[data-tv-osd-volume]"), logo: $("[data-tv-osd-logo]"), channel: $("[data-tv-osd-channel]"),
     clock: $("[data-tv-osd-clock]"), title: $("[data-tv-osd-title]"), time: $("[data-tv-osd-time]"),
     progress: $("[data-tv-osd-progress]"), description: $("[data-tv-osd-description]"), next: $("[data-tv-osd-next]"),
+    exit: $("[data-tv-exit-fullscreen]"),
   };
   const hideTimers = new Map();
   function flash(node, duration) {
@@ -104,6 +105,7 @@
     osd.logo.hidden = !entry.logo_url;
     if (entry.logo_url) osd.logo.src = entry.logo_url;
     osd.clock.textContent = clock(serverNow());
+    osd.exit.hidden = !document.fullscreenElement;
     const airing = current && current.airing;
     if (!airing) return;
     const start = Date.parse(airing.start), end = Date.parse(airing.end);
@@ -649,6 +651,8 @@
   $("[data-tv-guide-toggle]").addEventListener("click", () => (guide.open ? guide.close() : guide.show()));
   $("[data-tv-info]").addEventListener("click", () => { if (powered) showBanner(true); });
   $("[data-tv-fullscreen]").addEventListener("click", toggleFullscreen);
+  osd.exit.addEventListener("click", () => document.exitFullscreen?.());
+  document.addEventListener("fullscreenchange", () => { osd.exit.hidden = !document.fullscreenElement; });
   root.querySelectorAll("[data-tv-digit]").forEach(button => {
     button.addEventListener("click", () => enterDigit(button.dataset.tvDigit));
   });

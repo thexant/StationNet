@@ -481,6 +481,48 @@ def set_category(book_id):
     return redirect(url_for("library.view", book_id=book_id))
 
 
+@bp.route("/<int:book_id>/edit", methods=("GET", "POST"))
+@login_required
+def edit(book_id):
+    book = _book(book_id)
+    if not g.user["is_admin"] and book["uploader_id"] != g.user["id"]:
+        abort(403)
+    if request.method == "POST":
+        validate_csrf()
+        def field(name, limit):
+            return " ".join(request.form.get(name, "").split())[:limit]
+        title = field("title", 150)
+        description = request.form.get("description", "").strip()[:5000]
+        raw_category = request.form.get("category_id", "").strip()
+        error = None
+        if not title:
+            error = "Enter a title."
+        elif book["category_id"] is not None and raw_category == str(book["category_id"]):
+            # Editing details must not drop a category a SYSOP has since disabled.
+            category_id = book["category_id"]
+        else:
+            try:
+                category_id = _selected_category()
+            except ValueError as exc:
+                error = str(exc)
+        if error:
+            flash(error, "error")
+        else:
+            database = get_db()
+            database.execute(
+                "UPDATE library_books SET title=?,author=?,description=?,publisher=?,language=?,"
+                "identifier=?,category_id=? WHERE id=?",
+                (title, field("author", 150), description, field("publisher", 150),
+                 field("language", 80), field("identifier", 250), category_id, book_id))
+            if book["uploader_id"] != g.user["id"]:
+                audit(database, g.user["id"], book["uploader_id"], "edit_book",
+                      "SYSOP metadata edit", "library_book", book_id)
+            database.commit()
+            flash("Book details updated.", "success")
+            return redirect(url_for("library.view", book_id=book_id))
+    return render_template("library/edit.html", book=book, categories=_categories())
+
+
 @bp.get("/<int:book_id>/download")
 def download(book_id):
     if not g.station["library_downloads_enabled"]:

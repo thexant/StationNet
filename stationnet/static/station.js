@@ -61,8 +61,8 @@ sfxToggle?.addEventListener("click",()=>{
 });
 
 const vfxStorageKey="stationnet.vfx.enabled";
-let vfxEnabled=true;
-try{vfxEnabled=localStorage.getItem(vfxStorageKey)!=="false"}catch(_){}
+let vfxEnabled=false;
+try{vfxEnabled=localStorage.getItem(vfxStorageKey)==="true"}catch(_){}
 const vfxToggle=document.querySelector("[data-vfx-toggle]");
 const renderVfxToggle=()=>{
   document.documentElement.dataset.vfxEnabled=String(vfxEnabled);

@@ -2446,7 +2446,34 @@ def _migrate_tv(database):
      media_id INTEGER NOT NULL REFERENCES tv_media(id) ON DELETE RESTRICT,
      title_override TEXT, description TEXT NOT NULL DEFAULT '');
      CREATE INDEX IF NOT EXISTS idx_tv_block_items_block ON tv_block_items(block_id, position);
-     CREATE INDEX IF NOT EXISTS idx_tv_block_items_media ON tv_block_items(media_id);""")
+     CREATE INDEX IF NOT EXISTS idx_tv_block_items_media ON tv_block_items(media_id);
+     CREATE TABLE IF NOT EXISTS tv_folder_kinds (
+     folder TEXT PRIMARY KEY,
+     kind TEXT NOT NULL CHECK(kind IN ('program','ident','bumper','offair')),
+     recursive INTEGER NOT NULL DEFAULT 1 CHECK(recursive IN (0,1)));""")
+    for table in ("tv_media", "tv_folder_kinds"):
+        _rebuild_with_check(database, table, "'commercial'", "'program','ident','bumper','offair'",
+                            "'program','ident','bumper','commercial','offair'")
+    media_columns = {row["name"] for row in database.execute("PRAGMA table_info(tv_media)")}
+    for name, definition in (("content_type", "TEXT NOT NULL DEFAULT ''"), ("genre", "TEXT NOT NULL DEFAULT ''"),
+                             ("series", "TEXT NOT NULL DEFAULT ''"), ("season", "INTEGER"), ("episode", "INTEGER")):
+        if name not in media_columns:
+            database.execute(f"ALTER TABLE tv_media ADD COLUMN {name} {definition}")
+    block_columns = {row["name"] for row in database.execute("PRAGMA table_info(tv_blocks)")}
+    if "origin" not in block_columns:
+        database.execute("ALTER TABLE tv_blocks ADD COLUMN origin TEXT NOT NULL DEFAULT 'manual' "
+                         "CHECK(origin IN ('manual','auto'))")
+    if "locked" not in block_columns:
+        database.execute("ALTER TABLE tv_blocks ADD COLUMN locked INTEGER NOT NULL DEFAULT 0 CHECK(locked IN (0,1))")
+    database.executescript("""CREATE INDEX IF NOT EXISTS idx_tv_blocks_auto ON tv_blocks(channel_id, origin, start_date);
+     CREATE TABLE IF NOT EXISTS tv_auto_config (
+     channel_id INTEGER PRIMARY KEY REFERENCES tv_channels(id) ON DELETE CASCADE,
+     settings TEXT NOT NULL DEFAULT '{}', updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);
+     CREATE TABLE IF NOT EXISTS tv_auto_drafts (
+     channel_id INTEGER PRIMARY KEY REFERENCES tv_channels(id) ON DELETE CASCADE,
+     start_date TEXT NOT NULL, days INTEGER NOT NULL, seed INTEGER NOT NULL, version INTEGER NOT NULL,
+     payload TEXT NOT NULL, warnings TEXT NOT NULL DEFAULT '[]',
+     created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);""")
 
 
 def _migrate_library(database):

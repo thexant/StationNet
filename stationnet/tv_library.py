@@ -76,6 +76,28 @@ def title_from(name):
     return re.sub(r"[_\.]+", " ", Path(name).stem).strip()[:150] or "Untitled"
 
 
+EPISODE_RE = re.compile(r"(?i)(?:\bS(\d{1,3})[ ._-]*E(\d{1,4})\b|\b(\d{1,2})x(\d{1,3})\b)")
+
+
+def guess_episode(name, folder=""):
+    """Series, season and episode from names like ``Show.S01E02.mkv`` or ``Show 1x02``; empty if none."""
+    title = title_from(name)
+    match = EPISODE_RE.search(title)
+    if not match:
+        return {}
+    season, episode = (match.group(1), match.group(2)) if match.group(1) else (match.group(3), match.group(4))
+    series = re.sub(r"[\s\-–:]+$", "", title[:match.start()]).strip()
+    if not series and folder:
+        parts = [part for part in folder.split("/") if not re.fullmatch(r"(?i)season\s*\d+|s\d+", part.strip())]
+        series = parts[-1].strip() if parts else ""
+    return {"series": series[:150], "season": int(season), "episode": int(episode)}
+
+
+def natural_key(text):
+    """Sort key treating digit runs as numbers, so "Part 10" follows "Part 9"."""
+    return [int(part) if part.isdigit() else part.lower() for part in re.split(r"(\d+)", text or "")]
+
+
 def probe(path):
     """Duration and frame size via optional ffprobe; empty when unavailable."""
     executable = shutil.which("ffprobe")

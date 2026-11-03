@@ -253,3 +253,200 @@ def test_tv_css_uses_theme_tokens_not_hardcoded_colours():
             red, green, blue = (digits[i:i + 2] for i in (0, 2, 4))
             assert red == green == blue, f"{name} hard-codes a tinted colour #{colour}; use a theme token"
         assert "var(--green)" in css and "var(--surface-selected)" in css
+
+
+def _scan_all(client):
+    results, cursor, done = {}, 0, False
+    while not done:
+        data = _post(client, "/sysop/tv/api/import/scan", {"cursor": cursor}).get_json()
+        results.update({item["path"]: item["status"] for item in data["results"]})
+        cursor, done = data["cursor"], data["done"]
+    return results
+
+
+def _library(client):
+    return {item["id"]: item for item in client.get("/sysop/tv/api/state").get_json()["media"]}
+
+
+def test_bulk_edit_and_delete(tmp_path):
+    app, client, admin, member = _setup(tmp_path)
+    _signin(client, admin)
+    first = _media_with_duration(client, app, "a.mp4", 60)
+    second = _media_with_duration(client, app, "b.mp4", 60)
+    scheduled = _media_with_duration(client, app, "c.mp4", 60)
+    with app.app_context():
+        before = get_db().execute("SELECT version FROM tv_state").fetchone()[0]
+    assert _post(client, "/sysop/tv/api/media/bulk", {"ids": [first, second], "kind": "comet"}).status_code == 400
+    assert _post(client, "/sysop/tv/api/media/bulk", {"ids": [first]}).status_code == 400
+    result = _post(client, "/sysop/tv/api/media/bulk", {"ids": [first, second, first, 9999], "kind": "bumper",
+                                                        "folder": "Breaks/../Night"})
+    assert result.get_json() == {"updated": 2}
+    media = _library(client)
+    assert [media[first]["kind"], media[second]["kind"], media[scheduled]["kind"]] == ["bumper", "bumper", "program"]
+    assert media[first]["folder"] == "Breaks/Night" and media[first]["description"] == ""
+    with app.app_context():
+        assert get_db().execute("SELECT version FROM tv_state").fetchone()[0] > before
+
+    channel = _post(client, "/sysop/tv/api/channels", {"number": 1, "name": "One"}).get_json()["id"]
+    assert _post(client, "/sysop/tv/api/blocks", {"channel_id": channel, "kind": "weekly", "weekdays": 1,
+                                                  "start_time": "10:00", "items": [{"media_id": scheduled}]}).status_code == 200
+    path = tmp_path / "tv" / media[first]["rel_path"]
+    deleted = _post(client, "/sysop/tv/api/media/bulk-delete", {"ids": [first, second, scheduled]}).get_json()
+    assert deleted["deleted"] == 2 and deleted["kept_files"] == 0 and deleted["failed"] == []
+    assert [entry["id"] for entry in deleted["blocked"]] == [scheduled] and deleted["blocked"][0]["usage"]
+    assert not path.exists() and set(_library(client)) == {scheduled}
+
+    _signin(client, member)
+    assert _post(client, "/sysop/tv/api/media/bulk-delete", {"ids": [scheduled]}).status_code == 403
+    _signin(client, admin)
+    assert client.post("/sysop/tv/api/media/bulk", json={"ids": [scheduled], "kind": "ident"}).status_code == 400
+
+
+def test_folder_kinds_rules_and_rename(tmp_path):
+    app, client, admin, _member = _setup(tmp_path)
+    _signin(client, admin)
+    root = tmp_path / "tv" / "import"
+    (root / "Breaks" / "Night").mkdir(parents=True)
+    (root / "Breaks" / "one.mp4").write_bytes(MP4 + b"one")
+    (root / "Breaks" / "Night" / "two.mp4").write_bytes(MP4 + b"two")
+    (root / "Breakfast").mkdir()
+    (root / "Breakfast" / "show.mp4").write_bytes(MP4 + b"show")
+    _scan_all(client)
+    by_name = lambda: {item["original_name"]: item for item in _library(client).values()}
+
+    assert _post(client, "/sysop/tv/api/folders/kind", {"folder": "Breaks", "kind": "nope"}).status_code == 400
+    assert _post(client, "/sysop/tv/api/folders/kind", {"folder": "Breaks", "kind": "ident"}).get_json() == {"updated": 1}
+    assert [by_name()[name]["kind"] for name in ("one.mp4", "two.mp4")] == ["ident", "program"]
+    assert _post(client, "/sysop/tv/api/folders/kind", {"folder": "Breaks", "kind": "bumper", "recursive": True,
+                                                        "remember": True}).get_json() == {"updated": 2}
+    media = by_name()
+    assert media["one.mp4"]["kind"] == media["two.mp4"]["kind"] == "bumper" and media["show.mp4"]["kind"] == "program"
+    state = client.get("/sysop/tv/api/state").get_json()
+    assert state["folder_rules"] == [{"folder": "Breaks", "kind": "bumper", "recursive": True}]
+
+    # New files below a remembered folder arrive with its type; a sibling with a shared prefix does not.
+    (root / "Breaks" / "Night" / "three.mp4").write_bytes(MP4 + b"three")
+    (root / "Breakfast" / "four.mp4").write_bytes(MP4 + b"four")
+    _scan_all(client)
+    media = by_name()
+    assert media["three.mp4"]["kind"] == "bumper" and media["four.mp4"]["kind"] == "program"
+    assert _upload(client, "five.mp4", MP4 + b"five", "Breaks/five.mp4")["media"]["kind"] == "bumper"
+
+    assert _post(client, "/sysop/tv/api/folders/rename", {"from": "Breaks", "to": "Breaks/Inner"}).status_code == 400
+    assert _post(client, "/sysop/tv/api/folders/rename", {"from": "Breaks", "to": "Interstitials"}).get_json()["updated"] == 4
+    media = by_name()
+    assert media["two.mp4"]["folder"] == "Interstitials/Night" and media["show.mp4"]["folder"] == "Breakfast"
+    assert client.get("/sysop/tv/api/state").get_json()["folder_rules"][0]["folder"] == "Interstitials"
+    assert _post(client, "/sysop/tv/api/folders/rule/delete", {"folder": "Interstitials"}).status_code == 200
+    assert client.get("/sysop/tv/api/state").get_json()["folder_rules"] == []
+
+
+def test_bulk_block_actions(tmp_path):
+    app, client, admin, _member = _setup(tmp_path)
+    _signin(client, admin)
+    show = _media_with_duration(client, app, "show.mp4", 600)
+    channel = _post(client, "/sysop/tv/api/channels", {"number": 1, "name": "One"}).get_json()["id"]
+    blocks = [_post(client, "/sysop/tv/api/blocks", {"channel_id": channel, "kind": "weekly", "weekdays": 127,
+                                                     "start_time": f"{hour:02d}:00", "items": [{"media_id": show}]}).get_json()["id"]
+              for hour in (8, 9, 10)]
+    assert _post(client, "/sysop/tv/api/blocks/bulk", {"ids": blocks, "action": "explode"}).status_code == 400
+    assert _post(client, "/sysop/tv/api/blocks/bulk", {"ids": blocks[:2], "action": "disable"}).get_json() == {"updated": 2}
+    day = client.get(f"/sysop/tv/api/schedule?channel={channel}&date=2026-01-05").get_json()
+    assert {block["id"]: block["enabled"] for block in day["blocks"]} == {blocks[0]: 0, blocks[1]: 0, blocks[2]: 1}
+    assert _post(client, "/sysop/tv/api/blocks/bulk", {"ids": blocks[1:], "action": "delete"}).get_json() == {"updated": 2}
+    day = client.get(f"/sysop/tv/api/schedule?channel={channel}&date=2026-01-05").get_json()
+    assert [block["id"] for block in day["blocks"]] == [blocks[0]]
+
+
+def test_media_metadata_bulk_autonumber_and_episode_guessing(tmp_path):
+    app, client, admin, _member = _setup(tmp_path)
+    _signin(client, admin)
+    guessed = _upload(client, "Moon.Base.S02E05.Lift.Off.mp4", MP4 + b"ep5")["media"]
+    assert (guessed["series"], guessed["season"], guessed["episode"], guessed["content_type"]) == ("Moon Base", 2, 5, "show")
+    ids = [_upload(client, f"part {n}.mp4", MP4 + bytes([n]))["media"]["id"] for n in (10, 9, 2)]
+    assert _post(client, f"/sysop/tv/api/media/{ids[0]}", {"title": "part 10", "kind": "program",
+                                                         "content_type": "nope"}).status_code == 400
+    assert _post(client, f"/sysop/tv/api/media/{ids[0]}", {"title": "part 10", "kind": "commercial",
+                                                         "genre": " Sci  Fi "}).status_code == 200
+    result = _post(client, "/sysop/tv/api/media/bulk", {"ids": ids, "kind": "program", "content_type": "miniseries",
+                                                        "series": "Deep Field", "season": 1, "autonumber": True})
+    assert result.status_code == 200, result.get_json()
+    media = {item["id"]: item for item in client.get("/sysop/tv/api/state").get_json()["media"]}
+    assert [media[i]["episode"] for i in ids] == [3, 2, 1]
+    assert media[ids[0]]["genre"] == "Sci Fi" and media[ids[0]]["content_type"] == "miniseries"
+
+
+def test_auto_scheduler_generate_publish_lock_and_regenerate(tmp_path):
+    app, client, admin, member = _setup(tmp_path)
+    _signin(client, admin)
+    _enable(client)
+    episodes = [_media_with_duration(client, app, f"Rover S01E0{n}.mp4", 22 * 60) for n in range(1, 5)]
+    movie = _media_with_duration(client, app, "feature.mp4", 95 * 60)
+    ads = [_media_with_duration(client, app, f"ad{n}.mp4", 30) for n in range(3)]
+    ident = _media_with_duration(client, app, "ident.mp4", 10)
+    assert _post(client, "/sysop/tv/api/media/bulk", {"ids": ads, "kind": "commercial"}).status_code == 200
+    assert _post(client, "/sysop/tv/api/media/bulk", {"ids": [ident], "kind": "ident"}).status_code == 200
+    assert _post(client, "/sysop/tv/api/media/bulk", {"ids": [movie], "content_type": "movie"}).status_code == 200
+    channel = _post(client, "/sysop/tv/api/channels", {"number": 7, "name": "Auto"}).get_json()["id"]
+    tomorrow = (datetime.now(timezone.utc) + timedelta(days=1)).date().isoformat()
+    manual = _post(client, "/sysop/tv/api/blocks", {"channel_id": channel, "kind": "once", "start_date": tomorrow,
+                                                    "start_time": "12:00", "items": [{"media_id": movie}]}).get_json()["id"]
+
+    _signin(client, member)
+    assert client.get(f"/sysop/tv/api/auto/{channel}").status_code == 403
+    _signin(client, admin)
+    assert client.post(f"/sysop/tv/api/auto/{channel}/generate", json={}).status_code == 400
+    assert _post(client, f"/sysop/tv/api/auto/{channel}/config", {"commercials": "loud"}).status_code == 400
+    saved = _post(client, f"/sysop/tv/api/auto/{channel}/config",
+                  {"on_air_from": "08:00", "on_air_until": "20:00", "days": 1, "mix": {"show": 70, "movie": 30}})
+    assert saved.status_code == 200 and saved.get_json()["config"]["on_air_until"] == "20:00"
+    state = client.get(f"/sysop/tv/api/auto/{channel}").get_json()
+    assert state["library"]["types"] == {"show": 4, "movie": 1} and state["draft"] is None
+
+    draft = _post(client, f"/sysop/tv/api/auto/{channel}/generate", {"start_date": tomorrow}).get_json()["draft"]
+    assert draft["slots"] and draft["warnings"]
+    assert any(entry["status"] == "manual" for entry in draft["fixed"])
+    noon = f"{tomorrow}T12:00:00.000Z"
+    for slot in draft["slots"]:
+        assert slot["start"] >= f"{tomorrow}T08:00" and slot["end"] <= f"{tomorrow}T20:00:00.000Z"
+        assert not (slot["start"] < f"{tomorrow}T13:35:00.000Z" and slot["end"] > noon)
+    rerolled = _post(client, f"/sysop/tv/api/auto/{channel}/generate", {"start_date": tomorrow}).get_json()["draft"]
+    assert rerolled["slots"]
+    published = _post(client, f"/sysop/tv/api/auto/{channel}/publish").get_json()
+    assert published["published"] == len(rerolled["slots"]) and published["replaced"] == 0
+    assert client.get(f"/sysop/tv/api/auto/{channel}").get_json()["draft"] is None
+
+    day = client.get(f"/sysop/tv/api/schedule?channel={channel}&date={tomorrow}").get_json()
+    generated = [block for block in day["blocks"] if block["origin"] == "auto"]
+    assert len(generated) == published["published"]
+    assert next(block for block in day["blocks"] if block["id"] == manual)["origin"] == "manual"
+    first_episode = next(block for block in generated if block["items"][0]["media_id"] in episodes)
+    assert first_episode["loop_until"] and any(item["media_id"] in ads for item in first_episode["items"])
+
+    _signin(client, member)
+    guide = client.get(f"/tv/api/guide?start={tomorrow}T08:00:00Z&hours=6").get_json()
+    titles = [airing["title"] for airing in guide["channels"][0]["airings"]]
+    assert not any(title.startswith("ad") for title in titles), titles
+
+    _signin(client, admin)
+    locked, edited = generated[0], generated[1]
+    assert _post(client, f"/sysop/tv/api/blocks/{locked['id']}/lock", {"locked": True}).status_code == 200
+    body = {key: edited[key] for key in ("channel_id", "title", "kind", "start_date", "start_time", "loop_until")}
+    body["items"] = [{"media_id": item["media_id"]} for item in edited["items"]]
+    assert _post(client, f"/sysop/tv/api/blocks/{edited['id']}", body).status_code == 200
+    _post(client, f"/sysop/tv/api/auto/{channel}/generate", {"start_date": tomorrow})
+    assert _post(client, f"/sysop/tv/api/media/{ident}", {"title": "ident", "kind": "ident"}).status_code == 200
+    assert _post(client, f"/sysop/tv/api/auto/{channel}/publish").status_code == 409
+    again = _post(client, f"/sysop/tv/api/auto/{channel}/generate", {"start_date": tomorrow}).get_json()["draft"]
+    assert again["replaced"] == len(generated) - 2
+    assert {"locked"} <= {entry["status"] for entry in again["fixed"]}
+    assert _post(client, f"/sysop/tv/api/auto/{channel}/publish").status_code == 200
+    blocks = {block["id"]: block for block in
+              client.get(f"/sysop/tv/api/schedule?channel={channel}&date={tomorrow}").get_json()["blocks"]}
+    assert locked["id"] in blocks and edited["id"] in blocks and manual in blocks
+    assert blocks[edited["id"]]["locked"] == 1
+
+    cleared = _post(client, f"/sysop/tv/api/auto/{channel}/clear", {"start_date": tomorrow, "days": 1}).get_json()
+    assert cleared["removed"] > 0
+    remaining = client.get(f"/sysop/tv/api/schedule?channel={channel}&date={tomorrow}").get_json()["blocks"]
+    assert {block["id"] for block in remaining} == {locked["id"], edited["id"], manual}

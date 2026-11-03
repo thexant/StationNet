@@ -7,6 +7,7 @@ from collections import OrderedDict
 from datetime import date, datetime, timedelta, timezone
 import hmac
 from io import BytesIO
+import json
 import re
 import secrets
 import threading
@@ -16,6 +17,7 @@ from flask import (Blueprint, Response, abort, current_app, flash, g, jsonify, r
                    render_template, request, send_file, session, url_for)
 from PIL import Image, ImageOps, UnidentifiedImageError
 
+from . import tv_autoschedule as auto
 from . import tv_library as library
 from . import tv_schedule as schedule
 from .db import get_db
@@ -26,7 +28,8 @@ admin_bp = Blueprint("tv_admin", __name__, url_prefix="/sysop/tv")
 
 UTC = timezone.utc
 UNIX_EPOCH = datetime(1970, 1, 1, tzinfo=UTC)
-KINDS = ("program", "ident", "bumper", "offair")
+KINDS = ("program", "ident", "bumper", "commercial", "offair")
+CONTENT_TYPES = auto.CONTENT_TYPES
 TIME_RE = re.compile(r"^([01]\d|2[0-3]):[0-5]\d$")
 RANGE_RE = re.compile(r"^bytes=(\d*)-(\d*)$")
 MAX_GUIDE_HOURS = 6
@@ -118,7 +121,8 @@ def _media_available(row):
 
 def _item(row, title=None, description=""):
     return schedule.Item(row["id"], title or row["title"], row["duration_s"],
-                         description or row["description"], _media_available(row))
+                         description or row["description"], _media_available(row),
+                         row["kind"] in auto.INTERSTITIAL_KINDS)
 
 
 def _blocks(channel_id, include_disabled=False):
@@ -277,7 +281,7 @@ def now_playing():
     if index is None:
         airings, index = [schedule.Airing(now, now + timedelta(hours=12), "offair", "OFF AIR")], 0
     current = airings[index]
-    following = airings[index + 1] if index + 1 < len(airings) else None
+    following = next((airing for airing in airings[index + 1:] if not airing.interstitial), None)
     data = {"server_now": _iso(now), "version": version(), "channel": _channel_json(channel),
             "airing": _airing_json(current, now), "next": _airing_json(following) if following else None}
     if current.kind in {"offair", "filler"}:
@@ -301,8 +305,8 @@ def guide():
     for channel in _viewer_channels():
         data = _channel_json(channel)
         # A wider span keeps the true start and end of programmes crossing the window edges.
-        data["airings"] = [_airing_json(airing) for airing in
-                           timeline(channel, start - timedelta(hours=12), end + timedelta(hours=12))
+        data["airings"] = [_airing_json(airing) for airing in schedule.fold_interstitials(
+                           timeline(channel, start - timedelta(hours=12), end + timedelta(hours=12)))
                            if airing.end > start and airing.start < end]
         channels.append(data)
     return jsonify(server_now=_iso(now), version=version(), start=_iso(start), end=_iso(end), channels=channels)
@@ -349,7 +353,8 @@ def _error(message, status=400, **extra):
 def _media_json(row, usage=0):
     return {key: row[key] for key in ("id", "title", "description", "folder", "source", "rel_path",
                                       "original_name", "size_bytes", "duration_s", "width", "height",
-                                      "kind", "missing", "created_at")} | {
+                                      "kind", "content_type", "genre", "series", "season", "episode",
+                                      "missing", "created_at")} | {
         "usage": usage, "url": url_for("tv.media", media_id=row["id"])}
 
 
@@ -374,9 +379,11 @@ def state():
         filler.setdefault(row[0], []).append(row[1])
     channels = database.execute("SELECT * FROM tv_channels ORDER BY sort_order,number").fetchall()
     media = database.execute("SELECT * FROM tv_media ORDER BY folder COLLATE NOCASE,title COLLATE NOCASE").fetchall()
+    rules = database.execute("SELECT folder,kind,recursive FROM tv_folder_kinds ORDER BY folder COLLATE NOCASE")
     return jsonify(
         channels=[_admin_channel_json(row, filler) for row in channels],
         media=[_media_json(row, usage.get(row["id"], 0)) for row in media],
+        folder_rules=[{"folder": row[0], "kind": row[1], "recursive": bool(row[2])} for row in rules],
         settings={"enabled": bool(g.station["tv_enabled"]), "timezone": g.station["tv_timezone"],
                   "max_upload_mb": g.station["tv_max_upload_mb"],
                   "default_channel_id": g.station["tv_default_channel_id"]},
@@ -547,14 +554,88 @@ def _media_row(media_id):
     return get_db().execute("SELECT * FROM tv_media WHERE id=?", (media_id,)).fetchone()
 
 
+BULK_LIMIT = 5000
+SQL_CHUNK = 500
+
+
+def _chunks(values):
+    for start in range(0, len(values), SQL_CHUNK):
+        yield values[start:start + SQL_CHUNK]
+
+
+def _ids(data, table="tv_media"):
+    """De-duplicated ids from ``data["ids"]`` that exist in ``table``, or an error."""
+    raw = data.get("ids")
+    if not isinstance(raw, list) or not 1 <= len(raw) <= BULK_LIMIT:
+        return None, f"Select between 1 and {BULK_LIMIT} items."
+    try:
+        wanted = list(dict.fromkeys(int(value) for value in raw))
+    except (TypeError, ValueError):
+        return None, "Invalid selection."
+    found = set()
+    for chunk in _chunks(wanted):
+        found.update(row[0] for row in get_db().execute(
+            f"SELECT id FROM {table} WHERE id IN ({','.join('?' * len(chunk))})", chunk))
+    return [value for value in wanted if value in found], None
+
+
+def _folder_match(folder, recursive):
+    """SQL condition and parameters selecting a library folder, optionally with its sub-folders."""
+    if not folder or not recursive:
+        return "folder=?", (folder,)
+    return "(folder=? OR substr(folder,1,?)=?)", (folder, len(folder) + 1, folder + "/")
+
+
+def _rule_kind(database, folder):
+    """Type remembered for new files in ``folder``: the most specific matching rule wins."""
+    best = None
+    for row in database.execute("SELECT folder,kind,recursive FROM tv_folder_kinds"):
+        if row[0] == folder or (row[2] and row[0] and folder.startswith(row[0] + "/")):
+            if best is None or len(row[0]) > len(best[0]):
+                best = row
+    return best[1] if best else "program"
+
+
 def _insert_media(database, rel_path, source, name, folder, path, fingerprint):
     info = library.probe(path)
+    kind = _rule_kind(database, folder)
+    episode = library.guess_episode(name, folder) if kind == "program" else {}
     return database.execute(
         "INSERT INTO tv_media(title,folder,source,rel_path,original_name,mime_type,size_bytes,"
-        "duration_s,width,height,fingerprint) VALUES(?,?,?,?,?,?,?,?,?,?,?)",
+        "duration_s,width,height,fingerprint,kind,content_type,series,season,episode) "
+        "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
         (library.title_from(name), folder, source, rel_path, name[:255],
          library.FORMATS[path.suffix.lower()], path.stat().st_size, info.get("duration_s"),
-         info.get("width"), info.get("height"), fingerprint)).lastrowid
+         info.get("width"), info.get("height"), fingerprint, kind, "show" if episode else "",
+         episode.get("series", ""), episode.get("season"), episode.get("episode"))).lastrowid
+
+
+def _metadata(data):
+    """Validated scheduler metadata among the keys present in ``data``: (changes, error)."""
+    changes = {}
+    if "content_type" in data:
+        if data["content_type"] not in ("", *CONTENT_TYPES):
+            return None, "Select a valid content type."
+        changes["content_type"] = data["content_type"]
+    for key, limit in (("genre", 60), ("series", 150)):
+        if key in data:
+            value = " ".join(str(data[key] or "").split())
+            if len(value) > limit:
+                return None, f"{key.capitalize()} cannot exceed {limit} characters."
+            changes[key] = value
+    for key in ("season", "episode"):
+        if key in data:
+            if data[key] in (None, ""):
+                changes[key] = None
+                continue
+            try:
+                number = int(data[key])
+            except (TypeError, ValueError):
+                return None, f"{key.capitalize()} must be a whole number."
+            if not 0 <= number <= 99999:
+                return None, f"{key.capitalize()} must be between 0 and 99999."
+            changes[key] = number
+    return changes, None
 
 
 @admin_bp.post("/api/media/<int:media_id>")
@@ -572,8 +653,14 @@ def update_media(media_id):
         return _error("Description cannot exceed 5000 characters.")
     if kind not in KINDS:
         return _error("Select a valid programme type.")
+    metadata, error = _metadata(data)
+    if error:
+        return _error(error)
     database.execute("UPDATE tv_media SET title=?,description=?,folder=?,kind=? WHERE id=?",
                      (title, description, library.clean_folder(data.get("folder")), kind, media_id))
+    if metadata:
+        database.execute(f"UPDATE tv_media SET {','.join(f'{key}=?' for key in metadata)} WHERE id=?",
+                         (*metadata.values(), media_id))
     bump_version(database)
     database.commit()
     return jsonify(ok=True)
@@ -602,30 +689,173 @@ def report_probe(media_id):
     return jsonify(ok=True)
 
 
-@admin_bp.post("/api/media/<int:media_id>/delete")
-def delete_media(media_id):
-    database = get_db()
-    row = _media_row(media_id)
-    if row is None:
-        return _error("No such library item.", 404)
+def _delete_media(database, row):
+    """Remove one library entry; return (None, None) or (reason, scheduled-block list)."""
     usage = [f"{block['number']} {block['name']} / {block['title']}" for block in database.execute(
         "SELECT DISTINCT c.number,c.name,b.title FROM tv_block_items i JOIN tv_blocks b ON b.id=i.block_id "
-        "JOIN tv_channels c ON c.id=b.channel_id WHERE i.media_id=? ORDER BY c.number", (media_id,))]
+        "JOIN tv_channels c ON c.id=b.channel_id WHERE i.media_id=? ORDER BY c.number", (row["id"],))]
     if usage:
-        return _error("This programme is still scheduled. Remove it from these blocks first.", 409, usage=usage)
+        return "scheduled", usage
     if row["source"] == "upload":
         path = library.resolve(row["rel_path"])
         try:
             if path is not None:
                 path.unlink(missing_ok=True)
         except OSError:
-            return _error("The file could not be deleted; nothing was changed.", 500)
-    database.execute("DELETE FROM tv_media WHERE id=?", (media_id,))
-    audit(database, g.user["id"], None, "tv_media_delete", target_type="tv_media", target_id=media_id,
+            return "file", None
+    database.execute("DELETE FROM tv_media WHERE id=?", (row["id"],))
+    audit(database, g.user["id"], None, "tv_media_delete", target_type="tv_media", target_id=row["id"],
           note=row["title"])
+    return None, None
+
+
+@admin_bp.post("/api/media/<int:media_id>/delete")
+def delete_media(media_id):
+    database = get_db()
+    row = _media_row(media_id)
+    if row is None:
+        return _error("No such library item.", 404)
+    reason, usage = _delete_media(database, row)
+    if reason == "scheduled":
+        return _error("This programme is still scheduled. Remove it from these blocks first.", 409, usage=usage)
+    if reason == "file":
+        return _error("The file could not be deleted; nothing was changed.", 500)
     bump_version(database)
     database.commit()
     return jsonify(ok=True, file_kept=row["source"] == "import")
+
+
+@admin_bp.post("/api/media/bulk")
+def bulk_update_media():
+    data = _json()
+    ids, error = _ids(data)
+    if error:
+        return _error(error)
+    changes = {}
+    if "kind" in data:
+        if data["kind"] not in KINDS:
+            return _error("Select a valid programme type.")
+        changes["kind"] = data["kind"]
+    if "folder" in data:
+        changes["folder"] = library.clean_folder(data["folder"])
+    if "description" in data:
+        description = str(data["description"] or "").strip()
+        if len(description) > 5000:
+            return _error("Description cannot exceed 5000 characters.")
+        changes["description"] = description
+    metadata, error = _metadata({key: data[key] for key in ("content_type", "genre", "series", "season") if key in data})
+    if error:
+        return _error(error)
+    changes |= metadata
+    autonumber = bool(data.get("autonumber"))
+    if not changes and not autonumber:
+        return _error("Choose something to change.")
+    database = get_db()
+    if changes:
+        assignments = ",".join(f"{key}=?" for key in changes)
+        for chunk in _chunks(ids):
+            database.execute(f"UPDATE tv_media SET {assignments} WHERE id IN ({','.join('?' * len(chunk))})",
+                             (*changes.values(), *chunk))
+    if autonumber:
+        # Episodes become 1..n in title order within each series and season of the selection.
+        rows = []
+        for chunk in _chunks(ids):
+            rows.extend(database.execute(
+                f"SELECT id,title,series,season FROM tv_media WHERE id IN ({','.join('?' * len(chunk))})", chunk))
+        groups = {}
+        for row in sorted(rows, key=lambda r: (library.natural_key(r["title"]), r["id"])):
+            groups.setdefault((row["series"].lower(), row["season"]), []).append(row["id"])
+        database.executemany("UPDATE tv_media SET episode=? WHERE id=?",
+                             [(number, media_id) for members in groups.values()
+                              for number, media_id in enumerate(members, 1)])
+    summary = ", ".join(f"{key}={str(value)[:40]}" if key != "description" else "description"
+                        for key, value in changes.items()) + (" autonumber" if autonumber else "")
+    audit(database, g.user["id"], None, "tv_media_bulk_edit", target_type="tv_media", note=f"{len(ids)} items: {summary}")
+    bump_version(database)
+    database.commit()
+    return jsonify(updated=len(ids))
+
+
+@admin_bp.post("/api/media/bulk-delete")
+def bulk_delete_media():
+    ids, error = _ids(_json())
+    if error:
+        return _error(error)
+    database = get_db()
+    deleted = kept_files = 0
+    blocked, failed = [], []
+    for media_id in ids:
+        row = _media_row(media_id)
+        reason, usage = _delete_media(database, row)
+        if reason == "scheduled":
+            blocked.append({"id": media_id, "title": row["title"], "usage": usage})
+        elif reason == "file":
+            failed.append({"id": media_id, "title": row["title"]})
+        else:
+            deleted += 1
+            kept_files += row["source"] == "import"
+    bump_version(database)
+    database.commit()
+    return jsonify(deleted=deleted, kept_files=kept_files, blocked=blocked, failed=failed)
+
+
+@admin_bp.post("/api/folders/kind")
+def folder_kind():
+    data = _json()
+    folder = library.clean_folder(data.get("folder"))
+    kind = data.get("kind")
+    recursive = bool(data.get("recursive"))
+    if kind not in KINDS:
+        return _error("Select a valid programme type.")
+    database = get_db()
+    condition, params = _folder_match(folder, recursive)
+    updated = database.execute(f"UPDATE tv_media SET kind=? WHERE {condition}", (kind, *params)).rowcount
+    if data.get("remember"):
+        database.execute("INSERT INTO tv_folder_kinds(folder,kind,recursive) VALUES(?,?,?) "
+                         "ON CONFLICT(folder) DO UPDATE SET kind=excluded.kind,recursive=excluded.recursive",
+                         (folder, kind, int(recursive)))
+    audit(database, g.user["id"], None, "tv_folder_kind", target_type="tv_media",
+          note=f"{folder or '(no folder)'}{'/*' if recursive else ''} = {kind} ({updated} items)")
+    bump_version(database)
+    database.commit()
+    return jsonify(updated=updated)
+
+
+@admin_bp.post("/api/folders/rename")
+def rename_folder():
+    data = _json()
+    source = library.clean_folder(data.get("from"))
+    target = library.clean_folder(data.get("to"))
+    if not source:
+        return _error("Choose a folder to rename.")
+    if source == target:
+        return jsonify(updated=0)
+    if target.startswith(source + "/"):
+        return _error("A folder cannot be moved inside itself.")
+    database = get_db()
+
+    def renamed(value):
+        return (target + value[len(source):]).lstrip("/")[:300]
+
+    condition, params = _folder_match(source, True)
+    rows = database.execute(f"SELECT id,folder FROM tv_media WHERE {condition}", params).fetchall()
+    database.executemany("UPDATE tv_media SET folder=? WHERE id=?", [(renamed(row[1]), row[0]) for row in rows])
+    rules = database.execute(f"SELECT folder,kind,recursive FROM tv_folder_kinds WHERE {condition}", params).fetchall()
+    database.execute(f"DELETE FROM tv_folder_kinds WHERE {condition}", params)
+    database.executemany("INSERT OR REPLACE INTO tv_folder_kinds(folder,kind,recursive) VALUES(?,?,?)",
+                         [(renamed(rule[0]), rule[1], rule[2]) for rule in rules])
+    audit(database, g.user["id"], None, "tv_folder_rename", target_type="tv_media",
+          note=f"{source} -> {target or '(no folder)'} ({len(rows)} items)")
+    database.commit()
+    return jsonify(updated=len(rows))
+
+
+@admin_bp.post("/api/folders/rule/delete")
+def delete_folder_rule():
+    database = get_db()
+    database.execute("DELETE FROM tv_folder_kinds WHERE folder=?", (library.clean_folder(_json().get("folder")),))
+    database.commit()
+    return jsonify(ok=True)
 
 
 @admin_bp.post("/api/media/recheck")
@@ -777,7 +1007,8 @@ def _block_json(row, items, today=None, zone=None):
                 "description": item["item_description"], "duration": item["duration_s"],
                 "available": _media_available(item)} for item in items]
     data = {key: row[key] for key in ("id", "channel_id", "title", "description", "kind", "start_date", "weekdays",
-                                      "start_time", "loop_until", "valid_from", "valid_until", "enabled")}
+                                      "start_time", "loop_until", "valid_from", "valid_until", "enabled",
+                                      "origin", "locked")}
     data["items"] = entries
     data["total_duration"] = sum(item["duration"] or 0 for item in entries)
     if today is not None:
@@ -806,12 +1037,15 @@ def day_schedule():
     gap_mode, filler, offair = _gap_sources(channel)
     airings = schedule.fill_gaps(programmed, start, end, gap_mode, filler, offair)
     rows, items = _blocks(channel["id"], include_disabled=True)
+    # Generated entries are numerous; list only the ones starting on this day.
+    shown = [row for row in rows if row["origin"] != "auto" or row["start_date"] == day.isoformat()]
     return jsonify(
+        auto_hidden=len(rows) - len(shown),
         timezone=str(zone), date=day.isoformat(), start=_iso(start), end=_iso(end),
         airings=[_airing_json(airing) for airing in schedule.merge(airings)],
         conflicts=[{"block": c.block_title, "preempted": c.preempted_title,
                     "start": _iso(c.start), "end": _iso(c.end)} for c in conflicts],
-        blocks=[_block_json(row, items.get(row["id"], ()), day, zone) for row in rows])
+        blocks=[_block_json(row, items.get(row["id"], ()), day, zone) for row in shown])
 
 
 def _valid_day(value):
@@ -912,7 +1146,9 @@ def update_block(block_id):
     values, error = _block_payload(_json())
     if error:
         return _error(error)
-    database.execute(f"UPDATE tv_blocks SET {','.join(f'{key}=?' for key in BLOCK_FIELDS)} WHERE id=?",
+    # A hand-edited generated entry is locked so the next automatic run keeps it.
+    database.execute(f"UPDATE tv_blocks SET {','.join(f'{key}=?' for key in BLOCK_FIELDS)},"
+                     "locked=CASE WHEN origin='auto' THEN 1 ELSE locked END WHERE id=?",
                      (*(values[key] for key in BLOCK_FIELDS), block_id))
     _save_items(database, block_id, values["items"])
     bump_version(database)
@@ -927,6 +1163,26 @@ def delete_block(block_id):
     bump_version(database)
     database.commit()
     return jsonify(ok=True)
+
+
+@admin_bp.post("/api/blocks/bulk")
+def bulk_blocks():
+    data = _json()
+    ids, error = _ids(data, "tv_blocks")
+    if error:
+        return _error(error)
+    action = data.get("action")
+    statements = {"enable": "UPDATE tv_blocks SET enabled=1", "disable": "UPDATE tv_blocks SET enabled=0",
+                  "lock": "UPDATE tv_blocks SET locked=1", "unlock": "UPDATE tv_blocks SET locked=0",
+                  "delete": "DELETE FROM tv_blocks"}
+    if action not in statements:
+        return _error("Choose enable, disable, lock, unlock or delete.")
+    database = get_db()
+    for chunk in _chunks(ids):
+        database.execute(f"{statements[action]} WHERE id IN ({','.join('?' * len(chunk))})", chunk)
+    bump_version(database)
+    database.commit()
+    return jsonify(updated=len(ids))
 
 
 @admin_bp.post("/api/blocks/copy-day")
@@ -959,3 +1215,320 @@ def copy_day():
     bump_version(database)
     database.commit()
     return jsonify(copied=copied)
+
+
+# Auto scheduler ----------------------------------------------------------
+
+AUTO_HISTORY_DAYS = 14
+AUTO_PRUNE_DAYS = 60
+
+
+def _channel_row(channel_id):
+    return get_db().execute("SELECT * FROM tv_channels WHERE id=?", (channel_id,)).fetchone()
+
+
+def _auto_config(channel_id):
+    row = get_db().execute("SELECT settings FROM tv_auto_config WHERE channel_id=?", (channel_id,)).fetchone()
+    try:
+        stored = json.loads(row["settings"]) if row else {}
+    except ValueError:
+        stored = {}
+    config, error = auto.normalize_config(stored)
+    return config if not error else auto.normalize_config({})[0]
+
+
+def _auto_library():
+    """Scheduler inputs from the library: (programmes, interstitial clips, rows left out)."""
+    programs, clips, excluded = [], [], 0
+    for row in get_db().execute("SELECT * FROM tv_media WHERE kind IN ('program','ident','bumper','commercial') "
+                                "ORDER BY id"):
+        if not row["duration_s"] or not _media_available(row):
+            excluded += 1
+        elif row["kind"] == "program":
+            programs.append(auto.Program(row["id"], row["title"], row["duration_s"], row["content_type"] or "other",
+                                         row["genre"], row["series"], row["season"], row["episode"],
+                                         row["description"]))
+        else:
+            clips.append(auto.Clip(row["id"], row["title"], row["duration_s"], row["kind"]))
+    return programs, clips, excluded
+
+
+def _on_air_spans(config, first_day, days, zone):
+    """One (start, end) per day for the channel's broadcasting hours; equal times mean all day."""
+    spans = []
+    for offset in range(days):
+        day = first_day + timedelta(days=offset)
+        until_day = day if config["on_air_until"] > config["on_air_from"] else day + timedelta(days=1)
+        spans.append((schedule.local_moment(day, config["on_air_from"], zone),
+                      schedule.local_moment(until_day, config["on_air_until"], zone)))
+    return spans
+
+
+def _replaceable(channel_id, spans, zone, now):
+    """Unlocked generated blocks a run over ``spans`` replaces; anything already on air stays."""
+    first = spans[0][0].astimezone(zone).date() - timedelta(days=1)
+    last = spans[-1][1].astimezone(zone).date()
+    rows = get_db().execute(
+        "SELECT id,start_date,start_time FROM tv_blocks WHERE channel_id=? AND origin='auto' AND locked=0 "
+        "AND kind='once' AND start_date BETWEEN ? AND ?", (channel_id, first.isoformat(), last.isoformat()))
+    found = []
+    for row in rows:
+        moment = schedule.local_moment(schedule.parse_day(row["start_date"]), row["start_time"], zone)
+        if moment >= now and any(start <= moment < end for start, end in spans):
+            found.append(row["id"])
+    return found
+
+
+def _free_windows(spans, programmed, now):
+    """Broadcast time not taken by fixed programming, from now on."""
+    merged = []
+    for start, end in sorted(spans):
+        if merged and start <= merged[-1][1]:
+            merged[-1] = (merged[-1][0], max(merged[-1][1], end))
+        else:
+            merged.append((start, end))
+    windows = []
+    for start, end in merged:
+        cursor = max(start, now)
+        for airing in programmed:
+            if airing.end <= cursor or airing.start >= end:
+                continue
+            if airing.start > cursor:
+                windows.append((cursor, airing.start))
+            cursor = max(cursor, airing.end)
+        if cursor < end:
+            windows.append((cursor, end))
+    return windows
+
+
+def _slot_json(slot, zone):
+    local_start, local_end = slot.start.astimezone(zone), slot.end.astimezone(zone)
+    return {"start": _iso(slot.start), "end": _iso(slot.end), "date": local_start.date().isoformat(),
+            "start_time": local_start.strftime("%H:%M"),
+            "loop_until": local_end.strftime("%H:%M") if slot.fill else None,
+            "title": slot.title[:150], "content_type": slot.content_type, "genre": slot.genre,
+            "series": slot.series, "rerun": slot.rerun, "interlude": slot.interlude,
+            "items": [list(item) for item in slot.items]}
+
+
+def _generate_draft(channel, first_day, days, config, seed):
+    zone, now = _zone(), _now()
+    spans = _on_air_spans(config, first_day, days, zone)
+    replaced = _replaceable(channel["id"], spans, zone, now)
+    blocks = _engine_blocks(channel["id"])
+    fixed = [block for block in blocks if block.id not in set(replaced)]
+    window_start, window_end = spans[0][0], max(end for _start, end in spans)
+    programmed, _conflicts = schedule.resolve(fixed, window_start, window_end, zone)
+    windows = _free_windows(spans, programmed, now)
+    programs, clips, excluded = _auto_library()
+    history_end = max(window_start, now)
+    past, _conflicts = schedule.resolve(blocks, history_end - timedelta(days=AUTO_HISTORY_DAYS), history_end, zone)
+    history = [(airing.start, airing.media_id) for airing in past
+               if airing.media_id is not None and not airing.interstitial]
+    series_of = {program.media_id: program.series for program in programs if program.series}
+    pointer = {}
+    for _aired, media_id in sorted(history):
+        if media_id in series_of:
+            pointer[series_of[media_id]] = media_id
+    slots, warnings = auto.generate(windows, programs, clips, config, zone, history, pointer, seed)
+    if excluded:
+        warnings.append(f"{excluded} library item(s) left out: unknown length or missing file.")
+    if replaced:
+        warnings.append(f"Publishing replaces {len(replaced)} earlier generated entries in this range. "
+                        "Locked and manual programming is kept.")
+    return {"slots": [_slot_json(slot, zone) for slot in slots], "replaced": replaced}, warnings
+
+
+def _auto_preview(channel, draft):
+    """Draft slots alongside the fixed programming they were fitted around, for the guide preview."""
+    database, zone = get_db(), _zone()
+    payload = json.loads(draft["payload"])
+    first_day = date.fromisoformat(draft["start_date"])
+    config = _auto_config(channel["id"])
+    spans = _on_air_spans(config, first_day, draft["days"], zone)
+    start = datetime.combine(first_day, datetime.min.time(), tzinfo=zone).astimezone(UTC)
+    end = max(spans[-1][1], datetime.combine(first_day + timedelta(days=draft["days"]), datetime.min.time(),
+                                             tzinfo=zone).astimezone(UTC))
+    replaced = set(payload["replaced"])
+    fixed_blocks = [block for block in _engine_blocks(channel["id"]) if block.id not in replaced]
+    programmed, _conflicts = schedule.resolve(fixed_blocks, start, end, zone)
+    origin = {row["id"]: (row["origin"], row["locked"]) for row in database.execute(
+        "SELECT id,origin,locked FROM tv_blocks WHERE channel_id=?", (channel["id"],))}
+    fixed = []
+    for airing in schedule.fold_interstitials(programmed):
+        if fixed and fixed[-1]["block_id"] == airing.block_id and fixed[-1]["end"] == airing.start:
+            fixed[-1]["end"] = airing.end
+            continue
+        block_origin, locked = origin.get(airing.block_id, ("manual", 0))
+        fixed.append({"block_id": airing.block_id, "title": airing.block_title or airing.title,
+                      "start": airing.start, "end": airing.end,
+                      "status": "locked" if block_origin == "auto" and locked else block_origin})
+    media = {row["id"]: row for row in database.execute("SELECT id,title,kind,duration_s FROM tv_media")}
+    slots = []
+    for slot in payload["slots"]:
+        items = [{"title": override or (media[media_id]["title"] if media_id in media else "(deleted)"),
+                  "kind": media[media_id]["kind"] if media_id in media else "program",
+                  "duration": media[media_id]["duration_s"] if media_id in media else None}
+                 for media_id, override, _description in slot["items"]]
+        slots.append({key: slot[key] for key in ("start", "end", "title", "content_type", "genre", "series",
+                                                 "rerun", "interlude")} | {"items": items})
+    return {"start_date": draft["start_date"], "days": draft["days"], "timezone": str(zone),
+            "start": _iso(start), "end": _iso(end), "created_at": draft["created_at"],
+            "stale": draft["version"] != version(), "warnings": json.loads(draft["warnings"]),
+            "slots": slots, "replaced": len(replaced),
+            "fixed": [{"title": entry["title"], "status": entry["status"], "start": _iso(entry["start"]),
+                       "end": _iso(entry["end"])} for entry in fixed]}
+
+
+def _draft_row(channel_id):
+    return get_db().execute("SELECT * FROM tv_auto_drafts WHERE channel_id=?", (channel_id,)).fetchone()
+
+
+def _library_stats():
+    database = get_db()
+    types = {}
+    for row in database.execute(
+            "SELECT content_type,COUNT(*) FROM tv_media WHERE kind='program' AND duration_s IS NOT NULL "
+            "AND missing=0 GROUP BY content_type"):
+        types[row[0] or "other"] = types.get(row[0] or "other", 0) + row[1]
+    clips = {row[0]: row[1] for row in database.execute(
+        "SELECT kind,COUNT(*) FROM tv_media WHERE kind IN ('ident','bumper','commercial') "
+        "AND duration_s IS NOT NULL AND missing=0 GROUP BY kind")}
+    series = [{"name": row[0], "episodes": row[1]} for row in database.execute(
+        "SELECT series,COUNT(*) FROM tv_media WHERE kind='program' AND series<>'' "
+        "GROUP BY series COLLATE NOCASE ORDER BY series COLLATE NOCASE")]
+    genres = [row[0] for row in database.execute(
+        "SELECT DISTINCT genre FROM tv_media WHERE genre<>'' ORDER BY genre COLLATE NOCASE")]
+    unmeasured = database.execute("SELECT COUNT(*) FROM tv_media WHERE duration_s IS NULL").fetchone()[0]
+    return {"types": types, "clips": clips, "series": series, "genres": genres, "unmeasured": unmeasured}
+
+
+@admin_bp.get("/api/auto/<int:channel_id>")
+def auto_state(channel_id):
+    channel = _channel_row(channel_id)
+    if channel is None:
+        return _error("No such channel.", 404)
+    draft = _draft_row(channel_id)
+    return jsonify(config=_auto_config(channel_id), defaults=auto.DEFAULT_CONFIG, content_types=CONTENT_TYPES,
+                   library=_library_stats(), timezone=str(_zone()),
+                   today=_now().astimezone(_zone()).date().isoformat(),
+                   draft=_auto_preview(channel, draft) if draft else None)
+
+
+@admin_bp.post("/api/auto/<int:channel_id>/config")
+def auto_save_config(channel_id):
+    if _channel_row(channel_id) is None:
+        return _error("No such channel.", 404)
+    config, error = auto.normalize_config(_json())
+    if error:
+        return _error(error)
+    database = get_db()
+    database.execute("INSERT INTO tv_auto_config(channel_id,settings,updated_at) VALUES(?,?,CURRENT_TIMESTAMP) "
+                     "ON CONFLICT(channel_id) DO UPDATE SET settings=excluded.settings,updated_at=excluded.updated_at",
+                     (channel_id, json.dumps(config)))
+    database.commit()
+    return jsonify(config=config)
+
+
+@admin_bp.post("/api/auto/<int:channel_id>/generate")
+def auto_generate(channel_id):
+    channel = _channel_row(channel_id)
+    if channel is None:
+        return _error("No such channel.", 404)
+    data = _json()
+    config = _auto_config(channel_id)
+    first_day = _valid_day(data.get("start_date"))
+    if first_day is False:
+        return _error("Enter a valid start date.")
+    first_day = date.fromisoformat(first_day) if first_day else _now().astimezone(_zone()).date()
+    try:
+        days = int(data.get("days") or config["days"])
+    except (TypeError, ValueError):
+        days = 0
+    if not 1 <= days <= auto.MAX_DAYS:
+        return _error(f"Generate between 1 and {auto.MAX_DAYS} days.")
+    seed = secrets.randbelow(2 ** 31)
+    payload, warnings = _generate_draft(channel, first_day, days, config, seed)
+    database = get_db()
+    database.execute("INSERT OR REPLACE INTO tv_auto_drafts(channel_id,start_date,days,seed,version,payload,warnings) "
+                     "VALUES(?,?,?,?,?,?,?)", (channel_id, first_day.isoformat(), days, seed, version(),
+                                               json.dumps(payload), json.dumps(warnings)))
+    database.commit()
+    return jsonify(draft=_auto_preview(channel, _draft_row(channel_id)))
+
+
+@admin_bp.post("/api/auto/<int:channel_id>/publish")
+def auto_publish(channel_id):
+    channel = _channel_row(channel_id)
+    draft = _draft_row(channel_id) if channel else None
+    if draft is None:
+        return _error("Generate a schedule first.", 404)
+    if draft["version"] != version():
+        return _error("The schedule or library changed after this preview was generated. Regenerate it first.", 409)
+    payload = json.loads(draft["payload"])
+    database = get_db()
+    for chunk in _chunks(payload["replaced"]):
+        database.execute(f"DELETE FROM tv_blocks WHERE origin='auto' AND locked=0 AND id IN "
+                         f"({','.join('?' * len(chunk))})", chunk)
+    for slot in payload["slots"]:
+        block_id = database.execute(
+            "INSERT INTO tv_blocks(channel_id,title,description,kind,start_date,weekdays,start_time,loop_until,"
+            "enabled,origin,locked) VALUES(?,?,?,'once',?,0,?,?,1,'auto',0)",
+            (channel_id, slot["title"], "Encore presentation" if slot["rerun"] else "", slot["date"],
+             slot["start_time"], slot["loop_until"])).lastrowid
+        _save_items(database, block_id, [tuple(item) for item in slot["items"]])
+    cutoff = (_now().astimezone(_zone()).date() - timedelta(days=AUTO_PRUNE_DAYS)).isoformat()
+    database.execute("DELETE FROM tv_blocks WHERE channel_id=? AND origin='auto' AND locked=0 AND kind='once' "
+                     "AND start_date<?", (channel_id, cutoff))
+    database.execute("DELETE FROM tv_auto_drafts WHERE channel_id=?", (channel_id,))
+    audit(database, g.user["id"], None, "tv_auto_publish", target_type="tv_channel", target_id=channel_id,
+          note=f"{draft['start_date']} +{draft['days']}d: {len(payload['slots'])} entries, "
+               f"{len(payload['replaced'])} replaced")
+    bump_version(database)
+    database.commit()
+    return jsonify(published=len(payload["slots"]), replaced=len(payload["replaced"]))
+
+
+@admin_bp.post("/api/auto/<int:channel_id>/discard")
+def auto_discard(channel_id):
+    database = get_db()
+    database.execute("DELETE FROM tv_auto_drafts WHERE channel_id=?", (channel_id,))
+    database.commit()
+    return jsonify(ok=True)
+
+
+@admin_bp.post("/api/auto/<int:channel_id>/clear")
+def auto_clear(channel_id):
+    """Remove unlocked generated programming from a range, keeping manual and locked entries."""
+    if _channel_row(channel_id) is None:
+        return _error("No such channel.", 404)
+    data = _json()
+    first_day = _valid_day(data.get("start_date"))
+    try:
+        days = int(data.get("days"))
+    except (TypeError, ValueError):
+        days = 0
+    if not first_day or not 1 <= days <= 366:
+        return _error("Choose a start date and between 1 and 366 days.")
+    zone, first_day = _zone(), date.fromisoformat(first_day)
+    spans = [(datetime.combine(first_day, datetime.min.time(), tzinfo=zone).astimezone(UTC),
+              datetime.combine(first_day + timedelta(days=days), datetime.min.time(), tzinfo=zone).astimezone(UTC))]
+    ids = _replaceable(channel_id, spans, zone, _now())
+    database = get_db()
+    for chunk in _chunks(ids):
+        database.execute(f"DELETE FROM tv_blocks WHERE id IN ({','.join('?' * len(chunk))})", chunk)
+    audit(database, g.user["id"], None, "tv_auto_clear", target_type="tv_channel", target_id=channel_id,
+          note=f"{first_day.isoformat()} +{days}d: {len(ids)} entries")
+    bump_version(database)
+    database.commit()
+    return jsonify(removed=len(ids))
+
+
+@admin_bp.post("/api/blocks/<int:block_id>/lock")
+def lock_block(block_id):
+    database = get_db()
+    if not database.execute("SELECT 1 FROM tv_blocks WHERE id=?", (block_id,)).fetchone():
+        return _error("No such block.", 404)
+    database.execute("UPDATE tv_blocks SET locked=? WHERE id=?", (int(bool(_json().get("locked"))), block_id))
+    database.commit()
+    return jsonify(ok=True)

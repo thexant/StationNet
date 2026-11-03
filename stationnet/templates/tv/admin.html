@@ -1,6 +1,6 @@
 {% extends "base.html" %}
 {% block title %}TV Management{% endblock %}
-{% block extra_styles %}<link rel="stylesheet" href="{{ url_for('static',filename='tv-admin.css',v='1') }}">{% endblock %}
+{% block extra_styles %}<link rel="stylesheet" href="{{ url_for('static',filename='tv-admin.css',v='3') }}">{% endblock %}
 {% block content %}
 <section class="tv-admin" data-tv-admin data-api="{{ url_for('tv_admin.manage') }}/api" data-csrf="{{ session.csrf_token }}">
   <div class="board-head">
@@ -14,6 +14,7 @@
 
   <nav class="tv-admin-tabs" aria-label="TV management sections">
     <button type="button" data-tab="schedule" aria-current="page">SCHEDULE</button>
+    <button type="button" data-tab="auto">AUTO SCHEDULER</button>
     <button type="button" data-tab="channels">CHANNELS</button>
     <button type="button" data-tab="library">PROGRAMMING LIBRARY</button>
   </nav>
@@ -42,12 +43,110 @@
       <tbody data-day-airings></tbody>
     </table></div>
     <h2 class="tv-admin-heading">Programming blocks on this channel</h2>
-    <p class="muted">A block starts at a fixed time and airs its programmes back to back. One-off blocks override weekly blocks; a block overrides any earlier block for its own time span, and the earlier block resumes afterwards.</p>
+    <p class="muted">A block starts at a fixed time and airs its programmes back to back. One-off blocks override weekly blocks; a block overrides any earlier block for its own time span, and the earlier block resumes afterwards. AUTO blocks come from the auto scheduler; lock one (or edit it) to keep it when the schedule is regenerated.</p>
+    <p class="muted" data-auto-hidden hidden></p>
+    <div class="tv-select-bar" data-block-select-bar hidden>
+      <strong data-block-select-count></strong>
+      <button type="button" class="secondary" data-block-bulk="enable">ENABLE</button>
+      <button type="button" class="secondary" data-block-bulk="disable">DISABLE</button>
+      <button type="button" class="secondary" data-block-bulk="lock">LOCK</button>
+      <button type="button" class="secondary" data-block-bulk="unlock">UNLOCK</button>
+      <button type="button" class="danger" data-block-bulk="delete">DELETE SELECTED</button>
+      <button type="button" class="secondary" data-block-select-clear>CLEAR</button>
+    </div>
     <div class="app-table-wrap"><table class="tv-admin-table">
-      <thead><tr><th>BLOCK</th><th>AIRS</th><th>START</th><th>RUNS</th><th>PROGRAMMES</th><th></th></tr></thead>
+      <thead><tr><th class="tv-check"><input type="checkbox" data-block-select-all aria-label="Select all blocks"></th><th>BLOCK</th><th>AIRS</th><th>START</th><th>RUNS</th><th>PROGRAMMES</th><th></th></tr></thead>
       <tbody data-blocks></tbody>
     </table></div>
   </section>
+
+  <!-- Auto scheduler -->
+  <section data-panel="auto" class="tv-admin-panel" hidden>
+    <div class="tv-admin-toolbar">
+      <label>Channel<select data-auto-channel></select></label>
+      <span class="tv-admin-zone">TIMES IN <b data-auto-zone></b></span>
+    </div>
+    <p class="muted">Categorise programmes in the library, choose how this channel runs, then generate a preview. Manual blocks and locked entries are kept and the generator fills the time around them. Nothing goes on air until you publish.</p>
+    <div class="tv-admin-split">
+      <section class="terminal-card">
+        <p class="eyebrow">LIBRARY READINESS</p>
+        <div class="tv-auto-library" data-auto-library></div>
+      </section>
+      <form class="terminal-card form-grid" data-auto-form>
+        <p class="eyebrow">CHANNEL STYLE</p>
+        <div class="tv-form-row">
+          <label>On air from<input type="time" name="on_air_from" step="60" required></label>
+          <label>until<input type="time" name="on_air_until" step="60" required></label>
+        </div>
+        <small class="muted">The same time twice means 24 hours. Outside these hours the channel shows its usual gap screen.</small>
+        <div class="tv-form-row">
+          <label>Commercials<select name="commercials"><option value="light">Light</option><option value="standard">Standard</option><option value="heavy">Heavy</option></select></label>
+          <label>Reruns<select name="reruns"><option value="minimal">Minimal</option><option value="moderate">Moderate</option><option value="frequent">Frequent</option></select></label>
+          <label>Days<input type="number" name="days" min="1" max="28" required></label>
+        </div>
+        <fieldset>
+          <legend>Programming mix</legend>
+          <div class="tv-auto-mix" data-auto-mix></div>
+          <small class="muted">Relative share of airtime. Types without programmes are ignored; commercials, bumpers and idents only fill breaks.</small>
+        </fieldset>
+      </form>
+    </div>
+    <details class="terminal-card">
+      <summary class="eyebrow">TIME-OF-DAY RULES</summary>
+      <p class="muted">&ldquo;Prefer&rdquo; makes matching programmes more likely in that window; &ldquo;only&rdquo; allows nothing else whenever a matching programme fits.</p>
+      <div class="app-table-wrap"><table class="tv-admin-table tv-auto-rules">
+        <thead><tr><th>DAYS</th><th>FROM</th><th>UNTIL</th><th>MODE</th><th>CONTENT</th><th>GENRES</th><th></th></tr></thead>
+        <tbody data-auto-rules></tbody>
+      </table></div>
+      <div class="button-row"><button type="button" class="secondary" data-auto-rule-add>+ ADD RULE</button><button type="button" class="secondary" data-auto-rule-defaults>RESTORE DEFAULTS</button></div>
+    </details>
+    <details class="terminal-card">
+      <summary class="eyebrow">DAY THEMES</summary>
+      <p class="muted">Optional all-day preferences, such as horror on Fridays or documentaries on Sundays.</p>
+      <div class="app-table-wrap"><table class="tv-admin-table">
+        <thead><tr><th>DAY</th><th>CONTENT</th><th>GENRE</th></tr></thead>
+        <tbody data-auto-themes></tbody>
+      </table></div>
+    </details>
+    <div class="tv-admin-toolbar">
+      <label>First day<input type="date" data-auto-start></label>
+      <span class="button-row">
+        <button type="button" class="secondary" data-auto-save>SAVE SETTINGS</button>
+        <button type="button" data-auto-generate>GENERATE PREVIEW</button>
+        <button type="button" class="secondary" data-auto-clear>CLEAR GENERATED&hellip;</button>
+      </span>
+    </div>
+    <section class="tv-admin-panel" data-auto-draft hidden>
+      <h2 class="tv-admin-heading">Proposed schedule</h2>
+      <p class="muted" data-auto-draft-meta></p>
+      <ul class="tv-auto-warnings" data-auto-warnings></ul>
+      <div class="button-row">
+        <button type="button" data-auto-publish>PUBLISH</button>
+        <button type="button" class="secondary" data-auto-regenerate>REGENERATE</button>
+        <button type="button" class="danger" data-auto-discard>DISCARD</button>
+      </div>
+      <div class="tv-auto-legend" data-auto-legend></div>
+      <div class="tv-auto-guide-wrap"><div class="tv-auto-guide" data-auto-guide></div></div>
+      <div class="terminal-card tv-auto-detail" data-auto-detail hidden></div>
+    </section>
+  </section>
+
+  <!-- Bulk categorise dialog -->
+  <dialog class="app-dialog tv-dialog" data-meta-dialog>
+    <form method="dialog" class="app-dialog-body form-grid" data-meta-form>
+      <h2 data-meta-title>Categorise</h2>
+      <p class="muted">Only ticked fields change.</p>
+      <div class="tv-form-row"><label class="check"><input type="checkbox" name="set_content_type"> Content</label><select class="tv-grow" name="content_type" data-content-select></select></div>
+      <div class="tv-form-row"><label class="check"><input type="checkbox" name="set_genre"> Genre</label><input class="tv-grow" name="genre" maxlength="60" list="tv-genre-list"></div>
+      <div class="tv-form-row"><label class="check"><input type="checkbox" name="set_series"> Series</label><input class="tv-grow" name="series" maxlength="150" list="tv-series-list" placeholder="Blank = standalone"></div>
+      <div class="tv-form-row"><label class="check"><input type="checkbox" name="set_season"> Season</label><input type="number" name="season" min="0" max="99999"></div>
+      <label class="check"><input type="checkbox" name="autonumber"> Number episodes 1, 2, 3&hellip; in title order within each series</label>
+      <div class="app-dialog-actions button-row">
+        <button type="button" class="secondary" data-close>CANCEL</button>
+        <button value="save">APPLY</button>
+      </div>
+    </form>
+  </dialog>
 
   <!-- Channels -->
   <section data-panel="channels" class="tv-admin-panel" hidden>
@@ -89,14 +188,42 @@
         <ol class="tv-queue" data-import-log></ol>
       </section>
     </div>
+    <details class="terminal-card tv-folders" data-folders-card open>
+      <summary class="eyebrow">FOLDERS</summary>
+      <p class="muted">Set the type of every file in a folder at once. Tick &ldquo;remember&rdquo; so files imported or uploaded into that folder later arrive with the same type.</p>
+      <div class="app-table-wrap"><table class="tv-admin-table">
+        <thead><tr><th>FOLDER</th><th>ITEMS</th><th>TYPES</th><th>SET TYPE</th><th></th></tr></thead>
+        <tbody data-folders></tbody>
+      </table></div>
+    </details>
     <div class="tv-admin-toolbar">
       <label>Search<input type="search" data-library-search placeholder="Title or folder"></label>
       <label>Folder<select data-library-folder><option value="">All folders</option></select></label>
-      <label>Type<select data-library-kind><option value="">All types</option><option value="program">Programmes</option><option value="ident">Idents</option><option value="bumper">Bumpers</option><option value="offair">Off-air</option></select></label>
+      <label class="check"><input type="checkbox" data-library-recursive checked> Incl. sub-folders</label>
+      <label>Type<select data-library-kind><option value="">All types</option><option value="program">Programmes</option><option value="ident">Idents</option><option value="bumper">Bumpers</option><option value="commercial">Commercials</option><option value="offair">Off-air</option></select></label>
+      <label>Content<select data-library-content><option value="">Any content</option></select></label>
+      <label>Genre<select data-library-genre><option value="">Any genre</option></select></label>
+      <label>Status<select data-library-usage><option value="">Everything</option><option value="used">Scheduled</option><option value="unused">Not scheduled</option><option value="missing">Missing file</option><option value="measuring">Measuring</option></select></label>
       <button type="button" class="secondary" data-recheck>RECHECK FILES</button>
     </div>
+    <div class="tv-select-bar" data-select-bar hidden>
+      <strong data-select-count></strong>
+      <span class="tv-select-group">
+        <select data-bulk-kind aria-label="New type"><option value="program">Programme</option><option value="ident">Station ident</option><option value="bumper">Bumper / intermission</option><option value="commercial">Commercial</option><option value="offair">Off-air loop</option></select>
+        <button type="button" class="secondary" data-bulk-kind-apply>SET TYPE</button>
+      </span>
+      <span class="tv-select-group">
+        <input data-bulk-folder list="tv-folder-list" maxlength="300" placeholder="Folder (blank = none)" aria-label="Move to folder">
+        <button type="button" class="secondary" data-bulk-folder-apply>MOVE</button>
+      </span>
+      <button type="button" class="secondary" data-bulk-meta>CATEGORISE&hellip;</button>
+      <button type="button" class="secondary" data-bulk-description>SET DESCRIPTION&hellip;</button>
+      <button type="button" class="secondary" data-bulk-block>ADD TO NEW BLOCK</button>
+      <button type="button" class="danger" data-bulk-delete>DELETE SELECTED</button>
+      <button type="button" class="secondary" data-select-clear>CLEAR</button>
+    </div>
     <div class="app-table-wrap"><table class="tv-admin-table">
-      <thead><tr><th>TITLE</th><th>FOLDER</th><th>TYPE</th><th>LENGTH</th><th>SIZE</th><th>SOURCE</th><th>USED</th><th></th></tr></thead>
+      <thead><tr><th class="tv-check"><input type="checkbox" data-select-all aria-label="Select all shown"></th><th data-sort="title">TITLE</th><th data-sort="folder">FOLDER</th><th data-sort="kind">TYPE</th><th data-sort="genre">GENRE</th><th data-sort="series">SERIES</th><th data-sort="duration_s">LENGTH</th><th data-sort="size_bytes">SIZE</th><th>SOURCE</th><th data-sort="usage">USED</th><th></th></tr></thead>
       <tbody data-library></tbody>
     </table></div>
     <video data-probe preload="metadata" muted hidden></video>
@@ -118,6 +245,7 @@
         <legend>Filler clips</legend>
         <ol class="tv-pick-list" data-filler-list></ol>
         <div class="tv-form-row"><select class="tv-grow" data-filler-select></select><button type="button" class="secondary" data-filler-add>ADD</button></div>
+        <div class="tv-form-row"><button type="button" class="secondary" data-filler-add-kind="bumper">ADD ALL BUMPERS</button><button type="button" class="secondary" data-filler-add-kind="ident">ADD ALL IDENTS</button><button type="button" class="secondary" data-filler-clear>CLEAR</button></div>
       </fieldset>
       <fieldset>
         <legend>Channel logo</legend>
@@ -140,9 +268,20 @@
       <label>Description<textarea name="description" maxlength="5000" rows="4"></textarea><small>Shown in the guide and the INFO banner.</small></label>
       <div class="tv-form-row">
         <label class="tv-grow">Folder<input name="folder" maxlength="300" list="tv-folder-list"></label>
-        <label>Type<select name="kind"><option value="program">Programme</option><option value="ident">Station ident</option><option value="bumper">Bumper / intermission</option><option value="offair">Off-air loop</option></select></label>
+        <label>Type<select name="kind"><option value="program">Programme</option><option value="ident">Station ident</option><option value="bumper">Bumper / intermission</option><option value="commercial">Commercial</option><option value="offair">Off-air loop</option></select></label>
+      </div>
+      <div class="tv-form-row" data-program-only>
+        <label>Content<select name="content_type" data-content-select></select></label>
+        <label class="tv-grow">Genre<input name="genre" maxlength="60" list="tv-genre-list"></label>
+      </div>
+      <div class="tv-form-row" data-program-only>
+        <label class="tv-grow">Series<input name="series" maxlength="150" list="tv-series-list" placeholder="Blank for a standalone programme"></label>
+        <label>Season<input type="number" name="season" min="0" max="99999"></label>
+        <label>Episode<input type="number" name="episode" min="0" max="99999"></label>
       </div>
       <datalist id="tv-folder-list" data-folder-list></datalist>
+      <datalist id="tv-genre-list" data-genre-list></datalist>
+      <datalist id="tv-series-list" data-series-list></datalist>
       <p class="muted" data-media-facts></p>
       <video class="tv-preview" data-media-preview controls preload="none"></video>
       <div class="app-dialog-actions button-row">
@@ -189,6 +328,7 @@
           <tbody data-items></tbody>
         </table></div>
         <p class="tv-block-total" data-block-total></p>
+        <p class="flash warning" data-block-overlap hidden></p>
         <div class="tv-form-row">
           <input type="search" data-item-search placeholder="Search library" aria-label="Search library">
           <select class="tv-grow" data-item-select aria-label="Library programme"></select>
@@ -196,13 +336,35 @@
         </div>
         <div class="tv-form-row">
           <select class="tv-grow" data-item-folder aria-label="Library folder"></select>
+          <select data-item-folder-kind aria-label="Types to add"><option value="program">Programmes</option><option value="ident">Idents</option><option value="bumper">Bumpers</option><option value="">All types</option></select>
+          <label class="check"><input type="checkbox" data-item-folder-recursive> Incl. sub-folders</label>
           <button type="button" class="secondary" data-item-add-folder>ADD WHOLE FOLDER</button>
+        </div>
+        <div class="tv-form-row">
+          <select class="tv-grow" data-interleave-select aria-label="Clip to insert between programmes"></select>
+          <button type="button" class="secondary" data-interleave>INSERT BETWEEN PROGRAMMES</button>
+        </div>
+        <div class="button-row">
+          <button type="button" class="secondary" data-items-shuffle>SHUFFLE ORDER</button>
+          <button type="button" class="secondary" data-items-clear>CLEAR ALL</button>
         </div>
       </fieldset>
       <div class="app-dialog-actions button-row">
         <button type="button" class="danger" data-block-delete>DELETE BLOCK</button>
         <button type="button" class="secondary" data-close>CANCEL</button>
         <button value="save">SAVE BLOCK</button>
+      </div>
+    </form>
+  </dialog>
+
+  <!-- Bulk description dialog -->
+  <dialog class="app-dialog tv-dialog" data-description-dialog>
+    <form method="dialog" class="app-dialog-body form-grid" data-description-form>
+      <h2 data-description-title>Set description</h2>
+      <label>Description<textarea name="description" maxlength="5000" rows="4"></textarea><small>Replaces the description of every selected item. Leave blank to clear it.</small></label>
+      <div class="app-dialog-actions button-row">
+        <button type="button" class="secondary" data-close>CANCEL</button>
+        <button value="save">APPLY</button>
       </div>
     </form>
   </dialog>
@@ -223,5 +385,5 @@
     </form>
   </dialog>
 </section>
-<script src="{{ url_for('static',filename='tv-admin.js',v='1') }}" defer></script>
+<script src="{{ url_for('static',filename='tv-admin.js',v='3') }}" defer></script>
 {% endblock %}
