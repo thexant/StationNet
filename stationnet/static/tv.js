@@ -15,6 +15,8 @@
   const clock = ms => timeFormat.format(new Date(ms));
   const DRIFT_LIMIT = 2;
   const STALL_LIMIT = 8000;
+  const METADATA_TIMEOUT = 15000;
+  const TUNE_DELAY = 250;
 
   let skew = 0;
   let index = 0;
@@ -25,6 +27,8 @@
   let transitionTimer = 0;
   let retryTimer = 0;
   let stallTimer = 0;
+  let tuneTimer = 0;
+  let tuning = false;
   let selfSeek = false;
   let lastCheck = 0;
   let volume = Number.parseFloat(store.get("stationnet.tv.volume") ?? "0.8");
@@ -53,14 +57,19 @@
   }
 
   const staticCanvas = $("[data-tv-static]");
+  const STATIC_MIN = 300;
   let staticFrame = 0;
-  function showStatic(duration = 350) {
+  let staticSince = 0;
+  let staticStopTimer = 0;
+  /* Static runs until stopStatic(); the old picture never shows through a channel change. */
+  function startStatic() {
     const context = staticCanvas.getContext("2d");
     const style = getComputedStyle(document.documentElement);
     const tint = (style.getPropertyValue("--theme-rgb").trim() || "0,237,69").split(",").map(Number);
     const image = context.createImageData(staticCanvas.width, staticCanvas.height);
-    const until = performance.now() + duration;
     cancelAnimationFrame(staticFrame);
+    clearTimeout(staticStopTimer);
+    staticSince = performance.now();
     staticCanvas.hidden = false;
     const draw = () => {
       for (let offset = 0; offset < image.data.length; offset += 4) {
@@ -71,10 +80,17 @@
         image.data[offset + 3] = 255;
       }
       context.putImageData(image, 0, 0);
-      if (performance.now() < until) staticFrame = requestAnimationFrame(draw);
-      else staticCanvas.hidden = true;
+      staticFrame = requestAnimationFrame(draw);
     };
     draw();
+  }
+
+  function stopStatic({immediate = false} = {}) {
+    clearTimeout(staticStopTimer);
+    const hide = () => { cancelAnimationFrame(staticFrame); staticCanvas.hidden = true; };
+    const remaining = STATIC_MIN - (performance.now() - staticSince);
+    if (immediate || remaining <= 0 || staticCanvas.hidden) hide();
+    else staticStopTimer = setTimeout(hide, remaining);
   }
 
   /* On-screen display -------------------------------------------------- */
@@ -201,16 +217,20 @@
     }
   }
 
-  function waitForMetadata(token) {
+  /* Resolves "ok", "error" or "timeout"; "stale" once another tune has taken over. */
+  function waitForMetadata(token, source) {
     return new Promise(resolve => {
-      if (video.readyState >= 1) { resolve(true); return; }
-      const done = ok => {
+      if (video.readyState >= 1) { resolve("ok"); return; }
+      let timer = 0;
+      const done = result => {
+        clearTimeout(timer);
         video.removeEventListener("loadedmetadata", onLoad);
         video.removeEventListener("error", onError);
-        resolve(ok && token === tuneToken);
+        resolve(token === tuneToken && video.src === source ? result : "stale");
       };
-      const onLoad = () => done(true);
-      const onError = () => done(false);
+      const onLoad = () => done("ok");
+      const onError = () => done("error");
+      timer = setTimeout(() => done("timeout"), METADATA_TIMEOUT);
       video.addEventListener("loadedmetadata", onLoad);
       video.addEventListener("error", onError);
     });
@@ -221,8 +241,16 @@
     video.loop = airing.kind === "offair";
     if (video.src !== source) {
       video.src = source;
-      if (!await waitForMetadata(token)) {
-        if (token === tuneToken) standby();
+      const result = await waitForMetadata(token, source);
+      if (result === "stale") return;
+      if (result === "timeout") {
+        standby("SIGNAL LOST – RETUNING");
+        clearTimeout(retryTimer);
+        retryTimer = setTimeout(() => sync(), 5000);
+        return;
+      }
+      if (result !== "ok") {
+        standby();
         return;
       }
     }
@@ -238,12 +266,16 @@
 
   function standby(text = "WE ARE EXPERIENCING TECHNICAL DIFFICULTIES") {
     stopVideo();
+    tuning = false;
+    stopStatic();
     $("[data-tv-standby-text]").textContent = text;
     showLayer("standby");
   }
 
   function offAir(data) {
     stopVideo();
+    tuning = false;
+    stopStatic();
     $("[data-tv-offair-channel]").textContent = `${data.channel.number}  ${data.channel.name}`;
     $("[data-tv-offair-resume]").textContent = data.resumes_at
       ? `PROGRAMMING RESUMES ${dayFormat.format(new Date(Date.parse(data.resumes_at)))} AT ${clock(Date.parse(data.resumes_at))}`
@@ -305,13 +337,29 @@
     index = (newIndex + channels.length) % channels.length;
     store.set("stationnet.tv.channel", String(channel().id));
     if (!powered) { powerOn(); return; }
+    // Cut the old channel at once: drop in-flight work, stop its picture, sound and download.
+    tuneToken += 1;
+    clearTimeout(tuneTimer);
+    clearTimeout(transitionTimer);
+    clearTimeout(retryTimer);
+    clearTimeout(stallTimer);
     current = null;
+    stopVideo();
+    showLayer(null);
+    tuning = true;
+    startStatic();
     showNumber(String(channel().number));
     updatePanel();
-    showStatic();
-    await sync();
-    if (banner) showBanner();
     if (guide.open) guide.render();
+    // Zapping through channels only loads the one you land on.
+    const token = tuneToken;
+    tuneTimer = setTimeout(async () => {
+      if (token !== tuneToken || !powered) return;
+      await sync();
+      if (!powered || !current) return;
+      if (banner) showBanner();
+      if (guide.open) guide.render();
+    }, TUNE_DELAY);
   }
 
   function powerOn() {
@@ -327,8 +375,12 @@
     tuneToken += 1;
     clearTimeout(transitionTimer);
     clearTimeout(retryTimer);
+    clearTimeout(tuneTimer);
+    clearTimeout(stallTimer);
     root.classList.remove("is-on");
     stopVideo();
+    tuning = false;
+    stopStatic({immediate: true});
     osd.banner.hidden = osd.number.hidden = osd.hint.hidden = true;
     showLayer("poweroff");
     updatePanel();
@@ -341,8 +393,8 @@
   });
   video.addEventListener("ratechange", () => { if (video.playbackRate !== 1) video.playbackRate = 1; });
   video.addEventListener("pause", () => {
-    if (powered && video.src && !video.ended && current && current.airing.media_url) {
-      setTimeout(() => { if (powered && video.paused && video.src) startPlayback(tuneToken); }, 300);
+    if (powered && !tuning && video.src && !video.ended && current && current.airing.media_url) {
+      setTimeout(() => { if (powered && !tuning && video.paused && video.src) startPlayback(tuneToken); }, 300);
     }
   });
   video.addEventListener("ended", () => { if (powered && !video.loop) standby("PLEASE STAND BY"); });
@@ -356,7 +408,10 @@
     clearTimeout(stallTimer);
     stallTimer = setTimeout(() => { if (powered) sync(); }, STALL_LIMIT);
   });
-  video.addEventListener("playing", () => clearTimeout(stallTimer));
+  video.addEventListener("playing", () => {
+    clearTimeout(stallTimer);
+    if (tuning && current) { tuning = false; stopStatic(); }
+  });
   video.addEventListener("contextmenu", event => event.preventDefault());
 
   /* Drift, transitions after sleep, and schedule changes. */

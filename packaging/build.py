@@ -14,10 +14,15 @@ import sys
 import uuid
 import zipfile
 from pathlib import Path
-from kiwix_tools import install as install_kiwix_tools
+from kiwix_tools import fetch as fetch_kiwix_tools, install as install_kiwix_tools
 
 ROOT = Path(__file__).resolve().parents[1]
 OUT = ROOT / "dist"
+
+
+def kiwix_cache():
+    """Downloaded Kiwix archives are reused between builds (the mirror can be slow)."""
+    return OUT / ".cache" / "kiwix"
 
 
 @contextmanager
@@ -59,10 +64,11 @@ def archive(folder, name):
 def build_posix():
     if sys.platform == "win32":
         raise SystemExit("Build POSIX wheel bundles on the target Linux or Raspberry Pi platform.")
+    fetch_kiwix_tools(kiwix_cache())
     with build_workspace() as temp:
         package = temp / "StationNet"
         copy_app(package / "core")
-        install_kiwix_tools(package / "core" / "kiwix_tools")
+        install_kiwix_tools(package / "core" / "kiwix_tools", kiwix_cache())
         wheels = package / "wheels"
         wheels.mkdir(parents=True)
         subprocess.run([sys.executable, "-m", "pip", "wheel", "--wheel-dir", str(wheels),
@@ -81,6 +87,8 @@ def build_windows():
     if subprocess.run([sys.executable, "-c", "import pymupdf, pyfiglet, pystray"]).returncode:
         raise SystemExit(f"Runtime dependencies are missing; run `{sys.executable} -m pip install "
                          f"-r requirements.txt` and build again.")
+    # Fetch before freezing so a download problem fails in seconds, not after PyInstaller.
+    fetch_kiwix_tools(kiwix_cache())
     with build_workspace() as workspace:
         # The spec builds StationNet.exe and StationNetManager.exe into one folder.
         subprocess.run([sys.executable, "-m", "PyInstaller", "--noconfirm", "--clean",
@@ -88,7 +96,7 @@ def build_windows():
                         str(ROOT / "packaging" / "StationNet.spec")], cwd=ROOT, check=True)
         package = workspace / "StationNet"
         shutil.copytree(workspace / "frozen" / "StationNet", package / "core")
-        install_kiwix_tools(package / "core" / "kiwix_tools")
+        install_kiwix_tools(package / "core" / "kiwix_tools", kiwix_cache())
         shutil.copy2(ROOT / "packaging" / "windows-start.bat", package / "start.bat")
         shutil.copy2(ROOT / "packaging" / "windows-manager.bat", package / "manager.bat")
         shutil.copy2(ROOT / "packaging" / "windows-install.bat", package / "install.bat")
