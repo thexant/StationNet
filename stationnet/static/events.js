@@ -2,7 +2,7 @@
   const zone = document.querySelector('[data-event-timezone]');
   if (zone && !zone.value) zone.value = Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC';
   const dateFormat = new Intl.DateTimeFormat(undefined, {dateStyle: 'full', timeStyle: 'short'});
-  document.querySelectorAll('time[data-local-time]').forEach(node => {
+  document.querySelectorAll('time[data-local-time="full"]').forEach(node => {
     const date = new Date(node.dateTime);
     if (!Number.isNaN(date.getTime())) node.textContent = dateFormat.format(date);
   });

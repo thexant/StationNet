@@ -1546,16 +1546,17 @@ def worlds(database, *, include_disabled=False):
     """Every installed authored world plus the procedural dungeon world, home world first."""
     station = database.execute("SELECT mud_procedural_enabled FROM station WHERE id=1").fetchone()
     rows = database.execute(
-        "SELECT p.id,p.name,p.author,p.imported,p.enabled,"
+        "SELECT p.id,p.name,p.author,p.imported,p.enabled,p.removing,"
         "(SELECT COUNT(*) FROM mud_characters AS c WHERE c.world_key=p.id AND c.creation_state<>'pending') "
         "AS characters FROM mud_world_packages AS p ORDER BY p.id<>?,p.name COLLATE NOCASE,p.id",
         (mud_scope.HOME,)).fetchall()
     result = [{"key": row["id"], "name": row["name"], "author": row["author"], "kind": "authored",
                "imported": bool(row["imported"]), "enabled": bool(row["enabled"]),
-               "characters": row["characters"]} for row in rows]
+               "removing": bool(row["removing"]), "characters": row["characters"]} for row in rows]
     procedural = bool(station and station["mud_procedural_enabled"])
     result.append({"key": mud_scope.PROCEDURAL, "name": world_name(database, mud_scope.PROCEDURAL),
                    "author": "StationNet", "kind": "procedural", "imported": False, "enabled": procedural,
+                   "removing": False,
                    "characters": database.execute(
                        "SELECT COUNT(*) FROM mud_characters WHERE world_key=? AND creation_state<>'pending'",
                        (mud_scope.PROCEDURAL,)).fetchone()[0]})
@@ -1572,6 +1573,8 @@ def set_enabled(database, world_id, enabled):
     if world is None:
         raise WorldError("World was not found.")
     if enabled:
+        if database.execute("SELECT removing FROM mud_world_packages WHERE id=?", (world_id,)).fetchone()[0]:
+            raise WorldError("This world is being removed.")
         if database.execute("SELECT 1 FROM mud_world_rooms WHERE id=? AND world_id=?",
                             (world["start_room_id"], world_id)).fetchone() is None:
             raise WorldError("World starting room is missing.")
@@ -2883,56 +2886,174 @@ def removal_origins(database, world_id):
     return result
 
 
-def remove(database, world_id, *, remove_origins=False):
-    """Uninstall a disabled imported world. Its characters stay, hidden, and return if it is reinstalled."""
-    from . import character_creation, mud_skills
-    world = database.execute("SELECT imported,enabled FROM mud_world_packages WHERE id=?", (world_id,)).fetchone()
+REMOVAL_BATCH = 200
+
+
+def _transaction(database):
+    """One short write transaction; commits (or rolls back) on exit."""
+    class _Txn:
+        def __enter__(self):
+            database.execute("BEGIN IMMEDIATE")
+            return database
+
+        def __exit__(self, kind, error, trace):
+            if kind is None:
+                database.commit()
+            else:
+                database.rollback()
+            return False
+    return _Txn()
+
+
+def _staged_files(world_id):
+    path = directory() / f"{world_id}.zip"
+    return sorted(path.parent.glob(path.name + ".removing-*"))
+
+
+def begin_removal(database, world_id, *, remove_origins=False):
+    """Validate a removal and mark the world as being removed; the heavy work is finish_removal's.
+
+    The world is disabled, so players are not in it. Marking it ``removing`` keeps it from being
+    enabled again and lets an interrupted removal resume after a restart.
+    """
+    world = database.execute("SELECT imported,enabled,removing FROM mud_world_packages WHERE id=?",
+                             (world_id,)).fetchone()
     if world is None or not world["imported"]:
         raise WorldError("Only installed custom worlds can be removed.")
     if world["enabled"]:
         raise WorldError("Disable this world before removing it.")
+    if world["removing"]:
+        raise WorldError("This world is already being removed.")
     path = directory() / f"{world_id}.zip"
     staged = path.with_name(path.name + ".removing-" + uuid.uuid4().hex)
     if path.exists():
         path.rename(staged)
     try:
-        with database:
-            database.execute("BEGIN IMMEDIATE")
-            world = database.execute("SELECT imported,enabled FROM mud_world_packages WHERE id=?",
-                                     (world_id,)).fetchone()
-            if world is None or not world["imported"]:
-                raise WorldError("Only installed custom worlds can be removed.")
-            if world["enabled"]:
+        with _transaction(database):
+            marked = database.execute(
+                "UPDATE mud_world_packages SET removing=1,removing_origins=? "
+                "WHERE id=? AND imported=1 AND enabled=0 AND removing=0", (int(bool(remove_origins)), world_id))
+            if marked.rowcount != 1:
                 raise WorldError("Disable this world before removing it.")
-            associated = removal_origins(database, world_id)
-            linked = world_origin_keys(database, world_id)
-            selected = {kind: {entry["key"] for entry in associated[kind]}
-                        for kind in (*character_creation.KINDS, "skills")}
-            _retire_rows(database, world_id, "This world was removed from the station.")
-            if remove_origins and any(selected[kind] for kind in character_creation.KINDS):
-                character_creation.remove_origins(database, selected)
-            # Skills go after the origins removed above, which no longer depend on them.
-            if remove_origins and selected["skills"]:
-                selected["skills"] = {entry["key"] for entry in
-                                      mud_skills.remove_linked(database, associated["skills"])}
-            # Abilities and effects go last, once nothing removed above still grants or applies them.
-            magic = (mud_shared_definitions.remove_unused_abilities_and_effects(database, ("world", world_id))
-                     if remove_origins else {"abilities": [], "effects": [], "kept": []})
-            database.execute("DELETE FROM mud_world_packages WHERE id=?", (world_id,))
-            database.execute("DELETE FROM mud_world_availability WHERE world_key=?", (world_id,))
-            preserved = {kind: len(linked[kind]) - (len(selected[kind]) if remove_origins else 0)
-                         for kind in selected}
-            # Worlds left without a race, class, or starting skills fall back to the built-ins.
-            restored = character_creation.restore_world_defaults(database)
     except Exception:
         if staged.exists():
             staged.rename(path)
         raise
-    try:
-        staged.unlink(missing_ok=True)
-        file_warning = False
-    except OSError:
-        file_warning = True
+
+
+def _delete_batches(database, select_ids, delete_sql, parameters=()):
+    """Delete in small transactions so other writers get the database between them."""
+    import time
+    while True:
+        ids = [row[0] for row in database.execute(select_ids, parameters)]
+        if not ids:
+            return
+        with _transaction(database):
+            database.executemany(delete_sql, [(value,) for value in ids])
+        time.sleep(0.01)
+
+
+def _retire_rows_batched(database, world_id, reason):
+    """_retire_rows in short transactions. Every step is safe to repeat if removal is resumed."""
+    import time
+    from . import mud
+    with _transaction(database):
+        mud.end_world_runs(database, world_id, reason)
+        for table in ("mud_script_flags", "mud_trigger_fires", "mud_script_entity_states"):
+            database.execute(f"DELETE FROM {table} WHERE realm=?", (world_id,))
+        retired_id = f"retired:{world_id}:{uuid.uuid4().hex}"
+        for table in ("mud_item_definitions", "mud_npc_definitions", "mud_conversations", "mud_quests",
+                      "mud_world_factions"):
+            database.execute(f"UPDATE {table} SET world_id=? WHERE world_id=?", (retired_id, world_id))
+    # Descendants go before their containers so the item-location constraint holds in every batch.
+    items = [row[0] for row in database.execute(
+        "WITH RECURSIVE placed(id,depth) AS ("
+        "SELECT id,0 FROM mud_item_instances WHERE room_id IN "
+        "(SELECT id FROM mud_world_rooms WHERE world_id=?) UNION ALL "
+        "SELECT child.id,placed.depth+1 FROM mud_item_instances child "
+        "JOIN placed ON child.container_id=placed.id) "
+        "SELECT id FROM placed ORDER BY depth DESC", (world_id,))]
+    for start in range(0, len(items), REMOVAL_BATCH * 2):
+        with _transaction(database):
+            database.executemany("DELETE FROM mud_item_instances WHERE id=?",
+                                 [(value,) for value in items[start:start + REMOVAL_BATCH * 2]])
+        time.sleep(0.01)
+    with _transaction(database):
+        database.execute("DELETE FROM mud_professions WHERE world_id=?", (world_id,))
+        for table in ("mud_vehicles", "mud_transit_trips", "mud_vehicle_definitions", "mud_transit_lines"):
+            database.execute(f"DELETE FROM {table} WHERE world_id=?", (world_id,))
+        database.execute("DELETE FROM mud_property_holdings WHERE world_id=?", (world_id,))
+        database.execute("DELETE FROM mud_properties WHERE world_id=?", (world_id,))
+    # Rooms cascade into exits, NPC instances and more, so remove them a slice at a time.
+    _delete_batches(database, f"SELECT id FROM mud_world_rooms WHERE world_id=? LIMIT {REMOVAL_BATCH}",
+                    "DELETE FROM mud_world_rooms WHERE id=?", (world_id,))
+
+
+def finish_removal(database, world_id):
+    """Do the removal begin_removal started: clear the world in slices, then drop its package."""
+    from . import character_creation, mud_skills
+    world = database.execute("SELECT removing,removing_origins FROM mud_world_packages WHERE id=?",
+                             (world_id,)).fetchone()
+    if world is None or not world["removing"]:
+        raise WorldError("This world is not being removed.")
+    remove_origins = bool(world["removing_origins"])
+    # Origin links come from tables the steps below leave alone, so it is safe to read them first.
+    associated = removal_origins(database, world_id)
+    linked = world_origin_keys(database, world_id)
+    selected = {kind: {entry["key"] for entry in associated[kind]}
+                for kind in (*character_creation.KINDS, "skills")}
+    _retire_rows_batched(database, world_id, "This world was removed from the station.")
+    with _transaction(database):
+        if remove_origins and any(selected[kind] for kind in character_creation.KINDS):
+            character_creation.remove_origins(database, selected)
+        # Skills go after the origins removed above, which no longer depend on them.
+        if remove_origins and selected["skills"]:
+            selected["skills"] = {entry["key"] for entry in
+                                  mud_skills.remove_linked(database, associated["skills"])}
+        # Abilities and effects go last, once nothing removed above still grants or applies them.
+        magic = (mud_shared_definitions.remove_unused_abilities_and_effects(database, ("world", world_id))
+                 if remove_origins else {"abilities": [], "effects": [], "kept": []})
+        database.execute("DELETE FROM mud_world_packages WHERE id=?", (world_id,))
+        database.execute("DELETE FROM mud_world_availability WHERE world_key=?", (world_id,))
+        preserved = {kind: len(linked[kind]) - (len(selected[kind]) if remove_origins else 0)
+                     for kind in selected}
+        # Worlds left without a race, class, or starting skills fall back to the built-ins.
+        restored = character_creation.restore_world_defaults(database)
+    file_warning = False
+    for staged in _staged_files(world_id):
+        try:
+            staged.unlink(missing_ok=True)
+        except OSError:
+            file_warning = True
     return {"removed": selected if remove_origins else {kind: set() for kind in selected},
             "preserved": preserved, "magic": magic,
             "restored": restored, "file_warning": file_warning}
+
+
+def remove(database, world_id, *, remove_origins=False):
+    """Uninstall a disabled imported world. Its characters stay, hidden, and return if it is reinstalled."""
+    begin_removal(database, world_id, remove_origins=remove_origins)
+    return finish_removal(database, world_id)
+
+
+def removing_worlds(database):
+    return [row["id"] for row in database.execute("SELECT id FROM mud_world_packages WHERE removing=1")]
+
+
+def start_removal(app, world_id):
+    """Run finish_removal on a worker thread; False if one is already running for this world."""
+    from . import background_jobs
+    return background_jobs.start(app, f"mud-world-remove:{world_id}",
+                                 lambda database: finish_removal(database, world_id))
+
+
+def resume_removals(app):
+    """Restart removals a shutdown interrupted."""
+    from .db import close_db, get_db
+    with app.app_context():
+        try:
+            pending = removing_worlds(get_db())
+        finally:
+            close_db()
+    for world_id in pending:
+        start_removal(app, world_id)

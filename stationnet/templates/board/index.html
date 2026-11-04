@@ -13,7 +13,7 @@
   <div class="bulletin-columns" aria-hidden="true"><span>ORIGIN</span><span>SUBJECT / EXCERPT</span><span>TRAFFIC</span></div>
   {% for post in posts %}
   <article class="bulletin-row">
-    <div class="bulletin-meta"><strong>{{ post.username }} - [{{ post.callsign }}]</strong><time>{{ post.created_at }} UTC</time></div>
+    <div class="bulletin-meta"><strong>{{ post.username }} - [{{ post.callsign }}]</strong>{{ post.created_at|localtime }}</div>
     <div class="bulletin-content"><h2><a href="{{ url_for('board.thread',post_id=post.id) }}">{{ post.title }}</a>{% if post.has_poll %} <span class="poll-tag">POLL</span>{% endif %}</h2><p>{{ post.body|truncate(220) }}</p></div>
     <a class="reply-count" href="{{ url_for('board.thread',post_id=post.id) }}"><strong>{{ '%02d'|format(post.reply_count) }}</strong><span>{{ 'reply' if post.reply_count==1 else 'replies' }}</span></a>
   </article>

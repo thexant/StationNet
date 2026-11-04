@@ -139,7 +139,7 @@ function initialize() {
       button.type = 'button';
       button.className = record.id === currentId ? 'selected' : '';
       button.textContent = title;
-      button.title = `Updated ${record.updated_at} UTC`;
+      button.title = `Updated ${window.StationNet?.localTimestamp ? window.StationNet.localTimestamp(record.updated_at) : `${record.updated_at} UTC`}`;
       button.onclick = () => load(record.id);
       item.append(button);
       list.append(item);

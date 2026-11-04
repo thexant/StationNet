@@ -20,6 +20,8 @@ IDEAL_BREAK = {"light": 120, "standard": 300, "heavy": 420}
 RERUN_LEVELS = {"minimal": 0.0, "moderate": 0.15, "frequent": 0.35}
 # Hours before a standalone programme may comfortably air again.
 REPEAT_GAP_HOURS = {"minimal": 96, "moderate": 48, "frequent": 18}
+# How a series' episodes are chosen: a shuffled deck, or season/episode order.
+EPISODE_ORDERS = {"shuffle": "Shuffled", "sequential": "In order"}
 SLOT = timedelta(minutes=30)
 MAX_INTERLUDE = timedelta(minutes=15)
 MAX_BREAK_PER_HALF = 480
@@ -35,6 +37,7 @@ DEFAULT_CONFIG = {
             "special": 5, "other": 5},
     "commercials": "standard",
     "reruns": "moderate",
+    "episode_order": "shuffle",
     "days": 7,
     "on_air_from": "06:00",
     "on_air_until": "02:00",
@@ -143,10 +146,12 @@ def normalize_config(raw):
         if not any(mix.values()):
             return None, "Give at least one content type a weight."
         config["mix"] = mix
-    for key, allowed in (("commercials", COMMERCIAL_LEVELS), ("reruns", RERUN_LEVELS)):
+    for key, allowed, label in (("commercials", COMMERCIAL_LEVELS, "commercials level"),
+                                ("reruns", RERUN_LEVELS, "reruns level"),
+                                ("episode_order", EPISODE_ORDERS, "episode order")):
         if key in raw:
-            if raw[key] not in allowed:
-                return None, f"Choose a valid {key} level."
+            if not isinstance(raw[key], str) or raw[key] not in allowed:
+                return None, f"Choose a valid {label}."
             config[key] = raw[key]
     if "days" in raw:
         try:
@@ -227,6 +232,8 @@ class _Series:
     genre: str
     pointer: int = -1
     wraps: int = 0
+    deck: list = field(default_factory=list)
+    deck_pos: int = 0
 
 
 @dataclass
@@ -262,6 +269,9 @@ class Generator:
                 grouped.setdefault(program.series.lower(), []).append(program)
             else:
                 self.standalone.append(program)
+        for airing_start, media_id in history:
+            self.state.last_aired[media_id] = max(self.state.last_aired.get(media_id, airing_start), airing_start)
+        self.shuffle = config.get("episode_order", "shuffle") == "shuffle"
         self.series = {}
         pointers = {key.lower(): value for key, value in (series_pointer or {}).items()}
         for key, episodes in grouped.items():
@@ -270,8 +280,11 @@ class Generator:
             genres = [e.genre for e in episodes if e.genre]
             entry = _Series(episodes[0].series, episodes, max(set(types), key=types.count),
                             max(set(genres), key=genres.count) if genres else "")
-            last = pointers.get(key)
-            entry.pointer = next((i for i, e in enumerate(episodes) if e.media_id == last), -1)
+            if self.shuffle:
+                entry.deck = self._first_deck(episodes)
+            else:
+                last = pointers.get(key)
+                entry.pointer = next((i for i, e in enumerate(episodes) if e.media_id == last), -1)
             self.series[key] = entry
         present = {p.content_type for p in self.standalone} | {s.content_type for s in self.series.values()}
         weights = {kind: config["mix"].get(kind, 0) for kind in present}
@@ -279,21 +292,40 @@ class Generator:
         if total == 0:
             weights, total = {kind: 1 for kind in present}, len(present) or 1
         self.share = {kind: weight / total for kind, weight in weights.items()}
-        for airing_start, media_id in history:
-            self.state.last_aired[media_id] = max(self.state.last_aired.get(media_id, airing_start), airing_start)
         self.by_id = {p.media_id: p for p in programs}
         for airing_start, media_id in history:
             program = self.by_id.get(media_id)
             if program and airing_start.astimezone(zone).hour in PRIME_HOURS:
                 self.state.prime_log.append((airing_start, program))
 
+    # Episode decks --------------------------------------------------------
+
+    def _first_deck(self, episodes):
+        """Unaired episodes in random order, then recently aired ones oldest first."""
+        unaired = [e for e in episodes if e.media_id not in self.state.last_aired]
+        aired = sorted((e for e in episodes if e.media_id in self.state.last_aired),
+                       key=lambda e: self.state.last_aired[e.media_id])
+        self.state.rng.shuffle(unaired)
+        return unaired + aired
+
+    def _reshuffle(self, entry, just_aired):
+        deck = list(entry.episodes)
+        self.state.rng.shuffle(deck)
+        if len(deck) > 1 and deck[0].media_id == just_aired:
+            swap = self.state.rng.randrange(1, len(deck))
+            deck[0], deck[swap] = deck[swap], deck[0]
+        entry.deck, entry.deck_pos = deck, 0
+
     # Candidate scoring ----------------------------------------------------
 
     def _units(self):
         units = [(program, None, False) for program in self.standalone]
         for key, entry in self.series.items():
-            index = (entry.pointer + 1) % len(entry.episodes)
-            units.append((entry.episodes[index], key, False))
+            if self.shuffle:
+                units.append((entry.deck[entry.deck_pos], key, False))
+            else:
+                index = (entry.pointer + 1) % len(entry.episodes)
+                units.append((entry.episodes[index], key, False))
         return units
 
     def _encores(self, at):
@@ -348,7 +380,7 @@ class Generator:
         if series_key:
             if state.last_series == series_key:
                 score *= 0.35
-            if state.strip.get(local.strftime("%H:%M")) == series_key:
+            if not self.shuffle and state.strip.get(local.strftime("%H:%M")) == series_key:
                 score *= 2.5
         if self.clips:
             break_per_half = (length.total_seconds() - program.duration) / (length / SLOT)
@@ -459,9 +491,15 @@ class Generator:
                     program.media_id, program.series, rerun, covered >= length.total_seconds())
         if series_key and not rerun:
             entry = self.series[series_key]
-            entry.pointer = (entry.pointer + 1) % len(entry.episodes)
-            if entry.pointer == len(entry.episodes) - 1:
-                entry.wraps += 1
+            if self.shuffle:
+                entry.deck_pos += 1
+                if entry.deck_pos >= len(entry.deck):
+                    self._reshuffle(entry, program.media_id)
+                    entry.wraps += 1
+            else:
+                entry.pointer = (entry.pointer + 1) % len(entry.episodes)
+                if entry.pointer == len(entry.episodes) - 1:
+                    entry.wraps += 1
             state.strip[at.astimezone(self.zone).strftime("%H:%M")] = series_key
         state.last_series = series_key or ""
         state.encores += rerun

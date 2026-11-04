@@ -80,7 +80,7 @@
     </header>
 
     <div class="flash-stack" aria-live="polite">
-      {% for category,message in get_flashed_messages(with_categories=true) %}<div class="flash {{ category }}"><span>SYS://</span> {{ message }}</div>{% endfor %}
+      {% for category,message in get_flashed_messages(with_categories=true) %}<div class="flash {{ category }}" data-local-text><span>SYS://</span> {{ message }}</div>{% endfor %}
       {% if g.user %}<div class="direct-alerts" data-direct-alerts aria-live="polite"></div>{% endif %}
     </div>
 

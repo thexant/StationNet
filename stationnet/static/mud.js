@@ -146,7 +146,7 @@ for(const mud of document.querySelectorAll("[data-mud]")){
     const type=document.createElement("span");
     type.textContent=(event.event_type||"system").toUpperCase();
     const body=document.createElement("p");
-    body.textContent=event.body;
+    body.textContent=window.StationNet?.localizeText?window.StationNet.localizeText(event.body):event.body;
     row.append(type,body);
     events.append(row);
     while(events.querySelectorAll("[data-event-id]").length>200){

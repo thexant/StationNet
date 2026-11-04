@@ -82,8 +82,10 @@
         <div class="tv-form-row">
           <label>Commercials<select name="commercials"><option value="light">Light</option><option value="standard">Standard</option><option value="heavy">Heavy</option></select></label>
           <label>Reruns<select name="reruns"><option value="minimal">Minimal</option><option value="moderate">Moderate</option><option value="frequent">Frequent</option></select></label>
+          <label>Episode order<select name="episode_order"><option value="shuffle">Shuffled</option><option value="sequential">In order</option></select></label>
           <label>Days<input type="number" name="days" min="1" max="28" required></label>
         </div>
+        <small class="muted">Shuffled mixes up episodes and seasons and airs each one before repeating any. In order continues each series from where it left off, at the same time each day.</small>
         <fieldset>
           <legend>Programming mix</legend>
           <div class="tv-auto-mix" data-auto-mix></div>

@@ -75,7 +75,7 @@ def test_directory_ties_are_stable_and_profiles_share_last_active(tmp_path):
     assert _names(client.get("/users?page=3"))[-1] == "user22"
     assert 'LAST ACTIVE: NEVER' in client.get("/users?page=3").get_data(as_text=True)
     assert '<dt>LAST ACTIVE</dt><dd>NEVER</dd>' in client.get(f"/users/{user22}").get_data(as_text=True)
-    assert 'datetime="2024-03-01T00:00:00+00:00" data-local-time' in client.get(
+    assert 'datetime="2024-03-01T00:00:00Z" data-local-time="datetime"' in client.get(
         f"/users/{user00}").get_data(as_text=True)
 
     recent = datetime.now(timezone.utc).replace(microsecond=0).isoformat()

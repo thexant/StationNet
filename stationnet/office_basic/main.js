@@ -91,7 +91,7 @@ function start() {
     for (const record of records) {
       const li = document.createElement('li'), button = document.createElement('button'); button.type = 'button';
       try { button.textContent = cleanTitle(decrypt(record.envelope).title); } catch { button.textContent = 'Unable to decrypt'; }
-      button.className = record.id === id ? 'selected' : ''; button.title = `Updated ${record.updated_at} UTC`; button.onclick = () => load(record.id); li.append(button); list.append(li);
+      button.className = record.id === id ? 'selected' : ''; button.title = `Updated ${window.StationNet?.localTimestamp ? window.StationNet.localTimestamp(record.updated_at) : `${record.updated_at} UTC`}`; button.onclick = () => load(record.id); li.append(button); list.append(li);
     }
     if (!records.length) { const li = document.createElement('li'); li.textContent = 'No saved programs yet.'; list.append(li); }
   }

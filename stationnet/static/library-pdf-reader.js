@@ -1,7 +1,8 @@
 (() => {
   const root = document.querySelector('[data-pdf-reader]');
   if (!root) return;
-  const frame = root.querySelector('[data-pdf-frame]');
+  const stage = root.querySelector('[data-pdf-stage]');
+  const canvas = root.querySelector('[data-pdf-canvas]');
   const pageInput = root.querySelector('[data-pdf-page]');
   const status = root.querySelector('[data-pdf-status]');
   const zoomLabel = root.querySelector('[data-pdf-zoom-label]');
@@ -11,6 +12,51 @@
   let zoom = 'page-width';
   let page = Number(root.dataset.page);
   let saveTimer;
+  let pdf = null;
+  let renderTask = null;
+  let renderToken = 0;
+
+  const ready = import(root.dataset.pdfjsUrl).then(async pdfjs => {
+    pdfjs.GlobalWorkerOptions.workerSrc = root.dataset.pdfjsWorkerUrl;
+    pdf = await pdfjs.getDocument({
+      url: root.dataset.pdfUrl, withCredentials: true, isEvalSupported: false,
+      standardFontDataUrl: root.dataset.pdfjsFontsUrl,
+    }).promise;
+  }).catch(error => {
+    console.error(error);
+    stage.classList.add('failed');
+    stage.textContent = 'This PDF could not be displayed in the reader.';
+  });
+
+  async function render() {
+    await ready;
+    if (!pdf) return;
+    const token = ++renderToken;
+    if (renderTask) { renderTask.cancel(); renderTask = null; }
+    const pdfPage = await pdf.getPage(Math.min(page, pdf.numPages));
+    if (token !== renderToken) return;
+    const base = pdfPage.getViewport({scale: 1});
+    const fit = Math.max(120, stage.clientWidth - 2) / base.width;
+    const scale = zoom === 'page-width' ? fit : zoom / 100;
+    const ratio = window.devicePixelRatio || 1;
+    const viewport = pdfPage.getViewport({scale: scale * ratio});
+    const buffer = document.createElement('canvas');
+    buffer.width = Math.floor(viewport.width);
+    buffer.height = Math.floor(viewport.height);
+    renderTask = pdfPage.render({canvasContext: buffer.getContext('2d'), viewport});
+    try { await renderTask.promise; } catch (error) {
+      if (error?.name !== 'RenderingCancelledException') status.textContent = 'Could not draw this page.';
+      return;
+    }
+    if (token !== renderToken) return;
+    renderTask = null;
+    canvas.width = buffer.width;
+    canvas.height = buffer.height;
+    canvas.style.width = `${Math.floor(viewport.width / ratio)}px`;
+    canvas.style.height = `${Math.floor(viewport.height / ratio)}px`;
+    canvas.getContext('2d').drawImage(buffer, 0, 0);
+    stage.scrollTop = 0;
+  }
 
   async function post(url, body) {
     const response = await fetch(url, {method: 'POST', credentials: 'same-origin',
@@ -34,7 +80,7 @@
     root.querySelector('[data-pdf-previous]').disabled = page <= 1;
     root.querySelector('[data-pdf-next]').disabled = page >= pages;
     zoomLabel.textContent = zoom === 'page-width' ? 'FIT WIDTH' : `${zoom}%`;
-    frame.src = `${root.dataset.pdfUrl}#page=${page}&zoom=${zoom}&toolbar=0&navpanes=0`;
+    render();
     const url = new URL(root.dataset.readUrl, location.href);
     url.searchParams.set('page', String(page));
     history.replaceState(null, '', url);
@@ -71,6 +117,26 @@
     if (event.key === 'ArrowLeft') go(page - 1);
     if (event.key === 'ArrowRight') go(page + 1);
   });
+  let touchStart = null;
+  stage.addEventListener('touchstart', event => {
+    touchStart = event.touches.length === 1 ? {x: event.touches[0].clientX, y: event.touches[0].clientY} : null;
+  }, {passive: true});
+  stage.addEventListener('touchend', event => {
+    if (!touchStart || event.changedTouches.length !== 1) return;
+    const dx = event.changedTouches[0].clientX - touchStart.x;
+    const dy = event.changedTouches[0].clientY - touchStart.y;
+    touchStart = null;
+    if (stage.scrollWidth > stage.clientWidth + 2) return;
+    if (Math.abs(dx) > 60 && Math.abs(dx) > 2 * Math.abs(dy)) go(dx < 0 ? page + 1 : page - 1);
+  }, {passive: true});
+  let resizeTimer;
+  let lastWidth = stage.clientWidth;
+  new ResizeObserver(() => {
+    if (stage.clientWidth === lastWidth) return;
+    lastWidth = stage.clientWidth;
+    clearTimeout(resizeTimer);
+    if (zoom === 'page-width') resizeTimer = setTimeout(render, 150);
+  }).observe(stage);
   if (loggedIn) {
     const list = root.querySelector('[data-pdf-bookmarks]');
     root.querySelector('[data-pdf-bookmark]').addEventListener('click', async () => {

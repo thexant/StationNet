@@ -91,7 +91,7 @@ function initialize() {
       try { title = decrypt(record.envelope).title || 'Untitled workbook'; } catch { /* Bad or old password. */ }
       const li = document.createElement('li'), button = document.createElement('button');
       button.type = 'button'; button.textContent = title; button.className = record.id === id ? 'selected' : '';
-      button.title = `Updated ${record.updated_at} UTC`; button.onclick = () => load(record.id);
+      button.title = `Updated ${window.StationNet?.localTimestamp ? window.StationNet.localTimestamp(record.updated_at) : `${record.updated_at} UTC`}`; button.onclick = () => load(record.id);
       li.append(button); list.append(li);
     }
     if (!records.length) { const li = document.createElement('li'); li.textContent = 'No saved workbooks yet.'; list.append(li); }

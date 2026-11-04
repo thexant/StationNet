@@ -20,7 +20,7 @@ from flask import (Blueprint, abort, current_app, flash, g, jsonify, redirect, r
 
 from .auth import admin_required, login_required
 from .db import get_db
-from . import dungeons, character_creation, mud_abilities, mud_combat, mud_conditions, mud_quests, mud_effects, mud_progression, mud_firearms, mud_compat, mud_gathering, mud_housing, mud_work, mud_scope, mud_skills, mud_society, mud_start_rules, mud_transport, mud_triggers, mud_wayfinding, mud_wilderness, moderation
+from . import dungeons, character_creation, mud_abilities, mud_combat, mud_conditions, mud_quests, mud_effects, mud_progression, mud_firearms, mud_compat, mud_gathering, mud_housing, mud_work, mud_scope, mud_skills, mud_society, mud_start_rules, mud_transport, mud_triggers, mud_wayfinding, mud_wilderness, moderation, timefmt
 from .security import validate_csrf
 
 bp = Blueprint("mud", __name__, url_prefix="/mud")
@@ -2871,8 +2871,8 @@ def _period_text(seconds):
 
 
 def _moment_text(value):
-    moment = mud_housing.parse_time(value)
-    return moment.strftime("%Y-%m-%d %H:%M UTC") if moment else "now"
+    """UTC text the MUD client shows in the player's local time."""
+    return timefmt.utc_text(value, "now")
 
 
 def _property_terms(found, owners=1):
@@ -3411,7 +3411,7 @@ def process_housing(database, now=None):
                                      (stamp, row["holding_id"], row["character_id"]))
                     drafts.append(_private(row["user_id"], f"Rent for {row['name']} is due: pay {share} coins with "
                                                            f"/house pay {row['name']} before "
-                                                           f"{mud_housing.stamp(deadline)[:16].replace('T', ' ')} UTC.",
+                                                           f"{_moment_text(deadline)}.",
                                            "housing"))
             for draft in drafts:
                 _insert_event(database, draft, default_user_id=draft.recipient_ids[0] if draft.recipient_ids else None)
@@ -7593,7 +7593,7 @@ def _daily_settings(database):
     return row
 
 
-def _daily_day_key(settings, now=None):
+def _daily_zone_instant(settings, now=None):
     try:
         zone = ZoneInfo(settings["timezone"])
     except ZoneInfoNotFoundError:
@@ -7601,7 +7601,18 @@ def _daily_day_key(settings, now=None):
     instant = now or datetime.now(timezone.utc)
     if instant.tzinfo is None:
         instant = instant.replace(tzinfo=timezone.utc)
-    return instant.astimezone(zone).date().isoformat()
+    return zone, instant.astimezone(zone)
+
+
+def _daily_day_key(settings, now=None):
+    return _daily_zone_instant(settings, now)[1].date().isoformat()
+
+
+def _daily_next_rotation(settings, now=None):
+    """The UTC instant of the next local midnight in the Dungeon of the Day time zone."""
+    zone, local = _daily_zone_instant(settings, now)
+    tomorrow = local.date() + timedelta(days=1)
+    return datetime(tomorrow.year, tomorrow.month, tomorrow.day, tzinfo=zone).astimezone(timezone.utc)
 
 
 def _eligible_daily_themes(database, settings):
@@ -7715,6 +7726,7 @@ def _daily_status_text(database, user_id, now=None):
         f"({daily['theme_id']}@{daily['theme_version']}) · "
         f"attempts {attempts}/{settings['max_attempts']} · completions {completions} · "
         f"failures {failures} · first-completion reward {reward}. "
+        f"Next rotation {_moment_text(_daily_next_rotation(settings, now))}. "
         f"Historical totals: {history['attempts']} attempts, {history['completions']} completions."
     )
 
@@ -10301,7 +10313,7 @@ def _work_action(database, user, parameters):
                 for npc in _room_npc_rows(database, room["id"]))
             if nearby or state and state["status"] != "idle":
                 status = state["status"] if state and state["status"] != "idle" else (
-                    f"cooldown until {state['available_at']}" if not _work_due(state) else "available")
+                    f"cooldown until {_moment_text(state['available_at'])}" if not _work_due(state) else "available")
                 goal = _work_goal_text(database, activity)
                 lines.append(f"{activity['profession_name']}/{activity['name']} · {activity['kind']} · {status} — "
                              f"{activity['description']}" + (f" Goal: {goal}." if goal else "") +

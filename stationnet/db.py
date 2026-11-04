@@ -1257,7 +1257,7 @@ def get_db():
         _register_mud_functions(g.db)
         g.db.execute("PRAGMA foreign_keys=ON")
         g.db.execute("PRAGMA journal_mode=WAL")
-        g.db.execute("PRAGMA busy_timeout=5000")
+        g.db.execute("PRAGMA busy_timeout=15000")
     return g.db
 
 def close_db(_error=None):
@@ -3551,7 +3551,9 @@ def _migrate_mud_package_definitions(database):
     columns = {row["name"] for row in database.execute("PRAGMA table_info(mud_world_packages)")}
     for name, ddl in (("progression_json", "TEXT NOT NULL DEFAULT '{}'"),
                       ("format_version", "INTEGER NOT NULL DEFAULT 1"),
-                      ("package_hash", "TEXT")):
+                      ("package_hash", "TEXT"),
+                      ("removing", "INTEGER NOT NULL DEFAULT 0"),
+                      ("removing_origins", "INTEGER NOT NULL DEFAULT 0")):
         if name not in columns:
             database.execute(f"ALTER TABLE mud_world_packages ADD COLUMN {name} {ddl}")
     # The legacy enabled flag on shared definitions is never read; keep it mirroring installed.

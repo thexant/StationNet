@@ -78,23 +78,23 @@
       <div class="activity-list">
         {% if module_enabled('board') %}<a class="activity-item" href="{{ url_for('board.thread',post_id=activity.bulletin.id) if activity.bulletin else url_for('board.index') }}">
           <span>MOST RECENT BULLETIN</span>
-          {% if activity.bulletin %}<strong>{{ activity.bulletin.title }}</strong><small>{{ activity.bulletin.username }} / {{ activity.bulletin.callsign }}</small><time datetime="{{ activity.bulletin.created_at|replace(' ', 'T') }}Z" data-local-time>{{ activity.bulletin.created_at }} UTC</time>{% else %}<em>NO BULLETINS POSTED</em>{% endif %}
+          {% if activity.bulletin %}<strong>{{ activity.bulletin.title }}</strong><small>{{ activity.bulletin.username }} / {{ activity.bulletin.callsign }}</small>{{ activity.bulletin.created_at|localtime }}{% else %}<em>NO BULLETINS POSTED</em>{% endif %}
         </a>
         {% if activity.reply %}<a class="activity-item" href="{{ url_for('board.thread',post_id=activity.reply.bulletin_id) }}#reply-{{ activity.reply.id }}">
           <span>MOST RECENT REPLY</span>
-          <strong>RE: {{ activity.reply.bulletin_title }}</strong><p>{{ activity.reply.body|truncate(120) }}</p><small>{{ activity.reply.username }} / {{ activity.reply.callsign }}</small><time datetime="{{ activity.reply.created_at|replace(' ', 'T') }}Z" data-local-time>{{ activity.reply.created_at }} UTC</time>
+          <strong>RE: {{ activity.reply.bulletin_title }}</strong><p>{{ activity.reply.body|truncate(120) }}</p><small>{{ activity.reply.username }} / {{ activity.reply.callsign }}</small>{{ activity.reply.created_at|localtime }}
         </a>{% else %}<a class="activity-item" href="{{ url_for('board.index') }}"><span>MOST RECENT REPLY</span><em>NO REPLIES POSTED</em></a>{% endif %}{% endif %}
         {% if module_enabled('chat') %}<a class="activity-item" href="{{ url_for('chat.station_chat') }}">
           <span>MOST RECENT CHAT MESSAGE</span>
-          {% if activity.chat %}<time datetime="{{ activity.chat.created_at|replace(' ', 'T') }}Z" data-local-time>{{ activity.chat.created_at }} UTC</time>{% else %}<em>NO CHAT MESSAGES</em>{% endif %}
+          {% if activity.chat %}{{ activity.chat.created_at|localtime }}{% else %}<em>NO CHAT MESSAGES</em>{% endif %}
         </a>{% endif %}
         {% if module_enabled('archive') %}<a class="activity-item" href="{{ url_for('archive.index') }}{% if activity.file %}#file-{{ activity.file.id }}{% endif %}">
           <span>NEWEST FILE</span>
-          {% if activity.file %}<strong>{{ activity.file.display_name }}</strong><time datetime="{{ activity.file.created_at|replace(' ', 'T') }}Z" data-local-time>{{ activity.file.created_at }} UTC</time>{% else %}<em>NO FILES UPLOADED</em>{% endif %}
+          {% if activity.file %}<strong>{{ activity.file.display_name }}</strong>{{ activity.file.created_at|localtime }}{% else %}<em>NO FILES UPLOADED</em>{% endif %}
         </a>{% endif %}
         {% if module_enabled('users') %}{% if activity.member %}<a class="activity-item" href="{{ url_for('users.profile', user_id=activity.member.id) }}">
           <span>NEWEST MEMBER</span>
-          <strong>{{ activity.member.username }}</strong><time datetime="{{ activity.member.created_at|replace(' ', 'T') }}Z" data-local-time>{{ activity.member.created_at }} UTC</time>
+          <strong>{{ activity.member.username }}</strong>{{ activity.member.created_at|localtime }}
         </a>{% else %}<div class="activity-item">
           <span>NEWEST MEMBER</span><em>NO REGISTERED MEMBERS</em>
         </div>{% endif %}{% endif %}
@@ -104,10 +104,18 @@
         {% if module_enabled('radio') %}<div class="activity-broadcasts" data-activity-broadcasts>
           <a class="activity-item activity-broadcast-link" id="activity-broadcast-list" href="{{ url_for('radio.console') }}">
             <span>ACTIVE BROADCASTS</span>
-            {% for broadcast in activity.broadcasts %}<div class="activity-broadcast"{% if loop.index > 5 %} hidden{% endif %}><strong>{{ broadcast.name }}</strong><small>{{ broadcast.frequency }} MHz / {% if broadcast.automated %}STATION AUTOMATION{% else %}{{ broadcast.username }} - [{{ broadcast.callsign }}]{% endif %}</small>{% if broadcast.message %}<p>{{ broadcast.message }}</p>{% endif %}<em>{{ broadcast.track_title }}{% if broadcast.track_artist %} / {{ broadcast.track_artist }}{% endif %}</em></div>{% else %}<em>NO AUTHORIZED BROADCASTS ON AIR</em>{% endfor %}
-            {% if activity.broadcasts|length > 5 %}<small class="activity-broadcast-more" data-activity-broadcast-more>and {{ activity.broadcasts|length - 5 }} more</small>{% endif %}
+            {% set broadcast_limit = activity.broadcast_limit|default(5) %}{% for broadcast in activity.broadcasts %}<div class="activity-broadcast"{% if loop.index > broadcast_limit %} hidden{% endif %}><strong>{{ broadcast.name }}</strong><small>{{ broadcast.frequency }} MHz / {% if broadcast.automated %}STATION AUTOMATION{% else %}{{ broadcast.username }} - [{{ broadcast.callsign }}]{% endif %}</small>{% if broadcast.message %}<p>{{ broadcast.message }}</p>{% endif %}<em>{{ broadcast.track_title }}{% if broadcast.track_artist %} / {{ broadcast.track_artist }}{% endif %}</em></div>{% else %}<em>NO AUTHORIZED BROADCASTS ON AIR</em>{% endfor %}
+            {% if activity.broadcasts|length > broadcast_limit %}<small class="activity-broadcast-more" data-activity-broadcast-more>and {{ activity.broadcasts|length - broadcast_limit }} more</small>{% endif %}
           </a>
-          {% if activity.broadcasts|length > 5 %}<button class="activity-broadcast-toggle" type="button" aria-label="Show all active broadcasts" aria-controls="activity-broadcast-list" aria-expanded="false" data-activity-broadcast-toggle><span aria-hidden="true">&#9662;</span></button>{% endif %}
+          {% if activity.broadcasts|length > broadcast_limit %}<button class="activity-broadcast-toggle" type="button" aria-label="Show all active broadcasts" aria-controls="activity-broadcast-list" aria-expanded="false" data-activity-broadcast-toggle><span aria-hidden="true">&#9662;</span></button>{% endif %}
+        </div>{% endif %}
+        {% if module_enabled('tv') and activity.tv_channels %}<div class="activity-broadcasts activity-tv" data-activity-broadcasts data-toggle-label="TV channels">
+          <a class="activity-item activity-broadcast-link" id="activity-tv-list" href="{{ url_for('tv.index') }}">
+            <span>TV LISTINGS</span>
+            {% for channel in activity.tv_channels %}<div class="activity-broadcast"{% if loop.index > 3 %} hidden{% endif %}><strong>CH {{ channel.number }} / {{ channel.name }}</strong><small>NOW {{ channel.now.start|localtime('time') }} - {{ channel.now.end|localtime('time') }}</small><em>{{ channel.now.title }}</em>{% if channel.next %}<small>NEXT {{ channel.next.start|localtime('datetime' if channel.next.far else 'time') }} / {{ channel.next.title }}</small>{% endif %}</div>{% endfor %}
+            {% if activity.tv_channels|length > 3 %}<small class="activity-broadcast-more" data-activity-broadcast-more>and {{ activity.tv_channels|length - 3 }} more</small>{% endif %}
+          </a>
+          {% if activity.tv_channels|length > 3 %}<button class="activity-broadcast-toggle" type="button" aria-label="Show all TV channels" aria-controls="activity-tv-list" aria-expanded="false" data-activity-broadcast-toggle><span aria-hidden="true">&#9662;</span></button>{% endif %}
         </div>{% endif %}
       </div>
     </aside>

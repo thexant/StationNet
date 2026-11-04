@@ -9,7 +9,7 @@ from threading import Event
 
 from uvicorn.middleware.wsgi import WSGIMiddleware, WSGIResponder
 
-from . import applications, moderation, mud
+from . import applications, moderation, mud, mud_worlds
 from .realtime import utc_now
 from .db import get_db
 from .multiplayer import MAX_EVENT_BYTES, MultiplayerError, _emit, _promote_connected_host
@@ -176,6 +176,10 @@ def create_asgi_app(flask_app):
                 message = await receive()
                 if message["type"] == "lifespan.startup":
                     timer = asyncio.create_task(mud_timer())
+                    try:
+                        await asyncio.to_thread(mud_worlds.resume_removals, flask_app)
+                    except Exception:
+                        flask_app.logger.exception("Resuming world removals failed")
                     await send({"type": "lifespan.startup.complete"})
                 elif message["type"] == "lifespan.shutdown":
                     for disconnected in tuple(audio_disconnects):

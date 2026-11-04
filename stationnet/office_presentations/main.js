@@ -84,7 +84,7 @@ function initialize() {
     records = (await request(api)).presentations; const list = $('#presentations-list'); list.replaceChildren();
     for (const record of records) {
       let title = 'Unable to decrypt'; try { title = decrypt(record.envelope).title || 'Untitled presentation'; } catch { /* Another password. */ }
-      const li = document.createElement('li'), button = document.createElement('button'); button.type = 'button'; button.textContent = title; button.className = record.id === id ? 'selected' : ''; button.title = `Updated ${record.updated_at} UTC`; button.onclick = () => load(record.id); li.append(button); list.append(li);
+      const li = document.createElement('li'), button = document.createElement('button'); button.type = 'button'; button.textContent = title; button.className = record.id === id ? 'selected' : ''; button.title = `Updated ${window.StationNet?.localTimestamp ? window.StationNet.localTimestamp(record.updated_at) : `${record.updated_at} UTC`}`; button.onclick = () => load(record.id); li.append(button); list.append(li);
     }
     if (!records.length) { const li = document.createElement('li'); li.textContent = 'No saved presentations yet.'; list.append(li); }
   }

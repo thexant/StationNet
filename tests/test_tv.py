@@ -450,3 +450,35 @@ def test_auto_scheduler_generate_publish_lock_and_regenerate(tmp_path):
     assert cleared["removed"] > 0
     remaining = client.get(f"/sysop/tv/api/schedule?channel={channel}&date={tomorrow}").get_json()["blocks"]
     assert {block["id"] for block in remaining} == {locked["id"], edited["id"], manual}
+
+
+def test_station_activity_lists_scheduled_channels_lowest_first(tmp_path):
+    app, client, admin, member = _setup(tmp_path)
+    _signin(client, admin)
+    _enable(client)
+    show = _media_with_duration(client, app, "show.mp4", 3600)
+    short = _media_with_duration(client, app, "short.mp4", 600)
+    start = (datetime.now(timezone.utc) - timedelta(minutes=10)).replace(second=0, microsecond=0)
+    channels = {}
+    for number in (7, 4, 2):
+        channels[number] = _post(client, "/sysop/tv/api/channels",
+                                 {"number": number, "name": f"Channel {number}"}).get_json()["id"]
+    for number in (7, 2):
+        assert _post(client, "/sysop/tv/api/blocks", {
+            "channel_id": channels[number], "kind": "once", "start_date": start.date().isoformat(),
+            "start_time": start.strftime("%H:%M"),
+            "items": [{"media_id": show}, {"media_id": short}]}).status_code == 200
+
+    with app.test_request_context():
+        from flask import g
+        from stationnet import tv
+        g.station = get_db().execute("SELECT * FROM station").fetchone()
+        listings = tv.activity_listings()
+    assert [entry["number"] for entry in listings] == [2, 7]
+    assert listings[0]["now"]["title"] == "show" and listings[0]["now"]["kind"] == "program"
+    assert listings[0]["next"]["title"] == "short" and not listings[0]["next"]["far"]
+
+    _signin(client, member)
+    page = client.get("/terminal").get_data(as_text=True)
+    assert "TV LISTINGS" in page and "CH 2 / Channel 2" in page and "Channel 4" not in page
+    assert "data-activity-broadcast-toggle" not in page.split("TV LISTINGS", 1)[1]

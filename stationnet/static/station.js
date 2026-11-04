@@ -345,13 +345,47 @@ if(stationHours){
   }else showRegular();
 }
 if(clock){const tick=()=>{const now=new Date();clock.textContent=now.toLocaleTimeString([],{hour12:false});if(dateReadout)dateReadout.textContent=now.toLocaleDateString([],{weekday:"short",month:"short",day:"2-digit",year:"numeric"}).toUpperCase()};tick();setInterval(tick,1000)}
-const localTimestamp=value=>{
-  if(!value)return "";
-  const normalized=/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/.test(value)?`${value.replace(" ","T")}Z`:value;
-  const timestamp=new Date(normalized);
-  return Number.isNaN(timestamp.getTime())?value:timestamp.toLocaleString([],{dateStyle:"medium",timeStyle:"short"});
+// Stored timestamps are UTC; show them in the viewer's device time zone.
+const localTimeStyles={
+  datetime:{dateStyle:"medium",timeStyle:"short"},
+  date:{dateStyle:"medium"},
+  time:{timeStyle:"short"},
+  full:{dateStyle:"full",timeStyle:"short"},
 };
-for(const time of document.querySelectorAll("[data-local-time]"))time.textContent=localTimestamp(time.dateTime||time.textContent);
+const parseUtc=value=>{
+  if(!value)return null;
+  let text=String(value).trim().replace(/ UTC$/,"");
+  // Date-times without an offset (SQLite CURRENT_TIMESTAMP) are UTC.
+  if(/^\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}(:\d{2}(\.\d+)?)?$/.test(text))text=`${text.replace(" ","T")}Z`;
+  const timestamp=new Date(text);
+  return Number.isNaN(timestamp.getTime())?null:timestamp;
+};
+const localTimestamp=(value,style="datetime")=>{
+  if(!value)return "";
+  const timestamp=parseUtc(value);
+  return timestamp?timestamp.toLocaleString([],localTimeStyles[style]||localTimeStyles.datetime):String(value);
+};
+// Only stamps that say they are UTC (Z, +00:00 or " UTC") are rewritten, so other text is left alone.
+const utcStampPattern=/\b\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:(?:Z|[+-]00:?00)(?: UTC)?| UTC)(?![\w:])/g;
+const localizeText=text=>text?String(text).replace(utcStampPattern,(stamp,offset,whole)=>{
+  const timestamp=parseUtc(stamp.replace(/(?:Z|[+-]00:?00)?(?: UTC)?$/,"Z"));
+  if(!timestamp)return stamp;
+  const local=localTimestamp(timestamp.toISOString());
+  // Avoid "a.m.." when a sentence ends right after the time.
+  return local.endsWith(".")&&whole[offset+stamp.length]==="."?local.slice(0,-1):local;
+}):text;
+const localizeTimes=(root=document)=>{
+  for(const time of root.querySelectorAll("[data-local-time]")){
+    if(time.dataset.localTime==="full")continue; // events.js formats these.
+    time.textContent=localTimestamp(time.dateTime||time.textContent,time.dataset.localTime||"datetime");
+  }
+  for(const node of root.querySelectorAll("[data-local-text]")){
+    const walker=document.createTreeWalker(node,NodeFilter.SHOW_TEXT);
+    for(let text=walker.nextNode();text;text=walker.nextNode())text.nodeValue=localizeText(text.nodeValue);
+  }
+};
+window.StationNet=Object.assign(window.StationNet||{},{localTimestamp,localizeText,localizeTimes});
+localizeTimes();
 const reducedTaglineMotion=window.matchMedia("(prefers-reduced-motion: reduce)");
 const taglineTimers=new WeakMap();
 const taglineCharacters=value=>typeof Intl.Segmenter==="function"?[...new Intl.Segmenter(undefined,{granularity:"grapheme"}).segment(value)].map(part=>part.segment):Array.from(value);
@@ -633,10 +667,11 @@ for(const section of document.querySelectorAll("[data-activity-broadcasts]")){
   if(!toggle)continue;
   const broadcasts=section.querySelectorAll(".activity-broadcast[hidden]");
   const more=section.querySelector("[data-activity-broadcast-more]");
+  const label=section.dataset.toggleLabel||"active broadcasts";
   toggle.addEventListener("click",()=>{
     const expanded=toggle.getAttribute("aria-expanded")!=="true";
     toggle.setAttribute("aria-expanded",String(expanded));
-    toggle.setAttribute("aria-label",expanded?"Show fewer active broadcasts":"Show all active broadcasts");
+    toggle.setAttribute("aria-label",expanded?`Show fewer ${label}`:`Show all ${label}`);
     for(const broadcast of broadcasts)broadcast.hidden=!expanded;
     if(more)more.hidden=expanded;
   });

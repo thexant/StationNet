@@ -37,7 +37,7 @@ def test_bulletin_pages_hide_numbers_and_keep_anchors(station):
     assert not NUMBER_LABEL.search(visible_text(index))
     assert not NUMBER_LABEL.search(visible_text(page))
     assert f'id="reply-{reply}"' in page
-    assert f'<option value="{reply}">Reply by other · ' in page
+    assert f'<option value="{reply}" data-local-text>Reply by other · ' in page
 
 
 def test_imageboard_pages_hide_numbers_and_keep_anchors(station):
@@ -50,7 +50,7 @@ def test_imageboard_pages_hide_numbers_and_keep_anchors(station):
     assert not NUMBER_LABEL.search(visible_text(page))
     assert f'id="reply-{reply}"' in page
     assert f'<option value="imageboard_thread:{thread}">Thread: thread</option>' in page
-    assert f'<option value="imageboard_reply:{reply}">Reply by other · ' in page
+    assert f'<option value="imageboard_reply:{reply}" data-local-text>Reply by other · ' in page
 
 
 def test_catalog_status_label_has_no_stray_separator(station):

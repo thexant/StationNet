@@ -352,7 +352,7 @@ dd { margin: 0; color: var(--white); font-size: var(--text-xs); text-align: righ
 .imageboard-card-image img { display: block; max-width: 100%; max-height: 9rem; object-fit: contain; }
 .imageboard-card-copy { min-width: 0; overflow-wrap: anywhere; }
 .imageboard-card-copy h2 { margin: .2rem 0; font-size: 1rem; }
-.imageboard-card-copy p, .imageboard-card-copy time { font-size: var(--text-xs); }
+.imageboard-card-copy p, .imageboard-card-copy time, .imageboard-card-copy .imageboard-bumped { font-size: var(--text-xs); }
 .imageboard-card-copy p { white-space: pre-wrap; overflow-wrap: anywhere; }
 .terminal-card.imageboard-post { width: min(900px,100%); }
 .imageboard-thumb { display: block; width: auto; max-width: min(100%,320px); max-height: 320px; margin: 1rem 0; border: 1px solid var(--green-dim); object-fit: contain; }
@@ -1223,8 +1223,9 @@ button:disabled { opacity: .5; cursor: not-allowed; }
 .library-pdf-controls label { display: flex; align-items: center; gap: .35rem; }
 .library-pdf-controls input { width: 4.5rem; }
 .library-pdf-controls [data-pdf-zoom-label] { min-width: 5rem; text-align: center; color: var(--cyan); }
-.library-pdf-stage { margin-top: .7rem; height: max(70vh, 600px); border: 1px solid var(--green-dim); background: #777; }
-.library-pdf-stage iframe { display: block; width: 100%; height: 100%; border: 0; background: #fff; }
+.library-pdf-stage { margin-top: .7rem; height: max(70vh, 600px); overflow: auto; -webkit-overflow-scrolling: touch; overscroll-behavior: contain; border: 1px solid var(--green-dim); background: #777; }
+.library-pdf-stage canvas { display: block; margin: 0 auto; background: #fff; }
+.library-pdf-stage.failed { display: grid; place-items: center; padding: 1rem; color: #000; text-align: center; }
 .library-pdf-note { display: flex; flex-wrap: wrap; justify-content: space-between; gap: .5rem; }
 @media (max-width: 760px) { .library-pdf-stage { height: calc(100dvh - 13rem); min-height: 420px; } .library-pdf-controls { width: 100%; } }
 .video-description { white-space: pre-wrap; overflow-wrap: anywhere; }
@@ -1256,7 +1257,7 @@ button:disabled { opacity: .5; cursor: not-allowed; }
   .bulletin-row { grid-template-columns: minmax(0,1fr) 3.5rem; }
   .bulletin-meta { grid-column: 1 / -1; grid-template-columns: auto auto 1fr; }
   .bulletin-row .bulletin-meta { grid-template-columns: auto 1fr; }
-  .bulletin-meta time { text-align: right; }
+  .bulletin-meta time, .bulletin-meta .meta-times { text-align: right; }
   .station-profile { grid-template-columns: 1fr; }
   .profile-ident { border-top: 1px dotted var(--cyan); border-left: 0; }
   .auth-alternatives { align-items: flex-start; flex-direction: column; }
@@ -1310,7 +1311,7 @@ button:disabled { opacity: .5; cursor: not-allowed; }
   .service-list > * { grid-template-columns: 3rem minmax(0,1fr); }
   .service-state { display: none; }
   .bulletin-meta { grid-template-columns: auto 1fr; }
-  .bulletin-meta time { grid-column: 1 / -1; text-align: left; }
+  .bulletin-meta time, .bulletin-meta .meta-times { grid-column: 1 / -1; text-align: left; }
   .terminal-card { padding: .8rem; }
   .statusbar span:nth-child(2) { display: none; }
   .frequency-fields { grid-template-columns: 1fr; }

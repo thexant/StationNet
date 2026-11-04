@@ -3,6 +3,7 @@ from io import BytesIO
 import json
 from pathlib import Path
 import shutil
+import time
 import uuid
 import zipfile
 
@@ -164,7 +165,17 @@ def test_worlds_run_side_by_side_and_disable_without_loss(tmp_path):
         removed = client.post("/sysop/settings/mud-worlds/remove", data={
             "csrf_token": "test-token", "world_id": "harbor", "confirm_remove": "on"},
             follow_redirects=True)
-        assert b"Custom world removed" in removed.data
+        assert b"World removal started" in removed.data
+        finished = []
+        for _ in range(200):
+            status = client.get("/sysop/settings/mud-worlds/remove-status").get_json()
+            finished = status["finished"]
+            if finished:
+                break
+            time.sleep(0.05)
+        assert finished and "Custom world removed" in finished[0]
+        with app.app_context():
+            assert get_db().execute("SELECT 1 FROM mud_world_packages WHERE id='harbor'").fetchone() is None
         assert not (tmp_path / "mud_worlds" / "harbor.zip").exists()
         reinstalled = client.post("/sysop/settings/mud-worlds/import", data={
             "csrf_token": "test-token", "world_file": (BytesIO(_archive()), "harbor.zip")},
@@ -347,6 +358,10 @@ def test_bundled_origins_have_per_world_availability_export_and_reinstall(tmp_pa
         _enable(client, "harbor", False)
         client.post("/sysop/settings/mud-worlds/remove", data={
             "csrf_token": "test-token", "world_id": "harbor", "confirm_remove": "on"})
+        for _ in range(200):
+            if client.get("/sysop/settings/mud-worlds/remove-status").get_json()["finished"]:
+                break
+            time.sleep(0.05)
         with app.app_context():
             db = get_db()
             assert db.execute("SELECT installed FROM mud_origin_definitions WHERE key=?", (race_key,)).fetchone()[0] == 1
@@ -357,6 +372,43 @@ def test_bundled_origins_have_per_world_availability_export_and_reinstall(tmp_pa
             "csrf_token": "test-token", "world_file": (BytesIO(payload), "harbor.zip")}).status_code == 302
         with app.app_context():
             assert get_db().execute("SELECT COUNT(*) FROM mud_world_origins WHERE world_id='harbor'").fetchone()[0] == 2
+    finally:
+        coordinator = app.extensions["broadcast_coordinator"]
+        coordinator._closed = True
+        coordinator._timer.cancel()
+
+
+def test_interrupted_world_removal_resumes_and_other_writers_stay_unblocked(tmp_path, monkeypatch):
+    import sqlite3
+    app = create_app({"TESTING": True, "DATA_DIR": str(tmp_path)})
+    try:
+        with app.app_context():
+            db = get_db()
+            mud_worlds.install(db, _archive("slowpoke"))
+            db.commit()
+            rooms = db.execute("SELECT COUNT(*) FROM mud_world_rooms WHERE world_id='slowpoke'").fetchone()[0]
+            assert rooms
+            mud_worlds.begin_removal(db, "slowpoke")
+            assert db.execute("SELECT removing FROM mud_world_packages WHERE id='slowpoke'").fetchone()[0] == 1
+            with pytest.raises(mud_worlds.WorldError):
+                mud_worlds.set_enabled(db, "slowpoke", True)
+            # Another connection can write between the removal's short transactions.
+            other = sqlite3.connect(str(tmp_path / "station.db"), timeout=0.2)
+            real = mud_worlds._delete_batches
+
+            def failing(*args, **kwargs):
+                other.execute("UPDATE station SET mud_procedural_enabled=mud_procedural_enabled WHERE id=1")
+                other.commit()
+                raise RuntimeError("interrupted")
+            monkeypatch.setattr(mud_worlds, "_delete_batches", failing)
+            with pytest.raises(RuntimeError):
+                mud_worlds.finish_removal(db, "slowpoke")
+            other.close()
+            assert db.execute("SELECT removing FROM mud_world_packages WHERE id='slowpoke'").fetchone()[0] == 1
+            monkeypatch.setattr(mud_worlds, "_delete_batches", real)
+            mud_worlds.finish_removal(db, "slowpoke")
+            assert db.execute("SELECT 1 FROM mud_world_packages WHERE id='slowpoke'").fetchone() is None
+            assert db.execute("SELECT COUNT(*) FROM mud_world_rooms WHERE world_id='slowpoke'").fetchone()[0] == 0
     finally:
         coordinator = app.extensions["broadcast_coordinator"]
         coordinator._closed = True

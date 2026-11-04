@@ -86,6 +86,36 @@ if (worlds) {
     showRemovalDetails(removeDetails, removal[removeSelect.value]);
   });
 
+  const removalStatus = document.getElementById('world-removal-status');
+  const statusUrl = worlds.dataset.removalStatusUrl;
+  const badges = [...worlds.querySelectorAll('[data-world-badge]')];
+  if (removalStatus && statusUrl && badges.some(badge => badge.textContent === 'REMOVING')) {
+    const poll = async () => {
+      let again = true;
+      try {
+        const result = await (await fetch(statusUrl, {headers: {Accept: 'application/json'}})).json();
+        const active = Object.entries(result.removing);
+        const failed = active.filter(([, job]) => job.state === 'error');
+        removalStatus.hidden = false;
+        if (result.finished.length) {
+          removalStatus.textContent = result.finished.join(' ');
+          setTimeout(() => location.reload(), 3000);
+          again = false;
+        } else if (failed.length) {
+          removalStatus.textContent = `World removal stopped: ${failed[0][1].error}. Submit the removal again to resume it.`;
+          again = false;
+        } else if (active.length) {
+          removalStatus.textContent = 'Removing world in the background. The station stays usable meanwhile.';
+        } else {
+          location.reload();
+          again = false;
+        }
+      } catch (error) { /* keep polling */ }
+      if (again) setTimeout(poll, 3000);
+    };
+    poll();
+  }
+
   const exportSelect = document.getElementById('world-export-id');
   exportSelect?.addEventListener('change', () => {
     for (const box of document.querySelectorAll('.world-export-origin')) {

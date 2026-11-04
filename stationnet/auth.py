@@ -347,9 +347,10 @@ def login():
             return render_template("login.html", login_failed=True)
         else:
             from .moderation import active_restriction
+            from .timefmt import utc_text
             restriction = active_restriction(user["id"], ("ban", "suspension"))
             if restriction is not None:
-                until = f" until {restriction['expires_at']} UTC" if restriction["expires_at"] else ""
+                until = f" until {utc_text(restriction['expires_at'])}" if restriction["expires_at"] else ""
                 state = "banned" if restriction["kind"] == "ban" else "suspended"
                 flash(f"Account {state}{until}: {restriction['reason']}", "error")
                 return render_template("login.html", login_failed=True), 403

@@ -13,7 +13,7 @@ from .auth import admin_required, invitation_digest
 from .ansi import available_header_fonts, is_available_header_font, station_banner
 from .db import get_db
 from .instance import sync_name
-from . import arcade, character_creation, dungeons, header_taglines, mud_abilities, mud_effects, mud_scope, mud_skills, mud_worlds, tv
+from . import arcade, background_jobs, character_creation, dungeons, header_taglines, mud_abilities, mud_effects, mud_scope, mud_skills, mud_worlds, tv
 from . import themes
 from .markdown import render_markdown
 from .midi import InvalidMidi, MAX_MIDI_BYTES, inspect_midi
@@ -414,7 +414,10 @@ def terminal():
                     "message": definition["message"],
                 })
         broadcasts.sort(key=lambda item: (item["frequency_khz"], item["name"].casefold()))
+        tv_channels = tv.activity_listings() if g.station and g.station["tv_enabled"] else []
         activity = {
+            "tv_channels": tv_channels,
+            "broadcast_limit": 3 if tv_channels else 5,
             "bulletin": latest_bulletin,
             "reply": latest_reply,
             "chat": latest_chat,
@@ -1026,15 +1029,41 @@ def remove_mud_world():
     if request.form.get("confirm_remove") != "on":
         flash("Confirm world removal first.", "error")
         return redirect(destination)
+    world_id = request.form.get("world_id", "")
+    if world_id in mud_worlds.removing_worlds(get_db()):
+        # An interrupted or failed removal: submitting again picks it back up.
+        if mud_worlds.start_removal(current_app._get_current_object(), world_id):
+            flash("World removal resumed in the background.", "success")
+        else:
+            flash("This world is already being removed.", "error")
+        return redirect(destination)
     try:
-        result = mud_worlds.remove(get_db(), request.form.get("world_id", ""),
-                                   remove_origins=request.form.get("remove_origins") == "on")
+        mud_worlds.begin_removal(get_db(), world_id, remove_origins=request.form.get("remove_origins") == "on")
     except (mud_worlds.WorldError, ValueError, sqlite3.Error) as error:
         flash(str(error), "error")
     else:
-        flash(_removal_message("Custom world", result) + " Its characters are kept and return if it is reinstalled.",
-              "success")
+        # Clearing a big world takes a while; it runs in the background so the station stays responsive.
+        mud_worlds.start_removal(current_app._get_current_object(), world_id)
+        flash("World removal started. It continues in the background; this page shows when it finishes.", "success")
     return redirect(destination)
+
+
+@bp.get("/sysop/settings/mud-worlds/remove-status")
+@admin_required
+def mud_world_removal_status():
+    """Progress of background world removals, for the settings page to poll."""
+    database = get_db()
+    worlds = {}
+    for world_id in mud_worlds.removing_worlds(database):
+        job = background_jobs.status(f"mud-world-remove:{world_id}")
+        worlds[world_id] = {"state": job["state"] if job else "running", "error": job and job["error"]}
+    finished = []
+    for key in list(background_jobs.finished_keys("mud-world-remove:")):
+        job = background_jobs.status(key)
+        if job["state"] == "done" and key.split(":", 1)[1] not in worlds:
+            finished.append(_removal_message("Custom world", job["result"]))
+            background_jobs.forget(key)
+    return jsonify({"removing": worlds, "finished": finished})
 
 
 @bp.post("/sysop/settings/dungeons/import")

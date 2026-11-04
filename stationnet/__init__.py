@@ -4,7 +4,7 @@ import secrets
 from datetime import timedelta
 from pathlib import Path
 from flask import Flask, abort, g, jsonify, redirect, render_template, request, url_for
-from . import announcements, applications, arcade, archive, auth, auto_removal, board, broadcast, chat, db, downloads, dungeons, events, feeds, header_taglines, imageboard, kiwix, library, mail, moderation, mud, mud_worlds, office, polls, programs, pwa, radio, station, station_hours, themes, tv, users, videos
+from . import announcements, applications, arcade, archive, auth, auto_removal, board, broadcast, chat, db, downloads, dungeons, events, feeds, header_taglines, imageboard, kiwix, library, mail, moderation, mud, mud_worlds, office, polls, programs, pwa, radio, station, station_hours, themes, timefmt, tv, users, videos
 from .ansi import station_banner
 from .realtime import DirectChatStore
 from .radio import RadioStore
@@ -59,6 +59,7 @@ def create_app(test_config=None):
     kiwix.init_app(app)
     db.init_app(app)
     themes.init_app(app)
+    timefmt.init_app(app)
     dungeons.init_app(app)
     mud_worlds.init_app(app)
     app.extensions["direct_chat"] = DirectChatStore()
@@ -158,7 +159,7 @@ def create_app(test_config=None):
                 message = ("Account banned" if restriction["kind"] == "ban" else "Account suspended")
                 message += f": {restriction['reason']}"
                 if restriction["expires_at"]:
-                    message += f" (until {restriction['expires_at']} UTC)"
+                    message += f" (until {timefmt.utc_text(restriction['expires_at'])})"
                 if request.is_json or request.accept_mimetypes.best == "application/json" or request.path.startswith(("/radio/", "/broadcast/", "/applications/")):
                     return jsonify(error=message), 403
                 return render_template("moderation/restricted.html", message=message), 403

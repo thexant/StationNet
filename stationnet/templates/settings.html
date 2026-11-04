@@ -228,7 +228,7 @@
     <div class="invite-list">
       {% for invite in invitations %}
       <article class="invite-row">
-        <div><strong>INV-{{ '%04d'|format(invite.id) }} / …{{ invite.code_hint }}</strong><small>CREATED {{ invite.created_at }}{% if invite.creator_callsign %} BY {{ invite.creator_username }} - [{{ invite.creator_callsign }}]{% endif %}</small></div>
+        <div><strong>INV-{{ '%04d'|format(invite.id) }} / …{{ invite.code_hint }}</strong><small>CREATED {{ invite.created_at|localtime }}{% if invite.creator_callsign %} BY {{ invite.creator_username }} - [{{ invite.creator_callsign }}]{% endif %}</small></div>
         {% if invite.used_at %}<span class="invite-state used">USED{% if invite.used_callsign %} / {{ invite.used_username }} - [{{ invite.used_callsign }}]{% endif %}</span>
         {% elif invite.revoked_at %}<span class="invite-state revoked">REVOKED</span>
         {% else %}
@@ -476,7 +476,7 @@
     <label>Portal room description<textarea name="mud_portal_description" maxlength="2000" required>{{ mud_portal.description }}</textarea><small>The gameplay explanation and gateway controls are system-managed and cannot be edited here or in the world builder.</small></label>
     <button>SAVE MUD SETTINGS</button>
   </form>
-  <section id="mud-worlds" aria-labelledby="mud-worlds-heading" data-world-linked="{{ mud_world_origin_keys|tojson|forceescape }}" data-world-removal="{{ mud_world_removal|tojson|forceescape }}">
+  <section id="mud-worlds" aria-labelledby="mud-worlds-heading" data-world-linked="{{ mud_world_origin_keys|tojson|forceescape }}" data-world-removal="{{ mud_world_removal|tojson|forceescape }}" data-removal-status-url="{{ url_for('station.mud_world_removal_status') }}">
     <h3 id="mud-worlds-heading">Worlds</h3>
     <p class="muted">Disabling a world hides it from players without deleting its content or anyone's character; enable it again to resume. Each world chooses its own races, classes, and skills from the installed definitions.</p>
     <div class="file-list mud-world-list">
@@ -485,8 +485,9 @@
         <div>
           <h2>{{ world.name }}</h2>
           <p>{% if world.kind == 'procedural' %}Procedural dungeons{% elif world.imported %}Imported world by {{ world.author }}{% else %}World Builder home world{% endif %} · {{ world.characters }} character{{ 's' if world.characters != 1 }}</p>
-          <span class="origin-badge {{ 'default' if world.enabled else 'imported' }}">{{ 'ENABLED' if world.enabled else 'DISABLED' }}</span>
+          <span class="origin-badge {{ 'default' if world.enabled else 'imported' }}" data-world-badge="{{ world.key }}">{{ 'REMOVING' if world.removing else ('ENABLED' if world.enabled else 'DISABLED') }}</span>
         </div>
+        {% if not world.removing %}
         <div class="button-row">
           <form method="post" action="{{ url_for('station.set_mud_world_enabled') }}" class="inline-form">
             <input type="hidden" name="csrf_token" value="{{ session.csrf_token }}">
@@ -497,6 +498,7 @@
           <a class="button secondary" href="{{ url_for('station.mud_world_availability', world_id=world.key) }}">RACES, CLASSES &amp; SKILLS</a>
           {% if world.kind == 'authored' and g.station.mud_enabled %}<a class="button secondary" href="{{ url_for('mud.builder', world_key=world.key) }}">WORLD BUILDER</a>{% endif %}
         </div>
+        {% endif %}
       </article>
       {% endfor %}
     </div>
@@ -553,11 +555,12 @@
       <button>EXPORT WORLD ZIP</button>
     </form>
     {% endif %}
+    <p id="world-removal-status" role="status" aria-live="polite" hidden></p>
     {% if mud_world_list|selectattr('imported')|list %}
     <h4>Remove a World</h4>
     <form method="post" action="{{ url_for('station.remove_mud_world') }}" class="form-grid">
       <input type="hidden" name="csrf_token" value="{{ session.csrf_token }}">
-      <label>Remove custom world<select name="world_id" id="world-remove-id" required><option value="">Select a world</option>{% for world in mud_world_list if world.imported %}<option value="{{ world.id }}" {% if world.enabled %}disabled{% endif %}>{{ world.name }}{% if world.enabled %} (enabled; disable first){% endif %}</option>{% endfor %}</select></label>
+      <label>Remove custom world<select name="world_id" id="world-remove-id" required><option value="">Select a world</option>{% for world in mud_world_list if world.imported %}<option value="{{ world.id }}" {% if world.enabled %}disabled{% endif %}>{{ world.name }}{% if world.removing %} (removing; submit to resume){% elif world.enabled %} (enabled; disable first){% endif %}</option>{% endfor %}</select></label>
       <div id="world-remove-origins" aria-live="polite"></div>
       <small>Removal deletes the world's rooms and content and ends its dungeon runs. Its characters are kept, hidden, and return if a world with the same ID is installed again.</small>
       <label class="switch"><input type="checkbox" name="remove_origins"> Also remove this world's unshared races, classes, and skills from every world</label>
@@ -758,9 +761,9 @@
     </form>{% endif %}
     <details><summary>Generation diagnostics</summary>
       <h3>Daily failures</h3>
-      {% for failure in daily_failures %}<p><code>{{ failure.day_key }}</code> — {{ failure.error_message }} <small>{{ failure.generated_at }}</small></p>{% else %}<p class="muted">No daily rotation failures recorded.</p>{% endfor %}
+      {% for failure in daily_failures %}<p><code>{{ failure.day_key }}</code> — {{ failure.error_message }} <small>{{ failure.generated_at|localtime }}</small></p>{% else %}<p class="muted">No daily rotation failures recorded.</p>{% endfor %}
       <h3>Generator failures</h3>
-      {% for failure in generation_failures %}<p><code>{{ failure.theme_id or 'unknown' }}@{{ failure.theme_version or '?' }}</code> — {{ failure.message }} <small>{{ failure.created_at }}</small></p>{% else %}<p class="muted">No generator failures recorded.</p>{% endfor %}
+      {% for failure in generation_failures %}<p><code>{{ failure.theme_id or 'unknown' }}@{{ failure.theme_version or '?' }}</code> — {{ failure.message }} <small>{{ failure.created_at|localtime }}</small></p>{% else %}<p class="muted">No generator failures recorded.</p>{% endfor %}
     </details>
   </div>
 </section>
@@ -957,6 +960,6 @@
   {% endfor %}
   </div>
 </section>
-<script src="{{ url_for('static', filename='settings-mud.js', v='2') }}" defer></script>
+<script src="{{ url_for('static', filename='settings-mud.js', v='3') }}" defer></script>
 {% endblock %}
 

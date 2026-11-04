@@ -257,7 +257,15 @@ def test_world_packages_bundle_remap_export_and_remove_skills(station):
     removed = client.post("/sysop/settings/mud-worlds/remove", data={
         "csrf_token": "test-token", "world_id": "dojo", "remove_origins": "on", "confirm_remove": "on"},
         follow_redirects=True)
-    assert b"Custom world removed" in removed.data and b"2 skills" in removed.data
+    assert b"World removal started" in removed.data
+    import time
+    finished = []
+    for _ in range(200):
+        finished = client.get("/sysop/settings/mud-worlds/remove-status").get_json()["finished"]
+        if finished:
+            break
+        time.sleep(0.05)
+    assert finished and "Custom world removed" in finished[0] and "2 skills" in finished[0]
     installed = _installed(app)
     assert spears not in installed and drill not in installed
     assert not (path / "mud_worlds" / "dojo.zip").exists()

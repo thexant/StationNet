@@ -220,6 +220,43 @@ def _resumes_at(channel, after):
     return None
 
 
+def activity_listings():
+    """Now/next per enabled channel with content on or scheduled, lowest number first.
+
+    Used by the terminal's STATION ACTIVITY panel; never raises.
+    """
+    try:
+        now = _now()
+        listings = []
+        for channel in sorted(_viewer_channels(), key=lambda row: row["number"]):
+            airings = schedule.fold_interstitials(
+                timeline(channel, now - timedelta(hours=12), now + timedelta(hours=24)))
+            index = schedule.at(airings, now)
+            current = airings[index] if index is not None else schedule.Airing(
+                now, now + timedelta(hours=1), "offair", "OFF AIR")
+            later = airings[index + 1:] if index is not None else [a for a in airings if a.start > now]
+            following = next((a for a in later if a.kind in {"program", "standby"} and not a.interstitial), None)
+            if following is None and current.kind in {"offair", "filler"}:
+                resumes = _resumes_at(channel, now)
+                if resumes is not None:
+                    following = next((a for a in schedule.fold_interstitials(
+                        timeline(channel, resumes, resumes + timedelta(hours=12)))
+                        if a.kind in {"program", "standby"}), None)
+            if current.kind not in {"program", "standby", "filler"} and following is None:
+                continue
+            listings.append({
+                "id": channel["id"], "number": channel["number"], "name": channel["name"],
+                "now": {"title": current.title, "kind": current.kind,
+                        "start": _iso(current.start), "end": _iso(current.end)},
+                "next": {"title": following.title, "start": _iso(following.start),
+                         "far": following.start - now > timedelta(hours=18)} if following else None,
+            })
+        return listings
+    except Exception:  # A schedule fault must not take down the terminal page.
+        current_app.logger.exception("TV activity listings failed")
+        return []
+
+
 def _ranged(path, mimetype):
     """Serve at most one CHUNK per request so slow clients never buffer whole files."""
     stat = path.stat()

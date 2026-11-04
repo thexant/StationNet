@@ -33,7 +33,7 @@ def _programme_ids(slots):
 
 def test_episodes_air_in_order_wrap_and_continue_from_history():
     episodes = _episodes("Lab Hours", 4)
-    config = _config(mix={"show": 100}, reruns="minimal")
+    config = _config(mix={"show": 100}, reruns="minimal", episode_order="sequential")
     slots, warnings = auto.generate(_windows(1, 4), episodes, _ads(4), config, UTC, seed=3)
     assert _programme_ids(slots)[:6] == [1, 2, 3, 4, 1, 2]
     assert any("starts over" in warning for warning in warnings)
@@ -128,3 +128,32 @@ def test_config_validation():
     assert auto.normalize_config({"rules": [{"from": "20:00", "until": "22:00"}]})[1]
     config, error = auto.normalize_config({"themes": {"4": {"types": [], "genres": ["Horror"]}}, "days": 3})
     assert error is None and config["themes"] == {"4": {"types": [], "genres": ["Horror"]}} and config["days"] == 3
+    assert config["episode_order"] == "shuffle"
+    assert auto.normalize_config({"episode_order": "random"})[1]
+    assert auto.normalize_config({"episode_order": "sequential"})[0]["episode_order"] == "sequential"
+
+
+def test_shuffled_episodes_air_once_each_before_repeating_in_varied_order():
+    episodes = _episodes("Lab Hours", 12)
+    config = _config(mix={"show": 100}, reruns="minimal")
+    orders = set()
+    for seed in range(4):
+        slots, warnings = auto.generate(_windows(1, 12), episodes, _ads(4), config, UTC, seed=seed)
+        ids = _programme_ids(slots)
+        assert len(ids) > 12
+        assert sorted(ids[:12]) == list(range(1, 13))
+        assert ids[:12] != list(range(1, 13))
+        assert all(a != b for a, b in zip(ids, ids[1:]))
+        assert any("starts over" in warning for warning in warnings)
+        orders.add(tuple(ids[:12]))
+    assert len(orders) > 1
+
+
+def test_shuffled_episodes_prefer_ones_not_recently_aired():
+    episodes = _episodes("Lab Hours", 6)
+    config = _config(mix={"show": 100}, reruns="minimal")
+    history = [(MONDAY - timedelta(hours=6 - n), n) for n in (1, 2, 3)]
+    slots, _ = auto.generate(_windows(1, 3), episodes, _ads(4), config, UTC, history=history, seed=5)
+    ids = _programme_ids(slots)
+    assert sorted(ids[:3]) == [4, 5, 6]
+    assert ids[3:6] == [1, 2, 3]

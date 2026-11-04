@@ -1188,7 +1188,7 @@
     }
     renderReadiness();
     if (!keepForm) {
-      ["on_air_from", "on_air_until", "commercials", "reruns", "days"].forEach(key => { autoForm[key].value = auto.config[key]; });
+      ["on_air_from", "on_air_until", "commercials", "reruns", "episode_order", "days"].forEach(key => { autoForm[key].value = auto.config[key]; });
       renderMix();
       renderRules();
       renderThemes();
@@ -1315,7 +1315,8 @@
 
   function autoConfig() {
     return {on_air_from: autoForm.on_air_from.value, on_air_until: autoForm.on_air_until.value,
-      commercials: autoForm.commercials.value, reruns: autoForm.reruns.value, days: Number(autoForm.days.value),
+      commercials: autoForm.commercials.value, reruns: autoForm.reruns.value,
+      episode_order: autoForm.episode_order.value, days: Number(autoForm.days.value),
       mix: Object.fromEntries(auto.content_types.map(key => [key, Number(autoForm[`mix_${key}`].value)])),
       rules: rules.map(rule => ({...rule})), themes};
   }

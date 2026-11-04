@@ -67,7 +67,7 @@
             {% endif %}
             {% for event in events %}
             <article class="mud-event mud-event-{{ event.event_type }}" data-event-id="{{ event.id }}">
-              <span>{{ event.event_type|upper }}</span><p>{{ event.body }}</p>
+              <span>{{ event.event_type|upper }}</span><p data-local-text>{{ event.body }}</p>
             </article>
             {% endfor %}
           </div>
