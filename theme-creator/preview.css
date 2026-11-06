@@ -1,0 +1,118 @@
+/* Adapted from StationNet station.css. Rules and theme variables stay inside
+   .station-preview; editor controls remain readable even with extreme palettes. */
+.station-preview {
+  --black: #000000; --green: #00ed45; --green-bright: #71ff8a; --green-dim: #008d31;
+  --red: #ff3237; --red-dim: #7b1118; --cyan: #00d8cf; --magenta: #d829be;
+  --amber: #e6a431; --grey: #8b8b86; --white: #d8d8cf;
+  --surface-field: #030703; --surface-button: #001b08; --surface-flash: #001505;
+  --border-muted: #454540; --surface-title: #001506; --theme-rgb: 0,237,69;
+  --surface-accent-rgb: 0,10,8; --masthead-color: #00d8cf; --masthead-shadow: #d829be;
+  --mono: "Lucida Console", "Cascadia Mono", "Courier New", monospace;
+  --text-xs: .68em; color-scheme: dark; font-family: var(--mono); font-size: 17px;
+  line-height: 1.6; color: var(--green); background: var(--black); min-height: calc(100dvh - 119px);
+  container-type: inline-size; position: relative; isolation: isolate;
+}
+.station-preview * { scrollbar-color: var(--green-dim) var(--black); }
+.station-preview ::selection { color: #000; background: var(--green); }
+.station-preview a { color: var(--cyan); text-underline-offset: .2em; }
+.station-preview a:hover { color: var(--magenta); }
+.station-preview a:focus-visible, .station-preview button:focus-visible, .station-preview input:focus-visible { outline: 2px solid var(--cyan); outline-offset: 2px; }
+.station-preview button, .station-preview .button { display: inline-flex; align-items: center; justify-content: space-between; min-height: 2.15em; padding: .45em .6em; color: var(--green-bright); border: 1px solid var(--green); background: var(--surface-button); font: .7em var(--mono); text-decoration: none; }
+.station-preview button:hover, .station-preview .button:hover { color: var(--black); background: var(--green); }
+.station-preview .compact-button { margin-top: .25em; }
+.station-preview h2, .station-preview p { margin-top: 0; }
+.station-preview h2 { color: var(--green-bright); }
+.station-preview .station-shell { width: min(940px, 100%); min-height: calc(100dvh - 119px); margin: 0 auto; padding: .8em 1.1em 1em; display: flex; flex-direction: column; }
+.station-preview .station-brand { display: grid; justify-items: center; width: 100%; min-width: 0; margin: 1.5em 0 1.2em; }
+.station-preview .ansi-logo { width: max-content; max-width: 100%; margin: 0 auto; overflow: hidden; color: var(--masthead-color); font: 700 clamp(12px, 2.1cqw, 22px)/1.08 var(--mono); letter-spacing: .02em; text-align: center; text-shadow: .13em .1em 0 var(--masthead-shadow); white-space: pre; }
+.station-preview .ansi-logo-art { display: inline-block; text-align: left; white-space: pre; }
+.station-preview .brand-tag { color: var(--green-dim); margin-top: .8em; font-size: .7em; letter-spacing: .17em; }
+.station-preview .node-line { display: flex; align-items: center; flex-wrap: wrap; justify-content: space-between; gap: .5em; margin: .5em 0 .8em; color: var(--grey); font-size: .6em; }
+.station-preview .node-line b { color: var(--red); font-weight: 400; }
+.station-preview .sfx-toggle { min-height: auto; padding: .08em .35em; color: var(--cyan); border-color: var(--green-dim); background: transparent; font: inherit; line-height: 1.35; }
+.station-preview .sfx-toggle:hover { color: #000; background: var(--cyan); }
+.station-preview .sfx-toggle[aria-pressed="false"] { color: var(--grey); border-color: var(--border-muted); }
+.station-preview .service-nav { display: flex; justify-content: center; align-items: center; flex-wrap: wrap; gap: .6em; padding: .55em .2em; border-top: 1px solid var(--green-dim); border-bottom: 1px solid var(--green-dim); }
+.station-preview .service-nav a { display: inline-flex; align-items: center; min-height: 2em; gap: .25em; color: var(--green); font-size: .77em; font-weight: 700; letter-spacing: .03em; text-decoration: none; }
+.station-preview .service-nav a:hover, .station-preview .service-nav a[aria-current="page"] { color: var(--white); text-shadow: 0 0 .55em var(--green); }
+.station-preview .service-nav i { color: var(--cyan); font-style: normal; }
+.station-preview .mail-count { display: inline-block; padding: 0 .22em; background: var(--cyan); color: #000; font-size: .8em; text-align: center; }
+.station-preview .flash-stack { display: grid; gap: .35em; margin-top: .7em; }
+.station-preview .flash { padding: .6em .75em; color: var(--green-bright); border-left: 3px solid var(--green); background: var(--surface-flash); font-size: .72em; }
+.station-preview .flash span { color: var(--cyan); }
+.station-preview .flash.error { color: var(--red); border-color: var(--red); background: #160002; }
+.station-preview .flash.error span, .station-preview .flash.warning span { color: var(--red); }
+.station-preview .flash.warning { color: var(--amber); border-color: var(--amber); background: #130d00; }
+.station-preview .main-panel { padding: 1.5em 0; flex: 1; }
+.station-preview .directory-screen { display: grid; grid-template-columns: minmax(0, 1fr) 17em; gap: 2.5em; }
+.station-preview .screen-heading { grid-column: 1 / -1; }
+.station-preview .screen-heading > p:last-child { font-size: .78em; margin-bottom: 0; }
+.station-preview .eyebrow { margin-bottom: .55em; color: var(--grey); font-size: .7em; letter-spacing: .09em; }
+.station-preview .page-heading { margin: 0 0 .5em; font-size: clamp(1.45em, 4cqw, 2.25em); line-height: 1.15; letter-spacing: .08em; text-transform: uppercase; font-weight: 400; }
+.station-preview .service-list { border-top: 1px solid var(--green-dim); }
+.station-preview .service-list > a { display: grid; grid-template-columns: 3.5em minmax(0, 1fr) auto; gap: .8em; align-items: center; min-height: 5.15em; padding: .8em .4em; border-bottom: 1px solid var(--green-dim); text-decoration: none; color: var(--green); }
+.station-preview .service-list > a:hover { color: var(--green-bright); background: rgba(var(--theme-rgb), .05); }
+.station-preview .service-number { color: var(--cyan); }
+.station-preview .service-copy { display: grid; gap: .2em; }
+.station-preview .service-copy strong { font-size: .8em; letter-spacing: .05em; }
+.station-preview .service-copy small { color: var(--grey); font-size: .68em; line-height: 1.5; }
+.station-preview .service-state { color: var(--green-bright); font-size: .68em; }
+.station-preview .directory-sidebar { display: grid; align-self: start; gap: 1em; min-width: 0; }
+.station-preview .operator-block, .station-preview .activity-panel { align-self: start; padding: .75em; border: 1px solid var(--green); min-width: 0; }
+.station-preview .operator-block h2, .station-preview .activity-panel h2 { margin: 0; padding-bottom: .35em; border-bottom: 1px solid var(--green-dim); font-size: 1em; font-weight: 700; letter-spacing: .08em; }
+.station-preview .operator-block h2::first-letter, .station-preview .activity-panel h2::first-letter { color: var(--cyan); }
+.station-preview .operator-summary { display: grid; gap: .08em; padding: .6em 0 .45em; }
+.station-preview .operator-summary strong { color: var(--white); font-size: .78em; }
+.station-preview .operator-summary span, .station-preview .operator-summary small { color: var(--grey); font-size: .68em; }
+.station-preview .operator-actions { display: flex; align-items: center; justify-content: space-between; gap: .45em; padding-top: .45em; border-top: 1px dotted var(--green-dim); font-size: .68em; }
+.station-preview .text-button { border: 0; padding: 0; background: transparent; color: var(--cyan); font: inherit; }
+.station-preview .text-button:hover { background: transparent; color: var(--magenta); }
+.station-preview .positive { color: var(--green-bright) !important; }
+.station-preview .warning-text { color: var(--amber) !important; }
+.station-preview .activity-list { display: grid; }
+.station-preview .activity-item { display: grid; gap: .18em; min-width: 0; padding: .7em 0; border-bottom: 1px dotted var(--green-dim); color: var(--white); text-decoration: none; }
+.station-preview .activity-item:last-child { border-bottom: 0; padding-bottom: .1em; }
+.station-preview a.activity-item:hover { padding-inline: .3em; color: var(--white); background: rgba(var(--theme-rgb), .05); }
+.station-preview .activity-item > span { color: var(--cyan); font-size: .68em; letter-spacing: .06em; }
+.station-preview .activity-item strong { color: var(--green-bright); font-size: .68em; font-weight: 400; overflow-wrap: anywhere; }
+.station-preview .activity-item small, .station-preview .activity-item time, .station-preview .activity-item em { color: var(--grey); font-size: .68em; font-style: normal; }
+.station-preview .activity-item p { margin: .1em 0; color: var(--white); font-size: .68em; line-height: 1.5; }
+.station-preview .activity-count { grid-template-columns: 1fr auto; align-items: end; }
+.station-preview .activity-count > span, .station-preview .activity-count > small { grid-column: 1; }
+.station-preview .activity-count > strong { grid-column: 2; grid-row: 1 / 3; color: var(--amber); font-size: 1.35em; }
+.station-preview .activity-broadcast { display: grid; gap: .08em; padding-left: .5em; border-left: 1px solid var(--cyan); }
+.station-preview .activity-broadcast em { color: var(--amber); }
+.station-preview .radio-player { display: grid; gap: .35em; align-items: center; width: 100%; padding: .38em .5em; border: 1px solid var(--cyan); background: rgba(var(--surface-accent-rgb), .98); }
+.station-preview .radio-player-state { display: flex; align-items: center; justify-content: center; gap: .4em; flex-wrap: wrap; }
+.station-preview .radio-player-state output { color: var(--green-bright); font-size: .82em; letter-spacing: .08em; }
+.station-preview .radio-player-state > span { color: var(--grey); font-size: .68em; }
+.station-preview .radio-player-state .radio-player-status { color: var(--amber); font-size: .68em; font-weight: 400; }
+.station-preview .radio-player-state .radio-now-playing { color: var(--green-bright); }
+.station-preview .radio-player-state button { font-size: .68em; }
+.station-preview .radio-player-controls { display: flex; justify-content: center; align-items: center; gap: .4em; flex-wrap: wrap; }
+.station-preview .radio-player-controls label { display: flex; align-items: center; gap: .35em; min-width: 0; color: var(--grey); font-size: .68em; }
+.station-preview .radio-player-controls input[type="text"] { width: 6em; padding: .4em .45em; border: 1px solid var(--green-dim); color: var(--green-bright); background: var(--surface-field); font: inherit; text-align: right; }
+.station-preview .radio-player-controls input::placeholder { color: var(--grey); opacity: 1; }
+.station-preview .radio-player-controls input[type="range"] { width: 7em; accent-color: var(--green); }
+.station-preview .statusbar { display: flex; justify-content: space-between; flex-wrap: wrap; gap: 1em; margin-top: .7em; padding: .5em .7em; color: var(--green-dim); border: 1px solid var(--green-dim); font-size: .68em; letter-spacing: .04em; }
+.station-preview .carrier { color: var(--green); }
+.station-preview .stationnet-link { color: var(--green-dim); text-decoration: none; }
+.station-preview .stationnet-link:hover { color: var(--cyan); text-decoration: underline; }
+.station-preview .carrier i { display: inline-block; width: .38em; height: .38em; margin-right: .3em; border-radius: 50%; background: currentColor; box-shadow: 0 0 .45em currentColor; }
+.station-preview[data-vfx="true"]:after { content: ''; position: absolute; inset: 0; z-index: 2; pointer-events: none; opacity: .045; background: repeating-linear-gradient(0deg, transparent 0 2px, #fff 2px 3px); }
+@container (max-width: 700px) {
+  .station-preview .station-shell { padding-inline: .65em; }
+  .station-preview .directory-screen { grid-template-columns: 1fr; gap: 1.2em; }
+  .station-preview .directory-sidebar { grid-template-columns: 1fr 1fr; gap: 1em; }
+  .station-preview .operator-block h2, .station-preview .activity-panel h2 { font-size: .85em; }
+}
+@container (max-width: 430px) {
+  .station-preview .node-line { justify-content: center; }
+  .station-preview .brand-tag { letter-spacing: .08em; font-size: .6em; }
+  .station-preview .service-nav { gap: .35em; }
+  .station-preview .service-nav a { font-size: .68em; }
+  .station-preview .service-list > a { grid-template-columns: 3em minmax(0, 1fr); }
+  .station-preview .service-state { display: none; }
+  .station-preview .directory-sidebar { grid-template-columns: 1fr; }
+  .station-preview .statusbar > span:nth-child(2) { display: none; }
+}

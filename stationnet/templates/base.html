@@ -23,7 +23,7 @@
   <a class="skip-link" href="#main">Skip to content</a>
   <div class="station-shell">
     <header class="station-header">
-      <a class="station-brand" href="{{ url_for('station.index') if g.station else url_for('auth.setup') }}" aria-label="{{ g.station.name if g.station else 'StationNet' }} home">
+      <a class="station-brand" href="{{ url_for('station.terminal') if g.station and g.user else (url_for('station.index') if g.station else url_for('auth.setup')) }}" aria-label="{{ g.station.name if g.station else 'StationNet' }} home">
         {% if g.station and g.station.display_station_icon and g.station_icon_exists %}
         <div class="masthead-row">
           <img class="masthead-icon" src="{{ url_for('station.station_icon') }}" alt="" aria-hidden="true" width="128" height="128">

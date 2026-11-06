@@ -41,6 +41,8 @@ def test_pwa_uses_station_identity_and_icon_setting(tmp_path):
     assert b'/manifest.webmanifest' in client.get("/login").data
     assert client.get("/service-worker.js").status_code == 200
     assert client.get("/service-worker.js").headers["Service-Worker-Allowed"] == "/"
+    # Safari loses multipart upload bodies when a worker re-fetches form POSTs.
+    assert b"method !== 'GET'" in client.get("/service-worker.js").data
     assert _pixel(client.get("/pwa-icon-192.png"))[0] == (192, 192)
 
     with client.session_transaction() as session:

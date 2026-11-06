@@ -1,0 +1,85 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#001506">
+  <meta name="description" content="Create, preview and export portable StationNet colour themes. Works offline, entirely in your browser.">
+  <title>StationNet Theme Creator</title>
+  <link rel="icon" href="favicon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="creator.css">
+  <link rel="stylesheet" href="preview.css">
+  <script src="theme-data.js" defer></script>
+  <script src="theme-core.js" defer></script>
+  <script src="creator.js" defer></script>
+</head>
+<body>
+  <a class="creator-skip" href="#editor">Skip to theme editor</a>
+  <header class="app-header">
+    <div class="app-identity"><span class="app-mark" aria-hidden="true">S<span>N</span></span><div><strong>StationNet</strong><span class="app-divider">/</span><h1>Theme Creator</h1></div></div>
+  </header>
+  <main class="workspace">
+    <section class="preview-pane" aria-labelledby="preview-title">
+      <div class="preview-toolbar"><h2 id="preview-title"><span class="live-dot" aria-hidden="true"></span> PREVIEW <span>/ SERVICE DIRECTORY</span></h2></div>
+      <div class="station-preview" id="station-preview">
+        <div class="station-shell">
+          <header class="station-header">
+            <div class="station-brand" aria-label="THEME">
+              <pre class="ansi-logo" aria-hidden="true"><span class="ansi-logo-art"> _____ _  _ ___ __  __ ___
+|_   _| || | __|  \/  | __|
+  | | | __ | _|| |\/| | _|
+  |_| |_||_|___|_|  |_|___|</span></pre>
+            </div>
+            <div class="node-line"><span>YOUR STATION: <b>THEME - [—]</b></span><span>SYSTEM DATE/TIME: <b>--- -- ----</b> <b>--:--:--</b></span><button class="sfx-toggle" type="button" aria-pressed="false" id="vfx-toggle">VFX: OFF</button></div>
+            <nav class="service-nav" aria-label="Station services">
+              <a href="#demo" aria-current="page">STATION</a><i aria-hidden="true">*</i><a href="#demo">BULLETIN BOARD</a><i aria-hidden="true">*</i><a href="#demo">ANNOUNCEMENTS</a><i aria-hidden="true">*</i><a href="#demo">EVENTS</a><i aria-hidden="true">*</i><a href="#demo">WIKI</a><i aria-hidden="true">*</i><a href="#demo">LIBRARY</a><i aria-hidden="true">*</i><a href="#demo">ARCADE</a><i aria-hidden="true">*</i><a href="#demo">CHAT</a><i aria-hidden="true">*</i><a href="#demo">MAIL</a><i aria-hidden="true">*</i><a href="#demo">RADIO</a><i aria-hidden="true">*</i><a href="#demo">FILES</a><i aria-hidden="true">*</i><a href="#demo">USERS</a><i aria-hidden="true">*</i><a href="#demo">PROGRAMS</a><i aria-hidden="true">*</i><a href="#demo">SYSOP CONTROL</a>
+            </nav>
+          </header>
+          <div class="main-panel">
+            <section class="directory-screen">
+              <header class="screen-heading"><p class="eyebrow">SERVICE DIRECTORY / THEME - [—]</p><h2 class="page-heading">THEME</h2><p>Independent communications station.</p></header>
+              <div class="service-list" id="service-list"></div>
+              <div class="directory-sidebar">
+                <aside class="operator-block"><h2>&gt; CURRENT OPERATOR</h2><div class="operator-summary"><strong>UNASSIGNED</strong><span>READ ONLY</span><small class="warning-text">* ANONYMOUS</small></div><a class="button compact-button" href="#demo">&gt; AUTHENTICATE</a></aside>
+                <aside class="activity-panel"><h2>&gt; STATION ACTIVITY</h2><div class="activity-list">
+                  <a class="activity-item" href="#demo"><span>MOST RECENT BULLETIN</span><em>NO BULLETINS POSTED</em></a>
+                  <a class="activity-item" href="#demo"><span>MOST RECENT REPLY</span><em>NO REPLIES POSTED</em></a>
+                  <a class="activity-item" href="#demo"><span>MOST RECENT CHAT MESSAGE</span><em>NO CHAT MESSAGES</em></a>
+                  <a class="activity-item" href="#demo"><span>NEWEST FILE</span><em>NO FILES UPLOADED</em></a>
+                  <div class="activity-item"><span>NEWEST MEMBER</span><em>NO REGISTERED MEMBERS</em></div>
+                  <a class="activity-item activity-count" href="#demo"><span>UNOPENED MESSAGES</span><strong>0</strong><small>UNREAD MESSAGES</small></a>
+                  <a class="activity-item" href="#demo"><span>ACTIVE BROADCASTS</span><em>NO AUTHORIZED BROADCASTS ON AIR</em></a>
+                </div></aside>
+              </div>
+            </section>
+          </div>
+          <aside class="radio-player" aria-label="Station radio player"><div class="radio-player-state"><button type="button" class="secondary" aria-pressed="false">POWER: OFF</button><output>---.--</output><span>MHz</span><span class="radio-player-status">OFF</span></div><div class="radio-player-controls"><button type="button" class="secondary" aria-label="Scan down for activity">&lt; SCAN</button><label class="radio-frequency-entry">MHz <input type="text" inputmode="decimal" autocomplete="off" maxlength="6" placeholder="145.00" aria-label="Frequency in MHz"></label><button type="button" class="secondary">TUNE</button><button type="button" class="secondary" aria-label="Scan up for activity">SCAN &gt;</button><label>VOL <input type="range" min="0" max="100" value="55"></label><button type="button" class="secondary" aria-pressed="false">MUTE: OFF</button><button type="button" class="secondary" aria-pressed="true" title="Analog receiver audio effect">FX: ON</button><a class="button radio-open" href="#demo">OPEN RADIO</a></div></aside>
+          <footer class="statusbar"><span>STATION: —</span><span>USER: UNIDENTIFIED</span><a class="stationnet-link" href="#demo">GET YOUR OWN STATION</a><span class="carrier"><i aria-hidden="true"></i> CARRIER</span></footer>
+        </div>
+      </div>
+    </section>
+    <aside class="editor" id="editor" aria-label="Theme editor" tabindex="-1">
+      <button class="drawer-toggle" id="drawer-toggle" type="button" aria-expanded="false" aria-controls="editor-body"><span class="drawer-grip" aria-hidden="true"></span><span>Edit your theme</span><span class="drawer-arrow" aria-hidden="true">↑</span></button>
+      <div class="editor-body" id="editor-body">
+        <div class="editor-heading"><h2><span aria-hidden="true">&gt;</span> Theme editor</h2></div>
+        <div class="editor-tabs" role="tablist" aria-label="Editor sections"><button id="palette-tab" type="button" role="tab" aria-selected="true" aria-controls="palette-panel">Palette <span>15</span></button><button id="details-tab" type="button" role="tab" aria-selected="false" aria-controls="details-panel" tabindex="-1">Theme &amp; export</button></div>
+        <div class="editor-scroll">
+          <div id="palette-panel" role="tabpanel" aria-labelledby="palette-tab">
+            <section class="preset-section"><label for="preset">START WITH A PALETTE</label><div class="preset-controls"><select id="preset"></select><button id="apply-preset" class="small-button" type="button">Apply</button></div><p>Presets change colours, keeping your theme details.</p></section>
+            <details class="colour-group" open><summary><span>Interface colours</span><span class="group-count">13</span></summary><p class="group-description">Text, accents, borders and surfaces.</p><div id="site-colours"></div></details>
+            <details class="colour-group" open><summary><span>Masthead colours</span><span class="group-count">02</span></summary><p class="group-description">Logo colour and shadow.</p><div id="masthead-colours"></div></details>
+            <p class="palette-footnote">Some surfaces are automatically tinted from your main and accent colours, just like StationNet. Default field and button colours also follow the main colour. Custom values are used exactly.</p>
+          </div>
+          <div id="details-panel" role="tabpanel" aria-labelledby="details-tab" hidden>
+            <section class="info-section"><h3>Theme details</h3><p>Name and author are required for export.</p><div class="metadata-field"><label for="theme-name">Theme name</label><input id="theme-name" autocomplete="off" aria-describedby="name-error"><p id="name-error" class="field-error" hidden></p></div><div class="metadata-field"><label for="theme-author">Author</label><input id="theme-author" autocomplete="off" aria-describedby="author-error"><p id="author-error" class="field-error" hidden></p></div><div class="metadata-field"><label for="theme-id">Theme ID</label><input id="theme-id" autocomplete="off" spellcheck="false" aria-describedby="id-help id-error"><p id="id-help" class="field-help">Generated from the name until you edit it. Use a unique ID on your station.</p><p id="id-error" class="field-error" hidden></p></div></section>
+            <fieldset class="export-sections"><legend>Include in export</legend><label><input id="include-site" type="checkbox" checked><span><strong>Interface colours</strong><small>All 13 station interface colours</small></span></label><label><input id="include-masthead" type="checkbox" checked><span><strong>Masthead colours</strong><small>Logo colour and offset shadow</small></span></label><p class="field-help">Excluded sections use default colours in the preview. Your edits are kept.</p><p class="field-error" id="sections-error" hidden></p></fieldset>
+            <details class="install-guide"><summary>Install your theme <span aria-hidden="true">↗</span></summary><ol><li>Export your theme as a JSON file.</li><li>In StationNet, open <strong>SYSOP CONTROL → Station settings</strong> and import the file.</li><li>Select the theme for the interface, masthead, or both. They are independent selectors.</li></ol><p>Or place <code>&lt;id&gt;.json</code> in <code>&lt;STATIONNET_DATA&gt;/themes/</code> and refresh Station settings. Choose an ID that is not already installed.</p></details>
+          </div>
+        </div>
+        <div class="editor-footer"><p id="app-message" role="status" aria-live="polite"></p><button type="button" id="export-theme" class="export-button"><span>Export theme</span><span aria-hidden="true">↓</span></button><div class="secondary-actions"><button type="button" id="import-theme">Import JSON</button><span aria-hidden="true">/</span><button type="button" id="reset-theme">Reset</button><span class="storage-status" id="storage-status">Saved in this browser</span></div><input id="import-file" type="file" accept=".json,application/json" hidden></div>
+      </div>
+    </aside>
+  </main>
+  <noscript><div class="noscript">Enable JavaScript to edit and export themes. The creator runs entirely in your browser.</div></noscript>
+</body>
+</html>

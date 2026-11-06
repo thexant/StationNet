@@ -1,0 +1,2282 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>StationNet - Official User's Guide and Operator's Reference</title>
+<style>
+@page { size: letter; margin: 0.85in 0.9in 0.85in 0.9in;
+  @bottom-center { content: counter(page); font: 9pt "Arial", "Helvetica", sans-serif; }
+  @top-left { content: "StationNet User's Guide and Operator's Reference"; font: italic 8.5pt "Georgia", "Times New Roman", serif; color: #333; }
+}
+@page title { @top-left { content: none; } @top-right { content: none; } @bottom-center { content: none; } }
+@page front { @top-right { content: "Introduction"; font: italic 8.5pt "Georgia", serif; color: #333; } }
+@page contents { @top-right { content: "Contents"; font: italic 8.5pt "Georgia", serif; color: #333; } }
+@page part0 { @top-right { content: "Part I. Getting Started"; font: italic 8.5pt "Georgia", serif; color: #333; } }
+@page part1 { @top-right { content: "Part II. Communication and Community"; font: italic 8.5pt "Georgia", serif; color: #333; } }
+@page part2 { @top-right { content: "Part III. Information and Entertainment"; font: italic 8.5pt "Georgia", serif; color: #333; } }
+@page part3 { @top-right { content: "Part IV. Office"; font: italic 8.5pt "Georgia", serif; color: #333; } }
+@page part4 { @top-right { content: "Part V. Personalization and Everyday Use"; font: italic 8.5pt "Georgia", serif; color: #333; } }
+@page part5 { @top-right { content: "Part VI. Station Hosting and Administration"; font: italic 8.5pt "Georgia", serif; color: #333; } }
+@page part6 { @top-right { content: "Part VII. Developer's Reference"; font: italic 8.5pt "Georgia", serif; color: #333; } }
+@page part7 { @top-right { content: "Appendices"; font: italic 8.5pt "Georgia", serif; color: #333; } }
+html { font-size: 10.5pt; }
+body { margin: 0; font-family: "Georgia", "Times New Roman", serif; color: #000; background: #fff; line-height: 1.38;
+  -webkit-print-color-adjust: exact; print-color-adjust: exact; hyphens: auto; }
+h1, h2, h3, h4, .notice-label, th, .toc, .title-page { font-family: "Arial", "Helvetica", sans-serif; }
+p { margin: 0 0 0.55em; text-align: justify; orphans: 3; widows: 3; }
+code, pre { font-family: "Courier New", "Courier", monospace; }
+code { font-size: 1em; color: #000; }
+pre { font-size: 9pt; line-height: 1.3; margin: 0.4em 0 0.8em 1.4em; padding: 0.35em 0.6em; border-left: 2pt solid #000;
+  white-space: pre-wrap; break-inside: avoid; }
+pre code { font-size: inherit; }
+a { color: inherit; text-decoration: none; }
+ul, ol { margin: 0 0 0.6em; padding-left: 1.6em; }
+li { margin-bottom: 0.18em; }
+li > p { margin-bottom: 0.2em; }
+strong { font-weight: bold; }
+
+.title-page { page: title; box-sizing: border-box; height: 9.1in; display: flex; flex-direction: column; justify-content: space-between;
+  border-top: 6pt solid #000; border-bottom: 1.5pt solid #000; padding: 0.35in 0 0.25in; break-after: page; }
+.title-page .t-top { font-size: 10pt; letter-spacing: 0.25em; text-transform: uppercase; }
+.title-page .t-name { font-size: 44pt; font-weight: bold; letter-spacing: 0.02em; margin: 0.15in 0 0; line-height: 1; }
+.title-page .t-sub { font-size: 17pt; margin-top: 0.12in; }
+.title-page .t-rule { border-top: 1pt solid #000; margin: 0.3in 0 0.12in; width: 2.5in; }
+.title-page .t-ver { font-size: 11pt; }
+.title-page .t-bottom { font-size: 9.5pt; display: flex; justify-content: space-between; }
+
+.front { page: front; }
+.front h2 { font-size: 15pt; margin: 0 0 0.6em; padding-bottom: 0.15em; border-bottom: 1pt solid #000; }
+.front h3 { font-size: 11pt; margin: 1.1em 0 0.4em; }
+.front .notice-page { break-after: page; }
+.front .preface { break-after: page; }
+
+.contents { page: contents; break-after: page; }
+.contents h2 { font-size: 15pt; margin: 0 0 0.8em; padding-bottom: 0.15em; border-bottom: 1pt solid #000; }
+.toc { font-size: 9.6pt; }
+.toc div { display: flex; align-items: baseline; }
+.toc .toc-part { font-weight: bold; margin-top: 0.75em; text-transform: uppercase; letter-spacing: 0.04em; font-size: 9.2pt; }
+.toc .toc-chapter { padding-left: 1.4em; margin-top: 0.12em; }
+.toc .toc-text { flex: 0 1 auto; }
+.toc .toc-dots { flex: 1 1 auto; border-bottom: 1pt dotted #000; margin: 0 0.35em; transform: translateY(-0.25em); min-width: 1em; }
+.toc .toc-page { flex: 0 0 auto; min-width: 1.6em; text-align: right; font-variant-numeric: tabular-nums; }
+
+.part { break-before: page; }
+.part-head { border-top: 4pt solid #000; padding-top: 0.12in; margin-bottom: 0.25in; }
+.part-head .part-label { font: bold 9pt "Arial", sans-serif; letter-spacing: 0.3em; text-transform: uppercase; }
+.part-head h1 { font-size: 21pt; margin: 0.05in 0 0; line-height: 1.15; position: relative; }
+.part-head .part-intro { font-style: italic; margin-top: 0.12in; }
+.part h2 { font-size: 13.5pt; margin: 1.35em 0 0.5em; padding-bottom: 0.1em; border-bottom: 0.75pt solid #000;
+  break-after: avoid; position: relative; }
+.part-head + h2, .part-head + p + h2 { margin-top: 0; }
+.part h3 { font-size: 10.8pt; margin: 1em 0 0.35em; break-after: avoid; }
+.part h4 { font-size: 10pt; margin: 0.8em 0 0.3em; break-after: avoid; }
+#appendix-e-glossary ~ p { margin-bottom: 0.22em; text-align: left; }
+.pdfmark { position: absolute; left: 0; top: 0; font-size: 1px; line-height: 1px; color: #fff; }
+
+table { border-collapse: collapse; width: 100%; margin: 0.4em 0 0.9em; font-size: 9.2pt; line-height: 1.28; break-inside: auto; }
+thead { display: table-header-group; }
+tr { break-inside: avoid; }
+th { text-align: left; font-size: 8.8pt; border-top: 1.2pt solid #000; border-bottom: 0.75pt solid #000; padding: 0.22em 0.5em 0.22em 0; }
+td { border-bottom: 0.4pt solid #888; padding: 0.22em 0.5em 0.22em 0; vertical-align: top; }
+tr:last-child td { border-bottom: 1.2pt solid #000; }
+
+dl.definition { margin: 0 0 0.45em; display: grid; grid-template-columns: 1.95in 1fr; column-gap: 0.15in; break-inside: avoid; }
+dl.definition dt { font-weight: bold; }
+dl.definition dd { margin: 0; }
+
+.notice { margin: 0.6em 0 0.85em; padding: 0.45em 0.7em 0.35em; break-inside: avoid; display: grid;
+  grid-template-columns: 0.85in 1fr; column-gap: 0.12in; }
+.notice-note { border-top: 0.75pt solid #000; border-bottom: 0.75pt solid #000; }
+.notice-caution { border: 1pt solid #000; }
+.notice-warning { border: 2.4pt solid #000; }
+.notice-label { font-weight: bold; font-size: 9pt; letter-spacing: 0.12em; margin: 0.1em 0 0; text-align: left; }
+.notice-body p { margin-bottom: 0.3em; }
+.notice-body > :last-child { margin-bottom: 0; }
+
+@media screen {
+  body { max-width: 7.2in; margin: 0.5in auto; padding: 0 0.3in; }
+  #appendix-e-glossary ~ p { margin-bottom: 0.22em; text-align: left; }
+.pdfmark { display: none; }
+  .title-page { height: auto; min-height: 7in; }
+}
+</style>
+</head>
+<body>
+<section class="title-page">
+  <div><div class="t-top">Communications and Information Service</div>
+  <div class="t-name">StationNet</div>
+  <div class="t-sub">Official User's Guide and Operator's Reference</div>
+  <div class="t-rule"></div>
+  <div class="t-ver">For StationNet Version 1.0</div></div>
+  <div class="t-bottom"><span>First Edition</span><span>November 2026</span></div>
+</section>
+<section class="front"><div class="notice-page"><h2 id="notice">Notice</h2>
+<p>This manual describes StationNet Version 1.0 as distributed in November 2026.
+StationNet is under continuing development, and later releases may differ in
+detail from the descriptions given here.</p>
+<p>StationNet is modular. Each station is set up by its own operator, who decides
+which services are offered, who may use them, and what material they contain.
+The services, channels, books, games, programs, and worlds you find on a
+particular station may therefore differ from the examples in this manual.</p>
+<p>Screen names, button captions, and commands are printed exactly as they appear
+on the screen. Where the station operator may change a setting, the manual says
+so.</p>
+<p>Product names mentioned in this manual are used for identification only and
+may be trademarks of their respective owners.</p>
+</div><div class="preface"><h2 id="preface">Preface</h2>
+<p>StationNet is a self-hosted communications and information service. A single
+computer on a home, school, club, or office network runs the station, and
+everyone else reaches it with an ordinary web browser. No outside service,
+subscription, or Internet connection is required once a station is installed.</p>
+<p>This manual is written first for the people who use a station: those who read
+the bulletins, exchange mail, listen to the radio, read in the library, work in
+the Office programs, or play in the MUD. Parts I through V assume no knowledge
+of StationNet beyond basic familiarity with a computer and a web browser.</p>
+<p>Parts VI and VII serve two smaller audiences. Part VI is for the station
+operator, called the SYSOP, who installs StationNet, starts and stops stations,
+and administers accounts and content. Part VII is a short orientation for
+developers who wish to write programs, themes, or game worlds for StationNet.</p>
+<h3 id="how-this-manual-is-organized">How This Manual Is Organized</h3>
+<p><strong>Part I, Getting Started</strong>, explains what a station is, how to connect,
+how to create an account, and how the screen is arranged. It ends with a short
+guided session.</p>
+<p><strong>Part II, Communication and Community</strong>, covers the user directory, chat,
+private mail, the bulletin board, the imageboard, events, and the file archive.</p>
+<p><strong>Part III, Information and Entertainment</strong>, covers radio, television, videos,
+the library, the reference library (WIKI), programs, the arcade, and the MUD.</p>
+<p><strong>Part IV, Office</strong>, covers the six Office programs: Documents, Sheets,
+Presentations, Draw, Agenda, and BASIC.</p>
+<p><strong>Part V, Personalization and Everyday Use</strong>, collects the settings and habits
+that apply to every service: appearance, sound, notifications, installation on
+a phone or desktop, station hours, and account security.</p>
+<p><strong>Part VI, Station Hosting and Administration</strong>, is for SYSOPs.</p>
+<p><strong>Part VII, Developer&#39;s Reference</strong>, is for programmers.</p>
+<p>The <strong>Appendices</strong> contain a keyboard reference, a quick reference to common
+operations, a troubleshooting guide, a table of modules and permissions, and a
+glossary.</p>
+<h3 id="conventions-used-in-this-manual">Conventions Used in This Manual</h3>
+<p><code>MONOSPACED CAPITALS</code> show text that appears on the screen, such as a tab
+name or button caption: for example, choose <code>COMPOSE +</code>.</p>
+<p><code>Monospaced lower case</code> shows something you type exactly, such as a MUD
+command (<code>/look</code>) or a file name (<code>station.json</code>).</p>
+<p>Words in angle brackets stand for a value you supply. In <code>/go &lt;direction&gt;</code>,
+replace <code>&lt;direction&gt;</code> with an actual direction, such as <code>north</code>.</p>
+<p><strong>Choose</strong> means click with the mouse or tap on a touch screen. <strong>Press</strong>
+refers to a key on the keyboard.</p>
+<p>Three kinds of notices appear in the text:</p>
+<aside class="notice notice-note"><p class="notice-label">NOTE</p><div class="notice-body"><p>A NOTE gives additional information or a helpful suggestion.</p>
+</div></aside>
+<aside class="notice notice-caution"><p class="notice-label">CAUTION</p><div class="notice-body"><p>A CAUTION warns of an action that may cause inconvenience or loss of work.</p>
+</div></aside>
+<aside class="notice notice-warning"><p class="notice-label">WARNING</p><div class="notice-body"><p>A WARNING identifies an action that permanently destroys information or
+affects other people&#39;s access to the station.</p>
+</div></aside>
+</div></section>
+<section class="contents"><h2>Contents</h2><div class="toc"><div class="toc-part"><span class="toc-text">Part I. Getting Started</span><span class="toc-dots"></span><span class="toc-page">7</span></div>
+<div class="toc-chapter"><span class="toc-text">1. Introducing StationNet</span><span class="toc-dots"></span><span class="toc-page">7</span></div>
+<div class="toc-chapter"><span class="toc-text">2. Connecting and Signing In</span><span class="toc-dots"></span><span class="toc-page">8</span></div>
+<div class="toc-chapter"><span class="toc-text">3. The Station Workspace</span><span class="toc-dots"></span><span class="toc-page">9</span></div>
+<div class="toc-chapter"><span class="toc-text">4. Your Profile and Account</span><span class="toc-dots"></span><span class="toc-page">11</span></div>
+<div class="toc-chapter"><span class="toc-text">5. A First Session</span><span class="toc-dots"></span><span class="toc-page">12</span></div>
+<div class="toc-part"><span class="toc-text">Part II. Communication and Community</span><span class="toc-dots"></span><span class="toc-page">13</span></div>
+<div class="toc-chapter"><span class="toc-text">6. Users and Profiles</span><span class="toc-dots"></span><span class="toc-page">13</span></div>
+<div class="toc-chapter"><span class="toc-text">7. Chat</span><span class="toc-dots"></span><span class="toc-page">13</span></div>
+<div class="toc-chapter"><span class="toc-text">8. Private Mail</span><span class="toc-dots"></span><span class="toc-page">14</span></div>
+<div class="toc-chapter"><span class="toc-text">9. Bulletin Board, Announcements, and Polls</span><span class="toc-dots"></span><span class="toc-page">15</span></div>
+<div class="toc-chapter"><span class="toc-text">10. Imageboard</span><span class="toc-dots"></span><span class="toc-page">15</span></div>
+<div class="toc-chapter"><span class="toc-text">11. Events</span><span class="toc-dots"></span><span class="toc-page">16</span></div>
+<div class="toc-chapter"><span class="toc-text">12. File Archive</span><span class="toc-dots"></span><span class="toc-page">17</span></div>
+<div class="toc-part"><span class="toc-text">Part III. Information and Entertainment</span><span class="toc-dots"></span><span class="toc-page">18</span></div>
+<div class="toc-chapter"><span class="toc-text">13. Radio</span><span class="toc-dots"></span><span class="toc-page">18</span></div>
+<div class="toc-chapter"><span class="toc-text">14. Television</span><span class="toc-dots"></span><span class="toc-page">19</span></div>
+<div class="toc-chapter"><span class="toc-text">15. Videos</span><span class="toc-dots"></span><span class="toc-page">20</span></div>
+<div class="toc-chapter"><span class="toc-text">16. Library</span><span class="toc-dots"></span><span class="toc-page">21</span></div>
+<div class="toc-chapter"><span class="toc-text">17. WIKI Reference Library</span><span class="toc-dots"></span><span class="toc-page">21</span></div>
+<div class="toc-chapter"><span class="toc-text">18. Programs</span><span class="toc-dots"></span><span class="toc-page">22</span></div>
+<div class="toc-chapter"><span class="toc-text">19. Arcade</span><span class="toc-dots"></span><span class="toc-page">23</span></div>
+<div class="toc-chapter"><span class="toc-text">20. The Station MUD</span><span class="toc-dots"></span><span class="toc-page">24</span></div>
+<div class="toc-part"><span class="toc-text">Part IV. Office</span><span class="toc-dots"></span><span class="toc-page">27</span></div>
+<div class="toc-chapter"><span class="toc-text">21. Office Fundamentals</span><span class="toc-dots"></span><span class="toc-page">27</span></div>
+<div class="toc-chapter"><span class="toc-text">22. Documents</span><span class="toc-dots"></span><span class="toc-page">27</span></div>
+<div class="toc-chapter"><span class="toc-text">23. Sheets</span><span class="toc-dots"></span><span class="toc-page">28</span></div>
+<div class="toc-chapter"><span class="toc-text">24. Presentations</span><span class="toc-dots"></span><span class="toc-page">28</span></div>
+<div class="toc-chapter"><span class="toc-text">25. Draw</span><span class="toc-dots"></span><span class="toc-page">29</span></div>
+<div class="toc-chapter"><span class="toc-text">26. Agenda</span><span class="toc-dots"></span><span class="toc-page">29</span></div>
+<div class="toc-chapter"><span class="toc-text">27. BASIC</span><span class="toc-dots"></span><span class="toc-page">29</span></div>
+<div class="toc-part"><span class="toc-text">Part V. Personalization and Everyday Use</span><span class="toc-dots"></span><span class="toc-page">31</span></div>
+<div class="toc-chapter"><span class="toc-text">28. Appearance and Sound</span><span class="toc-dots"></span><span class="toc-page">31</span></div>
+<div class="toc-chapter"><span class="toc-text">29. Notifications</span><span class="toc-dots"></span><span class="toc-page">31</span></div>
+<div class="toc-chapter"><span class="toc-text">30. Installing the Station as an Application</span><span class="toc-dots"></span><span class="toc-page">32</span></div>
+<div class="toc-chapter"><span class="toc-text">31. Station Hours</span><span class="toc-dots"></span><span class="toc-page">32</span></div>
+<div class="toc-chapter"><span class="toc-text">32. Account Security</span><span class="toc-dots"></span><span class="toc-page">32</span></div>
+<div class="toc-part"><span class="toc-text">Part VI. Station Hosting and Administration</span><span class="toc-dots"></span><span class="toc-page">34</span></div>
+<div class="toc-chapter"><span class="toc-text">33. Installation</span><span class="toc-dots"></span><span class="toc-page">34</span></div>
+<div class="toc-chapter"><span class="toc-text">34. Starting, Stopping, and the Station Manager</span><span class="toc-dots"></span><span class="toc-page">35</span></div>
+<div class="toc-chapter"><span class="toc-text">35. Network Access</span><span class="toc-dots"></span><span class="toc-page">36</span></div>
+<div class="toc-chapter"><span class="toc-text">36. Station Hours, Sleep, and Wake</span><span class="toc-dots"></span><span class="toc-page">36</span></div>
+<div class="toc-chapter"><span class="toc-text">37. SYSOP Control: Station Settings</span><span class="toc-dots"></span><span class="toc-page">37</span></div>
+<div class="toc-chapter"><span class="toc-text">38. Accounts, Permissions, and Moderation</span><span class="toc-dots"></span><span class="toc-page">37</span></div>
+<div class="toc-chapter"><span class="toc-text">39. Managing Modules and Content</span><span class="toc-dots"></span><span class="toc-page">38</span></div>
+<div class="toc-chapter"><span class="toc-text">40. Backup, Upgrade, and Maintenance</span><span class="toc-dots"></span><span class="toc-page">39</span></div>
+<div class="toc-part"><span class="toc-text">Part VII. Developer's Reference</span><span class="toc-dots"></span><span class="toc-page">40</span></div>
+<div class="toc-chapter"><span class="toc-text">41. Project Organization</span><span class="toc-dots"></span><span class="toc-page">40</span></div>
+<div class="toc-chapter"><span class="toc-text">42. Programs and Packages</span><span class="toc-dots"></span><span class="toc-page">40</span></div>
+<div class="toc-chapter"><span class="toc-text">43. Themes</span><span class="toc-dots"></span><span class="toc-page">41</span></div>
+<div class="toc-chapter"><span class="toc-text">44. MUD Worlds and Content</span><span class="toc-dots"></span><span class="toc-page">41</span></div>
+<div class="toc-chapter"><span class="toc-text">45. Testing, Building, and Further References</span><span class="toc-dots"></span><span class="toc-page">41</span></div>
+<div class="toc-part"><span class="toc-text">Appendices</span><span class="toc-dots"></span><span class="toc-page">43</span></div>
+<div class="toc-chapter"><span class="toc-text">Appendix A. Keyboard Reference</span><span class="toc-dots"></span><span class="toc-page">43</span></div>
+<div class="toc-chapter"><span class="toc-text">Appendix B. Quick Reference</span><span class="toc-dots"></span><span class="toc-page">44</span></div>
+<div class="toc-chapter"><span class="toc-text">Appendix C. Troubleshooting</span><span class="toc-dots"></span><span class="toc-page">44</span></div>
+<div class="toc-chapter"><span class="toc-text">Appendix D. Modules and Permissions</span><span class="toc-dots"></span><span class="toc-page">45</span></div>
+<div class="toc-chapter"><span class="toc-text">Appendix E. Glossary</span><span class="toc-dots"></span><span class="toc-page">46</span></div></div></section>
+<section class="part" style="page: part0" id="part-i-getting-started"><header class="part-head"><div class="part-label">Part I</div><h1>Getting Started</h1></header><h2 id="1-introducing-stationnet">1. Introducing StationNet</h2>
+<h3 id="1-1-what-a-station-is">1.1 What a Station Is</h3>
+<p>A <em>station</em> is one running copy of StationNet together with everything it
+keeps: its name, its member accounts, its messages, and its files. The station
+runs on a single host computer, which may be a desktop computer, a laptop, a
+Raspberry Pi, or an Android phone. Other people reach the station over the
+local network with a web browser.</p>
+<p>Every station has a name chosen by its operator and a <em>callsign</em>, a short code
+assigned when the station is first set up. Every member also receives a
+callsign. Callsigns appear beside usernames throughout the system, in the form
+<code>username - [CALLSIGN]</code>, so that members can be identified reliably.</p>
+<p>One host computer may run several stations at once, each with its own name,
+network port, accounts, and content. The stations do not share information with
+one another.</p>
+<h3 id="1-2-services-and-modules">1.2 Services and Modules</h3>
+<p>The facilities a station offers are called <em>services</em>. Each service is
+provided by a <em>module</em> that the SYSOP may turn on or off. Bulletin board,
+announcements, chat, mail, radio, files, the user directory, and programs are
+normally on. The imageboard, events, WIKI, videos, library, arcade, television,
+Office, and MUD are off until the SYSOP turns them on.</p>
+<p>A service that is turned off does not appear in the navigation bar and cannot
+be opened. If this manual describes a service you cannot find, the station you
+are using does not offer it.</p>
+<p>The SYSOP also supplies most of a station&#39;s content: the radio programming, the
+television channels, the books and videos, the games, and the MUD worlds.
+StationNet provides the means of presenting this material; it does not supply
+the material itself.</p>
+<h3 id="1-3-classes-of-user">1.3 Classes of User</h3>
+<p>StationNet distinguishes three classes of user.</p>
+<p><strong>Guests</strong> are visitors who have not signed in. If the station permits guest
+access, a guest may read public services such as the bulletin board and
+announcements, but may not post, chat, or send mail.</p>
+<p><strong>Members</strong> are visitors who have signed in to an account. The status bar at
+the bottom of the screen shows a member as <code>MEMBER</code>.</p>
+<p><strong>SYSOPs</strong> are station operators. The person who sets up a station becomes its
+SYSOP and is shown as <code>SYSOP</code>. A SYSOP has two additional tabs, <code>SYSOP CONTROL</code>
+and <code>MODERATION</code>, and additional controls throughout the system. A SYSOP may
+also delegate particular duties to members, such as hosting radio broadcasts,
+creating events, moderating the imageboard, or building MUD worlds.</p>
+<p>Parts I through V describe what a member can do. Operations reserved for SYSOPs
+or delegated members are identified as such.</p>
+<h3 id="1-4-what-you-need">1.4 What You Need</h3>
+<p>To use a station you need:</p>
+<ul>
+<li>A computer, tablet, or phone on the same network as the station.</li>
+<li>A current web browser, such as Chrome, Edge, Firefox, or Safari.</li>
+<li>The station&#39;s address, which the SYSOP will give you.</li>
+<li>An account on the station, unless you intend only to browse as a guest.</li>
+</ul>
+<p>Some services require more. Live voice on the radio requires a microphone and,
+when you connect from a computer other than the host, a secure (<code>https://</code>)
+address. Installing the station as an application on a phone or desktop also
+requires a secure address. These requirements are described where they apply.</p>
+<h2 id="2-connecting-and-signing-in">2. Connecting and Signing In</h2>
+<h3 id="2-1-opening-the-station">2.1 Opening the Station</h3>
+<p>Every station has an address of the form</p>
+<pre><code>http://&lt;host-address&gt;:&lt;port&gt;
+</code></pre>
+<p>For example, <code>http://192.168.1.20:8080</code>. The SYSOP will tell you the
+correct address. If you are sitting at the host computer itself, the address is
+usually <code>http://127.0.0.1:8080</code>.</p>
+<p>Type the address into the address bar of your browser and press Enter. The
+station&#39;s welcome page appears, showing the station&#39;s name in large characters,
+its access policy, and, if the SYSOP has written one, a message about the
+station.</p>
+<aside class="notice notice-note"><p class="notice-label">NOTE</p><div class="notice-body"><p>Bookmark the station&#39;s address, or install it as an application (see
+Chapter 30), so that you do not need to type it each time.</p>
+</div></aside>
+<h3 id="2-2-registration-policies">2.2 Registration Policies</h3>
+<p>A strip at the top of the sign-in page reports the station&#39;s registration
+policy:</p>
+<dl class="definition"><dt><code>PUBLIC ENROLLMENT OPEN</code></dt><dd>Anyone may create an account.</dd></dl>
+<dl class="definition"><dt><code>PRIVATE / INVITATION ONLY</code></dt><dd>A single-use invitation code from the SYSOP is required.</dd></dl>
+<dl class="definition"><dt><code>ENROLLMENT CLOSED</code></dt><dd>New accounts cannot be created. Ask the SYSOP for assistance.</dd></dl>
+<h3 id="2-3-creating-an-account">2.3 Creating an Account</h3>
+<p>To create an account:</p>
+<ol>
+<li>On the sign-in page, choose <code>NO ACCOUNT? CREATE ONE -&gt;</code>, or on a private
+station <code>HAVE AN INVITATION? ENROLL -&gt;</code>.</li>
+<li>On a private station, enter the invitation code in the <strong>Invitation code</strong>
+field. If you followed an invitation link, the code is already filled in.</li>
+<li>Enter a <strong>Username</strong> of 3 to 24 characters. Letters, numbers, the
+underscore (<code>_</code>), and the hyphen (<code>-</code>) are allowed.</li>
+<li>Enter a <strong>Password</strong> of at least 10 characters, and enter it again in
+<strong>Confirm password</strong>.</li>
+<li>Choose <code>CREATE ACCOUNT</code>.</li>
+</ol>
+<p>The station creates the account, assigns you a random callsign, signs you in,
+and displays the confirmation <code>Account linked: &lt;username&gt; - [&lt;callsign&gt;]</code>.
+Usernames cannot be changed later, so choose carefully.</p>
+<h3 id="2-4-signing-in">2.4 Signing In</h3>
+<ol>
+<li>Choose <code>LOGIN</code> or <code>&gt; AUTHENTICATE</code>.</li>
+<li>Enter your <strong>Username</strong> and <strong>Password</strong>.</li>
+<li>If this is your own device, you may select <strong>Remember me on this device</strong>.</li>
+<li>Choose <code>LOGIN</code>.</li>
+</ol>
+<p>When you are signed in, the station displays <code>Link established. Welcome, &lt;username&gt;</code> and opens the STATION page.</p>
+<p>With <strong>Remember me on this device</strong> selected, the station keeps you signed in
+on that browser across restarts of the browser and of the station until you
+disconnect. Without it, you are signed out when the browser is closed.</p>
+<aside class="notice notice-caution"><p class="notice-label">CAUTION</p><div class="notice-body"><p>Do not select <strong>Remember me on this device</strong> on a computer that other people
+use.</p>
+</div></aside>
+<h3 id="2-5-if-you-forget-your-password">2.5 If You Forget Your Password</h3>
+<p>StationNet does not use e-mail and cannot send you a reset link. Instead:</p>
+<ol>
+<li>Attempt to sign in. After a failed attempt, a <code>FORGOT PASSWORD</code> button
+appears.</li>
+<li>Make sure your username is entered, then choose <code>FORGOT PASSWORD</code>.</li>
+<li>The station generates a temporary password and sends it privately to the
+station&#39;s SYSOPs. Contact a SYSOP, who will give it to you.</li>
+<li>Sign in with the temporary password, then change it at once (Section 4.4).</li>
+</ol>
+<h3 id="2-6-disconnecting">2.6 Disconnecting</h3>
+<p>To sign out, open the <code>STATION</code> tab and choose <code>[ DISCONNECT ]</code> in the
+<strong>CURRENT OPERATOR</strong> panel. The station displays <code>Connection closed.</code>
+Disconnecting also ends any direct chats you have open and turns off your radio.</p>
+<h2 id="3-the-station-workspace">3. The Station Workspace</h2>
+<h3 id="3-1-the-screen">3.1 The Screen</h3>
+<p>Every station page has the same general arrangement.</p>
+<p><strong>The masthead.</strong> The station&#39;s name, drawn in large text characters, appears
+at the top. A short line of text, the <em>tagline</em>, may appear beneath it. The SYSOP
+sets both.</p>
+<p><strong>The station line.</strong> Beneath the masthead, a line shows <code>YOUR STATION</code>, the
+<code>SYSTEM DATE/TIME</code>, and several switches: <code>SFX</code>, which turns interface sounds on
+or off; <code>VFX</code>, which turns a screen scan-line effect on or off; and, where the
+station has a theme tune, <code>MUSIC</code>. These switches are described in Chapter 28.
+If the station keeps regular hours, a second line shows them (Chapter 31).</p>
+<p><strong>The navigation bar.</strong> A row of tab names, separated by asterisks, leads to
+each service: <code>STATION</code>, <code>BULLETIN BOARD</code>, <code>ANNOUNCEMENTS</code>, <code>CHAT</code>, <code>MAIL</code>,
+<code>RADIO</code>, <code>FILES</code>, <code>USERS</code>, <code>PROGRAMS</code>, and others the station offers. The tab
+for the page you are on is highlighted. <code>CHAT</code> and <code>MAIL</code> show a count when
+something new is waiting.</p>
+<p><strong>The work area.</strong> The service you have chosen occupies the middle of the
+screen. Messages from the station appear above it, prefixed <code>SYS://</code>.</p>
+<p><strong>The radio player.</strong> When the radio is available, a small player is docked at
+the edge of every page. See Chapter 13.</p>
+<p><strong>The status bar.</strong> The bottom line shows the station callsign, your username
+and callsign, and your class (<code>MEMBER</code> or <code>SYSOP</code>). It also contains the link
+<code>GET YOUR OWN STATION</code>, which leads to a page of StationNet installation files
+if the SYSOP has provided them.</p>
+<h3 id="3-2-the-station-page">3.2 The STATION Page</h3>
+<p>The <code>STATION</code> tab opens the <strong>Service Directory</strong>. On the left is a numbered
+list of the station&#39;s services, each marked <code>* ONLINE</code>. Choose any entry to
+open that service.</p>
+<p>On the right, the <strong>CURRENT OPERATOR</strong> panel shows your username and class and
+offers <code>[ PROFILE ]</code> and <code>[ DISCONNECT ]</code>. Beneath it, the <strong>STATION ACTIVITY</strong>
+panel summarizes recent events: the newest bulletin and reply, the latest chat
+message, the newest file and member, your unread mail, radio broadcasts now on
+the air, and current television listings. Each item is a link to the service
+concerned.</p>
+<h3 id="3-3-conventions-common-to-all-services">3.3 Conventions Common to All Services</h3>
+<p>StationNet services share a small number of conventions. Once learned, they
+apply everywhere.</p>
+<p><strong>Buttons</strong> are shown in capitals. A button ending in <code>+</code>, such as
+<code>NEW BULLETIN +</code>, creates something new.</p>
+<p><strong>Item menus.</strong> Items you are allowed to change, such as your own posts, carry
+a small downward triangle (▾). Choose it to reveal actions such as <code>DELETE</code>.
+StationNet asks you to confirm before anything is removed.</p>
+<p><strong>Reporting.</strong> Items written by other people carry a small flag symbol. Choose
+the flag, type a reason of 10 to 500 characters, and choose <code>REPORT</code> to send
+the item to the SYSOPs for review. You may have one open report on any item and
+may file up to ten reports a day.</p>
+<p><strong>Times</strong> are displayed in your own device&#39;s time zone.</p>
+<p><strong>Keyboard navigation.</strong> When you are not typing in a field, pressing <code>/</code>
+moves the keyboard focus to the navigation bar (or, in the MUD, to the command
+line). Press Esc to release it. Individual services add their own keys; these
+are listed in Appendix A.</p>
+<p><strong>Guests.</strong> A guest who chooses a link that requires an account is sent to the
+sign-in page and, after signing in, is returned to the page requested.</p>
+<h2 id="4-your-profile-and-account">4. Your Profile and Account</h2>
+<h3 id="4-1-viewing-your-profile">4.1 Viewing Your Profile</h3>
+<p>Your <em>profile</em> is the page other members see when they look you up. To open
+it, choose <code>[ PROFILE ]</code> on the STATION page, or choose your name in the user
+directory.</p>
+<p>A profile shows whether the member is online, the time last active, the
+callsign, a short <strong>Status</strong> line, birthday and gender if supplied, the date the
+member joined, and an <strong>About</strong> section.</p>
+<h3 id="4-2-editing-your-profile">4.2 Editing Your Profile</h3>
+<ol>
+<li>Open your profile and choose <code>[ EDIT PROFILE ]</code>. (The <code>USERS</code> tab also has
+an <code>EDIT MY PROFILE</code> button.)</li>
+<li>Complete any of the following fields. All are optional.<ul>
+<li><strong>Profile photo</strong>: a PNG, JPEG, GIF, or WebP image. It is reduced to fit
+within 128 by 128 pixels and replaces any earlier photo.</li>
+<li><strong>Status</strong>: a line of up to 120 characters shown under your name.</li>
+<li><strong>About me</strong>: up to 2,000 characters.</li>
+<li><strong>Birthday</strong>: <code>MM/DD</code>, or <code>YYYY-MM-DD</code> to include the year.</li>
+<li><strong>Gender</strong>: up to 40 characters.</li>
+</ul>
+</li>
+<li>Choose <code>UPDATE MY PROFILE</code>.</li>
+</ol>
+<h3 id="4-3-theme-preferences">4.3 Theme Preferences</h3>
+<p>If the SYSOP permits personal themes, the profile editing page also contains
+<strong>Theme preferences</strong>, where you may choose your own colours. See Section 28.1.</p>
+<h3 id="4-4-changing-your-password">4.4 Changing Your Password</h3>
+<ol>
+<li>Open your profile and choose <code>[ EDIT PROFILE ]</code>.</li>
+<li>Under <strong>Change password</strong>, enter your <strong>Existing password</strong>.</li>
+<li>Enter a <strong>New password</strong> of at least 10 characters and confirm it.</li>
+<li>Choose <code>CHANGE PASSWORD</code>.</li>
+</ol>
+<p>Your StationNet password is separate from the Office password described in
+Chapter 21.</p>
+<h3 id="4-5-deleting-your-account">4.5 Deleting Your Account</h3>
+<p>The <strong>Delete account</strong> section at the foot of the profile editing page
+permanently removes your account and everything you have contributed: files,
+videos, images, Office documents, bulletins, feed posts and comments, chat
+messages, mail, events, radio uploads, saved program data, and MUD characters.
+Content in threads you started may also be removed.</p>
+<p>To proceed, choose <code>DELETE ACCOUNT</code> and type your username. Choose <code>CONFIRM</code>,
+select the final <code>CONFIRM</code> box, and choose <code>DELETE</code>.</p>
+<aside class="notice notice-warning"><p class="notice-label">WARNING</p><div class="notice-body"><p>Account deletion takes effect immediately and cannot be undone. The SYSOP
+cannot restore a deleted account.</p>
+</div></aside>
+<p>The account that set up the station cannot be deleted in this way.</p>
+<h2 id="5-a-first-session">5. A First Session</h2>
+<p>This short session introduces the services most members use daily. It assumes
+you have an account and that the station offers the usual services.</p>
+<ol>
+<li><strong>Sign in.</strong> Open the station&#39;s address, choose <code>LOGIN</code>, and sign in as
+described in Section 2.4. The STATION page appears.</li>
+<li><strong>Look around.</strong> Read the <strong>STATION ACTIVITY</strong> panel to see what has
+happened recently. Choose <code>ANNOUNCEMENTS</code> to read any notices from the
+SYSOP.</li>
+<li><strong>Complete your profile.</strong> Choose <code>[ PROFILE ]</code>, then <code>[ EDIT PROFILE ]</code>.
+Write a short Status line, such as <code>New here - say hello</code>, and choose
+<code>UPDATE MY PROFILE</code>.</li>
+<li><strong>Read the bulletin board.</strong> Choose <code>BULLETIN BOARD</code>. Choose any subject to
+read it and its replies. To answer, type in <strong>Post reply</strong> and choose
+<code>SEND REPLY</code>.</li>
+<li><strong>Say hello in chat.</strong> Choose <code>CHAT</code>, type a greeting in the box at the
+bottom, and press Enter.</li>
+<li><strong>Send a letter.</strong> Choose <code>USERS</code>, find another member, and choose <code>MAIL</code>.
+Enter a subject and message and choose <code>DELIVER PRIVATE MAIL</code>.</li>
+<li><strong>Turn on the radio.</strong> In the radio player at the edge of the screen, choose
+<code>POWER: OFF</code> to switch it on, then choose <code>SCAN &gt;</code> to find a station that is
+on the air.</li>
+<li><strong>Disconnect.</strong> When you have finished, open <code>STATION</code> and choose
+<code>[ DISCONNECT ]</code>.</li>
+</ol>
+</section>
+<section class="part" style="page: part1" id="part-ii-communication-and-community"><header class="part-head"><div class="part-label">Part II</div><h1>Communication and Community</h1></header><h2 id="6-users-and-profiles">6. Users and Profiles</h2>
+<h3 id="6-1-the-user-directory">6.1 The User Directory</h3>
+<p>The <code>USERS</code> tab lists every registered member. Each entry shows the member&#39;s
+photo, <code>ONLINE</code> or <code>OFFLINE</code>, username, callsign, status line, and the time last
+active. SYSOPs are marked <code>SYSOP</code>.</p>
+<p>To change the order, choose an option under <strong>SORT BY</strong>: <strong>Most recently
+active</strong>, <strong>Newest registered</strong>, <strong>Oldest registered</strong>, or <strong>Alphabetical
+(A–Z)</strong>. Then choose <code>SORT</code>. Long lists are divided into pages; use <code>PREVIOUS</code>,
+<code>NEXT</code>, or a page number.</p>
+<p>Each entry offers <code>PROFILE</code> and <code>MAIL</code>. Members who are online also offer
+<code>DIRECT CHAT</code>.</p>
+<h3 id="6-2-contacting-another-member">6.2 Contacting Another Member</h3>
+<p>From another member&#39;s profile you may:</p>
+<ul>
+<li>Choose <code>OPEN DIRECT CHAT</code>, if the member is online (Section 7.2).</li>
+<li>Choose <code>SEND PRIVATE MAIL</code> (Chapter 8).</li>
+<li>Report the member&#39;s behaviour with the flag symbol (Section 3.3).</li>
+</ul>
+<h3 id="6-3-user-feeds">6.3 User Feeds</h3>
+<p>Where the station offers user feeds, each profile has a <strong>feed</strong> of short
+posts beneath the profile details.</p>
+<p><strong>To post</strong> to your own feed, open your profile, type up to 200 characters in
+<strong>Share a thought</strong>, and choose <code>POST TO YOUR FEED</code>.</p>
+<p><strong>To react</strong> to a post, choose one of the five reaction buttons beneath it
+(<code>✓</code>, <code>XD</code>, <code>&lt;3</code>, <code>;_;</code>, <code>&gt;:c</code>). You may hold one reaction per post; choosing
+another replaces it.</p>
+<p><strong>To comment</strong>, choose <code>COMMENT</code> beneath the post, type up to 500 characters,
+and choose <code>COMMENT</code> again. When you comment on another member&#39;s post, that
+member is notified by private mail. A profile shows the three newest comments
+on each post; choose <code>VIEW ALL COMMENTS</code> to see the rest.</p>
+<p>You may delete your own posts and comments from their ▾ menus. The station
+limits the rate of posting: five posts in ten minutes, twenty comments an hour,
+and sixty reaction changes an hour.</p>
+<h2 id="7-chat">7. Chat</h2>
+<h3 id="7-1-station-chat">7.1 Station Chat</h3>
+<p>Station chat is a single public conversation open to every member. Its
+messages are kept, so you can read what was said before you arrived.</p>
+<ol>
+<li>Choose <code>CHAT</code>. The most recent messages are shown, and new ones appear
+automatically.</li>
+<li>Type your message, up to 1,000 characters, in the box labelled
+<strong>Transmit as</strong>.</li>
+<li>Press Enter, or choose <code>SEND</code>. Press Shift+Enter to begin a new line
+without sending.</li>
+</ol>
+<p>To report a public message, use the report control shown on the message.</p>
+<h3 id="7-2-direct-chat">7.2 Direct Chat</h3>
+<p>Direct chat is a private, temporary conversation between two members who are
+both online.</p>
+<p><strong>To start a direct chat</strong>, choose <code>DIRECT CHAT</code> beside the member&#39;s name in
+the user directory, or <code>OPEN DIRECT CHAT</code> on their profile. Type and send
+messages as in station chat.</p>
+<p><strong>When someone writes to you</strong>, a count appears on the <code>CHAT</code> tab and an alert
+naming the sender appears near the top of every page. Choose the sender&#39;s name
+to open the conversation.</p>
+<aside class="notice notice-note"><p class="notice-label">NOTE</p><div class="notice-body"><p>Direct chat is not stored. The conversation is erased when either member
+disconnects, and it cannot be recovered later. Use private mail for anything
+you wish to keep.</p>
+</div></aside>
+<p>If a SYSOP has muted your chat, the message <code>Your chat is muted</code> appears and
+messages cannot be sent until the restriction ends.</p>
+<h2 id="8-private-mail">8. Private Mail</h2>
+<p>Private mail is a permanent, private message service between members of the
+station.</p>
+<h3 id="8-1-reading-mail">8.1 Reading Mail</h3>
+<p>Choose <code>MAIL</code>. The <strong>Inbox</strong> lists messages sent to you, with unread messages
+highlighted. A count on the <code>MAIL</code> tab shows how many messages are unread.
+Choose <code>SENT MAIL</code> to list messages you have sent.</p>
+<p>Choose a message to open it. Messages between you and another member are shown
+together as one conversation, oldest first.</p>
+<h3 id="8-2-sending-mail">8.2 Sending Mail</h3>
+<ol>
+<li>Choose <code>COMPOSE +</code>. (Or choose <code>MAIL</code> beside a member&#39;s name.)</li>
+<li>Select the <strong>Recipient</strong> from the list of registered members.</li>
+<li>Enter a <strong>Subject</strong> of up to 120 characters.</li>
+<li>Type the <strong>Message</strong>, up to 10,000 characters.</li>
+<li>Choose <code>DELIVER PRIVATE MAIL</code>.</li>
+</ol>
+<h3 id="8-3-replying-and-deleting">8.3 Replying and Deleting</h3>
+<p>To reply, open the conversation, type in the reply box at the bottom, and
+choose <code>SEND REPLY</code>. To remove a message from your own mailbox, choose <code>DELETE</code>
+beside it. Deleting a message does not remove it from the other member&#39;s
+mailbox.</p>
+<p>The station also uses private mail for some notices: feed comments, SYSOP
+warnings, and password reset messages sent to SYSOPs.</p>
+<h2 id="9-bulletin-board-announcements-and-polls">9. Bulletin Board, Announcements, and Polls</h2>
+<h3 id="9-1-the-bulletin-board">9.1 The Bulletin Board</h3>
+<p>The bulletin board holds public discussions, called <em>bulletins</em>, each with
+its own replies. Choose <code>BULLETIN BOARD</code> to see the list. Each row gives the
+author, the subject with an excerpt, and the number of replies. A <code>POLL</code> tag
+marks a bulletin that includes a poll.</p>
+<p><strong>To read</strong> a bulletin, choose its subject.</p>
+<p><strong>To reply</strong>, type in <strong>Post reply</strong> at the foot of the bulletin and choose
+<code>SEND REPLY</code>.</p>
+<p><strong>To post</strong> a new bulletin:</p>
+<ol>
+<li>Choose <code>NEW BULLETIN +</code>.</li>
+<li>Enter a <strong>Subject</strong> (3 to 120 characters) and a <strong>Message</strong> (up to 5,000
+characters).</li>
+<li>Optionally, open <code>ADVANCED</code> to add a poll or set an automatic removal date
+(Sections 9.3 and 9.4).</li>
+<li>Choose <code>POST</code>.</li>
+</ol>
+<p>You may delete your own bulletins and replies from their ▾ menus. Deleting a
+bulletin also deletes all of its replies.</p>
+<h3 id="9-2-announcements">9.2 Announcements</h3>
+<p>The <code>ANNOUNCEMENTS</code> tab carries official notices from the SYSOP. Only SYSOPs
+may post announcements; everyone, including guests, may read them. An
+announcement may include a poll.</p>
+<h3 id="9-3-polls">9.3 Polls</h3>
+<p>A poll is a question with up to ten responses, attached to a bulletin or
+announcement when it is first published.</p>
+<p><strong>To vote</strong>, select a response (or several, if the poll is marked
+<code>MULTIPLE VOTES ALLOWED</code>) and choose <code>VOTE</code>. Results are shown after you have
+voted. You may later choose <code>CHANGE VOTE</code> or <code>CLEAR VOTE</code>.</p>
+<p><strong>To add a poll</strong> when posting, open <code>ADVANCED</code>, select <strong>Add a poll</strong>, enter
+the <strong>Question</strong> and responses, and if desired select <strong>Allow multiple votes</strong>.
+The author of a poll may end voting with <code>CLOSE POLL</code>.</p>
+<h3 id="9-4-automatic-removal">9.4 Automatic Removal</h3>
+<p>Under <code>ADVANCED</code>, the <strong>AUTO-REMOVAL</strong> fields let you choose a date and time
+at which a bulletin will be removed automatically. The time zone defaults to
+your device&#39;s own. Leave the date and time empty to keep the bulletin
+indefinitely. Bulletins with a removal date show <code>AUTO-REMOVES</code> and the time.</p>
+<h2 id="10-imageboard">10. Imageboard</h2>
+<p>The imageboard is a single station-wide board of picture threads. It is
+available only to signed-in members.</p>
+<h3 id="10-1-browsing">10.1 Browsing</h3>
+<p>Choose <code>IMAGEBOARD</code> to see the <strong>Thread catalog</strong>. Each thread shows a preview
+image, subject, author, number of replies, and the time it was last <em>bumped</em>
+(that is, last replied to). Pinned threads appear first. Choose a thread&#39;s
+picture or subject to open it, and choose any picture in a thread to see it at
+full size.</p>
+<h3 id="10-2-starting-a-thread">10.2 Starting a Thread</h3>
+<ol>
+<li>Choose <code>NEW THREAD +</code>.</li>
+<li>Enter a <strong>Subject</strong>. A <strong>Message</strong> is optional.</li>
+<li>Choose an <strong>Image</strong>. PNG, JPEG, GIF, and WebP files of up to 10 MB are
+accepted. Animated images are shown by their first frame.</li>
+<li>Choose <code>POST THREAD</code>.</li>
+</ol>
+<h3 id="10-3-replying">10.3 Replying</h3>
+<p>Beneath the thread, type a <strong>Message</strong>, attach an <strong>Image</strong>, or both, and
+choose <code>POST REPLY</code>. A thread marked <code>LOCKED</code> accepts no replies.</p>
+<h3 id="10-4-limits">10.4 Limits</h3>
+<p>The SYSOP sets the number of threads the board keeps. When a new thread would
+exceed the limit, the oldest threads are removed with their pictures. The SYSOP
+may also limit the number of pictures in each thread; after the limit is
+reached, text replies are still accepted.</p>
+<p>SYSOPs, and members granted imageboard moderation, may pin, lock, and delete
+threads.</p>
+<h2 id="11-events">11. Events</h2>
+<p>The events calendar announces station activities and lets members say whether
+they will attend.</p>
+<h3 id="11-1-viewing-events">11.1 Viewing Events</h3>
+<p>Choose <code>EVENTS</code>. Upcoming events and events in progress are listed first,
+followed by past and cancelled events. Choose an event to see its description,
+start and end times in your own time zone, location, link, a countdown, and
+the members who are going or interested.</p>
+<h3 id="11-2-responding">11.2 Responding</h3>
+<p>On the event page, choose <code>GOING</code> or <code>INTERESTED</code>. The chosen button is
+marked with a tick. To change your mind, choose the other button, or
+<code>WITHDRAW</code>.</p>
+<h3 id="11-3-creating-an-event">11.3 Creating an Event</h3>
+<p>The SYSOP decides who may create events: SYSOPs only, members of selected
+groups, or all members. If you are permitted, <code>CREATE EVENT +</code> appears on the
+EVENTS page.</p>
+<ol>
+<li>Choose <code>CREATE EVENT +</code>.</li>
+<li>Enter a <strong>Name</strong> and <strong>Description</strong>.</li>
+<li>Enter the <strong>Start date</strong> and <strong>Start time</strong>, and optionally the end date and
+time.</li>
+<li>Check the <strong>Timezone</strong>. It defaults to your device&#39;s time zone and is given
+in the standard form <code>Region/City</code>, for example <code>America/Edmonton</code>.</li>
+<li>Optionally enter a <strong>Location</strong> and a <strong>URL</strong>.</li>
+<li>Choose <code>CREATE EVENT</code>.</li>
+</ol>
+<p>The organizer may later choose <code>EDIT</code> or <code>CANCEL EVENT</code>. A cancelled event
+remains listed so that members know it will not take place.</p>
+<h2 id="12-file-archive">12. File Archive</h2>
+<p>The file archive is the station&#39;s shared collection of downloadable files.
+Choose <code>FILES</code> to open it.</p>
+<h3 id="12-1-finding-and-downloading-files">12.1 Finding and Downloading Files</h3>
+<p>The archive is divided into five categories: <strong>General</strong>, <strong>Documents</strong>,
+<strong>Images</strong>, <strong>Software</strong>, and <strong>Other</strong>. Choose <code>ALL</code> or a category name to
+filter the list. Each entry shows the category, size, name, description,
+uploader, and date. Picture files show a small preview.</p>
+<p>Choose <code>DOWNLOAD</code> to save a file to your device.</p>
+<h3 id="12-2-uploading-files">12.2 Uploading Files</h3>
+<ol>
+<li>Choose <code>UPLOAD FILE +</code>.</li>
+<li>Choose the <strong>File</strong>, select a <strong>Category</strong>, and add a <strong>Description</strong> of up
+to 500 characters.</li>
+<li>Choose <code>UPLOAD TO ARCHIVE</code>.</li>
+</ol>
+<p>The heading of the archive shows how much of the station&#39;s total storage is in
+use, and the upload page shows the largest file accepted. The SYSOP may limit
+uploading to SYSOPs or turn it off entirely, in which case <code>UPLOAD FILE +</code> does
+not appear.</p>
+<p>You may delete files you uploaded from their ▾ menus.</p>
+<aside class="notice notice-caution"><p class="notice-label">CAUTION</p><div class="notice-body"><p>Files in the archive are visible to every member. Do not upload private
+documents or material you do not have the right to share.</p>
+</div></aside>
+</section>
+<section class="part" style="page: part2" id="part-iii-information-and-entertainment"><header class="part-head"><div class="part-label">Part III</div><h1>Information and Entertainment</h1></header><h2 id="13-radio">13. Radio</h2>
+<p>The StationNet radio is a shared receiver and transmitter. Members tune to
+frequencies, measured in megahertz (MHz), to hear broadcasts and to talk with
+one another by voice, Morse code, or still pictures. The radio is an internal
+facility of the station; it does not use real radio equipment.</p>
+<h3 id="13-1-the-radio-player-and-the-radio-console">13.1 The Radio Player and the Radio Console</h3>
+<p>The radio can be operated in two places.</p>
+<p>The <strong>radio player</strong> is docked on every page except the radio console. It
+shows the power switch, the frequency, and what is playing. Choose <code>R</code> to
+expand it and reveal tuning, scanning, volume, <code>MUTE</code>, and <code>FX</code> controls, and
+<code>OPEN RADIO</code>. Because the player is present on every page, you may listen while
+you use other services.</p>
+<p>The <strong>radio console</strong>, opened with the <code>RADIO</code> tab or <code>OPEN RADIO</code>, offers
+the complete set of controls: a frequency display, a band selector, a live
+signal monitor, the <strong>Station broadcast directory</strong>, and controls for
+transmitting.</p>
+<h3 id="13-2-listening">13.2 Listening</h3>
+<ol>
+<li>Choose <code>POWER: OFF</code>. The switch changes to <code>POWER: ON</code>.</li>
+<li>Tune a frequency in any of these ways:<ul>
+<li>Type a frequency, such as <code>7.25</code>, in the <strong>Frequency MHz</strong> field and
+choose <code>TUNE</code> (or press Enter).</li>
+<li>Choose <code>TUNE − 0.50</code> or <code>TUNE + 0.50</code> to step down or up.</li>
+<li>Choose a <strong>Band</strong> to move to it.</li>
+<li>Choose <code>&lt; SCAN</code> or <code>SCAN &gt;</code> to search for the next active frequency.</li>
+<li>Choose an entry in the <strong>Station broadcast directory</strong>.</li>
+</ul>
+</li>
+<li>Adjust <strong>Volume</strong>, or choose <code>MUTE</code>.</li>
+</ol>
+<p>The display shows the name and message of the broadcast, the current title and
+artist, and the band. <code>FX</code> adds an analogue receiver sound to what you hear;
+choose it again to hear the plain signal.</p>
+<aside class="notice notice-note"><p class="notice-label">NOTE</p><div class="notice-body"><p>Browsers will not play sound until you have clicked or tapped on the page. If
+the radio is on but silent, choose any control on the page.</p>
+</div></aside>
+<h3 id="13-3-bands">13.3 Bands</h3>
+<p>The frequency range is divided into <em>bands</em>, each set aside for a particular
+purpose and kind of transmission. A new station has the following bands; the
+SYSOP may change them.</p>
+<table>
+<thead>
+<tr>
+<th>Band</th>
+<th>Range (MHz)</th>
+<th>Use</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>BROADCASTS</td>
+<td>7.00–13.99</td>
+<td>Hosted programmes</td>
+</tr>
+<tr>
+<td>MORSE / CW</td>
+<td>14.00–27.99</td>
+<td>Morse code</td>
+</tr>
+<tr>
+<td>DATA TRANSMISSIONS</td>
+<td>28.00–144.99</td>
+<td>Still pictures (SSTV)</td>
+</tr>
+<tr>
+<td>GENERAL COMMUNICATION</td>
+<td>145.00–432.99</td>
+<td>Live voice</td>
+</tr>
+<tr>
+<td>EXPERIMENTAL / UNRESTRICTED</td>
+<td>433.00–999.99</td>
+<td>Morse and pictures</td>
+</tr>
+</tbody></table>
+<p>Whether you may transmit on a band depends on the station&#39;s radio permissions:
+<code>FULL</code> allows receiving and transmitting, <code>LISTEN</code> allows receiving only, and
+<code>DENIED</code> allows neither. Only one person may transmit on a frequency at a time.</p>
+<h3 id="13-4-transmitting">13.4 Transmitting</h3>
+<p>When you tune to a band on which you may transmit, the console shows the
+controls for that band. If the band supports more than one kind of
+transmission, choose one under <strong>Active mode</strong>.</p>
+<p><strong>Live voice.</strong> Hold <code>HOLD TO TALK [V]</code>, or hold the V key while you are not
+typing in a field, and speak. Release to stop transmitting and clear the
+frequency for others. The browser will ask permission to use the microphone the
+first time. Voice travels directly between browsers and is never recorded.</p>
+<aside class="notice notice-note"><p class="notice-label">NOTE</p><div class="notice-body"><p>Browsers permit microphone use only on secure connections. Live voice works at
+the host computer itself, and from other computers only when the station is
+reached through an <code>https://</code> address. The console reports this condition if it
+applies.</p>
+</div></aside>
+<p><strong>Morse code (CW).</strong> Choose <code>BEGIN CW TRANSMISSION</code>, then hold
+<code>HOLD KEY [SPACE]</code> (or the Space bar) for each dot and dash. <strong>Tone Hz</strong> sets the
+pitch and <strong>Speed WPM</strong> the speed in words per minute. Select <strong>CW decoder</strong> to
+have received Morse shown as text. A <strong>MORSE REFERENCE</strong> table is provided.</p>
+<p><strong>Pictures (SSTV).</strong> Choose a <strong>Local image</strong>, check the preview, and choose
+<code>TRANSMIT PICTURE</code>. Pictures are sent at a small size (80 by 60 pixels) line by
+line. A picture you receive builds up in the <strong>RX PICTURE</strong> box; choose
+<code>SAVE RECEIVED</code> to keep it.</p>
+<h3 id="13-5-hosted-broadcasts">13.5 Hosted Broadcasts</h3>
+<p>Members whom the SYSOP has authorized to host broadcasts see a <code>MANAGE BROADCASTS</code> button and a <strong>Broadcast console</strong> on the radio console. A host
+uploads audio files (MP3, OGG, WAV, or MIDI), arranges them in playlists or in
+<em>programmes</em> that mix music with announcements, Morse, pictures, and live
+microphone breaks, and starts the broadcast on an assigned frequency.</p>
+<p>During a broadcast the host may choose <code>TAKE CONTROL</code> to act as disc jockey,
+then <code>PAUSE</code>, <code>SKIP</code>, <code>HOLD TO TALK</code>, or <code>PLAY NOW</code> for prepared content.
+Listeners who tune in midway join at the current point of the programme.</p>
+<h2 id="14-television">14. Television</h2>
+<p>The <code>TV</code> tab opens the station&#39;s television set. Television is <em>linear</em>:
+each channel follows a schedule set by the SYSOP, and when you tune in you join
+whatever programme is on the air at that moment, as with broadcast television.</p>
+<h3 id="14-1-watching">14.1 Watching</h3>
+<ol>
+<li>Choose <code>TV</code>.</li>
+<li>Choose <code>POWER</code> on the screen (or the ⏻ key on the receiver panel).</li>
+<li>The set tunes to the station&#39;s default channel, or to the channel you
+last watched.</li>
+</ol>
+<p>The receiver panel beside the screen provides channel up and down (<code>CH ▲ ▼</code>),
+volume (<code>VOL − +</code>), <code>MUTE</code>, <code>GUIDE</code>, <code>INFO</code>, fullscreen, and a numeric keypad
+for entering a channel number directly.</p>
+<p><code>INFO</code> displays the channel, the current programme with its progress, a
+description, and the next programme. A channel with nothing scheduled shows an
+<code>OFF AIR</code> test card with the time the channel resumes.</p>
+<h3 id="14-2-the-program-guide">14.2 The Program Guide</h3>
+<p>Choose <code>GUIDE</code> (or press G) to display the program guide, a grid of all
+channels against time. Use the arrow keys to move through it and choose a
+programme, or press Enter, to read about it or tune to it. The guide&#39;s own
+buttons are <code>Page Up</code>, <code>Page Down</code>, <code>+24 Hours</code>, and <code>−24 Hours</code>. Times are
+shown in your local time.</p>
+<h3 id="14-3-keyboard-controls">14.3 Keyboard Controls</h3>
+<table>
+<thead>
+<tr>
+<th>Key</th>
+<th>Action</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>0–9</td>
+<td>Enter a channel number</td>
+</tr>
+<tr>
+<td>↑ ↓, Page Up, Page Down</td>
+<td>Change channel</td>
+</tr>
+<tr>
+<td>[ and ]</td>
+<td>Volume down and up</td>
+</tr>
+<tr>
+<td>M</td>
+<td>Mute</td>
+</tr>
+<tr>
+<td>G</td>
+<td>Guide</td>
+</tr>
+<tr>
+<td>I</td>
+<td>Information</td>
+</tr>
+<tr>
+<td>F</td>
+<td>Fullscreen</td>
+</tr>
+<tr>
+<td>Esc</td>
+<td>Close the guide or information</td>
+</tr>
+</tbody></table>
+<h2 id="15-videos">15. Videos</h2>
+<p>The <code>VIDEOS</code> tab contains video recordings that can be watched at any time.</p>
+<p>To find a video, type part of its title in <strong>Search videos by title</strong> and
+choose <code>SEARCH</code>, or browse the pages of the catalogue. Choose a video to open
+it. Use the player&#39;s own controls to play, pause, seek, change volume, and view
+fullscreen.</p>
+<p>The SYSOP runs the video service in one of two modes. In <strong>Community</strong> mode,
+members may upload videos and comment on them. In <strong>Curated</strong> mode, only the
+station publishes videos, authors are not shown, and comments are not offered.</p>
+<p><strong>To upload a video</strong> (Community mode):</p>
+<ol>
+<li>Choose <code>UPLOAD VIDEO +</code>.</li>
+<li>Enter a <strong>Title</strong> and, optionally, a <strong>Description</strong>.</li>
+<li>Choose a video file in MP4, WebM, or Ogg format, up to 120 MB.</li>
+<li>Choose <code>UPLOAD VIDEO</code>.</li>
+</ol>
+<p>Each member has an upload quota set by the SYSOP. <strong>To comment</strong>, type in
+<strong>Add a comment</strong> beneath the video and choose <code>POST COMMENT</code>.</p>
+<h2 id="16-library">16. Library</h2>
+<p>The <code>LIBRARY</code> tab holds books in EPUB format and documents in PDF format.</p>
+<h3 id="16-1-finding-a-book">16.1 Finding a Book</h3>
+<p>Use the controls at the top of the catalogue: <strong>Search titles, authors, and
+descriptions</strong>, a <strong>Category</strong>, a <strong>Format</strong> (EPUB or PDF), and <strong>Sort by</strong>.
+Choose <code>APPLY</code>; <code>CLEAR</code> restores the full catalogue. Choose a cover to see the
+book&#39;s details.</p>
+<h3 id="16-2-reading">16.2 Reading</h3>
+<p>On the details page, choose <code>READ BOOK</code> (EPUB) or <code>READ PDF</code>. If you have read
+the book before, the button reads <code>RESUME READING</code> and returns you to where you
+stopped. When the SYSOP permits it, a <code>DOWNLOAD</code> button saves a copy of the
+file.</p>
+<p><strong>EPUB books</strong> are displayed one chapter at a time in the station&#39;s colours.
+Select a <strong>Chapter</strong> from the list, or choose <code>PREVIOUS CHAPTER</code> and
+<code>NEXT CHAPTER</code>. Choose <code>A−</code> and <code>A+</code> to change the size of the text.</p>
+<p><strong>PDF documents</strong> keep their original appearance. Choose ◀ and ▶ (or press the
+Left and Right arrow keys) to turn pages, or type a page number. Choose − and +
+to zoom, or <code>FIT WIDTH</code>.</p>
+<h3 id="16-3-bookmarks-and-reading-position">16.3 Bookmarks and Reading Position</h3>
+<p>When you are signed in, your reading position is saved automatically and
+follows you to any device you use on the same station.</p>
+<p><strong>To set a bookmark</strong>, choose <code>BOOKMARK</code> while reading. <strong>To return to a
+bookmark</strong>, open <strong>Bookmarks</strong> above the text and choose the bookmark. <strong>To
+remove one</strong>, choose × beside it. Guests may read, but positions and bookmarks
+are not saved for them.</p>
+<h3 id="16-4-contributing-books">16.4 Contributing Books</h3>
+<p>In Community mode, members may choose <code>UPLOAD EPUB / PDF +</code> to add a book.
+Title, author, and description are read from the file where available, and may
+be corrected afterwards with <code>EDIT DETAILS</code>. Uploads count against a quota set
+by the SYSOP.</p>
+<h2 id="17-wiki-reference-library">17. WIKI Reference Library</h2>
+<p>The <code>WIKI</code> tab opens the station&#39;s <strong>REFERENCE LIBRARY</strong>: offline copies of
+encyclopedias, dictionaries, manuals, and other reference works that the SYSOP
+has installed. Each work is called a <em>collection</em>. Because the collections are
+stored on the station itself, they are available without an Internet
+connection.</p>
+<h3 id="17-1-browsing-and-searching">17.1 Browsing and Searching</h3>
+<p>The opening page lists the available collections. Choose <code>OPEN COLLECTION →</code>
+to go to a collection&#39;s main page, and follow links within its articles as you
+would on any web site.</p>
+<p>To search, select a collection in the search bar, type words in <strong>Find
+articles and pages</strong>, and choose <code>SEARCH</code>. Choose a result to open it.</p>
+<p>While reading, use <code>← BACK</code> and <code>FORWARD →</code> to retrace your steps, the
+<strong>COLLECTION</strong> list to switch collections, and <code>ALL COLLECTIONS</code> to return to
+the list.</p>
+<p>If the page reports <code>LIBRARY UNAVAILABLE</code>, no collection is installed or the
+reference reader could not start. Inform the SYSOP.</p>
+<h2 id="18-programs">18. Programs</h2>
+<p>The <code>PROGRAMS</code> tab opens the <strong>Program Manager</strong>, a directory of software that
+runs within StationNet: games, utilities, creative tools, and productivity
+programs.</p>
+<h3 id="18-1-finding-and-launching-a-program">18.1 Finding and Launching a Program</h3>
+<ol>
+<li>Choose <code>PROGRAMS</code>.</li>
+<li>Narrow the list by typing in <strong>FIND PROGRAM</strong>, or choose a category:
+<code>GAMES</code>, <code>UTILITIES</code>, <code>CREATIVE</code>, <code>EDUCATIONAL</code>, <code>PRODUCTIVITY</code>, <code>OTHER</code>,
+and, when Office is enabled, <code>OFFICE</code>.</li>
+<li>Choose a program to see its details: version, author, the devices it
+supports, and the input it requires.</li>
+<li>Choose <code>LAUNCH PROGRAM &gt;</code>.</li>
+</ol>
+<p>The list may also be operated from the keyboard: press ↑ and ↓ to select a
+program and Enter to open it.</p>
+<p>If your device lacks something the program needs, such as a keyboard, the
+program pauses with an explanation. You may choose <strong>Launch anyway</strong> to try it
+regardless.</p>
+<h3 id="18-2-pinned-and-recent-programs">18.2 Pinned and Recent Programs</h3>
+<p>Choose <code>PIN TO FAVORITES</code> on a program&#39;s details to add it to the <strong>PINNED</strong>
+list at the left of the Program Manager. Programs you have launched appear
+under <strong>RECENTLY USED</strong>. Choose <code>UNPIN</code> to remove a pinned program.</p>
+<h3 id="18-3-running-programs">18.3 Running Programs</h3>
+<p>Programs open within the StationNet page. Some fill the whole page in
+<em>immersive</em> presentation; choose <strong>Exit immersive</strong>, or press Esc, to return.
+Many programs can also be shown fullscreen.</p>
+<p>Programs save their own information, such as high scores and documents, to
+your account on the station. Some keep shared station-wide records, such as a
+community score table.</p>
+<h3 id="18-4-programs-supplied-with-stationnet">18.4 Programs Supplied with StationNet</h3>
+<p>StationNet is supplied with a set of built-in programs. A station may disable
+any of them or add others.</p>
+<table>
+<thead>
+<tr>
+<th>Program</th>
+<th>Category</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>Calculator</td>
+<td>Utilities</td>
+<td>Standard and scientific calculator with memory</td>
+</tr>
+<tr>
+<td>Clock</td>
+<td>Utilities</td>
+<td>World clocks, alarms, timers, and stopwatch</td>
+</tr>
+<tr>
+<td>Sleep Calculator</td>
+<td>Utilities</td>
+<td>Bedtimes and waking times by sleep cycle</td>
+</tr>
+<tr>
+<td>Focus Console</td>
+<td>Productivity</td>
+<td>Work timer with session log and statistics</td>
+</tr>
+<tr>
+<td>Personal Calendar</td>
+<td>Productivity</td>
+<td>Private month calendar and daily planner</td>
+</tr>
+<tr>
+<td>ASCII/ANSI Art Studio</td>
+<td>Creative</td>
+<td>Coloured character art</td>
+</tr>
+<tr>
+<td>MIDI Composer</td>
+<td>Creative</td>
+<td>Multi-track music composition and MIDI export</td>
+</tr>
+<tr>
+<td>Breakout</td>
+<td>Games</td>
+<td>Brick-breaking game</td>
+</tr>
+<tr>
+<td>Snake</td>
+<td>Games</td>
+<td>Classic, Sprint, and Maze Snake</td>
+</tr>
+<tr>
+<td>Number Guess</td>
+<td>Games</td>
+<td>Number-guessing game</td>
+</tr>
+<tr>
+<td>Light Cycles</td>
+<td>Games</td>
+<td>Light cycle arena game</td>
+</tr>
+<tr>
+<td>Cybercrawler</td>
+<td>Games</td>
+<td>Turn-based grid exploration</td>
+</tr>
+<tr>
+<td>Echo Choir: Remix</td>
+<td>Games</td>
+<td>Musical puzzles</td>
+</tr>
+<tr>
+<td>Oddling Garden</td>
+<td>Games</td>
+<td>Virtual pets</td>
+</tr>
+<tr>
+<td>Void Trader</td>
+<td>Games</td>
+<td>Space trading simulation</td>
+</tr>
+<tr>
+<td>Wirestorm Rally</td>
+<td>Games</td>
+<td>Off-road racing</td>
+</tr>
+</tbody></table>
+<h2 id="19-arcade">19. Arcade</h2>
+<p>The <code>ARCADE</code> tab offers games for classic home consoles and arcade machines,
+played in the browser through emulation. The SYSOP or the members supply the
+game files; StationNet supplies the emulators.</p>
+<h3 id="19-1-finding-a-game">19.1 Finding a Game</h3>
+<p>Use <strong>Search games</strong>, <strong>Sort by</strong>, and the <strong>Platforms</strong> and <strong>Genres</strong> menus,
+then choose <code>APPLY FILTERS</code>. Choose a game&#39;s cover to open its page, which
+lists its platform, genre, year, developer, and other details.</p>
+<p>Supported platforms include the Nintendo Entertainment System, Super Nintendo,
+Game Boy, Game Boy Color, Game Boy Advance, Nintendo 64, Nintendo DS, Sega
+Genesis/Mega Drive, Master System, Game Gear, Atari 2600, 7800, and Lynx,
+TurboGrafx-16, ColecoVision, MAME arcade sets, and Sony PSP.</p>
+<h3 id="19-2-playing">19.2 Playing</h3>
+<p>Choose <code>▶ PLAY &lt;title&gt;</code>. The emulator loads and starts the game. The
+emulator&#39;s own menu bar, at the foot of the game area, provides controls,
+volume, fullscreen, and the emulator&#39;s settings, including the keyboard and
+gamepad assignments.</p>
+<aside class="notice notice-note"><p class="notice-label">NOTE</p><div class="notice-body"><p>The station does not keep emulator save states for you. If you use the
+emulator&#39;s save-state feature, keep any file it gives you.</p>
+</div></aside>
+<p>Sony PSP games require a secure (<code>https://</code>) connection or play at the host
+computer, and a browser with WebGL 2 support. Very large games may exceed the
+memory available to a browser on small devices.</p>
+<h3 id="19-3-uploading-games">19.3 Uploading Games</h3>
+<p>When the arcade is in Community mode, members may choose <code>UPLOAD GAME +</code>,
+select the platform, and supply the game file, cover picture, and details.
+Uploads count against a quota.</p>
+<aside class="notice notice-caution"><p class="notice-label">CAUTION</p><div class="notice-body"><p>Upload only game files you are entitled to share.</p>
+</div></aside>
+<h2 id="20-the-station-mud">20. The Station MUD</h2>
+<p>The MUD is a text-based, multiplayer role-playing game. You explore a world
+described in words, meet other players and the game&#39;s characters (called
+NPCs), take on quests, gather possessions, and fight opponents. A station may
+run several worlds, and each world is a separate game.</p>
+<h3 id="20-1-choosing-a-world-and-creating-a-character">20.1 Choosing a World and Creating a Character</h3>
+<p>Choose <code>MUD</code>. The <strong>Choose a world</strong> page lists the worlds the station offers.
+Each world requires its own character; your progress, skills, possessions, and
+coins remain in the world where they were earned.</p>
+<ol>
+<li>Choose <code>CREATE CHARACTER</code> beside a world.</li>
+<li>Work through the steps, choosing <code>NEXT</code> and <code>BACK</code> as required:<ol>
+<li><strong>Identity</strong>: a character name of 2 to 32 letters. Spaces,
+apostrophes, periods, and hyphens are permitted. Other players see this
+name, which is separate from your StationNet username.</li>
+<li><strong>Race</strong>: each race lists its traits and attribute adjustments.</li>
+<li><strong>Archetype</strong>: your character&#39;s calling, with its own bonuses.</li>
+<li><strong>Attributes</strong>: distribute the points shown among Strength,
+Agility, Intellect, and Vitality.</li>
+<li><strong>Skills</strong>: select the number of starting skills shown.</li>
+<li><strong>Faction</strong>: offered only in worlds that have factions.</li>
+<li><strong>Review</strong>.</li>
+</ol>
+</li>
+<li>Choose <code>CREATE CHARACTER</code>.</li>
+</ol>
+<p>Your choices cannot be changed later except by deleting the character with
+<code>DELETE CHARACTER</code> and beginning again. To return to a world, choose
+<code>CONTINUE</code>. To switch worlds, choose <code>CHANGE WORLD</code>.</p>
+<h3 id="20-2-the-mud-screen">20.2 The MUD Screen</h3>
+<p>The <strong>GAME</strong> panel carries a running account of what happens around you. At
+its top are the name of your current location and three buttons: <code>ROOM</code> shows
+the full description of the location with its exits, items, NPCs, enemies, and
+other players; <code>LATEST</code> returns to the newest activity; and <code>CLEAR</code> empties the
+account.</p>
+<p>Below it is the <strong>command line</strong>. At the side, panels show your
+<strong>Character</strong> (level, health, mana, experience, attributes), <strong>Inventory</strong>,
+<strong>Quests</strong>, and, in some worlds, faction <strong>Standing</strong>. Choose a panel&#39;s title to
+open or close it.</p>
+<h3 id="20-3-entering-commands">20.3 Entering Commands</h3>
+<p>Type in the command line and press Enter or choose <code>SEND</code>.</p>
+<ul>
+<li>Text without a leading slash is speech, heard by everyone in the same
+location.</li>
+<li>Text beginning with <code>/</code> is a command, such as <code>/look</code>.</li>
+<li>While you type a command, suggestions appear; press Tab to accept one.</li>
+<li>Press ↑ and ↓ to recall earlier commands.</li>
+<li>Enter <code>/help</code> for a list of commands, or <code>/help &lt;command&gt;</code> for details of
+one.</li>
+</ul>
+<p>Where a name contains spaces, enclose it in quotation marks:
+<code>/get &quot;Red Apple&quot; from &quot;Oak Chest&quot;</code>.</p>
+<h3 id="20-4-moving-about">20.4 Moving About</h3>
+<p>Each location, or <em>room</em>, has exits leading to other rooms. <code>/exits</code> lists
+them.</p>
+<pre><code>/go north        Leave by the north exit
+/north  or  /n   The same, in short form
+/look            Describe the room again
+/map             Show a map of the surrounding area
+</code></pre>
+<p>The directions <code>north</code>, <code>south</code>, <code>east</code>, <code>west</code>, <code>northeast</code>, <code>northwest</code>,
+<code>southeast</code>, <code>southwest</code>, <code>up</code>, and <code>down</code> may each be used as a command or
+abbreviated (<code>/n</code>, <code>/ne</code>, <code>/u</code>, and so on). Some exits have names instead of
+directions; use <code>/go &lt;exit name&gt;</code>.</p>
+<p>In open country, <code>/travel &lt;direction&gt;</code> walks steadily in one direction, one
+room at a time, until something of interest occurs; <code>/stop</code> halts the journey.
+<code>/directions &lt;place&gt;</code> gives the way to a place you know, and <code>/destinations</code>
+lists the places you know.</p>
+<h3 id="20-5-talking-to-players-and-characters">20.5 Talking to Players and Characters</h3>
+<table>
+<thead>
+<tr>
+<th>Command</th>
+<th>Purpose</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>/say &lt;text&gt;</code></td>
+<td>Speak to the room (plain text does the same)</td>
+</tr>
+<tr>
+<td><code>/tell &quot;&lt;name&gt;&quot; &lt;text&gt;</code></td>
+<td>Speak privately to one player</td>
+</tr>
+<tr>
+<td><code>/reply &lt;text&gt;</code></td>
+<td>Answer the last private message</td>
+</tr>
+<tr>
+<td><code>/emote &lt;action&gt;</code></td>
+<td>Describe an action</td>
+</tr>
+<tr>
+<td><code>/who</code></td>
+<td>List players in the world</td>
+</tr>
+<tr>
+<td><code>/talk &lt;npc&gt;</code></td>
+<td>Begin a conversation with an NPC</td>
+</tr>
+<tr>
+<td><code>/respond &lt;number&gt;</code></td>
+<td>Choose a reply in a conversation</td>
+</tr>
+<tr>
+<td><code>/block &lt;name&gt;</code></td>
+<td>Ignore a player</td>
+</tr>
+</tbody></table>
+<h3 id="20-6-possessions">20.6 Possessions</h3>
+<p><code>/inventory</code> (or <code>/i</code>) lists what you carry and wear. <code>/get</code> and <code>/drop</code> pick
+up and put down items; <code>/open</code>, <code>/close</code>, and <code>/put</code> work with containers;
+<code>/equip</code> and <code>/unequip</code> wear or remove gear; <code>/use</code> uses or reads an item.
+Where a merchant is present, <code>/shop</code> shows what can be bought and sold.</p>
+<h3 id="20-7-quests">20.7 Quests</h3>
+<p>NPCs may offer quests. <code>/quests</code> lists your active quests and their
+objectives, which are also shown in the <strong>Quests</strong> panel. Many worlds use
+<code>/quest available</code>, <code>/quest accept</code>, and <code>/quest turnin</code> to find, accept, and
+complete quests.</p>
+<h3 id="20-8-combat-and-recovery">20.8 Combat and Recovery</h3>
+<p>Some NPCs are hostile. <code>/attack &lt;enemy&gt;</code> attacks; <code>/defend</code> reduces the
+damage you take and protects your companions; <code>/flee</code> attempts escape;
+<code>/cast &lt;spell&gt;</code> uses a known spell (see <code>/spells</code>); <code>/combat</code> reports the state
+of the fight. Outside combat, <code>/rest</code> restores part of your health and mana.</p>
+<p>If your character is defeated, it recovers at the starting location with half
+its health. In ordinary worlds, part of the experience gained toward the next
+level is lost, but levels are never lost.</p>
+<p>As your character gains experience it rises in level and earns <em>attribute
+points</em>, spent with <code>/train</code>, and <em>skill points</em>, used with <code>/learn</code> and
+<code>/practice</code>. <code>/character</code> shows your full statistics and <code>/skills</code> your skills.</p>
+<h3 id="20-9-dungeons-and-expeditions">20.9 Dungeons and Expeditions</h3>
+<p>Some worlds contain dungeons that are generated afresh for each visit. Where
+the station offers the procedural dungeon world, <code>/expedition</code> starts a random
+expedition and <code>/daily</code> enters the station-wide Dungeon of the Day. Other
+players may join an expedition with <code>/join &lt;code&gt;</code>. <code>/run</code> shows its progress,
+<code>/complete</code> finishes it from the exit, and <code>/abandon</code> leaves at once.</p>
+<aside class="notice notice-note"><p class="notice-label">NOTE</p><div class="notice-body"><p>The commands available depend on the world. Many worlds add banking, housing,
+professions, vehicles, and other systems. <code>/help</code> always lists the commands
+that apply where you are.</p>
+</div></aside>
+</section>
+<section class="part" style="page: part3" id="part-iv-office"><header class="part-head"><div class="part-label">Part IV</div><h1>Office</h1></header><h2 id="21-office-fundamentals">21. Office Fundamentals</h2>
+<p>StationNet Office is a set of six private productivity programs:
+<strong>Documents</strong>, <strong>Sheets</strong>, <strong>Presentations</strong>, <strong>Draw</strong>, <strong>Agenda</strong>, and
+<strong>BASIC</strong>. Open them with the <code>OFFICE</code> tab, or from the <code>OFFICE</code> category in
+the Program Manager. Office is available only to signed-in members.</p>
+<h3 id="21-1-the-office-password">21.1 The Office Password</h3>
+<p>Office work is <em>encrypted</em> in your browser before it is sent to the station.
+Neither the SYSOP nor anyone else can read it. The encryption is controlled by
+a single <strong>OFFICE Password</strong>, which is separate from your StationNet password.</p>
+<p><strong>The first time</strong> you open any Office program, you are asked to choose an
+OFFICE Password of at least 12 characters and confirm it.</p>
+<p><strong>Thereafter</strong>, each program opens with an <strong>Unlock</strong> panel:</p>
+<ol>
+<li>Enter your <strong>OFFICE Password</strong>.</li>
+<li>Optionally select <strong>Remember on this browser</strong>, so that the programs stay
+unlocked on this browser until you choose <code>LOCK</code> or disconnect.</li>
+<li>Choose the unlock button.</li>
+</ol>
+<p>Unlocking one Office program unlocks all of them in the same browser tab.
+Choose <code>LOCK</code> in any program when you leave your desk.</p>
+<aside class="notice notice-warning"><p class="notice-label">WARNING</p><div class="notice-body"><p>The OFFICE Password is not stored anywhere and cannot be reset by the SYSOP. If
+you forget it, everything you have saved in Office becomes permanently
+unreadable.</p>
+</div></aside>
+<h3 id="21-2-operations-common-to-all-office-programs">21.2 Operations Common to All Office Programs</h3>
+<p>Each program keeps a private list of your files, and each provides <code>NEW</code>,
+<code>SAVE</code>, <code>DELETE</code>, <code>UNDO</code>, and <code>REDO</code> where they apply.</p>
+<p>Documents, Sheets, Agenda, and BASIC save your work automatically shortly
+after you stop typing, and report the save status on screen. In Presentations
+and Draw, choose <code>SAVE</code> to save. If the same file is open in two browser tabs,
+StationNet prevents the older tab from overwriting newer work.</p>
+<p><strong>Import</strong> and <strong>export</strong> take place entirely in your browser. Importing
+creates a new Office file from a file on your device; exporting saves a copy of
+an Office file to your device in a common format. Exported copies are not
+encrypted.</p>
+<h2 id="22-documents">22. Documents</h2>
+<p><strong>Documents</strong> is a word processor.</p>
+<p><strong>Writing and formatting.</strong> Select a paragraph style (Normal, Title, Subtitle,
+Heading 1 to 3, Quote, or Code) and use the toolbar for bold, italic,
+alignment (<code>LEFT</code>, <code>CENTER</code>, <code>RIGHT</code>, <code>JUSTIFY</code>), bulleted and numbered lists,
+indentation, links, horizontal rules, images, and tables (<code>TABLE</code>, <code>+ ROW</code>,
+<code>+ COL</code>). <code>FIND</code> opens find and replace.</p>
+<p><strong>Importing.</strong> Choose <code>IMPORT FILE</code> and select a Word (<code>.docx</code>), OpenDocument
+(<code>.odt</code>), text, Markdown, HTML, or RTF file.</p>
+<p><strong>Exporting.</strong> Choose <code>EXPORT</code>, then <code>WORD .DOCX</code>, <code>ODT</code>, <code>PDF</code>, <code>HTML</code>,
+<code>MARKDOWN</code>, or <code>PLAIN TEXT</code>.</p>
+<p><strong>Printing.</strong> Choose <code>PRINT</code>. <code>PRINT THEME</code> previews the page as it will print,
+in black on white.</p>
+<aside class="notice notice-note"><p class="notice-label">NOTE</p><div class="notice-body"><p>Word and OpenDocument files keep their general structure, but complex page
+layouts, tracked changes, comments, and unusual fonts may be lost on import or
+export. Markdown and plain text lose page styling; plain text also loses
+pictures.</p>
+</div></aside>
+<h2 id="23-sheets">23. Sheets</h2>
+<p><strong>Sheets</strong> is a spreadsheet program. Each workbook may contain several sheets.</p>
+<p><strong>Entering data.</strong> Select a cell and type a value or a formula. Formulas
+begin with <code>=</code>, for example <code>=SUM(B2:B10)</code>. Set number formats (<code>GENERAL</code>,
+<code>NUMBER</code>, <code>CURRENCY</code>, <code>PERCENT</code>, <code>DATE</code>) and alignment from the toolbar.</p>
+<p><strong>Arranging data.</strong> Use <code>+ ROW</code>, <code>− ROW</code>, <code>+ COL</code>, and <code>− COL</code> to insert and
+remove rows and columns; <code>FILL →</code> and <code>FILL ↓</code> to copy across or down;
+<code>SORT ↑</code> and <code>SORT ↓</code> to sort; <code>FILTER</code> to show only matching rows; and
+<code>FREEZE</code> to keep headings in view. <code>RENAME</code> and <code>DELETE SHEET</code> act on the
+current sheet.</p>
+<p><strong>Charts.</strong> Select a range and choose <code>BAR CHART</code>, <code>LINE CHART</code>, or
+<code>PIE CHART</code>.</p>
+<p><strong>Importing and exporting.</strong> <code>IMPORT FILE</code> accepts Excel (<code>.xlsx</code>, <code>.xls</code>),
+OpenDocument (<code>.ods</code>), CSV, and TSV files. For text files you may choose the
+character encoding and separator. <code>EXPORT</code> offers <code>EXCEL .XLSX</code>, <code>ODS</code>, <code>CSV</code>,
+<code>TSV</code>, and <code>PDF / PRINT</code>.</p>
+<h2 id="24-presentations">24. Presentations</h2>
+<p><strong>Presentations</strong> prepares and shows slide presentations.</p>
+<p><strong>Building slides.</strong> Choose a layout (<code>BLANK</code>, <code>TITLE</code>, <code>TITLE + BODY</code>,
+<code>TWO COLUMNS</code>) and a theme (<code>STATION</code>, <code>LIGHT</code>, <code>DARK</code>, <code>WARM</code>). Add objects
+with <code>+ TEXT</code>, <code>+ IMAGE</code>, <code>+ RECT</code>, <code>+ ELLIPSE</code>, <code>+ LINE</code>, and <code>+ TABLE</code>.
+Selected objects may be moved, resized, aligned, sent to the <code>FRONT</code> or
+<code>BACK</code>, duplicated (<code>DUP</code>), or deleted. Each slide may have a background
+picture and a transition (<code>NONE</code> or <code>FADE</code>).</p>
+<p><strong>Presenting.</strong> Choose <code>PRESENT</code>. Advance with the Right arrow, Page Down, or
+the Space bar; go back with the Left arrow; press Esc or choose <code>EXIT</code> to
+finish.</p>
+<p><strong>Importing and exporting.</strong> <code>IMPORT .PPTX</code> opens a PowerPoint file.
+<code>EXPORT .PPTX</code>, <code>PDF</code>, and <code>SLIDE .PNG</code> save the presentation or the current
+slide.</p>
+<p>Remember to choose <code>SAVE</code>; Presentations does not save automatically.</p>
+<h2 id="25-draw">25. Draw</h2>
+<p><strong>Draw</strong> produces diagrams, flowcharts, posters, and simple page layouts.</p>
+<p>Select a tool: <code>SELECT</code>, <code>PEN</code> (freehand), <code>LINE</code>, <code>ARROW</code>, <code>CONNECTOR</code>,
+<code>RECT</code>, <code>ELLIPSE</code>, <code>TRIANGLE</code>, <code>DIAMOND</code>, <code>TEXT</code>, or <code>IMAGE</code>. Drag on the page
+to draw. Connectors attach to shapes and follow them when the shapes are moved.</p>
+<p>With objects selected, <code>GROUP</code> and <code>UNGROUP</code> combine and separate them,
+<code>FRONT</code>, <code>FORWARD</code>, <code>BACKWARD</code>, and <code>BACK</code> change their stacking, and
+<code>DUPLICATE</code> and <code>DELETE</code> copy and remove them. The zoom list sets the view from
+50% to 200%, or <code>FIT</code>.</p>
+<p>To export, choose <code>PNG</code> for a picture or <code>SVG</code> for a scalable drawing. Choose
+<code>SAVE</code> to keep your work in Office.</p>
+<h2 id="26-agenda">26. Agenda</h2>
+<p><strong>Agenda</strong> combines a calendar, a task list, and an address book.</p>
+<p><strong>Calendar.</strong> Choose <code>MONTH</code>, <code>WEEK</code>, or <code>DAY</code>, and use <code>‹</code>, <code>›</code>, and <code>TODAY</code>
+to move through time. Choose <code>+ EVENT</code>, enter the details, and choose
+<code>SAVE EVENT</code>. Events may repeat.</p>
+<p><strong>Tasks.</strong> Choose <code>TASKS</code>, then <code>+ TASK</code>. Tasks may have subtasks
+(<code>+ SUBTASK</code>). Choose <code>SAVE TASK</code>.</p>
+<p><strong>Contacts.</strong> Choose <code>CONTACTS</code>, then <code>+ CONTACT</code>, and <code>SAVE CONTACT</code>.</p>
+<p><strong>Reminders.</strong> Choose <code>ENABLE REMINDERS</code> and allow notifications when your
+browser asks. Reminders are given only while Agenda is open and unlocked in a
+browser tab.</p>
+<h2 id="27-basic">27. BASIC</h2>
+<p><strong>BASIC</strong> is a programming environment for the BASIC language, compatible with
+programs written for QBasic and QB64. Programs can draw graphics, play sound,
+and respond to the keyboard, mouse, and touch screen.</p>
+<h3 id="27-1-writing-and-running-a-program">27.1 Writing and Running a Program</h3>
+<ol>
+<li><p>Choose <code>NEW</code>.</p>
+</li>
+<li><p>Type the program in the <code>CODE</code> view. For example:</p>
+<pre><code>CLS
+INPUT &quot;What is your name&quot;; N$
+PRINT &quot;Hello, &quot;; N$
+</code></pre>
+</li>
+<li><p>Choose <code>RUN ▶</code>. The program runs in the <code>SCREEN</code> view.</p>
+</li>
+<li><p>Choose <code>STOP ■</code> to end a program that is still running.</p>
+</li>
+</ol>
+<p>Error messages appear in the console beneath the screen. To study working
+programs, select one from <strong>Open an example…</strong>.</p>
+<p>Each run takes place in a closed area of the browser that cannot reach the
+station, your Office files, or the network.</p>
+<h3 id="27-2-importing-and-exporting">27.2 Importing and Exporting</h3>
+<p><code>IMPORT .BAS</code> opens a BASIC source file from your device. <code>EXPORT…</code> offers two
+forms:</p>
+<ul>
+<li><strong>BASIC file (.bas)</strong>: the program text.</li>
+<li><strong>StationNet Package (.zip)</strong>: an installable program. Fill in the name,
+description, category, and device requirements. Give the file to the SYSOP,
+who can install it in the Program Manager for all members.</li>
+</ul>
+</section>
+<section class="part" style="page: part4" id="part-v-personalization-and-everyday-use"><header class="part-head"><div class="part-label">Part V</div><h1>Personalization and Everyday Use</h1></header><h2 id="28-appearance-and-sound">28. Appearance and Sound</h2>
+<h3 id="28-1-themes">28.1 Themes</h3>
+<p>StationNet&#39;s appearance is governed by two colour schemes: the
+<strong>site-wide theme</strong>, which colours pages, panels, and controls, and the
+<strong>masthead theme</strong>, which colours the station name at the top of the screen.
+The SYSOP chooses the station&#39;s defaults. Supplied themes include Default/Cyan,
+Amber, Terminal Green, Bright Green, Magenta, Electric Blue, Crimson, Violet,
+Monochrome, and Vintage Terminal. Themes added by the SYSOP are marked
+<code>[CUSTOM]</code>.</p>
+<p>To choose your own:</p>
+<ol>
+<li>Open your profile and choose <code>[ EDIT PROFILE ]</code>.</li>
+<li>Under <strong>Theme preferences</strong>, choose a <strong>Site-wide theme</strong> and a
+<strong>Masthead theme</strong>. The preview panels show the effect. Choose
+<strong>Station default</strong> to follow the station.</li>
+<li>Choose <code>SAVE THEME PREFERENCES</code>.</li>
+</ol>
+<p>If <strong>Theme preferences</strong> does not appear, the SYSOP has required all members
+to use the station&#39;s themes.</p>
+<h3 id="28-2-interface-switches">28.2 Interface Switches</h3>
+<p>The switches on the station line apply to the browser you are using and are
+remembered by it.</p>
+<dl class="definition"><dt><code>SFX</code></dt><dd>Interface sound effects, such as clicks and the alerts for new mail and direct chat.</dd></dl>
+<dl class="definition"><dt><code>VFX</code></dt><dd>A scan-line effect resembling a cathode-ray screen.</dd></dl>
+<dl class="definition"><dt><code>MUSIC</code></dt><dd>The station theme tune, if the SYSOP has provided one. Your choice is saved with your account.</dd></dl>
+<p>Where supported, a fullscreen switch is also shown.</p>
+<h3 id="28-3-accessibility">28.3 Accessibility</h3>
+<p>All pages can be operated from the keyboard. A <strong>Skip to content</strong> link at
+the top of each page moves directly to the work area. Moving tagline effects
+are stopped when your device is set to reduce motion. Text size follows your
+browser&#39;s zoom setting (Ctrl and + or −).</p>
+<h2 id="29-notifications">29. Notifications</h2>
+<p>StationNet notifies you within the station&#39;s pages:</p>
+<ul>
+<li>A count on the <code>MAIL</code> tab shows unread mail, with a sound if <code>SFX</code> is on.</li>
+<li>A count on the <code>CHAT</code> tab and an alert at the top of the page announce a
+direct chat message. The alert clears when you open the conversation.</li>
+<li>The <strong>STATION ACTIVITY</strong> panel summarizes new bulletins, files, members,
+broadcasts, and television.</li>
+<li>Agenda reminders use your browser&#39;s notifications (Chapter 26).</li>
+</ul>
+<p>Notifications appear only while a station page is open in your browser.</p>
+<h2 id="30-installing-the-station-as-an-application">30. Installing the Station as an Application</h2>
+<p>A station can be installed on a phone, tablet, or computer so that it opens in
+its own window with its own icon, like any other application.</p>
+<ol>
+<li>Open the station in a browser that supports installation, such as Chrome
+or Edge, or Safari on an iPhone or iPad.</li>
+<li>Choose the browser&#39;s <strong>Install</strong> or <strong>Add to Home Screen</strong> command.</li>
+</ol>
+<p>The installed application uses the station&#39;s name and, if the SYSOP has
+chosen, its icon. A connection to the station is still needed; when the station
+cannot be reached, the application shows <strong>Station unavailable</strong>.</p>
+<aside class="notice notice-note"><p class="notice-label">NOTE</p><div class="notice-body"><p>Browsers offer installation only for secure (<code>https://</code>) addresses and for the
+host computer itself. A station reached through a plain <code>http://</code> network
+address can be used in the browser but cannot be installed.</p>
+</div></aside>
+<p>On a phone, all services can be used in the browser. Some programs and games
+show on-screen touch controls.</p>
+<h2 id="31-station-hours">31. Station Hours</h2>
+<p>Some stations are open only at certain times. When a station keeps hours, a
+line beneath the station line shows them, for example
+<code>STATION HOURS: 8:00AM - 9:00PM</code>. Other messages that may appear there are
+<code>HOURS TEMPORARILY EXTENDED</code> and <code>OPEN EARLY</code>.</p>
+<p>When the station closes, it stops, and pages no longer respond until it opens
+again. Save your work and finish conversations before closing time.</p>
+<h2 id="32-account-security">32. Account Security</h2>
+<p>Observe the following practices:</p>
+<ul>
+<li>Choose a password of at least ten characters that you do not use elsewhere.</li>
+<li>Use <strong>Remember me on this device</strong> and Office&#39;s <strong>Remember on this browser</strong>
+only on your own devices.</li>
+<li>On a shared computer, choose <code>LOCK</code> in Office and <code>[ DISCONNECT ]</code> when you
+finish.</li>
+<li>If you suspect someone else has used your account, change your password at
+once (Section 4.4) and inform the SYSOP.</li>
+</ul>
+<p>SYSOPs can read the station&#39;s public services and administer accounts. They
+cannot read your Office files. Private mail and chat are stored on the station
+computer and should not be regarded as secret from the person who operates it.</p>
+</section>
+<section class="part" style="page: part5" id="part-vi-station-hosting-and-administration"><header class="part-head"><div class="part-label">Part VI</div><h1>Station Hosting and Administration</h1></header><p>This part is for the SYSOP. It describes how to install StationNet, start and
+operate stations, and administer accounts and content.</p>
+<h2 id="33-installation">33. Installation</h2>
+<h3 id="33-1-the-software-the-station-and-its-data">33.1 The Software, the Station, and Its Data</h3>
+<p>Three things should be kept distinct:</p>
+<ul>
+<li><strong>StationNet</strong> is the software: the program and its supplied files. It
+never writes to its own folder.</li>
+<li>A <strong>station</strong> is one configured, running service with its own name and port.</li>
+<li>A station&#39;s <strong>data</strong> is kept in its own folder under <code>stations/</code>. Every
+account, message, upload, installed program, theme, world, and reference
+collection belongs to the station folder.</li>
+</ul>
+<p>A typical installation is arranged as follows:</p>
+<pre><code>StationNet/
+  run.py, stationnet/, .venv/   the software (packaged: core/)
+  stations/
+    default/                    one folder per station
+      station.json              name, port, network access, hours
+      station.db                the station database
+      uploads/, themes/, ...    files, programs, worlds, WIKI data
+      run/                      status and log while running
+</code></pre>
+<h3 id="33-2-requirements">33.2 Requirements</h3>
+<p>The host computer may run Windows, Linux, macOS, or Raspberry Pi OS. Source
+installations require Python 3.11 or newer. Packaged Windows builds include
+everything they need. Packaged Linux and Raspberry Pi builds require Python
+3.11 with venv. The Station Manager requires Tkinter (<code>python3-tk</code> on Debian
+and Raspberry Pi OS). StationNet uses no separate database server.</p>
+<h3 id="33-3-installing-a-packaged-release">33.3 Installing a Packaged Release</h3>
+<p><strong>Windows.</strong> Unzip the package and double-click <code>install.bat</code>. The software is
+installed to <code>%LOCALAPPDATA%\StationNet</code>. Start a station with <code>start.bat</code> in
+that folder, or manage several with <code>manager.bat</code>. To run without
+installing, run <code>start.bat</code> from the unzipped folder.</p>
+<p><strong>Linux and Raspberry Pi.</strong> Unzip the package for your platform and run:</p>
+<pre><code>sh install.sh
+~/.local/share/stationnet/start.sh
+</code></pre>
+<p>The Station Manager is <code>~/.local/share/stationnet/manager.sh</code>. Packaged
+releases install without network access.</p>
+<p><strong>Android.</strong> The StationNet Android application hosts a station on a 64-bit
+ARM phone running Android 8 or later. Tap <strong>Start station</strong>, complete the
+first-run setup in the phone&#39;s browser, then enable the phone&#39;s hotspot so that
+nearby devices can connect to the addresses shown. The Android application does
+not yet include the WIKI reader.</p>
+<h3 id="33-4-installing-from-source">33.4 Installing from Source</h3>
+<p><strong>Windows:</strong> double-click <code>install.bat</code>, then start with <code>run.bat</code> (one
+station) or <code>manager.bat</code> (several stations).</p>
+<p><strong>Linux and macOS:</strong></p>
+<pre><code>chmod +x install.sh run.sh manager.sh uninstall.sh
+./install.sh
+./run.sh
+</code></pre>
+<p>Source installation downloads Python packages and the WIKI reader.</p>
+<h3 id="33-5-first-run-setup">33.5 First-Run Setup</h3>
+<p>When a new station starts for the first time, open <code>http://127.0.0.1:8080</code>
+on the host computer. The <strong>Initialize local station</strong> page asks for:</p>
+<ul>
+<li>The <strong>Station name</strong> (2 to 80 characters) and <strong>Station description</strong>.</li>
+<li>The <strong>Administrator username</strong> and <strong>Password</strong> of the first SYSOP.</li>
+<li>The <strong>Registration policy</strong>: Open, Private, or Disabled.</li>
+</ul>
+<p>Choose <code>INITIALIZE STATION</code>. The station and its SYSOP each receive a callsign,
+and the SYSOP is signed in.</p>
+<aside class="notice notice-caution"><p class="notice-label">CAUTION</p><div class="notice-body"><p>The account created at first-run setup is the station&#39;s only SYSOP account.
+Record its password safely. StationNet provides no means of creating further
+SYSOP accounts through the station&#39;s pages.</p>
+</div></aside>
+<h2 id="34-starting-stopping-and-the-station-manager">34. Starting, Stopping, and the Station Manager</h2>
+<h3 id="34-1-running-a-single-station">34.1 Running a Single Station</h3>
+<p><code>run.bat</code>, <code>./run.sh</code>, or a packaged <code>start.bat</code>/<code>start.sh</code> starts the
+<code>default</code> station in a console window. Press Ctrl+C in that window to stop it.
+To run another station from the command line, give its identifier:</p>
+<pre><code>python run.py --station &lt;id&gt;
+</code></pre>
+<p>A station that is already running cannot be started a second time.</p>
+<h3 id="34-2-the-station-manager">34.2 The Station Manager</h3>
+<p>The Station Manager (<code>manager.bat</code> or <code>manager.sh</code>) is a desktop window that
+lists every station under <code>stations/</code> with its name, status, port, and
+addresses. Each station card provides:</p>
+<dl class="definition"><dt><code>Start</code>, <code>Stop</code>, <code>Restart</code></dt><dd>Control the station. Stations started here continue running if the manager window is closed. A station that has not stopped within 20 seconds offers <code>Force Stop</code>.</dd></dl>
+<dl class="definition"><dt><code>Open</code></dt><dd>Opens the station in the browser.</dd></dl>
+<dl class="definition"><dt><code>Logs</code></dt><dd>Opens the station&#39;s log.</dd></dl>
+<dl class="definition"><dt><code>Settings</code></dt><dd>Changes the name, port, network access, and the <strong>Served through an HTTPS proxy</strong> option. Changes to a running station take effect when it restarts; <code>Save &amp; Restart</code> does both.</dd></dl>
+<dl class="definition"><dt><code>Hours</code></dt><dd>Sets opening and closing times (Chapter 36).</dd></dl>
+<dl class="definition"><dt><code>Delete</code></dt><dd>Removes the station permanently, after you type its name to confirm.</dd></dl>
+<p><strong>To create a station</strong>, choose <code>+ New Station</code>. The manager suggests a name
+and a free port and asks who may connect. It can also create the first SYSOP
+account, so that the browser setup page is not needed.</p>
+<p>A station shown as <strong>CRASHED</strong> stopped unexpectedly; its last log line is
+displayed. Start it again, and examine the log if the problem recurs.</p>
+<h2 id="35-network-access">35. Network Access</h2>
+<p>By default a station listens on every network adapter of the host, on port
+8080. Other devices connect to <code>http://&lt;host-address&gt;:8080</code>. If they cannot,
+permit incoming TCP connections on the station&#39;s port in the host&#39;s firewall.</p>
+<p>In the Station Manager&#39;s <strong>Settings</strong> you may restrict a station to <strong>this
+computer only</strong>, to all adapters, or to one chosen address. For source
+installations, the environment variables <code>STATIONNET_HOST</code> and
+<code>STATIONNET_PORT</code> override the station&#39;s settings.</p>
+<h3 id="35-1-secure-connections">35.1 Secure Connections</h3>
+<p>Browsers allow the microphone (radio voice), application installation, and PSP
+emulation only on secure connections. To provide them to other computers, place
+StationNet behind an HTTPS reverse proxy with a certificate trusted by every
+client. For example, with Caddy:</p>
+<pre><code>stationnet.lan {
+    tls internal
+    reverse_proxy 127.0.0.1:8080
+}
+</code></pre>
+<p>Set the station to listen on this computer only, select <strong>Served through an
+HTTPS proxy</strong> in the Station Manager (or set <code>STATIONNET_HTTPS=1</code>), make
+<code>stationnet.lan</code> resolve to the host, and install the proxy&#39;s root certificate
+on each client.</p>
+<aside class="notice notice-caution"><p class="notice-label">CAUTION</p><div class="notice-body"><p>Enable the HTTPS proxy setting only when clients actually use the <code>https://</code>
+address. With it enabled, sign-in does not work over plain <code>http://</code>.</p>
+</div></aside>
+<p>Live voice travels directly between browsers and is designed for clients on
+the same local network.</p>
+<h2 id="36-station-hours-sleep-and-wake">36. Station Hours, Sleep, and Wake</h2>
+<p>Station hours are set from the Station Manager&#39;s <code>Hours</code> button and take
+effect at once. They are kept only while a Station Manager window is open
+(it may be minimized).</p>
+<ul>
+<li><strong>Closing.</strong> For a few minutes before closing (five by default) the card
+shows a countdown and a <code>Stay Online</code> button, which keeps the station open
+until its next opening time. Otherwise the station is stopped cleanly at
+closing time.</li>
+<li><strong>Opening.</strong> A stopped station is started at its opening time. A station
+you stop by hand during its hours stays stopped until the next opening.</li>
+<li><strong>Messages.</strong> The header line, and the <em>Extended</em> and <em>Early Open</em> messages,
+may be edited.</li>
+<li><strong>Sleep.</strong> With SLEEP selected, the computer is put to sleep after the
+station closes, following a <code>Cancel Sleep</code> countdown, unless another station
+is still running.</li>
+<li><strong>Wake.</strong> The manager sets a wake timer before the earliest next opening.
+<strong>Sleep &amp; Wake</strong> in the manager&#39;s toolbar sets the countdown and lead time and
+shows the next scheduled wake.</li>
+</ul>
+<p>On Windows, wake timers must be allowed in <strong>Power Options → Sleep → Allow wake
+timers</strong>, and some computers using Modern Standby ignore them. On Linux and
+macOS a <code>wake_command</code> must be configured in <code>manager.json</code>; see the README.</p>
+<h2 id="37-sysop-control-station-settings">37. SYSOP Control: Station Settings</h2>
+<p>The <code>SYSOP CONTROL</code> tab opens the station settings. A row of links at the top
+jumps to each section. Each section has its own save button.</p>
+<p><strong>Module availability.</strong> Select the services to offer and choose
+<code>SAVE MODULE AVAILABILITY</code>. A disabled module disappears from navigation, but
+its data is kept.</p>
+<p><strong>Station settings.</strong> Here you set the station name and description; the
+station icon (and whether it is used for the installed application); a station
+MIDI theme tune and its volume; the header taglines and their colours and
+effects; the landing page message (Markdown is accepted); the station themes,
+and whether members may choose their own; the ASCII banner text, lettering
+style, size, and colour; and the file archive policy (who may upload, total
+storage, and largest file). Custom colour themes are imported here from JSON
+files.</p>
+<p><strong>Registration and guest access.</strong> Choose the registration mode (Open,
+Private, or Disabled) and whether guests may browse. For a private station,
+choose <code>GENERATE INVITATION</code>. The complete invitation code and link are shown
+once only; send them to the new member. Unused invitations may be revoked.</p>
+<p><strong>Service sections.</strong> Further sections configure each optional service:
+Events (who may create events), User Feeds, Office, Videos, Library, Arcade,
+Television, Imageboard, WIKI, MUD, Dungeon of the Day, and Radio. These are
+described in Chapter 39.</p>
+<h2 id="38-accounts-permissions-and-moderation">38. Accounts, Permissions, and Moderation</h2>
+<h3 id="38-1-delegating-duties">38.1 Delegating Duties</h3>
+<p>There is one SYSOP account. Duties are delegated to members through <em>groups</em>,
+which are managed in the radio permission sections of SYSOP CONTROL:</p>
+<ul>
+<li><strong>Permission groups.</strong> Create a group with <code>CREATE GROUP</code>. Give it
+<code>HOST BROADCASTS</code> (radio hosting) or <code>MODERATE IMAGEBOARD</code> (pin, lock, and
+delete on the imageboard), and add radio access rules (<code>FULL</code>, <code>LISTEN</code>, or
+<code>DENIED</code> for a band, range, or frequency).</li>
+<li><strong>Assignments and effective access.</strong> Select the groups each member belongs
+to. Every member also belongs to the permanent <code>DEFAULT</code> group. Across
+groups, <code>DENIED</code> overrides <code>FULL</code>, and <code>FULL</code> overrides <code>LISTEN</code>.</li>
+<li><strong>Events.</strong> Event creation may be limited to selected groups.</li>
+<li><strong>MUD building.</strong> In the World Builder, the SYSOP may authorize members as
+builders. Builder access permits editing worlds only.</li>
+</ul>
+<h3 id="38-2-moderation">38.2 Moderation</h3>
+<p>The <code>MODERATION</code> tab lists accounts, current restrictions, <strong>Open reports</strong>,
+and a searchable <strong>Audit history</strong>. For each report, read the reported item and
+choose <code>RESOLVE</code> or <code>DISMISS</code> with a note.</p>
+<p>Open an account to record an action. Actions are formal warnings (delivered
+by private mail), temporary suspensions, permanent bans, chat mutes, and
+reinstatement. A reason is required; private notes are visible only to SYSOPs.
+<code>DELETE USER CHAT</code> removes the member&#39;s recent public chat messages. The account
+page also allows an account to be deleted.</p>
+<p>A suspended or banned member cannot sign in and is shown the reason. Temporary
+restrictions expire automatically.</p>
+<h3 id="38-3-passwords">38.3 Passwords</h3>
+<p>When a member uses <code>FORGOT PASSWORD</code>, the station mails a temporary password
+to the SYSOP. Confirm the member&#39;s identity before passing it on.</p>
+<h2 id="39-managing-modules-and-content">39. Managing Modules and Content</h2>
+<p><strong>Bulletins and announcements.</strong> Remove any bulletin, reply, or chat message
+from its ▾ menu. Post announcements with <code>NEW ANNOUNCEMENT +</code>.</p>
+<p><strong>Videos, Library, and Arcade.</strong> Each has a <strong>Community</strong> mode (members
+upload, within per-member quotas) and a <strong>Curated</strong> mode (station uploads
+only). Set the default quota and per-member overrides, and upload station
+material, in the service&#39;s settings section. The Library has categories, an
+option to allow downloads, and a maximum file size. The Arcade section manages
+emulator <em>cores</em>: each platform&#39;s preferred core can be chosen, and a missing
+core can be downloaded while the host has Internet access. PSP uploads have
+their own size limit.</p>
+<p><strong>Television.</strong> Set the schedule time zone, upload size limit, and default
+channel, then choose <code>OPEN TV MANAGEMENT</code>. There you create channels
+(<code>+ NEW CHANNEL</code>), build the <strong>Programming library</strong> by uploading videos or by
+copying them into the import folder and choosing <code>SCAN IMPORT FOLDER</code>, and
+arrange programmes into <em>blocks</em> on the <strong>Schedule</strong>. Weekly blocks repeat;
+one-off blocks override them. The <strong>Auto scheduler</strong> fills a channel&#39;s
+schedule from categorized programmes; review the proposed schedule and choose
+<code>PUBLISH</code>. Nothing goes on the air until published.</p>
+<p><strong>Radio.</strong> Set band names, ranges, and permitted transmission types under
+<strong>Band allocations</strong>; assign each broadcast host a frequency and set the
+maximum continuous session under <strong>Frequency assignments</strong>; and set audio
+storage quotas under <strong>Broadcaster library quotas</strong>. <code>MANAGE AUTOMATED BROADCASTS</code> schedules programmes to start at set times or intervals.</p>
+<p><strong>WIKI.</strong> Place <code>.zim</code> reference files in the station&#39;s <code>kiwix_data</code> folder
+(the path is shown in the settings section) and enable WIKI. New files are
+found on the next visit. Install only collections from sources you trust.</p>
+<p><strong>Programs.</strong> Choose <code>PROGRAMS</code> in the settings links (<strong>Manage programs</strong>).
+Upload a program package ZIP and choose <code>VALIDATE + INSTALL</code>. Installed
+programs can be disabled, re-enabled, or uninstalled. Built-in programs can
+be disabled but not removed. Uninstalling keeps members&#39; saved data.</p>
+<p><strong>MUD.</strong> Enable the MUD module, then enable individual worlds under <strong>MUD
+service → Worlds</strong>. Worlds are imported from ZIP files; several may run at
+once. The section also imports races, classes, skills, abilities, and dungeon
+themes, and offers an example world to download. The World Builder edits
+worlds in the browser.</p>
+<h2 id="40-backup-upgrade-and-maintenance">40. Backup, Upgrade, and Maintenance</h2>
+<h3 id="40-1-backing-up">40.1 Backing Up</h3>
+<p>To back up a station, stop it and copy its entire folder under <code>stations/</code>.
+That folder contains the station&#39;s identity, accounts, messages, uploads,
+installed programs, themes, and worlds. Reference collections (<code>.zim</code> files) in
+<code>kiwix_data</code> are also kept there and may be very large.</p>
+<p>The Station Manager&#39;s <code>Delete</code> command offers <strong>Back up the station first</strong>,
+which saves a ZIP of the folder, without <code>.zim</code> files. To restore a backup,
+unzip it into <code>stations/</code>.</p>
+<aside class="notice notice-warning"><p class="notice-label">WARNING</p><div class="notice-body"><p>A station folder contains every member&#39;s private mail and the station&#39;s secret
+key. Store backups securely and never publish them.</p>
+</div></aside>
+<h3 id="40-2-upgrading">40.2 Upgrading</h3>
+<p>Back up <code>stations/</code> first. Stop every station. Then:</p>
+<ul>
+<li><strong>Windows package:</strong> unzip the new release and run its <code>install.bat</code>. The
+software is replaced; <code>stations</code> is left alone.</li>
+<li><strong>Linux package:</strong> unzip the new release and run its <code>install.sh</code>.</li>
+<li><strong>Source:</strong> replace the source files, keeping <code>stations/</code>, and run the
+installer again.</li>
+</ul>
+<p>Installations older than the <code>stations/</code> layout are migrated automatically on
+first start. <code>python run.py --migrate-only --dry-run</code> previews the migration.</p>
+<h3 id="40-3-uninstalling">40.3 Uninstalling</h3>
+<p><code>uninstall.bat</code> or <code>./uninstall.sh</code> offers to back up station data, then
+removes the generated environment and station data, leaving the StationNet
+software ready to be installed again.</p>
+<h3 id="40-4-shutting-down-safely">40.4 Shutting Down Safely</h3>
+<p>Always stop a station with <code>Stop</code> in the Station Manager, or Ctrl+C in its
+console window, before shutting down the host computer or copying the
+station&#39;s folder. The station then closes its database cleanly. Continuous
+radio broadcasts and similar activities are restarted automatically at the next
+start.</p>
+</section>
+<section class="part" style="page: part6" id="part-vii-developer-s-reference"><header class="part-head"><div class="part-label">Part VII</div><h1>Developer's Reference</h1></header><p>This part introduces the means of extending StationNet. Detailed references
+are listed in Chapter 45.</p>
+<h2 id="41-project-organization">41. Project Organization</h2>
+<p>StationNet is a Python application built on Flask, served by Uvicorn, with
+data in SQLite. Pages are rendered on the server, with JavaScript where needed.
+No front-end build step is required to run it; the Office programs and some
+other components are supplied as prebuilt bundles.</p>
+<table>
+<thead>
+<tr>
+<th>Location</th>
+<th>Contents</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>run.py</code></td>
+<td>Starts a station</td>
+</tr>
+<tr>
+<td><code>stationnet/</code></td>
+<td>Application package: one module per service</td>
+</tr>
+<tr>
+<td><code>stationnet/modules.py</code></td>
+<td>Module switches and navigation names</td>
+</tr>
+<tr>
+<td><code>stationnet/db.py</code></td>
+<td>Database schema and migrations</td>
+</tr>
+<tr>
+<td><code>stationnet/templates/</code></td>
+<td>Page templates, one folder per service</td>
+</tr>
+<tr>
+<td><code>stationnet/static/</code></td>
+<td>Style sheets, scripts, and bundled assets</td>
+</tr>
+<tr>
+<td><code>stationnet/application_packages/</code></td>
+<td>Built-in programs and the program API reference</td>
+</tr>
+<tr>
+<td><code>stationnet/office_*/</code></td>
+<td>Sources of the Office programs</td>
+</tr>
+<tr>
+<td><code>tests/</code></td>
+<td>Automated tests</td>
+</tr>
+<tr>
+<td><code>packaging/</code>, <code>build-all.ps1</code></td>
+<td>Distribution builders</td>
+</tr>
+<tr>
+<td><code>android/</code></td>
+<td>Android host application</td>
+</tr>
+</tbody></table>
+<p>Each service is a Flask <em>blueprint</em>. A new service is registered in the same
+manner and should use the common page template (<code>base.html</code>) and the module
+switch mechanism in <code>modules.py</code>.</p>
+<h2 id="42-programs-and-packages">42. Programs and Packages</h2>
+<p>The most direct way to extend a station is to write a program for the
+Program Manager. A program is a ZIP file containing <code>manifest.json</code> and a
+JavaScript entry point (or a BASIC <code>.bas</code> file). It runs in an isolated worker
+with no access to the page, the network, or the file system. A minimal
+manifest:</p>
+<pre><code>{
+  &quot;package_format&quot;: 1,
+  &quot;slug&quot;: &quot;my-application&quot;,
+  &quot;name&quot;: &quot;My Application&quot;,
+  &quot;description&quot;: &quot;A short explanation.&quot;,
+  &quot;author&quot;: &quot;Your name&quot;,
+  &quot;version&quot;: &quot;1.0.0&quot;,
+  &quot;category&quot;: &quot;Utilities&quot;,
+  &quot;entrypoint&quot;: &quot;main.js&quot;
+}
+</code></pre>
+<p>and a minimal program:</p>
+<pre><code>StationNet.start((ui) =&gt; {
+  ui.render(ui.title(&quot;Hello&quot;), ui.text(&quot;Welcome.&quot;));
+});
+</code></pre>
+<p>The runtime provides interface elements (text, menus, forms, tables,
+calendars), a canvas with sprites and framebuffers, keyboard, pointer, touch
+gamepad, and fullscreen support, sound and General MIDI playback, per-user and
+shared storage, score tables, and multiplayer sessions. Packages are limited to
+64 files and 5 MiB compressed. Place <code>manifest.json</code> at the root of the ZIP.</p>
+<p>The SYSOP installs packages through <strong>Manage programs</strong>. The complete
+reference is <code>stationnet/application_packages/APIREADME.md</code>.</p>
+<h2 id="43-themes">43. Themes</h2>
+<p>A colour theme is a JSON file defining a <strong>site</strong> palette, a <strong>masthead</strong>
+palette, or both. Start from the template copied to the station&#39;s <code>themes/</code>
+folder (also <code>stationnet/theme_templates/template-theme.json</code>), give it a unique
+ID, name, and author, and edit the colours. The SYSOP imports it under
+<strong>Station settings → IMPORT COLOUR THEME</strong>. The format is described in
+<code>stationnet/theme_templates/THEMES_README.md</code>. Built-in palettes are defined in
+<code>stationnet/themes.py</code>.</p>
+<h2 id="44-mud-worlds-and-content">44. MUD Worlds and Content</h2>
+<p>MUD worlds are distributed as ZIP files containing rooms, exits, items, NPCs,
+dialogue, quests, triggers, wilderness, dungeons, and their own races, classes,
+and skills. They may be built in the World Builder and exported, or written
+directly as files. Races and classes, skills, abilities and effects, and
+dungeon themes may also be distributed separately as JSON. Each kind has a
+downloadable template in <strong>SYSOP CONTROL → MUD service</strong>.</p>
+<h2 id="45-testing-building-and-further-references">45. Testing, Building, and Further References</h2>
+<p><strong>Tests.</strong> Install the development requirements and run the test suite:</p>
+<pre><code>python -m pip install -r requirements-dev.txt
+python -m pytest
+</code></pre>
+<p>Browser-side tests are run with the <code>npm run test:*</code> scripts in
+<code>package.json</code>.</p>
+<p><strong>Rebuilding bundles.</strong> After changing an Office program or the MIDI engine,
+run <code>npm ci</code>, then the matching script: <code>npm run build:documents</code>,
+<code>build:sheets</code>, <code>build:presentations</code>, <code>build:draw</code>, <code>build:agenda</code>,
+<code>build:basic</code>, or <code>build:midi</code>.</p>
+<p><strong>Distribution.</strong> <code>build-all.ps1</code> builds every package the build computer can
+produce and places them in <code>dist/</code>, where the <code>GET YOUR OWN STATION</code> page
+offers them.</p>
+<p><strong>Further references.</strong></p>
+<table>
+<thead>
+<tr>
+<th>Document</th>
+<th>Subject</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>README.md</code></td>
+<td>Configuration, services, and networking</td>
+</tr>
+<tr>
+<td><code>DISTRIBUTION.md</code></td>
+<td>Building and installing packages</td>
+</tr>
+<tr>
+<td><code>BROADCASTING.md</code></td>
+<td>Radio programmes, automation, and interfaces</td>
+</tr>
+<tr>
+<td><code>stationnet/application_packages/APIREADME.md</code></td>
+<td>Program packages and runtime</td>
+</tr>
+<tr>
+<td><code>MUD_CREATOR_HANDBOOK.md</code></td>
+<td>Complete guide to MUD world creation</td>
+</tr>
+<tr>
+<td><code>stationnet/mud_world_templates/README_CUSTOM_WORLDS.md</code></td>
+<td>World file format</td>
+</tr>
+<tr>
+<td><code>stationnet/theme_templates/THEMES_README.md</code></td>
+<td>Colour theme format</td>
+</tr>
+</tbody></table>
+</section>
+<section class="part" style="page: part7" id="appendices"><header class="part-head"><h1>Appendices</h1></header><h2 id="appendix-a-keyboard-reference">Appendix A. Keyboard Reference</h2>
+<p><strong>Throughout the station</strong></p>
+<table>
+<thead>
+<tr>
+<th>Key</th>
+<th>Action</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>/</td>
+<td>Move to the navigation bar (MUD: the command line)</td>
+</tr>
+<tr>
+<td>Esc</td>
+<td>Release focus; leave immersive program view</td>
+</tr>
+<tr>
+<td>Tab</td>
+<td>Move between controls</td>
+</tr>
+</tbody></table>
+<p><strong>Chat</strong></p>
+<table>
+<thead>
+<tr>
+<th>Key</th>
+<th>Action</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>Enter</td>
+<td>Send message</td>
+</tr>
+<tr>
+<td>Shift+Enter</td>
+<td>New line</td>
+</tr>
+</tbody></table>
+<p><strong>Radio</strong></p>
+<table>
+<thead>
+<tr>
+<th>Key</th>
+<th>Action</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>V (hold)</td>
+<td>Talk on a voice frequency</td>
+</tr>
+<tr>
+<td>Space (hold)</td>
+<td>Morse key, after BEGIN CW TRANSMISSION</td>
+</tr>
+<tr>
+<td>Enter</td>
+<td>Tune the frequency typed</td>
+</tr>
+</tbody></table>
+<p><strong>Television</strong>: see Section 14.3.</p>
+<p><strong>Library (PDF)</strong></p>
+<table>
+<thead>
+<tr>
+<th>Key</th>
+<th>Action</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>← →</td>
+<td>Previous and next page</td>
+</tr>
+</tbody></table>
+<p><strong>Program Manager</strong></p>
+<table>
+<thead>
+<tr>
+<th>Key</th>
+<th>Action</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>↑ ↓</td>
+<td>Select program</td>
+</tr>
+<tr>
+<td>Enter</td>
+<td>Open program</td>
+</tr>
+</tbody></table>
+<p><strong>MUD</strong></p>
+<table>
+<thead>
+<tr>
+<th>Key</th>
+<th>Action</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>Enter</td>
+<td>Send speech or command</td>
+</tr>
+<tr>
+<td>Tab</td>
+<td>Accept suggestion</td>
+</tr>
+<tr>
+<td>↑ ↓</td>
+<td>Recall earlier commands</td>
+</tr>
+<tr>
+<td>Esc</td>
+<td>Close suggestions</td>
+</tr>
+</tbody></table>
+<p><strong>Presentations (while presenting)</strong></p>
+<table>
+<thead>
+<tr>
+<th>Key</th>
+<th>Action</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>→ , Page Down, Space</td>
+<td>Next slide</td>
+</tr>
+<tr>
+<td>←</td>
+<td>Previous slide</td>
+</tr>
+<tr>
+<td>Esc</td>
+<td>End presentation</td>
+</tr>
+</tbody></table>
+<h2 id="appendix-b-quick-reference">Appendix B. Quick Reference</h2>
+<table>
+<thead>
+<tr>
+<th>Task</th>
+<th>Procedure</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>Sign in</td>
+<td>LOGIN; enter username and password</td>
+</tr>
+<tr>
+<td>Sign out</td>
+<td>STATION; [ DISCONNECT ]</td>
+</tr>
+<tr>
+<td>Change password</td>
+<td>[ PROFILE ]; [ EDIT PROFILE ]; Change password</td>
+</tr>
+<tr>
+<td>Change colours</td>
+<td>[ EDIT PROFILE ]; Theme preferences</td>
+</tr>
+<tr>
+<td>Send mail</td>
+<td>MAIL; COMPOSE +</td>
+</tr>
+<tr>
+<td>Chat privately</td>
+<td>USERS; DIRECT CHAT (member must be online)</td>
+</tr>
+<tr>
+<td>Post a bulletin</td>
+<td>BULLETIN BOARD; NEW BULLETIN +</td>
+</tr>
+<tr>
+<td>Add a poll</td>
+<td>NEW BULLETIN +; ADVANCED; Add a poll</td>
+</tr>
+<tr>
+<td>Share a file</td>
+<td>FILES; UPLOAD FILE +</td>
+</tr>
+<tr>
+<td>RSVP to an event</td>
+<td>EVENTS; choose event; GOING or INTERESTED</td>
+</tr>
+<tr>
+<td>Report content</td>
+<td>Choose the flag symbol; give a reason</td>
+</tr>
+<tr>
+<td>Listen to radio</td>
+<td>POWER: OFF; SCAN &gt;</td>
+</tr>
+<tr>
+<td>Watch television</td>
+<td>TV; POWER; GUIDE</td>
+</tr>
+<tr>
+<td>Bookmark a book</td>
+<td>While reading, BOOKMARK</td>
+</tr>
+<tr>
+<td>Search the WIKI</td>
+<td>WIKI; select collection; SEARCH</td>
+</tr>
+<tr>
+<td>Pin a program</td>
+<td>PROGRAMS; choose program; PIN TO FAVORITES</td>
+</tr>
+<tr>
+<td>Start in the MUD</td>
+<td>MUD; CREATE CHARACTER; /help</td>
+</tr>
+<tr>
+<td>Unlock Office</td>
+<td>Enter OFFICE Password</td>
+</tr>
+<tr>
+<td>Export a document</td>
+<td>Documents; EXPORT; choose format</td>
+</tr>
+<tr>
+<td>Run BASIC</td>
+<td>BASIC; RUN ▶</td>
+</tr>
+</tbody></table>
+<h2 id="appendix-c-troubleshooting">Appendix C. Troubleshooting</h2>
+<p><strong>The station address does not open.</strong>
+The station may be stopped or outside its hours, the address or port may be
+wrong, or the host&#39;s firewall may be blocking connections. Confirm the address
+with the SYSOP. SYSOPs: check the station&#39;s status in the Station Manager and
+permit the port in the firewall.</p>
+<p><strong>&quot;Invalid username or password.&quot;</strong>
+Usernames and passwords are case-sensitive. Use <code>FORGOT PASSWORD</code> as described
+in Section 2.5.</p>
+<p><strong>&quot;Account suspended&quot; or &quot;Account banned.&quot;</strong>
+A SYSOP has restricted the account. The message shows the reason and any
+expiry time.</p>
+<p><strong>A service described in this manual is missing.</strong>
+The station does not offer it, or it requires you to sign in.</p>
+<p><strong>The radio or a video is silent.</strong>
+Click anywhere on the page; browsers block sound until you do. Check <code>MUTE</code>,
+the volume, and your device&#39;s volume.</p>
+<p><strong>Live voice reports that the microphone is unavailable.</strong>
+Microphones require a secure connection. Use the station&#39;s <code>https://</code> address,
+if it has one, or use the host computer itself. Allow microphone access when
+the browser asks.</p>
+<p><strong>&quot;Your chat is muted.&quot;</strong>
+A SYSOP has muted your chat. You may still read.</p>
+<p><strong>A direct chat has disappeared.</strong>
+Direct chats are erased when either member disconnects. This is normal.</p>
+<p><strong>Office will not unlock.</strong>
+The OFFICE Password is different from your StationNet password. If it has been
+lost, saved Office files cannot be recovered.</p>
+<p><strong>The browser offers no &quot;Install&quot; command.</strong>
+Installation requires a secure address. See Chapter 30.</p>
+<p><strong>A PSP game will not start.</strong>
+PSP games require a secure connection or the host computer, and WebGL 2.</p>
+<p><strong>WIKI reports LIBRARY UNAVAILABLE.</strong>
+SYSOPs: place <code>.zim</code> files in the folder shown in the WIKI settings section.</p>
+<p><strong>The Station Manager shows CRASHED.</strong>
+Read the last log line shown, open <code>Logs</code>, and correct the cause, such as a
+port already in use. Then start the station again.</p>
+<p><strong>A station will not start: port in use.</strong>
+Another station or program is using the port. Choose a different port in
+<code>Settings</code>.</p>
+<h2 id="appendix-d-modules-and-permissions">Appendix D. Modules and Permissions</h2>
+<p>The following table lists each module, its condition when a station is first
+set up, and who may use it.</p>
+<table>
+<thead>
+<tr>
+<th>Module (tab)</th>
+<th>Initially</th>
+<th>Guests</th>
+<th>Members</th>
+<th>Reserved to SYSOP or delegates</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>BULLETIN BOARD</td>
+<td>On</td>
+<td>Read, if permitted</td>
+<td>Read, post, reply</td>
+<td>Remove any post</td>
+</tr>
+<tr>
+<td>ANNOUNCEMENTS</td>
+<td>On</td>
+<td>Read</td>
+<td>Read, vote</td>
+<td>Post and edit</td>
+</tr>
+<tr>
+<td>CHAT</td>
+<td>On</td>
+<td>—</td>
+<td>Station and direct chat</td>
+<td>Delete messages, mute</td>
+</tr>
+<tr>
+<td>MAIL</td>
+<td>On</td>
+<td>—</td>
+<td>Send and receive</td>
+<td>—</td>
+</tr>
+<tr>
+<td>RADIO</td>
+<td>On</td>
+<td>—</td>
+<td>Listen; transmit by band rules</td>
+<td>Host broadcasts (group)</td>
+</tr>
+<tr>
+<td>FILES</td>
+<td>On</td>
+<td>—</td>
+<td>Download; upload if permitted</td>
+<td>Upload policy</td>
+</tr>
+<tr>
+<td>USERS</td>
+<td>On</td>
+<td>—</td>
+<td>Directory, profiles, feeds</td>
+<td>Moderation</td>
+</tr>
+<tr>
+<td>PROGRAMS</td>
+<td>On</td>
+<td>—</td>
+<td>Run programs</td>
+<td>Install and manage</td>
+</tr>
+<tr>
+<td>IMAGEBOARD</td>
+<td>Off</td>
+<td>—</td>
+<td>Post and reply</td>
+<td>Pin, lock, delete (group)</td>
+</tr>
+<tr>
+<td>EVENTS</td>
+<td>Off</td>
+<td>Read, if permitted</td>
+<td>RSVP; create if permitted</td>
+<td>Creation policy</td>
+</tr>
+<tr>
+<td>WIKI</td>
+<td>Off</td>
+<td>Read, if permitted</td>
+<td>Read</td>
+<td>Install collections</td>
+</tr>
+<tr>
+<td>VIDEOS</td>
+<td>Off</td>
+<td>Watch, if permitted</td>
+<td>Watch; upload in Community mode</td>
+<td>Curated uploads</td>
+</tr>
+<tr>
+<td>LIBRARY</td>
+<td>Off</td>
+<td>Read, if permitted</td>
+<td>Read; upload in Community mode</td>
+<td>Categories, curated uploads</td>
+</tr>
+<tr>
+<td>ARCADE</td>
+<td>Off</td>
+<td>Browse, if permitted</td>
+<td>Play; upload in Community mode</td>
+<td>Cores, curated uploads</td>
+</tr>
+<tr>
+<td>TV</td>
+<td>Off</td>
+<td>Watch, if permitted</td>
+<td>Watch</td>
+<td>Channels and schedules</td>
+</tr>
+<tr>
+<td>OFFICE</td>
+<td>Off</td>
+<td>—</td>
+<td>Private use</td>
+<td>—</td>
+</tr>
+<tr>
+<td>MUD</td>
+<td>Off</td>
+<td>—</td>
+<td>Play enabled worlds</td>
+<td>Worlds; building (delegated)</td>
+</tr>
+<tr>
+<td>USER FEEDS</td>
+<td>On</td>
+<td>—</td>
+<td>Post, comment, react</td>
+<td>Remove posts</td>
+</tr>
+</tbody></table>
+<h2 id="appendix-e-glossary">Appendix E. Glossary</h2>
+<p><strong>Announcement.</strong> An official notice posted by a SYSOP.</p>
+<p><strong>Band.</strong> A range of radio frequencies set aside for a particular purpose.</p>
+<p><strong>Bulletin.</strong> A public message on the bulletin board, with its replies.</p>
+<p><strong>Callsign.</strong> A random identifying code assigned to each station and each member.</p>
+<p><strong>Collection.</strong> One reference work in the WIKI.</p>
+<p><strong>Core.</strong> An emulator component that runs games for one platform in the Arcade.</p>
+<p><strong>CW.</strong> Continuous wave; Morse code transmission on the radio.</p>
+<p><strong>Direct chat.</strong> A private, unrecorded conversation between two online members.</p>
+<p><strong>Guest.</strong> A visitor who has not signed in.</p>
+<p><strong>Host computer.</strong> The computer on which a station runs.</p>
+<p><strong>Imageboard.</strong> A board of picture threads.</p>
+<p><strong>Member.</strong> A visitor who has signed in to an account.</p>
+<p><strong>Module.</strong> A component that provides one service and can be turned on or off.</p>
+<p><strong>MUD.</strong> Multi-user dungeon; a text-based multiplayer game.</p>
+<p><strong>NPC.</strong> A character in a MUD world controlled by the game.</p>
+<p><strong>OFFICE Password.</strong> The password that encrypts a member&#39;s Office files.</p>
+<p><strong>Programme.</strong> A scheduled item on television, or a sequence of content on the radio.</p>
+<p><strong>PTT.</strong> Push-to-talk; holding a control to transmit by voice.</p>
+<p><strong>SSTV.</strong> Slow-scan television; still-picture transmission on the radio.</p>
+<p><strong>Station.</strong> One running StationNet service, with its own name, accounts, and data.</p>
+<p><strong>Station Manager.</strong> The desktop program used to create, start, and stop stations.</p>
+<p><strong>SYSOP.</strong> System operator; the administrator of a station.</p>
+<p><strong>Tagline.</strong> A short line of text displayed beneath the station&#39;s name.</p>
+<p><strong>World.</strong> One game within the MUD, with its own characters.</p>
+<p><strong>ZIM file.</strong> The file format of WIKI reference collections.</p>
+</section>
+</body>
+</html>
