@@ -6,12 +6,9 @@ from jinja2 import Environment
 
 
 def test_active_broadcasts_collapse_after_five():
-    source = (Path(__file__).resolve().parents[1] / "stationnet/templates/terminal.html").read_text()
-    start = '        <div class="activity-broadcasts" data-activity-broadcasts>'
-    fragment = start + source.split(start, 1)[1].split("        </div>", 1)[0] + "        </div>"
     environment = Environment(autoescape=True)
     environment.globals["url_for"] = lambda endpoint: "/radio"
-    template = environment.from_string(fragment)
+    template = environment.from_string(_fragment('<div class="activity-broadcasts" data-activity-broadcasts>'))
 
     broadcasts = [
         {

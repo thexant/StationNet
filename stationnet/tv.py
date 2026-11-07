@@ -13,7 +13,7 @@ import secrets
 import threading
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-from flask import (Blueprint, Response, abort, current_app, flash, g, jsonify, redirect,
+from flask import (Blueprint, Response, abort, current_app, flash, g, has_request_context, jsonify, redirect,
                    render_template, request, send_file, session, url_for)
 from PIL import Image, ImageOps, UnidentifiedImageError
 
@@ -113,10 +113,14 @@ def _viewer_channels():
 
 
 def _media_available(row):
-    if row["missing"]:
-        return False
-    path = library.resolve(row["rel_path"])
-    return path is not None and path.is_file()
+    # A programme can occur in many blocks, channels and cached UTC days.
+    # Share filesystem checks only within this request, never across requests.
+    cache = request.environ.setdefault("stationnet.tv_media_available", {}) if has_request_context() else {}
+    key = (row["rel_path"], bool(row["missing"]))
+    if key not in cache:
+        path = None if row["missing"] else library.resolve(row["rel_path"])
+        cache[key] = path is not None and path.is_file()
+    return cache[key]
 
 
 def _item(row, title=None, description=""):
@@ -125,22 +129,32 @@ def _item(row, title=None, description=""):
                          row["kind"] in auto.INTERSTITIAL_KINDS)
 
 
-def _blocks(channel_id, include_disabled=False):
+def _blocks(channel_id, include_disabled=False, date_window=None):
+    """Load blocks and their items, optionally limited to inclusive local dates."""
     database = get_db()
+    where = "b.channel_id=?" + ("" if include_disabled else " AND b.enabled=1")
+    parameters = [channel_id]
+    if date_window is not None:
+        first, last = (day.isoformat() for day in date_window)
+        where += (
+            " AND ((b.kind='once' AND b.start_date BETWEEN ? AND ?) OR "
+            "(b.kind='weekly' AND (b.valid_from IS NULL OR b.valid_from='' OR b.valid_from<=?) "
+            "AND (b.valid_until IS NULL OR b.valid_until='' OR b.valid_until>=?)))"
+        )
+        parameters.extend((first, last, last, first))
     rows = database.execute(
-        "SELECT * FROM tv_blocks WHERE channel_id=?" + ("" if include_disabled else " AND enabled=1") +
-        " ORDER BY id", (channel_id,)).fetchall()
+        "SELECT b.* FROM tv_blocks b WHERE " + where + " ORDER BY b.id", parameters).fetchall()
     items = {}
     for row in database.execute(
             "SELECT i.block_id,i.title_override,i.description item_description,m.* FROM tv_block_items i "
             "JOIN tv_media m ON m.id=i.media_id JOIN tv_blocks b ON b.id=i.block_id "
-            "WHERE b.channel_id=? ORDER BY i.block_id,i.position", (channel_id,)):
+            "WHERE " + where + " ORDER BY i.block_id,i.position", parameters):
         items.setdefault(row["block_id"], []).append(row)
     return rows, items
 
 
-def _engine_blocks(channel_id):
-    rows, items = _blocks(channel_id)
+def _engine_blocks(channel_id, date_window=None):
+    rows, items = _blocks(channel_id, date_window=date_window)
     return [schedule.Block(
         row["id"], row["title"], row["kind"], row["start_time"],
         tuple(_item(media, media["title_override"], media["item_description"]) for media in items.get(row["id"], ())),
@@ -170,8 +184,11 @@ def _day_timeline(channel, day_index, zone, current_version):
             cache["days"].move_to_end(key)
             return cache["days"][key]
     start = UNIX_EPOCH + timedelta(days=day_index)
+    end = start + timedelta(days=1)
+    # Match schedule.occurrences(), including overnight blocks and DST edges.
+    date_window = (start.astimezone(zone).date() - timedelta(days=2), end.astimezone(zone).date())
     gap_mode, filler, offair = _gap_sources(channel)
-    result = schedule.airings(_engine_blocks(channel["id"]), start, start + timedelta(days=1),
+    result = schedule.airings(_engine_blocks(channel["id"], date_window=date_window), start, end,
                               zone, gap_mode, filler, offair)
     with _cache_lock:
         days = current_app.extensions["tv_cache"]["days"]

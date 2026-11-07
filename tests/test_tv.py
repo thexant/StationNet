@@ -3,6 +3,7 @@ from datetime import datetime, timedelta, timezone
 import os
 from pathlib import Path
 import re
+from unittest.mock import Mock
 
 import pytest
 
@@ -482,3 +483,57 @@ def test_station_activity_lists_scheduled_channels_lowest_first(tmp_path):
     page = client.get("/terminal").get_data(as_text=True)
     assert "TV LISTINGS" in page and "CH 2 / Channel 2" in page and "Channel 4" not in page
     assert "data-activity-broadcast-toggle" not in page.split("TV LISTINGS", 1)[1]
+
+
+def test_terminal_tv_listings_refresh_after_schedule_and_media_edits(tmp_path, monkeypatch):
+    from stationnet import tv
+
+    app, client, admin, _member = _setup(tmp_path)
+    _signin(client, admin)
+    _enable(client)
+    show = _media_with_duration(client, app, "show.mp4", 1800)
+    other = _media_with_duration(client, app, "other.mp4", 1800)
+    channel = _post(client, "/sysop/tv/api/channels", {"number": 1, "name": "Test channel"}).get_json()["id"]
+    now = datetime(2026, 11, 6, 12, 10, tzinfo=timezone.utc)
+    monkeypatch.setattr(tv, "_now", lambda: now)
+    block = {"channel_id": channel, "kind": "once", "start_date": "2026-11-06", "start_time": "12:00",
+             "items": [{"media_id": show}, {"media_id": other}]}
+    block_id = _post(client, "/sysop/tv/api/blocks", block).get_json()["id"]
+    resolve = Mock(wraps=tv_library.resolve)
+    monkeypatch.setattr(tv_library, "resolve", resolve)
+
+    cold = client.get("/terminal")
+    assert cold.status_code == 200 and b"<em>show</em>" in cold.data
+    assert resolve.call_count == 2
+    warm = client.get("/terminal")
+    assert warm.status_code == 200 and b"<em>show</em>" in warm.data
+    assert resolve.call_count == 2
+
+    block["items"].reverse()
+    assert _post(client, f"/sysop/tv/api/blocks/{block_id}", block).status_code == 200
+    resolve.reset_mock()
+    changed_schedule = client.get("/terminal")
+    assert changed_schedule.status_code == 200 and b"<em>other</em>" in changed_schedule.data
+    assert resolve.call_count == 2
+    assert _post(client, f"/sysop/tv/api/media/{other}", {"title": "Updated programme"}).status_code == 200
+    resolve.reset_mock()
+    changed_media = client.get("/terminal")
+    assert changed_media.status_code == 200 and b"<em>Updated programme</em>" in changed_media.data
+    assert resolve.call_count == 2
+
+
+@pytest.mark.parametrize("authenticated,tv_enabled", [(False, True), (True, False)])
+def test_terminal_skips_tv_listings_when_not_displayed(tmp_path, monkeypatch, authenticated, tv_enabled):
+    from stationnet import tv
+
+    app, client, _admin, member = _setup(tmp_path)
+    with app.app_context():
+        get_db().execute("UPDATE station SET tv_enabled=?", (tv_enabled,))
+        get_db().commit()
+    if authenticated:
+        _signin(client, member)
+    listings = Mock(side_effect=AssertionError("TV listings should not be computed"))
+    monkeypatch.setattr(tv, "activity_listings", listings)
+    page = client.get("/terminal")
+    assert page.status_code == 200 and b"TV LISTINGS" not in page.data
+    listings.assert_not_called()
