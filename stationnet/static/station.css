@@ -1322,7 +1322,8 @@ button:disabled { opacity: .5; cursor: not-allowed; }
   .radio-console-page { padding: .5rem; }
   .radio-broadcast-directory { grid-template-columns: 1fr; }
   .radio-controls { grid-template-columns: 1fr 1fr; }
-  .radio-controls label { grid-column: 1 / -1; grid-row: 1; }
+  .radio-controls label { grid-column: 1 / -1; }
+  .radio-controls .radio-frequency-entry { grid-row: 1; }
   .radio-controls [data-radio-scan] { grid-column: 1 / -1; }
   .radio-operation, .radio-cw-controls, .radio-pictures, .radio-voice-controls { grid-template-columns: 1fr; }
   .playlist-settings { grid-template-columns: 1fr; }
