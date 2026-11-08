@@ -118,12 +118,6 @@
     .audience-card h3 { font-size: 1.1rem; }
     .audience-card p { flex: 1; color: var(--white); font-size: .81rem; }
     .audience-card .button { justify-content: space-between; align-self: stretch; margin-top: .45rem; }
-    .source-panel { display: grid; grid-template-columns: minmax(0, 1.2fr) minmax(14rem, .8fr); gap: 1.5rem; align-items: center; padding: 1.1rem; border: 1px solid var(--green); }
-    .source-panel p { margin-bottom: .7rem; color: var(--white); font-size: .83rem; }
-    .source-panel p:last-child { margin-bottom: 0; }
-    .source-actions { display: grid; gap: .6rem; }
-    .source-actions .button { width: 100%; }
-    .source-actions small { color: var(--grey); font-size: .68rem; }
     .statusbar { padding: .55rem .7rem; border: 1px solid var(--green-dim); color: var(--green-dim); }
     .statusbar a { color: var(--cyan); }
     .carrier { display: inline-flex; align-items: center; gap: .4rem; color: var(--green); }
@@ -131,7 +125,7 @@
     .vfx-toggle { min-height: auto; padding: .12rem .38rem; border-color: var(--green-dim); color: var(--cyan); background: transparent; font-size: .62rem; line-height: 1.4; }
     .vfx-toggle:hover { background: var(--cyan); }
     @media (max-width: 760px) {
-      .hero, .intro-grid, .radio-feature, .source-panel { grid-template-columns: 1fr; }
+      .hero, .intro-grid, .radio-feature { grid-template-columns: 1fr; }
       .hero-aside { grid-template-columns: repeat(2, minmax(0, 1fr)); }
       .hero-aside .aside-heading, .hero-aside .aside-foot { grid-column: 1 / -1; }
       .audience-grid { grid-template-columns: 1fr; }
@@ -181,7 +175,7 @@
         <a href="#radio">RADIO</a><i aria-hidden="true">*</i>
         <a href="#stations">STATIONS</a><i aria-hidden="true">*</i>
         <a href="#get-started">GET STARTED</a><i aria-hidden="true">*</i>
-        <a href="#source">SOURCE</a>
+        <a href="https://discord.gg/ZdMahX4fDv">DOWNLOADS / DISCORD</a>
       </nav>
     </header>
 
@@ -193,14 +187,16 @@
           <p class="lead">A StationNet station is a small, independent online place run by a person or community. Open it in your browser to leave a bulletin, talk with other members, share a file, tune the radio, or see what someone has built.</p>
           <p>It brings back a good idea from early computing: the network can feel like a place with regulars, local character, and somebody at the controls.</p>
           <div class="button-row">
+            <a class="button" href="https://discord.gg/ZdMahX4fDv">GET STATIONNET ON DISCORD <span class="arrow" aria-hidden="true">↗</span></a>
             <a class="button" href="#about">WHAT IS A STATION? <span class="arrow" aria-hidden="true">→</span></a>
             <a class="button secondary" href="#get-started">FIND YOUR WAY IN <span aria-hidden="true">→</span></a>
           </div>
+          <p class="service-note">StationNet downloads, updates, and support are available in our Discord server. The link above opens Discord, where you can get the download and ask for help.</p>
         </div>
         <aside class="hero-aside" aria-label="A quick look at a station">
           <p class="aside-heading">STATION DIRECTORY // A QUICK LOOK</p>
           <div class="aside-row"><span class="number">01</span><div><strong>COMMUNITY</strong><small>Bulletins, chat, mail, events, and people.</small></div></div>
-          <div class="aside-row"><span class="number">02</span><div><strong>ON THE AIR</strong><small>Shared frequencies, Morse, pictures, voice, and programs.</small></div></div>
+          <div class="aside-row"><span class="number">02</span><div><strong>ON THE AIR</strong><small>Shared frequencies, Morse, pictures, voice, television, and radio programs.</small></div></div>
           <div class="aside-row"><span class="number">03</span><div><strong>EXPLORE</strong><small>Games, apps, worlds, files, books, and video.</small></div></div>
           <div class="aside-row"><span class="number">04</span><div><strong>MAKE IT YOURS</strong><small>Every Sysop chooses the station's look and services.</small></div></div>
           <p class="aside-foot">A sketch of what StationNet can offer. Each station is different.</p>
@@ -271,19 +267,8 @@
         <div class="section-head"><h2 id="get-started-title">&gt; Choose a route</h2><p class="eyebrow">NEXT CONNECTION</p></div>
         <div class="audience-grid">
           <article class="audience-card"><p class="kicker">[01] VISIT</p><h3>Explore a station</h3><p>Ask a friend or community whether they run one, then open the address they share. Your first stop may be a welcome page; the Sysop decides whether guests can browse or new members can sign up. There is no central station directory to search.</p><a class="button" href="#stations">HOW STATIONS WORK <span class="arrow" aria-hidden="true">→</span></a></article>
-          <article class="audience-card"><p class="kicker">[02] HOST</p><h3>Run your own</h3><p>Start a station on your own computer for a LAN, friends, or a wider community you choose to reach. The project README has installation steps and the distribution guide explains packaged downloads.</p><a class="button" href="https://github.com/thexant/StationNet#install-and-run">READ INSTALL GUIDE <span class="arrow" aria-hidden="true">↗</span></a></article>
-          <article class="audience-card"><p class="kicker">[03] MAKE</p><h3>Build an app or game</h3><p>StationNet applications are installable ZIP packages. The developer guide covers the manifest, JavaScript runtime, and other supported formats, so you can make something a Sysop can add to a station.</p><a class="button" href="https://github.com/thexant/StationNet/blob/main/stationnet/application_packages/APIREADME.md">OPEN DEVELOPER GUIDE <span class="arrow" aria-hidden="true">↗</span></a></article>
-        </div>
-      </section>
-
-      <section class="section" id="source" aria-labelledby="source-title">
-        <div class="section-head"><h2 id="source-title">&gt; Source &amp; development</h2><p class="eyebrow">OPEN FOR INSPECTION</p></div>
-        <div class="source-panel">
-          <div>
-            <p>StationNet's source code and documentation are available in its public GitHub repository. You can see how the station works, follow its development, and read the guides for hosting or building applications.</p>
-            <p class="muted">The repository does not currently include a project-wide license file. Its bundled components have their own licenses; check those terms before reusing or redistributing code.</p>
-          </div>
-          <div class="source-actions"><a class="button secondary" href="https://github.com/thexant/StationNet">VIEW THE SOURCE <span aria-hidden="true">↗</span></a><small>GitHub is only needed to follow these links. This page works on its own.</small></div>
+          <article class="audience-card"><p class="kicker">[02] HOST</p><h3>Run your own</h3><p>Start a station on your own computer for a LAN, friends, or a wider community you choose to reach. Join our Discord server for StationNet downloads, updates, and help getting started.</p><a class="button" href="https://discord.gg/ZdMahX4fDv">DOWNLOADS ON DISCORD <span class="arrow" aria-hidden="true">↗</span></a></article>
+          <article class="audience-card"><p class="kicker">[03] MAKE</p><h3>Build an app or game</h3><p>StationNet applications are installable ZIP packages. Join our Discord server to ask about making games and apps, get help, and share what you create.</p><a class="button" href="https://discord.gg/ZdMahX4fDv">MAKE &amp; SHARE ON DISCORD <span class="arrow" aria-hidden="true">↗</span></a></article>
         </div>
       </section>
     </main>
