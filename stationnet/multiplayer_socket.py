@@ -13,6 +13,7 @@ from . import applications, moderation, mud, mud_worlds
 from .realtime import utc_now
 from .db import get_db
 from .multiplayer import MAX_EVENT_BYTES, MultiplayerError, _emit, _promote_connected_host
+from .video_upload_transport import is_video_upload, receive_video_upload
 
 PATH = re.compile(r"^/games-apps/([a-z0-9]+(?:-[a-z0-9]+)*)/realtime$")
 EXTERNAL_AUDIO_PATH = re.compile(r"^/radio/external/\d+/audio$")
@@ -198,6 +199,8 @@ def create_asgi_app(flask_app):
             if (scope["type"] == "http" and scope["method"] == "GET" and
                     EXTERNAL_AUDIO_PATH.fullmatch(scope.get("path", ""))):
                 await stream_audio(scope, receive, send)
+            elif scope["type"] == "http" and is_video_upload(scope):
+                await receive_video_upload(flask_app, http.executor, scope, receive, send)
             else:
                 await http(scope, receive, send)
             return

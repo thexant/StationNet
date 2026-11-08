@@ -1490,17 +1490,23 @@ def settings():
         if request.form.get("settings_section") == "radio":
             return _save_radio_bands()
         if request.form.get("settings_section") == "videos":
+            from . import videos
             mode = request.form.get("videos_mode")
             quota = request.form.get("videos_default_quota_mb", g.station["videos_default_quota_mb"], type=int)
+            max_upload = (request.form.get("videos_max_upload_mb", type=int)
+                          if "videos_max_upload_mb" in request.form else g.station["videos_max_upload_mb"])
             if mode not in {"community", "curated"}:
                 flash("Select a valid videos mode.", "error")
             elif quota is None or not 1 <= quota <= 10240:
                 flash("Default videos quota must be between 1 and 10240 MB.", "error")
+            elif max_upload is None or not 1 <= max_upload <= videos.MAX_UPLOAD_MB_LIMIT:
+                flash(f"Maximum video file size must be between 1 and {videos.MAX_UPLOAD_MB_LIMIT} MB.", "error")
             else:
                 enabled = request.form.get("videos_enabled") == "on"
                 database = get_db()
                 database.execute("UPDATE station SET videos_enabled=?,videos_mode=?,"
-                                 "videos_default_quota_mb=? WHERE id=1", (enabled, mode, quota))
+                                 "videos_default_quota_mb=?,videos_max_upload_mb=? WHERE id=1",
+                                 (enabled, mode, quota, max_upload))
                 database.commit()
                 flash("Videos settings updated.", "success")
             return redirect(url_for("station.settings") + "#videos-service")

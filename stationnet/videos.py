@@ -13,13 +13,20 @@ from .security import validate_csrf
 
 bp = Blueprint("videos", __name__, url_prefix="/videos")
 FORMATS = {".mp4": "video/mp4", ".webm": "video/webm", ".ogv": "video/ogg"}
-MAX_VIDEO_BYTES = 120 * 1024 * 1024
+MAX_UPLOAD_MB_LIMIT = 1024 * 1024
+
+
+def upload_request_limit(max_upload_mb):
+    """Allow multipart fields and boundaries in addition to the video itself."""
+    return (max_upload_mb + 1) * 1024 * 1024
 
 
 @bp.before_request
 def require_enabled():
     if not g.station or not g.station["videos_enabled"]:
         abort(404)
+    if request.method == "POST" and request.endpoint in {"videos.upload", "videos.station_upload"}:
+        request.max_content_length = upload_request_limit(g.station["videos_max_upload_mb"])
 
 
 def _video_path(item):
@@ -77,6 +84,8 @@ def index():
 
 
 def _save_upload(station_post):
+    max_upload_mb = g.station["videos_max_upload_mb"]
+    max_video_bytes = max_upload_mb * 1024 * 1024
     uploaded = request.files.get("file")
     title = request.form.get("title", "").strip()
     description = request.form.get("description", "").strip()
@@ -104,12 +113,12 @@ def _save_upload(station_post):
         with destination.open("xb") as output:
             output.write(header)
             while True:
-                chunk = uploaded.stream.read(min(1024 * 1024, MAX_VIDEO_BYTES + 1 - size))
+                chunk = uploaded.stream.read(min(1024 * 1024, max_video_bytes + 1 - size))
                 if not chunk:
                     break
                 size += len(chunk)
-                if size > MAX_VIDEO_BYTES:
-                    return "Video exceeds the 120 MB limit."
+                if size > max_video_bytes:
+                    return f"Video exceeds the {max_upload_mb} MB limit."
                 if not station_post and size > remaining:
                     return "Video upload quota exceeded. Remove a video or ask a SYSOP to raise your quota."
                 output.write(chunk)

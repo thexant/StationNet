@@ -862,10 +862,14 @@ station publishes videos, authors are not shown, and comments are not offered.
 
 1. Choose `UPLOAD VIDEO +`.
 2. Enter a **Title** and, optionally, a **Description**.
-3. Choose a video file in MP4, WebM, or Ogg format, up to 120 MB.
+3. Choose a video file in MP4, WebM, or Ogg format, within the maximum size
+   shown on the upload form.
 4. Choose `UPLOAD VIDEO`.
 
-Each member has an upload quota set by the SYSOP. **To comment**, type in
+The SYSOP sets the maximum size of each video separately from each member's
+total storage quota. Member uploads must fit both limits; station uploads use
+only the file size limit. The default file limit is 120 MB. Sizes use
+1 MB = 1,048,576 bytes. Interrupted uploads must be restarted. **To comment**, type in
 **Add a comment** beneath the video and choose `POST COMMENT`.
 
 ## 16. Library
@@ -1763,7 +1767,9 @@ from its ▾ menu. Post announcements with `NEW ANNOUNCEMENT +`.
 **Videos, Library, and Arcade.** Each has a **Community** mode (members
 upload, within per-member quotas) and a **Curated** mode (station uploads
 only). Set the default quota and per-member overrides, and upload station
-material, in the service's settings section. The Library has categories, an
+material, in the service's settings section. The Videos module also has a maximum video
+file size setting for member and station uploads, configurable from 1 to
+1,048,576 MB. The Library has categories, an
 option to allow downloads, and a maximum file size. The Arcade section manages
 emulator *cores*: each platform's preferred core can be chosen, and a missing
 core can be downloaded while the host has Internet access. PSP uploads have

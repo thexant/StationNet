@@ -33,6 +33,7 @@ CREATE TABLE IF NOT EXISTS station (
  file_size_limit_mb INTEGER NOT NULL DEFAULT 10,
  radio_default_quota_mb INTEGER NOT NULL DEFAULT 100,
  videos_default_quota_mb INTEGER NOT NULL DEFAULT 1024,
+ videos_max_upload_mb INTEGER NOT NULL DEFAULT 120,
  imageboard_max_threads INTEGER NOT NULL DEFAULT 100,
  imageboard_max_image_replies INTEGER NOT NULL DEFAULT 50,
  radio_broadcast_limit_minutes INTEGER NOT NULL DEFAULT 120,
@@ -2358,6 +2359,8 @@ def _migrate_videos(database):
         database.execute("ALTER TABLE station ADD COLUMN videos_mode TEXT NOT NULL DEFAULT 'community'")
     if "videos_default_quota_mb" not in columns:
         database.execute("ALTER TABLE station ADD COLUMN videos_default_quota_mb INTEGER NOT NULL DEFAULT 1024")
+    if "videos_max_upload_mb" not in columns:
+        database.execute("ALTER TABLE station ADD COLUMN videos_max_upload_mb INTEGER NOT NULL DEFAULT 120")
     user_columns = {row["name"] for row in database.execute("PRAGMA table_info(users)")}
     if "videos_quota_mb" not in user_columns:
         database.execute("ALTER TABLE users ADD COLUMN videos_quota_mb INTEGER")

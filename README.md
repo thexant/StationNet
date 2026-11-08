@@ -170,7 +170,7 @@ SYSOPs can set the maximum number of threads and image-bearing replies per threa
 
 ### Optional Videos
 
-Under **SYSOP CONTROL → VIDEOS**, SYSOPs can set a default member upload quota in MB and override it for individual users. Member uploads count toward their own library quota; station video uploads do not. Each video also retains its 120 MB file limit.
+Under **SYSOP CONTROL → VIDEOS**, SYSOPs can set a default member upload quota in MB and override it for individual users. Member uploads count toward their own library quota; station video uploads do not. The separate maximum video file size setting applies to both member and station uploads (120 MB by default, configurable up to 1,048,576 MB). Member uploads must also fit their remaining storage quota. Sizes use 1 MB = 1,048,576 bytes. Large uploads use temporary disk storage and restart if interrupted; allow space for the request, parsed upload, and saved video during processing.
 
 ### Optional Library
 

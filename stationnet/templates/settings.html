@@ -315,6 +315,7 @@
       <label class="switch"><input type="checkbox" name="videos_enabled" {% if g.station.videos_enabled %}checked{% endif %}> Enable Videos</label>
       <label>Mode<select name="videos_mode"><option value="community" {% if g.station.videos_mode=='community' %}selected{% endif %}>Community</option><option value="curated" {% if g.station.videos_mode=='curated' %}selected{% endif %}>Curated</option></select></label>
       <label>Default per-user upload quota (MB)<input type="number" name="videos_default_quota_mb" min="1" max="10240" required value="{{ g.station.videos_default_quota_mb }}"></label>
+      <label>Maximum video file size (MB)<input type="number" name="videos_max_upload_mb" min="1" max="1048576" required value="{{ g.station.videos_max_upload_mb }}"><small>Applies to member and station uploads. Member storage quotas also apply.</small></label>
       <button>SAVE VIDEOS SETTING</button>
     </form>
     {% if g.station.videos_enabled %}
@@ -333,7 +334,7 @@
       <input type="hidden" name="csrf_token" value="{{ session.csrf_token }}">
       <label>Title<input name="title" maxlength="150" required></label>
       <label>Description<textarea name="description" maxlength="5000" rows="4"></textarea></label>
-      <label>Video (MP4, WebM, or Ogg; up to 120 MB)<input type="file" name="file" accept="video/mp4,video/webm,video/ogg,.mp4,.webm,.ogv" required></label>
+      <label>Video (MP4, WebM, or Ogg; up to {{ g.station.videos_max_upload_mb }} MB)<input type="file" name="file" accept="video/mp4,video/webm,video/ogg,.mp4,.webm,.ogv" required></label>
       <button>UPLOAD STATION VIDEO</button>
     </form>{% endif %}
   </div>
