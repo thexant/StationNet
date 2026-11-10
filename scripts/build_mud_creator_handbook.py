@@ -7,7 +7,8 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
-OUTPUT = ROOT / "MUD_CREATOR_HANDBOOK.md"
+# Shipped with the app: World Forge reads it for its field registry and Handbook tab.
+OUTPUT = ROOT / "stationnet" / "world_forge" / "handbook.md"
 GUIDES = [
     ("world", "stationnet/mud_world_templates/README_CUSTOM_WORLDS.md", None),
     ("origins", "stationnet/mud_origin_templates/README_RACES_CLASSES.md", "Race and class reference"),
@@ -123,8 +124,8 @@ examples in full. No other README is required to create a world.
    validation messages and fix the reported JSON paths. Choose race, class,
    and skill availability, then enable the world for players.
 5. Play through character creation, movement, dialogue, quest acceptance and
-   turn-in, combat and loot, and each dungeon entrance. Export a world ZIP
-   after any World Builder edits. For later releases, re-import the same world
+   turn-in, combat and loot, and each dungeon entrance. World Forge (the
+   station's built-in editor) publishes edits directly. For later releases, re-import the same world
    ID as an upgrade; preserve IDs for content whose player state must carry
    over.
 
@@ -170,6 +171,7 @@ def example() -> str:
 
 
 def main() -> None:
+    import sys
     parts = [INTRO]
     for kind, path, heading in GUIDES:
         parts += [convert(kind, path, heading), "\n"]
@@ -181,7 +183,14 @@ def main() -> None:
     missing = targets - anchors
     if missing:
         raise ValueError(f"Broken handbook links: {', '.join(sorted(missing))}")
-    OUTPUT.write_text(rendered, encoding="utf-8")
+    if "--check" in sys.argv[1:]:
+        current = OUTPUT.read_text(encoding="utf-8") if OUTPUT.exists() else ""
+        if current != rendered:
+            raise SystemExit(f"{OUTPUT.relative_to(ROOT)} is stale; run scripts/build_mud_creator_handbook.py")
+        print(f"{OUTPUT.relative_to(ROOT)} is current")
+        return
+    OUTPUT.parent.mkdir(parents=True, exist_ok=True)
+    OUTPUT.write_text(rendered, encoding="utf-8", newline="\n")
     print(f"Wrote {OUTPUT.relative_to(ROOT)}")
 
 

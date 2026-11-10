@@ -55,7 +55,7 @@ def upload_station_midi():
     volume_text = request.form.get("station_midi_volume", str(g.station["station_midi_volume"]))
     if not volume_text.isdecimal() or not 0 <= int(volume_text) <= 100:
         flash("Station MIDI volume must be a whole number from 0 to 100.", "error")
-        return redirect(url_for("station.settings") + "#station-parameters")
+        return redirect(url_for("station.settings") + "#station-midi")
     volume = int(volume_text)
     uploaded = request.files.get("station_midi")
     path = _station_midi_path()
@@ -65,7 +65,7 @@ def upload_station_midi():
             inspect_midi(payload, allow_extended_velocity=True)
         except InvalidMidi as error:
             flash(str(error), "error")
-            return redirect(url_for("station.settings") + "#station-parameters")
+            return redirect(url_for("station.settings") + "#station-midi")
         temporary = path.with_name(f"station_theme_{secrets.token_hex(8)}.mid")
         try:
             temporary.write_bytes(payload)
@@ -74,7 +74,7 @@ def upload_station_midi():
             temporary.unlink(missing_ok=True)
     if not path.is_file() and request.form.get("play_station_midi") == "on":
         flash("Upload a Station MIDI Theme before enabling playback.", "error")
-        return redirect(url_for("station.settings") + "#station-parameters")
+        return redirect(url_for("station.settings") + "#station-midi")
     database = get_db()
     database.execute(
         "UPDATE station SET play_station_midi=?,station_midi_volume=? WHERE id=1",
@@ -82,7 +82,7 @@ def upload_station_midi():
     )
     database.commit()
     flash("Station MIDI Theme settings saved.", "success")
-    return redirect(url_for("station.settings") + "#station-parameters")
+    return redirect(url_for("station.settings") + "#station-midi")
 
 
 @bp.post("/sysop/settings/midi/clear")
@@ -93,7 +93,7 @@ def clear_station_midi():
     get_db().commit()
     _station_midi_path().unlink(missing_ok=True)
     flash("Station MIDI Theme cleared.", "success")
-    return redirect(url_for("station.settings") + "#station-parameters")
+    return redirect(url_for("station.settings") + "#station-midi")
 
 
 @bp.post("/station-theme/preference")
@@ -143,11 +143,11 @@ def upload_station_icon():
             flash("Station icon display enabled. Upload an icon to show it in the masthead.", "success")
         else:
             flash("Station icon settings saved.", "success")
-        return redirect(url_for("station.settings") + "#station-parameters")
+        return redirect(url_for("station.settings") + "#station-icon")
     payload = uploaded.read(STATION_ICON_MAX_BYTES + 1)
     if not payload or len(payload) > STATION_ICON_MAX_BYTES:
         flash("Station icon must be between 1 byte and 10 MB.", "error")
-        return redirect(url_for("station.settings") + "#station-parameters")
+        return redirect(url_for("station.settings") + "#station-icon")
     try:
         with Image.open(BytesIO(payload)) as source:
             if source.format not in {"PNG", "JPEG", "GIF", "WEBP"}:
@@ -166,10 +166,10 @@ def upload_station_icon():
             clean.paste(image)
     except ValueError as error:
         flash(str(error), "error")
-        return redirect(url_for("station.settings") + "#station-parameters")
+        return redirect(url_for("station.settings") + "#station-icon")
     except (Image.DecompressionBombError, UnidentifiedImageError, OSError):
         flash("Select a valid PNG, JPEG, GIF, or WebP image.", "error")
-        return redirect(url_for("station.settings") + "#station-parameters")
+        return redirect(url_for("station.settings") + "#station-icon")
     path = _station_icon_path()
     temporary = path.with_name(f"station_icon_{secrets.token_hex(8)}.png")
     try:
@@ -184,7 +184,7 @@ def upload_station_icon():
     )
     database.commit()
     flash("Station icon and web-app settings saved.", "success")
-    return redirect(url_for("station.settings") + "#station-parameters")
+    return redirect(url_for("station.settings") + "#station-icon")
 
 
 @bp.post("/sysop/settings/theme")
@@ -194,19 +194,19 @@ def import_theme():
     uploaded = request.files.get("theme_file")
     if uploaded is None or not uploaded.filename:
         flash("Choose a JSON theme file to import.", "error")
-        return redirect(url_for("station.settings") + "#station-parameters")
+        return redirect(url_for("station.settings") + "#theme-library")
     payload = uploaded.read(themes.MAX_THEME_BYTES + 1)
     if not payload or len(payload) > themes.MAX_THEME_BYTES:
         flash("Theme file must be between 1 byte and 16 KB.", "error")
-        return redirect(url_for("station.settings") + "#station-parameters")
+        return redirect(url_for("station.settings") + "#theme-library")
     try:
         document = themes.parse(payload.decode("utf-8"))
     except (UnicodeError, themes.ThemeError) as error:
         flash(str(error) if isinstance(error, themes.ThemeError) else "Theme must be valid UTF-8 JSON.", "error")
-        return redirect(url_for("station.settings") + "#station-parameters")
+        return redirect(url_for("station.settings") + "#theme-library")
     if document["id"] in themes.custom_themes():
         flash("A custom theme with that ID is already installed.", "error")
-        return redirect(url_for("station.settings") + "#station-parameters")
+        return redirect(url_for("station.settings") + "#theme-library")
     path = themes.directory() / f"{document['id']}.json"
     try:
         with path.open("x", encoding="utf-8") as target:
@@ -214,16 +214,16 @@ def import_theme():
             target.write("\n")
     except FileExistsError:
         flash("A theme file with that ID already exists.", "error")
-        return redirect(url_for("station.settings") + "#station-parameters")
+        return redirect(url_for("station.settings") + "#theme-library")
     flash(f"Imported theme {document['name']} by {document['author']}.", "success")
-    return redirect(url_for("station.settings") + "#station-parameters")
+    return redirect(url_for("station.settings") + "#theme-library")
 
 
 @bp.post("/sysop/settings/theme/remove")
 @admin_required
 def remove_theme():
     validate_csrf()
-    destination = url_for("station.settings") + "#station-parameters"
+    destination = url_for("station.settings") + "#theme-library"
     theme_id = request.form.get("theme_id", "")
     if request.form.get("confirm_remove") != "on":
         flash("Check the confirmation box before removing a theme.", "error")
@@ -1393,6 +1393,29 @@ def save_library_user_quota(user_id):
     return redirect(url_for("station.settings") + "#library-service")
 
 
+def _posted_enabled(module):
+    """Read a service's enabled switch from the posted form.
+
+    The redesigned settings page manages every on/off switch from the
+    Modules switchboard, so its service forms send ``preserve_enabled=1``
+    and leave the stored state alone. Older forms still post the checkbox.
+    """
+    if request.form.get("preserve_enabled") == "1":
+        return bool(g.station[f"{module}_enabled"])
+    return request.form.get(f"{module}_enabled") == "on"
+
+
+# Cards on the settings page that save through the shared station
+# parameters form, with the message shown after a successful save.
+PARAMETER_CARDS = {
+    "station-identity": "Station identity saved.",
+    "landing-message": "Landing page message saved.",
+    "station-themes": "Site theme settings saved.",
+    "masthead-banner": "Masthead and banner saved.",
+    "file-archive": "File archive policy saved.",
+}
+
+
 @bp.route("/sysop/settings", methods=("GET", "POST"))
 @admin_required
 def settings():
@@ -1439,7 +1462,7 @@ def settings():
                 flash("Select valid permission groups.", "error")
                 return redirect(url_for("station.settings") + "#events-service")
             database.execute("UPDATE station SET events_enabled=?,events_create_permission=? WHERE id=1",
-                             (request.form.get("events_enabled") == "on", permission))
+                             (_posted_enabled("events"), permission))
             database.execute("DELETE FROM event_creation_groups")
             database.executemany("INSERT INTO event_creation_groups(group_id) VALUES(?)", [(item,) for item in ids])
             database.commit()
@@ -1453,7 +1476,7 @@ def settings():
             flash("User Feeds enabled." if enabled else "User Feeds disabled.", "success")
             return redirect(url_for("station.settings") + "#user-feeds")
         if request.form.get("settings_section") == "office":
-            enabled = request.form.get("office_enabled") == "on"
+            enabled = _posted_enabled("office")
             database = get_db()
             if request.form.get("office_nav_setting_present") == "1":
                 database.execute(
@@ -1463,10 +1486,13 @@ def settings():
             else:
                 database.execute("UPDATE station SET office_enabled=? WHERE id=1", (enabled,))
             database.commit()
-            flash("Office enabled." if enabled else "Office disabled.", "success")
+            if request.form.get("preserve_enabled") == "1":
+                flash("Office settings updated.", "success")
+            else:
+                flash("Office enabled." if enabled else "Office disabled.", "success")
             return redirect(url_for("station.settings") + "#office-suite")
         if request.form.get("settings_section") == "imageboard":
-            enabled = request.form.get("imageboard_enabled") == "on"
+            enabled = _posted_enabled("imageboard")
             max_threads = request.form.get("imageboard_max_threads", g.station["imageboard_max_threads"], type=int)
             max_image_replies = request.form.get("imageboard_max_image_replies", g.station["imageboard_max_image_replies"], type=int)
             if (max_threads is None or not 1 <= max_threads <= 10000
@@ -1478,7 +1504,10 @@ def settings():
                              "imageboard_max_image_replies=? WHERE id=1",
                              (enabled, max_threads, max_image_replies))
             database.commit()
-            flash("Imageboard enabled." if enabled else "Imageboard disabled.", "success")
+            if request.form.get("preserve_enabled") == "1":
+                flash("Imageboard settings updated.", "success")
+            else:
+                flash("Imageboard enabled." if enabled else "Imageboard disabled.", "success")
             return redirect(url_for("station.settings") + "#imageboard-service")
         if request.form.get("settings_section") == "kiwix":
             enabled = request.form.get("kiwix_enabled") == "on"
@@ -1502,7 +1531,7 @@ def settings():
             elif max_upload is None or not 1 <= max_upload <= videos.MAX_UPLOAD_MB_LIMIT:
                 flash(f"Maximum video file size must be between 1 and {videos.MAX_UPLOAD_MB_LIMIT} MB.", "error")
             else:
-                enabled = request.form.get("videos_enabled") == "on"
+                enabled = _posted_enabled("videos")
                 database = get_db()
                 database.execute("UPDATE station SET videos_enabled=?,videos_mode=?,"
                                  "videos_default_quota_mb=?,videos_max_upload_mb=? WHERE id=1",
@@ -1525,7 +1554,7 @@ def settings():
                 database.execute("UPDATE station SET library_enabled=?,library_mode=?,"
                                  "library_default_quota_mb=?,library_max_upload_mb=?,"
                                  "library_downloads_enabled=? WHERE id=1",
-                                 (request.form.get("library_enabled") == "on", mode, quota, max_upload,
+                                 (_posted_enabled("library"), mode, quota, max_upload,
                                   request.form.get("library_downloads_enabled") == "on"))
                 database.commit()
                 flash("Library settings updated.", "success")
@@ -1545,7 +1574,7 @@ def settings():
                 database = get_db()
                 database.execute("UPDATE station SET arcade_enabled=?,arcade_mode=?,"
                                  "arcade_default_quota_mb=?,arcade_psp_max_upload_mb=? WHERE id=1",
-                                 (request.form.get("arcade_enabled") == "on", mode, quota, psp_max))
+                                 (_posted_enabled("arcade"), mode, quota, psp_max))
                 database.commit()
                 flash("Arcade settings updated.", "success")
             return redirect(url_for("station.settings") + "#arcade-service")
@@ -1564,13 +1593,19 @@ def settings():
             else:
                 database.execute("UPDATE station SET tv_enabled=?,tv_max_upload_mb=?,tv_timezone=?,"
                                  "tv_default_channel_id=? WHERE id=1",
-                                 (request.form.get("tv_enabled") == "on", max_upload, zone, default_channel))
+                                 (_posted_enabled("tv"), max_upload, zone, default_channel))
                 tv.bump_version(database)
                 database.commit()
                 flash("TV settings updated.", "success")
             return redirect(url_for("station.settings") + "#tv-service")
-        name = request.form.get("name", "").strip()
-        description = request.form.get("description", "").strip()
+        # The redesigned page saves identity, themes, masthead, and the file
+        # archive policy as separate cards; each names its card in return_to
+        # and only posts its own fields, so absent values keep their setting.
+        return_to = request.form.get("return_to", "")
+        if return_to not in PARAMETER_CARDS:
+            return_to = ""
+        name = request.form.get("name", g.station["name"]).strip()
+        description = request.form.get("description", g.station["description"] or "").strip()
         landing_message = request.form.get(
             "landing_message", g.station["landing_message"]
         ).strip()
@@ -1662,12 +1697,16 @@ def settings():
                     "UPDATE station SET header_taglines_json=? WHERE id=1",
                     (json.dumps(current, ensure_ascii=False),),
                 )
-            database.commit(); flash("Station parameters updated.", "success")
+            database.commit()
+            flash(PARAMETER_CARDS.get(return_to, "Station parameters updated."), "success")
             if name != g.station["name"] and current_app.config.get("STATION_CONFIG"):
                 # The launcher renames the station's folder at its next stop or restart.
                 sync_name(current_app.config["STATION_CONFIG"], name)
                 flash("The station folder will be renamed to match at the next restart.", "success")
-            return redirect(url_for("station.settings"))
+            return redirect(url_for("station.settings") + (f"#{return_to}" if return_to else ""))
+        if return_to:
+            # Validation failed: return to the card so its error shows beside it.
+            return redirect(url_for("station.settings") + f"#{return_to}")
     database = get_db()
     header_fonts = available_header_fonts()
     bands = database.execute("SELECT * FROM radio_bands ORDER BY start_khz").fetchall()
@@ -2150,7 +2189,7 @@ def save_radio_memberships(user_id):
     database = get_db()
     if database.execute("SELECT 1 FROM users WHERE id=?", (user_id,)).fetchone() is None:
         flash("User not found.", "error")
-        return _radio_permissions_redirect()
+        return redirect(url_for("station.settings") + "#radio-users")
     selected = {int(value) for value in request.form.getlist("group_id") if value.isdigit()}
     valid = {row["id"] for row in database.execute(
         "SELECT id FROM radio_permission_groups WHERE is_default=0"
@@ -2170,6 +2209,6 @@ def save_radio_memberships(user_id):
     )
     database.commit()
     reconcile_radio_permissions(user_id)
-    flash("User radio groups updated.", "success")
-    return _radio_permissions_redirect()
+    flash("User permission groups updated.", "success")
+    return redirect(url_for("station.settings") + f"#radio-user-{user_id}")
 

@@ -1,0 +1,74 @@
+{% import 'settings/_macros.html' as ui with context %}
+{% set ns = namespace(on=0, active_invites=0) %}
+{% for name, label in available_modules %}{% if module_enabled(name) %}{% set ns.on = ns.on + 1 %}{% endif %}{% endfor %}
+{% for invite in invitations %}{% if not invite.used_at and not invite.revoked_at %}{% set ns.active_invites = ns.active_invites + 1 %}{% endif %}{% endfor %}
+{% set site_theme = site_themes.get(g.station.site_theme) %}
+<div class="settings-overview-grid">
+  <a class="settings-tile" href="#access-policy">
+    <span class="settings-tile-label">REGISTRATION</span>
+    <strong>{{ g.station.registration_mode|upper }}</strong>
+    <small>Guests {{ 'may browse' if g.station.guest_access else 'are blocked' }}</small>
+  </a>
+  <a class="settings-tile" href="#invitations">
+    <span class="settings-tile-label">INVITATIONS</span>
+    <strong>{{ ns.active_invites }} ACTIVE</strong>
+    <small>{{ invitations|length }} generated in total</small>
+  </a>
+  <a class="settings-tile" href="#module-availability">
+    <span class="settings-tile-label">MODULES</span>
+    <strong>{{ ns.on }} / {{ available_modules|length }} ON</strong>
+    <small>Services visible to members</small>
+  </a>
+  <a class="settings-tile" href="#station-themes">
+    <span class="settings-tile-label">SITE THEME</span>
+    <strong>{{ site_theme.name if site_theme else g.station.site_theme }}</strong>
+    <small>Personal themes {{ 'allowed' if g.station.personal_themes_enabled else 'off' }}</small>
+  </a>
+  {% if module_enabled('radio') %}
+  <a class="settings-tile" href="#broadcast-frequencies">
+    <span class="settings-tile-label">HOSTED BROADCASTS</span>
+    <strong>{{ broadcast_sessions|length }} LIVE</strong>
+    <small>{{ assignments|length }} frequency assignment{{ 's' if assignments|length != 1 }}</small>
+  </a>
+  {% endif %}
+  {% if module_enabled('tv') %}
+  <a class="settings-tile" href="#tv-service">
+    <span class="settings-tile-label">TELEVISION</span>
+    <strong>{{ tv_channels|length }} CHANNEL{{ 'S' if tv_channels|length != 1 }}</strong>
+    <small>Schedule zone {{ g.station.tv_timezone }}</small>
+  </a>
+  {% endif %}
+  {% if module_enabled('mud') %}
+  <a class="settings-tile" href="#mud-worlds">
+    <span class="settings-tile-label">MUD WORLDS</span>
+    <strong>{{ mud_worlds_all|selectattr('enabled')|list|length }} / {{ mud_worlds_all|length }} ENABLED</strong>
+    <small>Each enabled world is its own game</small>
+  </a>
+  <a class="settings-tile{% if current_daily.status == 'failed' %} is-alert{% endif %}" href="#mud-daily">
+    <span class="settings-tile-label">DUNGEON OF THE DAY</span>
+    <strong>{{ current_daily.status|upper }}</strong>
+    <small>{{ current_daily.day_key }}</small>
+  </a>
+  {% endif %}
+</div>
+
+{% call ui.card('overview-consoles', 'Management consoles', 'Dedicated pages for managing content and day-to-day operations. Settings on this page configure features; consoles run them.') %}
+<ul class="settings-console-list">
+  <li><a class="button secondary" href="{{ url_for('moderation.dashboard') }}">MODERATION</a><span>Members, open reports, and the audit history.</span></li>
+  <li><a class="button secondary" href="{{ url_for('tv_admin.manage') }}">TV MANAGEMENT</a><span>Channels, programming, and schedules.</span></li>
+  <li><a class="button secondary" href="{{ url_for('broadcast.automated') }}">AUTOMATED BROADCASTS</a><span>Scheduled hosted radio programming.</span></li>
+  {% if module_enabled('applications') %}<li><a class="button secondary" href="{{ url_for('application_admin.manage') }}">PROGRAMS</a><span>Install and manage station programs.</span></li>{% endif %}
+  {% if module_enabled('announcements') %}<li><a class="button secondary" href="{{ url_for('announcements.index') }}">ANNOUNCEMENTS</a><span>Post and manage station announcements.</span></li>{% endif %}
+  {% if g.station.mud_enabled %}<li><a class="button secondary" href="{{ url_for('world_forge.index') }}">WORLD FORGE</a><span>Build, edit, and publish MUD worlds.</span></li>{% endif %}
+</ul>
+{% endcall %}
+
+{% call ui.card('overview-help', 'How this page works') %}
+<ul class="settings-help-list">
+  <li>Choose a category in the sidebar, or type in <strong>Find a setting</strong> to jump straight to a control.</li>
+  <li>Each form has its own save button directly beneath the fields it saves. Nothing else on the page is saved with it.</li>
+  <li>Blocks tagged <span class="settings-tag">APPLIES IMMEDIATELY</span> act as soon as you press their buttons.</li>
+  <li>Edited forms are flagged <span class="settings-tag is-dirty">UNSAVED CHANGES</span>, and the sidebar marks their category. Moving between categories keeps your edits; you are warned before a save or page change would discard them.</li>
+  <li>Results of a save appear at the top of the card you saved.</li>
+</ul>
+{% endcall %}

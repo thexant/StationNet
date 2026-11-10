@@ -1,7 +1,0 @@
-{% if builder_world %}
-<form method="get" action="{{ url_for('mud.builder_worlds') }}" class="inline-form builder-world-switch">
-  <label>Editing world<select name="world">{% for item in builder_worlds %}<option value="{{ item.key }}" {% if item.key == builder_world.key %}selected{% endif %}>{{ item.name }}{% if not item.enabled %} (disabled){% endif %}</option>{% endfor %}</select></label>
-  <button class="secondary">SWITCH WORLD</button>
-</form>
-{% if not builder_world.enabled %}<p class="mud-legacy-notice" role="note">{{ builder_world.name }} is disabled. Players cannot enter it until a sysop enables it; your edits are saved.</p>{% endif %}
-{% endif %}

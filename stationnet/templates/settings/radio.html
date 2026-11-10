@@ -1,0 +1,77 @@
+{% import 'settings/_macros.html' as ui with context %}
+{{ ui.module_chip('radio', 'RADIO') }}
+<p class="muted settings-pane-note">Who may listen, transmit, or host on each band is set by <a href="#radio-permissions">Access &amp; Members → Permission groups</a>.</p>
+
+{% call ui.card('radio-spectrum', 'Band allocations', "Each band's purpose, limits, and transmission capabilities. These capabilities do not restrict normal tuning.") %}
+<form method="post" action="{{ url_for('station.settings') }}" class="form-grid">
+  {{ ui.csrf() }}
+  <input type="hidden" name="settings_section" value="radio">
+  <div class="settings-band-grid">
+  {% for band in bands %}
+  <fieldset class="band-settings">
+    <legend>BAND {{ '%02d'|format(loop.index) }}</legend>
+    <label>Purpose
+      <input name="band_{{ band.id }}_name" maxlength="40" required value="{{ band.name }}">
+    </label>
+    <div class="frequency-fields">
+      <label>Start MHz<input type="number" inputmode="decimal" step="0.01" min="0.10" max="999.99" name="band_{{ band.id }}_start" required value="{{ format_frequency(band.start_khz) }}"></label>
+      <label>End MHz<input type="number" inputmode="decimal" step="0.01" min="0.10" max="999.99" name="band_{{ band.id }}_end" required value="{{ format_frequency(band.end_khz) }}"></label>
+    </div>
+    <label class="switch"><input type="checkbox" name="band_{{ band.id }}_cw" {% if band.supports_cw %}checked{% endif %}> SUPPORT MORSE / CW</label>
+    <label class="switch"><input type="checkbox" name="band_{{ band.id }}_sstv" {% if band.supports_sstv %}checked{% endif %}> SUPPORT PICTURE / SSTV</label>
+    <label class="switch"><input type="checkbox" name="band_{{ band.id }}_live_voice" {% if band.supports_live_voice %}checked{% endif %}> SUPPORT LIVE VOICE</label>
+    <label class="switch"><input type="checkbox" name="band_{{ band.id }}_hosted_broadcasts" {% if band.supports_hosted_broadcasts %}checked{% endif %}> SUPPORT HOSTED BROADCASTS</label>
+    <label class="switch"><input type="checkbox" name="band_{{ band.id }}_open_broadcasts" {% if band.allow_open_broadcasts %}checked{% endif %}> ALLOW OPEN BROADCASTS</label>
+  </fieldset>
+  {% endfor %}
+  </div>
+  {{ ui.save_bar('COMMIT RADIO SPECTRUM') }}
+</form>
+{% endcall %}
+
+{% call ui.card('broadcast-frequencies', 'Hosted broadcasting', 'One reserved hosted-programming frequency per operator. Assignments remain idle until a broadcast begins.') %}
+<p><a class="button secondary" href="{{ url_for('broadcast.automated') }}">MANAGE AUTOMATED BROADCASTS →</a></p>
+<form method="post" action="{{ url_for('station.save_broadcast_limit') }}" class="form-grid">
+  {{ ui.csrf() }}
+  <label>Maximum continuous session (minutes)<input type="number" min="1" max="1440" name="radio_broadcast_limit_minutes" value="{{ g.station.radio_broadcast_limit_minutes }}" required><small>1–1440 minutes. Individual live sessions can be set to loop indefinitely below.</small></label>
+  {{ ui.save_bar('SAVE SESSION LIMIT') }}
+</form>
+{{ ui.subhead('Frequency assignments and live sessions', 'immediate') }}
+<div class="settings-assignment-list">
+{% for user in users %}
+{% set live = broadcast_sessions.get(user.id) %}
+<article class="settings-subcard{% if live %} is-live{% endif %}">
+  <div class="split-heading">
+    <h4>{{ user.username }} / {{ user.callsign }}</h4>
+    {% if live %}<span class="settings-tag is-live">{{ live.status|upper }}</span>{% endif %}
+  </div>
+  <form method="post" action="{{ url_for('station.save_broadcast_frequency',user_id=user.id) }}" class="inline-form settings-inline-wrap">
+    {{ ui.csrf() }}
+    <label>Assigned MHz<input name="frequency" inputmode="decimal" placeholder="BLANK TO REVOKE" value="{{ format_frequency(assignments[user.id].frequency_khz) if user.id in assignments else '' }}"></label>
+    <button>{{ 'CHANGE / REVOKE' if user.id in assignments else 'ASSIGN' }}</button>
+  </form>
+  {% if live %}
+  <p class="settings-readout">{{ live.status|upper }} / {{ live.playlist_name }} / {{ live.track_name }} / {{ live.frequency }} MHz{% if live.indefinite %} / INDEFINITE{% endif %}</p>
+  <div class="button-row">
+    <form method="post" action="{{ url_for('station.control_broadcast',user_id=user.id) }}">{{ ui.csrf() }}<input type="hidden" name="action" value="{{ 'resume' if live.status == 'paused' else 'pause' }}"><button class="secondary">{{ 'RESUME' if live.status == 'paused' else 'PAUSE' }}</button></form>
+    <form method="post" action="{{ url_for('station.control_broadcast',user_id=user.id) }}" data-confirm="Stop {{ user.username }}'s broadcast now?">{{ ui.csrf() }}<input type="hidden" name="action" value="stop"><button class="danger">STOP</button></form>
+    <form method="post" action="{{ url_for('station.control_broadcast',user_id=user.id) }}">{{ ui.csrf() }}<input type="hidden" name="action" value="indefinite"><input type="hidden" name="enabled" value="{{ 0 if live.indefinite else 1 }}"><button class="secondary">{{ 'RESTORE TIME LIMIT' if live.indefinite else 'LOOP INDEFINITELY' }}</button></form>
+  </div>
+  {% endif %}
+</article>
+{% endfor %}
+</div>
+{% endcall %}
+
+{% call ui.card('radio-storage', 'Broadcaster storage', 'Library quotas for broadcast audio. Available for administration regardless of your personal broadcast permissions.') %}
+<form method="post" action="{{ url_for('station.save_radio_default_quota') }}" class="form-grid">
+  {{ ui.csrf() }}
+  <label>Default per-user quota (MB)<input type="number" name="radio_default_quota_mb" min="1" max="10240" required value="{{ g.station.radio_default_quota_mb }}"></label>
+  {{ ui.save_bar('SAVE DEFAULT RADIO QUOTA') }}
+</form>
+{{ ui.subhead('Member quota overrides', 'immediate') }}
+{% call ui.overrides('Per-member broadcaster quotas (' ~ users|length ~ ' members)') %}
+<p class="muted">Leave a field blank to inherit the station default.</p>
+<div class="quota-admin-list">{% for user in users %}{{ ui.quota_row(user, 'radio_quota_mb', 'station.save_radio_user_quota', g.station.radio_default_quota_mb) }}{% endfor %}</div>
+{% endcall %}
+{% endcall %}

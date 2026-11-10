@@ -1,0 +1,334 @@
+/* Connections view, styled with station theme tokens. */
+.world-forge .map-view-tabs {
+  display: flex;
+  gap: 8px;
+  padding: 8px 18px;
+  background: var(--surface-title);
+  border-bottom: 1px solid var(--border-soft);
+  flex-shrink: 0;
+}
+.world-forge .map-view-tabs button {
+  font-size: 11px;
+  padding: 6px 18px;
+  background: transparent;
+}
+.world-forge .map-view-tabs button[aria-selected=true] {
+  background: var(--surface-selected);
+  border-color: var(--green-dim);
+  color: var(--green-bright);
+}
+.world-forge .room-tray {
+  height: auto;
+  max-height: 40%;
+  overflow: auto;
+}
+.world-forge .tray-heading {
+  flex-wrap: wrap;
+}
+.world-forge .tray-explanation {
+  font-size: 10px;
+  color: var(--grey);
+  margin: 0 0 9px;
+  line-height: 1.5;
+}
+.world-forge .tray-pagination,
+.world-forge .connections-pages {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 10px;
+  margin-top: 8px;
+  color: var(--grey);
+}
+.world-forge .tray-pagination button,
+.world-forge .connections-pages button {
+  font-size: 10px;
+  padding: 4px 8px;
+}
+.world-forge .connections-workspace {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+  flex-direction: column;
+}
+.world-forge .connections-note {
+  font-size: 11px;
+  line-height: 1.6;
+  color: var(--green);
+  margin: 0;
+  padding: 10px 16px;
+  background: var(--black);
+  border-bottom: 1px solid var(--border-soft);
+  flex-shrink: 0;
+}
+.world-forge .connections-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--border-soft);
+  flex-shrink: 0;
+}
+.world-forge .connections-toolbar button {
+  font-size: 10px;
+  padding: 5px 8px;
+}
+.world-forge .connections-toolbar>span {
+  font-size: 10px;
+}
+.world-forge .connections-toolbar .hint {
+  margin-left: auto;
+  font-size: 9px;
+}
+.world-forge .connections-body {
+  display: flex;
+  min-height: 140px;
+  flex: 1;
+  overflow: hidden;
+}
+.world-forge .connections-browser {
+  width: 204px;
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  padding: 10px;
+  background: var(--black);
+  border-right: 1px solid var(--border-soft);
+  min-height: 0;
+}
+.world-forge .connections-browser label {
+  font-size: 10px;
+  color: var(--green);
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+}
+.world-forge .connections-browser input {
+  width: 100%;
+  font-size: 11px;
+}
+.world-forge .connections-browser>p {
+  margin: 8px 0;
+  font-size: 9px;
+}
+.world-forge .connections-results {
+  overflow: auto;
+  flex: 1;
+  min-height: 0;
+}
+.world-forge .connections-results button {
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  text-align: left;
+  padding: 9px 7px;
+  gap: 5px;
+  margin-bottom: 5px;
+  background: var(--surface-button);
+}
+.world-forge .connections-results button.active {
+  background: var(--surface-selected);
+  border-color: var(--green-dim);
+}
+.world-forge .connections-results strong {
+  font-size: 10px;
+  font-weight: 500;
+  overflow-wrap: anywhere;
+}
+.world-forge .connections-results small {
+  font-size: 9px;
+  color: var(--green);
+  overflow-wrap: anywhere;
+}
+.world-forge .connections-diagram {
+  position: relative;
+  flex: 1;
+  min-width: 0;
+  min-height: 140px;
+  overflow: hidden;
+  background: radial-gradient(circle,color-mix(in srgb,var(--green) 7%,transparent) 1px,transparent 1px) 0 0/20px 20px,var(--black);
+}
+.world-forge .connections-diagram>svg {
+  display: block;
+  touch-action: none;
+  cursor: grab;
+}
+.world-forge .connections-diagram>svg:active {
+  cursor: grabbing;
+}
+.world-forge .connection-node {
+  cursor: pointer;
+  outline: none;
+}
+.world-forge .connection-node rect {
+  fill: color-mix(in srgb,var(--cyan) 30%,var(--black));
+  stroke: var(--green-dim);
+  stroke-width: 1.5;
+}
+.world-forge .connection-node.wilderness rect {
+  fill: var(--surface-title);
+  stroke: var(--green);
+  stroke-dasharray: 5 3;
+}
+.world-forge .connection-node.missing rect {
+  fill: var(--red-dim);
+  stroke: var(--red);
+}
+.world-forge .connection-node.selected rect,
+.world-forge .connection-node:focus-visible rect {
+  stroke: var(--green-bright);
+  stroke-width: 3;
+}
+.world-forge .connection-node text {
+  font-size: 10px;
+  fill: var(--green);
+  pointer-events: none;
+}
+.world-forge .connection-node .connection-name {
+  font-size: 12px;
+  fill: var(--green-bright);
+  font-weight: 550;
+}
+.world-forge .connection-edge text {
+  font-size: 9px;
+  paint-order: stroke;
+  stroke: var(--black);
+  stroke-width: 4px;
+  stroke-linejoin: round;
+  pointer-events: none;
+}
+.world-forge .connections-legend {
+  display: flex;
+  gap: 15px;
+  flex-wrap: wrap;
+  font-size: 9px;
+  color: var(--green);
+  padding: 8px 14px;
+  border-top: 1px solid var(--border-soft);
+  flex-shrink: 0;
+}
+.world-forge .hidden-link {
+  color: var(--magenta);
+}
+.world-forge .locked-link {
+  color: var(--amber);
+}
+.world-forge .conditional-link {
+  color: var(--amber);
+}
+.world-forge .vehicle-link {
+  color: var(--cyan);
+}
+.world-forge .connections-detail {
+  padding: 10px 14px;
+  border-top: 1px solid var(--border-soft);
+  background: var(--black);
+  max-height: 28%;
+  overflow: auto;
+  flex-shrink: 0;
+  font-size: 11px;
+}
+.world-forge .connections-detail>.inline {
+  flex-wrap: wrap;
+}
+.world-forge .connections-detail button {
+  padding: 5px 8px;
+  font-size: 10px;
+}
+.world-forge .connections-detail .hint {
+  margin: 8px 0;
+}
+.world-forge .connection-passages>div {
+  display: flex;
+  gap: 8px;
+  margin-top: 7px;
+  align-items: flex-start;
+}
+.world-forge .connection-passages>div>button:first-child {
+  flex: 1;
+  text-align: left;
+  justify-content: flex-start;
+}
+.world-forge .connection-passages>div>button:last-child {
+  flex-shrink: 0;
+}
+.world-forge .transport-association {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  flex-wrap: wrap;
+  border: 1px dashed var(--cyan);
+  background: color-mix(in srgb,var(--cyan) 30%,var(--black));
+  padding: 8px;
+  margin-top: 8px;
+  color: var(--cyan);
+}
+.world-forge .transport-association small {
+  font-size: 9px;
+  color: var(--cyan);
+}
+.world-forge .connections-failure {
+  position: absolute;
+  inset: 10px 15px auto;
+  padding: 12px;
+  background: var(--red-dim);
+  color: var(--amber);
+  border: 1px solid var(--amber);
+}
+@media(max-width:1150px) {
+  .world-forge .connections-browser {
+    width: 170px;
+  }
+  .world-forge .connections-toolbar .hint {
+    display: none;
+  }
+}
+@media(max-width:850px) {
+  .world-forge .connections-body {
+    flex-direction: column;
+  }
+  .world-forge .connections-browser {
+    width: auto;
+    height: 125px;
+    flex-shrink: 0;
+    border-right: 0;
+    border-bottom: 1px solid var(--border-soft);
+    padding: 6px 10px;
+  }
+  .world-forge .connections-browser label {
+    flex-direction: row;
+    align-items: center;
+  }
+  .world-forge .connections-browser input {
+    flex: 1;
+    min-width: 0;
+  }
+  .world-forge .connections-browser>p {
+    margin: 4px 0;
+  }
+  .world-forge .connections-results {
+    display: flex;
+    gap: 5px;
+  }
+  .world-forge .connections-results button {
+    min-width: 160px;
+    max-width: 180px;
+    flex-shrink: 0;
+  }
+  .world-forge .connections-pages {
+    margin-top: 3px;
+  }
+  .world-forge .connections-detail {
+    max-height: 25%;
+  }
+  .world-forge .connections-note {
+    font-size: 10px;
+    padding: 7px 12px;
+  }
+  .world-forge .connections-toolbar {
+    padding: 6px 10px;
+  }
+}

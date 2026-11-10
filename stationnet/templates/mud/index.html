@@ -10,7 +10,7 @@
     </div>
     <div class="mud-header-actions">
       <a class="button secondary" href="{{ url_for('mud.index') }}">CHANGE WORLD</a>
-      {% if g.mud_can_build and world.key != 'stationnet:procedural' %}<a class="button secondary" href="{{ url_for('mud.builder') }}">WORLD BUILDER</a>{% endif %}
+      {% if g.mud_can_build and world.key != 'stationnet:procedural' %}<a class="button secondary" href="{{ url_for('world_forge.index', world=world.key) }}">WORLD FORGE</a>{% endif %}
       <a class="button secondary" href="{{ url_for('mud.delete_character') }}">DELETE CHARACTER</a>
       <span class="mud-link-state">FOUNDATION ONLINE</span>
     </div>

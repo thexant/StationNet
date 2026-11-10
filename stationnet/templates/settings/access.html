@@ -1,0 +1,141 @@
+{% import 'settings/_macros.html' as ui with context %}
+{% call ui.card('access-policy', 'Registration & guest access', 'Who may create accounts and whether visitors can browse without one. Saves independently of every other setting.') %}
+<form method="post" action="{{ url_for('station.access_settings') }}" class="form-grid">
+  {{ ui.csrf() }}
+  <fieldset><legend>Registration mode</legend>
+    <label class="radio"><input type="radio" name="registration_mode" value="open" {% if g.station.registration_mode=='open' %}checked{% endif %}> Open — anyone may create an account</label>
+    <label class="radio"><input type="radio" name="registration_mode" value="private" {% if g.station.registration_mode=='private' %}checked{% endif %}> Private — require a single-use invitation</label>
+    <label class="radio"><input type="radio" name="registration_mode" value="disabled" {% if g.station.registration_mode=='disabled' %}checked{% endif %}> Disabled — prevent new account creation</label>
+  </fieldset>
+  <label class="switch"><input type="checkbox" name="guest_access" {% if g.station.guest_access %}checked{% endif %}> Allow guests to browse station services</label>
+  {{ ui.save_bar('SAVE ACCESS POLICY') }}
+</form>
+{% endcall %}
+
+{% call ui.card('invitations', 'Single-use invitations', 'Invitations let people register while registration is Private.') %}
+{{ ui.subhead('Generate', 'immediate') }}
+<p class="muted settings-note">Generate an unpredictable invitation code and link. The complete secret is shown only once; this list keeps only a non-secret identifier and redemption status.</p>
+<form method="post" action="{{ url_for('station.generate_invitation') }}">
+  {{ ui.csrf() }}<button>GENERATE INVITATION</button>
+</form>
+{{ ui.subhead('Issued invitations', 'immediate') }}
+<div class="invite-list">
+  {% for invite in invitations %}
+  <article class="invite-row">
+    <div><strong>INV-{{ '%04d'|format(invite.id) }} / …{{ invite.code_hint }}</strong><small>CREATED {{ invite.created_at|localtime }}{% if invite.creator_callsign %} BY {{ invite.creator_username }} - [{{ invite.creator_callsign }}]{% endif %}</small></div>
+    {% if invite.used_at %}<span class="invite-state used">USED{% if invite.used_callsign %} / {{ invite.used_username }} - [{{ invite.used_callsign }}]{% endif %}</span>
+    {% elif invite.revoked_at %}<span class="invite-state revoked">REVOKED</span>
+    {% else %}
+    <span class="invite-state active">ACTIVE</span>
+    <form method="post" action="{{ url_for('station.revoke_invitation',invitation_id=invite.id) }}" data-confirm="Revoke invitation INV-{{ '%04d'|format(invite.id) }}?">
+      {{ ui.csrf() }}<button class="secondary">REVOKE</button>
+    </form>
+    {% endif %}
+  </article>
+  {% else %}<p class="muted">No invitations have been generated.</p>{% endfor %}
+</div>
+{% endcall %}
+
+{% call ui.card('radio-permissions', 'Permission groups', 'Station-wide groups that grant radio access, hosted broadcasting, imageboard moderation, and (from Events) event creation.') %}
+<details class="settings-disclosure">
+  <summary>How group permissions combine</summary>
+  <div class="settings-disclosure-body">
+    <p class="muted">Within a group, frequency rules override ranges, and ranges override bands. Across a user's groups: DENIED overrides FULL, FULL overrides LISTEN, and an absent rule is UNSET. HOST BROADCASTS is a separate group capability; a host still needs effective FULL access. MODERATE IMAGEBOARD grants pin, lock, and delete controls while the imageboard is enabled. SYSOPs always have these controls.</p>
+  </div>
+</details>
+{{ ui.subhead('Create a group', 'immediate') }}
+<form method="post" action="{{ url_for('station.create_radio_group') }}" class="inline-form settings-inline-wrap">
+  {{ ui.csrf() }}
+  <label>New group <input name="name" maxlength="40" required placeholder="EMERGENCY SERVICES"></label>
+  <label class="switch"><input type="checkbox" name="host_broadcasts"> HOST BROADCASTS</label>
+  <label class="switch"><input type="checkbox" name="moderate_imageboard"> MODERATE IMAGEBOARD</label>
+  <button>CREATE GROUP</button>
+</form>
+{% for group in groups %}
+<article class="settings-subcard radio-group-settings" id="radio-group-{{ group.id }}">
+  <div class="split-heading">
+    <div><h4>{{ group.name }}</h4>{% if group.is_default %}<small class="muted">PERMANENT / EVERY ACCOUNT</small>{% endif %}</div>
+    {% if not group.is_default %}
+    <div class="button-row">
+      <form method="post" action="{{ url_for('station.rename_radio_group',group_id=group.id) }}" class="inline-form">
+        {{ ui.csrf() }}
+        <input name="name" maxlength="40" required value="{{ group.name }}" aria-label="Rename {{ group.name }}">
+        <button class="secondary">RENAME</button>
+      </form>
+      <form method="post" action="{{ url_for('station.delete_radio_group',group_id=group.id) }}" data-confirm="Delete {{ group.name }} and remove all of its user assignments?">
+        {{ ui.csrf() }}
+        <button class="danger">DELETE GROUP</button>
+      </form>
+    </div>
+    {% endif %}
+  </div>
+  <form method="post" action="{{ url_for('station.save_radio_group_capabilities',group_id=group.id) }}" class="inline-form settings-inline-wrap">
+    {{ ui.csrf() }}
+    <label class="switch"><input type="checkbox" name="host_broadcasts" {% if group.host_broadcasts %}checked{% endif %}> HOST BROADCASTS</label>
+    <label class="switch"><input type="checkbox" name="moderate_imageboard" {% if group.moderate_imageboard %}checked{% endif %}> MODERATE IMAGEBOARD</label>
+    <button class="secondary">SAVE CAPABILITY</button>
+  </form>
+  <div class="permission-rules">
+    {% for rule in rules_by_group[group.id] %}
+    <div class="permission-rule">
+      <span>{{ rule.scope_type|upper }} / {% if rule.scope_type=='band' %}{{ rule.band_name }}{% elif rule.scope_type=='frequency' %}{{ format_frequency(rule.start_khz) }} MHz{% else %}{{ format_frequency(rule.start_khz) }}–{{ format_frequency(rule.end_khz) }} MHz{% endif %}</span>
+      <strong>{{ rule.permission }}</strong>
+      <form method="post" action="{{ url_for('station.delete_radio_rule',rule_id=rule.id) }}">
+        {{ ui.csrf() }}
+        <button class="secondary">SET UNSET</button>
+      </form>
+    </div>
+    {% else %}<p class="muted">No rules. This group currently contributes UNSET everywhere.</p>{% endfor %}
+  </div>
+  <details class="settings-disclosure">
+    <summary>Add or update a radio rule</summary>
+    <form method="post" action="{{ url_for('station.save_radio_rule',group_id=group.id) }}" class="form-grid radio-rule-form settings-disclosure-body">
+      {{ ui.csrf() }}
+      <label>Rule type
+        <select name="scope_type" data-rule-scope>
+          <option value="band">Existing band</option><option value="range">Frequency range</option><option value="frequency">Individual frequency</option>
+        </select>
+        <small>Band rules use the band below; range and frequency rules use the MHz fields.</small>
+      </label>
+      <label>Band
+        <select name="band_id">{% for band in bands %}<option value="{{ band.id }}">{{ band.name }} / {{ format_frequency(band.start_khz) }}–{{ format_frequency(band.end_khz) }}</option>{% endfor %}</select>
+      </label>
+      <div class="frequency-fields">
+        <label>Frequency / range start MHz<input name="start" inputmode="decimal" placeholder="145.00"></label>
+        <label>Range end MHz<input name="end" inputmode="decimal" placeholder="145.99"></label>
+      </div>
+      <label>Permission
+        <select name="permission"><option value="FULL">FULL / receive + transmit</option><option value="LISTEN">LISTEN / receive only</option><option value="DENIED">DENIED / no access</option><option value="UNSET">UNSET / remove matching rule</option></select>
+      </label>
+      <div class="settings-save-bar"><button>ADD / UPDATE RULE</button></div>
+    </form>
+  </details>
+</article>
+{% endfor %}
+{% endcall %}
+
+{% call ui.card('radio-users', 'Group membership', 'Assign members to permission groups and review their effective radio access.') %}
+<p class="muted settings-note">Every account belongs to DEFAULT. Open a member to change their other groups.</p>
+<div class="settings-member-list">
+{% for user in users %}
+{% set member_groups = groups|selectattr('id', 'in', memberships[user.id])|rejectattr('is_default')|map(attribute='name')|list %}
+<details class="settings-disclosure settings-member" id="radio-user-{{ user.id }}">
+  <summary><span>{{ user.username }} / {{ user.callsign }}</span><small>{{ member_groups|join(', ') if member_groups else 'DEFAULT only' }}{% if broadcast_hosts[user.id] %} · HOST{% endif %}</small></summary>
+  <div class="settings-disclosure-body">
+    <form method="post" action="{{ url_for('station.save_radio_memberships',user_id=user.id) }}" class="form-grid">
+      {{ ui.csrf() }}
+      <label class="switch"><input type="checkbox" checked disabled> DEFAULT (permanent)</label>
+      {% for group in groups if not group.is_default %}
+      <label class="switch"><input type="checkbox" name="group_id" value="{{ group.id }}" {% if group.id in memberships[user.id] %}checked{% endif %}> {{ group.name }}</label>
+      {% endfor %}
+      {{ ui.save_bar('SAVE ' ~ user.username ~ ' GROUPS', reset=false) }}
+    </form>
+    <div class="permission-summary">
+      <span>Hosted broadcasting: <strong>{{ 'AUTHORIZED' if broadcast_hosts[user.id] else 'NOT AUTHORIZED' }}</strong></span>
+      {% for band in bands %}<span>{{ band.name }}: <strong>{{ effective[user.id][band.id] }}</strong></span>{% endfor %}
+    </div>
+  </div>
+</details>
+{% endfor %}
+</div>
+{% endcall %}

@@ -1,7 +1,7 @@
 """Optional world life: a game clock, NPC schedules, NPC relationships, factions, and crime.
 
 Every system here is off until a world enables it in its manifest (or the
-World Builder), so worlds that never mention them play exactly as before.
+World Forge), so worlds that never mention them play exactly as before.
 This module validates settings and authored schedules and holds the pure
 rules; mud.py owns the commands, events, and the scheduled tick.
 """

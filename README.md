@@ -34,7 +34,7 @@ The Programs directory includes bundled games and utilities, creative tools such
 
 ### MUD worlds
 
-The optional native multi-user dungeon (MUD) offers persistent characters, exploration, quests, NPCs, combat, and procedural dungeon expeditions. Operators and authorized builders can create and edit worlds with the World Builder, import and export world packages, and run multiple authored worlds with their own content and character options.
+The optional native multi-user dungeon (MUD) offers persistent characters, exploration, quests, NPCs, combat, and procedural dungeon expeditions. Operators and authorized builders can create, edit, and publish worlds with World Forge, a map-based world editor built into the station, import and export world packages, and run multiple authored worlds with their own content and character options.
 
 ### Administration and appearance
 

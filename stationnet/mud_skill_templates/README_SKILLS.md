@@ -128,7 +128,7 @@ bonus at rank *r* is `(r // every) × per_rank`, capped at `max` if given.
 
 Search and lockpicking use one formula: chance = 50% + skill score +
 2 × (Intellect or Agility − 10) − difficulty, kept between 5% and 95%.
-Builders set difficulties in the World Builder.
+Builders set difficulties in World Forge.
 
 ### Practice triggers
 
@@ -174,7 +174,7 @@ equipped. For example, Blades improves only when fighting with a blade.
 ## Weapon and armor proficiency
 
 Items can set `properties_json.category` (for example `"blade"`, `"axe"`,
-`"heavy"`, `"shield"`, `"firearm"`) in the World Builder, world content, or a
+`"heavy"`, `"shield"`, `"firearm"`) in World Forge, world content, or a
 class's starter equipment.
 
 - **Untrained penalty.** When a character equips categorized gear without a

@@ -1,7 +1,7 @@
 # Starter room presets
 
-These JSON files are the starters offered under **World Builder → Wilderness →
-Room presets → Start from**. Each file is one room preset:
+These JSON files are the starters offered in World Forge under **Content library
+→ Terrain presets → Add a station preset**. Each file is one room preset:
 
 | File | Terrain | Links |
 |---|---|---|
@@ -15,7 +15,7 @@ Room presets → Start from**. Each file is one room preset:
 A world copies a starter when you create a preset from it, so editing that copy
 never changes these files or other worlds. The starters name no creatures or
 resources, because NPC and item definitions belong to each world. Add them in
-the builder after creating the preset.
+World Forge after adding the preset.
 
 To share your own presets, use **Export** on the Wilderness page. It writes
 `{"presets": [...]}`, and **Import** reads either that format or a single

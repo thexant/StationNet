@@ -85,7 +85,8 @@ keep the engine's default:
 | `mana_per_level` | 0–10 | 2 | Base mana per level; Intellect still adjusts it. |
 | `starting_coins` | 0–100000 | 30 | Coins in a new character's purse. |
 
-The World Builder's **Progression** panel edits the same settings. Procedural
+In World Forge these are the **World settings → progression** fields; only a
+SYSOP may publish changes to them. Procedural
 portal dungeons always use the defaults.
 
 ### Availability
@@ -97,8 +98,8 @@ wins; leave the list out to offer the world's bundled choices (or the built-ins
 when it bundles none).
 The world ID must be unique on the station. World, room, and content record IDs
 match `^[a-z][a-z0-9-]{0,63}$`: 1 to 64 lowercase letters, digits, and hyphens,
-starting with a letter. `stationnet` is reserved for the original builder
-world. `name` is 2 to 80 characters; `author` is 1 to 80. `start_room` must
+starting with a letter. `stationnet` is reserved for the station's home
+world, which is edited in World Forge. `name` is 2 to 80 characters; `author` is 1 to 80. `start_room` must
 match a room ID in `rooms.json`.
 
 ### Give characters different beginnings
@@ -132,8 +133,7 @@ When several rules match a character:
 1. The rule testing the most of race, class, and faction wins, so a race and
    class rule beats a race rule without needing an order.
 2. Between equally specific rules, the lowest `sort_order` wins (default 0).
-3. If those tie too, the room name decides, then the rule ID. The World Builder
-   warns about rules that tie this way.
+3. If those tie too, the room name decides, then the rule ID.
 
 A character who matches no rule begins in `start_room`, as does one whose only
 matching rules name rooms that are no longer valid. A faction rule only matches
@@ -146,9 +146,9 @@ recovers there after defeat. Characters that matched no rule recover in
 `start_room`. Replacing a character's origins does not change either room, but
 deleting a character and creating a new one applies the rules again.
 
-In the World Builder, use **Start rules** to add, edit, remove, and review rules
-in the order they are checked. A room used by a rule cannot be deleted until the
-rule is moved or removed.
+In World Forge, start rules are a content collection (**Start rules**). A room
+used by a rule cannot be deleted until the rule is moved or removed; **Used by**
+on the room lists the rules that name it.
 
 ### Rename or disable mana
 
@@ -173,7 +173,7 @@ growth stay the same. With `"enabled": false`, the resource is hidden, and
 without magic. Characters keep their stored values, and races and classes that
 grant spells or mana growth still install and play normally. A missing
 `resource` means `{"enabled": true, "name": "Mana"}`. Builders can also change
-this under **Resource** in the World Builder. Exports include the setting
+this under **World settings → resource** in World Forge. Exports include the setting
 whenever it differs from the default. Procedural dungeons always use the usual
 Mana.
 
@@ -291,7 +291,7 @@ Rules:
 
 - An exit between two rooms with coordinates on **different** layers must use
   `up` or `down`. A `north`, `in`, `out` or named exit across layers is
-  rejected on import and in the World Builder.
+  rejected on import and in World Forge.
 - `up` and `down` exits may also join rooms on the same layer, or rooms without
   coordinates, such as the floors of a tower that has no map.
 - Rooms without coordinates belong to no layer. Exits to and from them are not
@@ -307,7 +307,7 @@ each `z` at most once (up to 200 entries, each name 2–80 characters):
            {"z": 5, "name": "Meridian Tower"}]
 ```
 
-Names appear in `/map` and in the World Builder, and exports keep them. A layer
+Names appear in `/map` and in World Forge, and exports keep them. A layer
 without a name is shown by number.
 
 What players see:
@@ -323,11 +323,10 @@ What players see:
   there.
 - **Movement** is ordinary: `/go up`, `up`, or `u`, and `down` or `d`.
 
-In the World Builder, name the layer you are viewing under **Wilderness →
-Map**. The exit forms there and on each room card accept **Or to the room at
-x,y,z** for a destination that is a wilderness square on another layer. The
-builder refuses an exit, or a room move, that would join two layers by any
-direction other than `up` or `down`.
+In World Forge, the map's layer menu switches layers and **+** adds one; layer
+names are the manifest's `layers`. A passage may lead to any wilderness square
+by its `@x,y,z` ID. World Forge refuses a passage, or a room move, that would
+join two layers by any direction other than `up` or `down`.
 
 ## 4. Add optional world content
 
@@ -450,7 +449,7 @@ also use the magazine and reload cycle, with abstract ammunition supply.
 The following **complete `content.json`** works with the `manifest.json`,
 `rooms.json`, and `exits.json` above. It adds a quest giver, a hostile NPC, a
 quest, a gun and ammunition, an NPC weapon, and a combat drop. It is a useful
-starting point even when there is no existing builder world to export.
+starting point even when there is no existing world to export.
 
 ```json
 {
@@ -1078,8 +1077,8 @@ An optional `conditions_json` array uses the same conditions as exits, including
 skills, attributes, held items, quests, and flags. Conditions must pass before
 the search roll; they neither consume items nor reveal a clue on failure.
 Only one of `item_definition_id`, `item_instance_id`, and `exit_id` may be set.
-The World Builder offers these results and can edit a discovery without erasing
-characters' existing discovery records. Deleting a referenced object or exit
+World Forge edits discoveries as a content collection; a light publish edits a
+discovery's text without erasing characters' existing discovery records. Deleting a referenced object or exit
 leaves the clue and those records in place.
 
 `mud_npc_trainers` makes an NPC teach a skill. `skill_key` names a skill from
@@ -1239,10 +1238,10 @@ interferes with other players' runs or with the Dungeon Portals.
   loot. Deleting an entrance, room or template never interrupts a run in
   progress. A missing return room falls back to the start room.
 
-World builders can do all of this from the **Dungeons** section of the World
-Builder and the **Dungeon entrances** panel on each room. Templates can start
-from any installed dungeon theme and have an unsaved layout preview. The
-builder's export writes `dungeons.json` automatically.
+In World Forge, **Dungeon templates** and **Dungeon entrances** are content
+collections. **New from a theme** starts a template from any installed dungeon
+theme or another template, and each template has a **Preview a generated run**
+button that generates a sample without saving anything.
 
 ## 5c. Events and triggers (`events.json`)
 
@@ -1292,7 +1291,7 @@ expressions, or loops, and nothing in a package can run code.
 | Field | Default | Meaning |
 | --- | --- | --- |
 | `id` | required | Lowercase letters, digits, and hyphens; unique in the file. |
-| `name` | the `id` | Shown in the World Builder. |
+| `name` | the `id` | Shown in World Forge. |
 | `scope` | `character` (timers: `world`) | `character` tracks `once`, `cooldown_seconds`, and `max_fires` separately for every character. `world` shares them across everyone. |
 | `once` | `false` | Fire only once per scope: once per character, or once ever for a world trigger. |
 | `cooldown_seconds` | `0` | Minimum time between firings, per scope (up to a week). |
@@ -1401,12 +1400,11 @@ flag that the trigger sets:
   "actions": [{"type": "coins", "amount": 25}, {"type": "message", "text": "The ratcatcher's bounty is yours."}]}]
 ```
 
-World builders can create, edit, disable, and remove triggers in the
-**Events** section of the World Builder. Each room also lists the triggers
-that start there. **Reset script state** clears the edited world's flags, fire
-counts, object and exit states, and spawned NPCs, which is useful while
-testing. Builder forms use installed IDs; the **IDs to use** list shows them.
-The builder's export writes `events.json` with simple local IDs.
+In World Forge, triggers are the **Events & triggers** collection, edited with
+guided condition and action editors; a room's **Used by** lists the triggers that
+name it. **Live world → Reset script state** clears the published world's flags,
+fire counts, object and exit states, and spawned NPCs, which is useful while
+testing. World Forge always uses the package's local IDs.
 
 ## 5d. Wilderness and room presets (`wilderness.json`)
 
@@ -1460,7 +1458,7 @@ separate map. Neighbouring squares on the same layer link automatically:
 |---|---|
 | `key` | Required. 1–32 lowercase letters, digits and hyphens, starting with a letter. |
 | `name` | Required, 2–80 characters. Used as the room name unless `names` is given. |
-| `terrain` | `grassland`, `forest`, `dense-forest`, `hills`, `mountains`, `desert`, `swamp`, `tundra`, `water`, `road` or `custom` (the default). Colours the builder map. |
+| `terrain` | `grassland`, `forest`, `dense-forest`, `hills`, `mountains`, `desert`, `swamp`, `tundra`, `water`, `road` or `custom` (the default). Colours the World Forge map. |
 | `glyph` | One printable character for maps; not a space, `@`, `*`, `P`, `<`, `>` or `&`, which `/map` uses for players, landmarks and ways up or down. Default `.`. |
 | `links` | `"4"` (default) or `"8"`. |
 | `names` | Optional list of up to 20 room-name variants (up to 80 characters each). |
@@ -1530,44 +1528,40 @@ name layers in `manifest.json`, and join them with `up` and `down` exits:
   1,000,000 wilderness rooms.
 - An authored room's `x`, `y`, `z` must fall on an empty square of its layer.
 
-Exports from the builder always write this compact form, so a 500 × 500 forest
+Exports and World Forge drafts always use this compact form, so a 500 × 500 forest
 takes only a few kilobytes.
 
-### Building in the World Builder
+### Building in World Forge
 
-Open **World Builder → Wilderness**.
+Open a world in **World Forge** and choose **World map → Grid**.
 
-- **Presets.** Create a preset from a starter (grassland, forest, dense forest,
-  mountains, desert, swamp), as a copy of an existing preset, or from scratch.
-  Edit it with the guided form, where creatures and items can be typed by name,
-  or as JSON. Presets can be imported and exported as JSON files: one preset, or
-  `{"presets": [...]}`. A preset that rooms still use can only be removed after
-  its rooms are moved to another preset.
-- **Map.** Pan, change layer and zoom. The map shows one layer at a time, with
-  `<`, `>` and `&` on rooms that have a way up, down, or both. Name the layer
-  you are viewing with **Name layer**. Choose **Inspect** to open a room,
-  **Rectangle** or **Ellipse** to pick two corners, or **Brush** to paint
-  individual squares.
-- **Fill.** Choose a preset and, optionally, a region. **Only fill empty
-  squares** leaves existing rooms alone. **Also repaint existing wilderness**
-  changes the preset of wilderness rooms in place, so they keep their contents
-  and anyone standing in them. Authored rooms are never overwritten. One fill
-  covers up to 250,000 squares.
-- **Remove wilderness.** Deletes only wilderness rooms in the area and anything
-  lying in them. Players there move to the starting room. Dungeon entrances
-  block the removal unless you also choose to remove them.
-- **Room inspector.** Shows a square's text, exits, players, NPCs and items. From
-  here you can place NPCs and items, add exits that reach beyond the grid (to an
-  authored room, or to any square by typing its `x,y,z`, such as a way down to
-  another layer), add a
-  dungeon entrance, set walls and the region, or **convert it to an authored
-  room**. Converting keeps its current text and position and unlocks every World
-  Builder tool for it: descriptions, triggers, discoveries and locks. Use this
-  for settlements, roads, ruins and other special locations.
-- **Placing existing rooms.** Each authored room in the World Builder has
-  **Wilderness grid placement**. Give it coordinates to drop it into the
-  wilderness. A wilderness room already at that spot is absorbed: its NPCs,
-  items, entrances and visitors move into the authored room.
+- **Presets.** In **Content library → Terrain presets**, add one of the
+  station's starters (grassland, forest, dense forest, mountains, desert,
+  swamp), duplicate an existing preset, or create one from scratch. Edit it with
+  the guided form or as JSON. **Import file** and **Export all** read and write
+  preset JSON files: one preset, or `{"presets": [...]}`. Importing can keep or
+  replace presets with the same key, and can leave out creatures and items the
+  world does not have. A preset that squares still use cannot be deleted.
+- **Map.** Pan (Alt-drag or the hand tool), change layer, and zoom (Ctrl-scroll).
+  The map shows one layer at a time, with arrows on rooms that have a way up or
+  down. **Inspect** opens a square; **Rectangle** and **Ellipse** fill between
+  two corners; **Brush** paints individual squares.
+- **Fill.** Choose a preset and, optionally, a region. **Only empty** leaves
+  existing squares alone; without it, painting changes the preset of wilderness
+  squares in place. Authored rooms are never overwritten.
+- **Erase.** Removes wilderness squares in an area. Squares that other content
+  refers to (an entrance, an NPC, a passage) are protected.
+- **Square inspector.** Shows a square's sample text, walls, and what refers to
+  it. From here you can add passages that reach beyond the grid, set walls, or
+  **convert it to an authored room**. Converting keeps its text and position
+  and makes it an ordinary room for descriptions, triggers, discoveries, and
+  locks. Use this for settlements, roads, ruins, and other special locations.
+- **Placing existing rooms.** Rooms without coordinates are listed under the
+  map; select one and click a square to place it. World Forge previews which
+  passages and automatic links the move adds or removes.
+
+When the world is published, players standing in squares that no longer
+exist move to the starting room.
 
 Players can type `/map` for a 15 × 9 view of the land around them on their
 current layer only. `@` marks the player, `P` other visible players, `*`
@@ -1642,15 +1636,15 @@ Players also learn destinations in these ways, and keep what they learn:
 A player never learns that an unknown destination exists. Asking for one gives
 the same answer as asking for a place that does not exist. If no route exists
 (a gate is sealed, for example), the player learns only the general bearing,
-or nothing if the place is off the grid. In the World Builder, each room card
-and the wilderness room inspector has a **Wayfinding destination** form. The
-item form chooses which destinations an item teaches.
+or nothing if the place is off the grid. In World Forge, destinations are the
+**Destinations** collection, and an item's `teaches_destinations` property
+chooses which destinations it teaches.
 
 ## 5f. World life
 
 These optional systems make a world feel inhabited. Each is **off** until the
 world turns it on, so existing worlds play exactly as before. Turn them on in
-`manifest.json` or under **World Builder → World life**; exports keep the
+`manifest.json` or under **World settings** in World Forge; exports keep the
 settings.
 
 ### World clock
@@ -1819,8 +1813,8 @@ the Red Hand, but helping the guild does not change the Red Hand.
 The `reputation` condition gates dialogue, quests, exits, destinations,
 triggers and stock, so a guild hall can admit only members of standing. Players
 see public factions with `/reputation` (or `/standing`) and in their Standing
-panel. In the World Builder, the **Factions** section creates factions, ranks
-and relations, and each NPC form chooses a faction.
+panel. In World Forge, the **Factions** and **Faction relations** collections
+hold factions, ranks and relations, and each NPC's `faction_id` chooses a faction.
 
 ### Faction membership
 
@@ -1897,8 +1891,8 @@ Authored content reacts to membership through:
   These don't fire for a faction chosen at creation, because the character isn't
   in the world yet; use a `member` condition instead.
 
-In the World Builder, turn membership on under **Faction membership**, then set
-each faction's joining rules on its form in the **Factions** section.
+In World Forge, turn membership on under **World settings → factions**, then
+set each faction's joining rules on its record in the **Factions** collection.
 
 ### Crime and consequences
 
@@ -1925,8 +1919,8 @@ rob or report one another.
   `state_json` names an owner: `{"owner_faction": "guild"}` or
   `{"owner_npc": "stall-keeper"}`, a placed NPC. The item becomes stolen
   goods, which merchants of the owning faction refuse to buy. Once taken it
-  is an ordinary item, so dropping and taking it again is no crime. In the
-  World Builder, each placed item in a room has an **Owner** choice.
+  is an ordinary item, so dropping and taking it again is no crime. In
+  World Forge, set `owner_faction` or `owner_npc` in a placed item's `state_json`.
 - **Pickpocketing.** `/steal from <npc>` against an NPC with a `steal`
   behaviour. A failed attempt is always caught by the victim.
 - **Assault.** Attacking an NPC that was not hostile to you, when it belongs
@@ -2064,7 +2058,7 @@ share from the next payment.
 
 A holding also ends when its primary owner abandons it
 (`/house abandon <property> confirm`), when a `revoke_property` outcome takes
-it, when a builder releases it or removes the property, or when the property
+it, when a builder releases it (**Live world**) or removes the property, or when the property
 is left out of an upgraded package. If a primary owner's character is
 deleted, the longest-standing co-owner becomes the primary owner instead.
 
@@ -2107,7 +2101,7 @@ separate and unchanged.
 
 ### World switch
 
-The `housing` manifest section (or **World Builder → World life → Housing**)
+The `housing` manifest section (or **World settings → housing** in World Forge)
 controls the system:
 
 ```json
@@ -2119,8 +2113,8 @@ stops rent evictions; owners keep their homes and storage and can still pay
 or leave. `max_holdings` (1–20, default 3) caps how many properties a
 character may own or share in the world.
 
-In the World Builder, **Housing and storage** creates and edits properties,
-lists holdings, and releases them; each room's panel adds storage. A room that
+In World Forge, properties, property rooms, and storage points are content
+collections; **Live world** lists holdings and releases them. A room that
 belongs to a property, or is a property's entrance, cannot be deleted until the
 property no longer uses it, and a property cannot switch between unique and
 instanced while anyone holds it. Upgrading a world keeps holdings, co-owners,
@@ -2297,8 +2291,8 @@ modes that ways require but no vehicle in the world provides.
 
 ### World switch
 
-The `transport` manifest section (or **World Builder → World life → Vehicles
-and transit**) controls the system:
+The `transport` manifest section (or **World settings → transport** in World
+Forge) controls the system:
 
 ```json
 "transport": {"enabled": true}
@@ -2307,10 +2301,10 @@ and transit**) controls the system:
 Switched off, nobody can board, refuel, or buy a ride; anyone already aboard
 can still drive and get off, and rides under way still arrive.
 
-In the World Builder, **Vehicles and transit** creates vehicles, places public
-ones, lists every vehicle in the world (send one home or remove it), adds fuel
-stations, and edits lines with their stops; each exit has **Needs a vehicle
-mode** and **On foot only**. Removing a vehicle kind or a placement lets its
+In World Forge, vehicles, vehicle placements, fuel stations, transit lines, and
+stops are content collections, and **Live world** lists every vehicle in the
+world (send one home or remove it); each passage has `requires_mode` and
+`allow_vehicles`. Removing a vehicle kind or a placement lets its
 riders off where it stands, and removing a line delivers its riders at once.
 Upgrading a world keeps owned vehicles where they stood, by local ID: riders
 step off beside them, rides under way arrive at their stops, and public
@@ -2337,21 +2331,20 @@ classes, and skills, offers them alongside the built-ins, or offers a manual
 selection, and tick **Enable it for players right away** if it is ready; other
 worlds keep running unchanged. Use **ENABLE** or **DISABLE** in the world list at
 any time: a disabled world disappears from the player world list but keeps its
-content and characters. The **WORLD BUILDER** link (or the world switcher at the
-top of the builder) edits that world, enabled or not. The **Export World ZIP**
-button downloads the current map, including builder changes. For a
-station-built world, the exported manifest uses `my-world` as a starter ID;
-change it before importing on the same station. Exports keep the IDs content
-was imported with (content made in the World Builder gets simple IDs such as
-`room-3`), so exporting twice gives the same files.
+content and characters. The **WORLD FORGE** link edits that world, enabled or not. World Forge's
+**Live world → Download ZIP** downloads the published world, and **Export draft
+ZIP** downloads the draft. For the home world, the exported manifest uses
+`my-world` as a starter ID; change it before importing on the same station.
+Exports keep the IDs content was imported with (older content gets simple IDs
+such as `room-3`), so exporting twice gives the same files.
 
 Exports are self-contained. Every custom race, class, skill, ability, and effect
 the world owns, offers, or uses in its content, events, and dungeons is bundled,
 along with its progression and race/class/skill selection. In sysop settings you
 may instead pick which races, classes, and skills to bundle; anything the
 content still needs is added anyway. References that cannot travel, such as an
-NPC schedule naming a room in another world, are listed as warnings (the
-builder's **CHECK EXPORT** shows them); tick the strict option to refuse such an
+NPC schedule naming a room in another world, are listed as warnings (World
+Forge's **Live world → Check export** shows them); tick the strict option to refuse such an
 export instead.
 
 ### Validation messages
@@ -2390,9 +2383,9 @@ Characters keep their level, gear, and coins. Quests, objectives, reputation,
 NPC regard, learned destinations, held items, and event history carry over to
 content that keeps the same IDs; characters in removed rooms move to the start
 room. Dungeon runs in progress end. The world keeps its enabled state and its
-race, class, and skill selection, plus any new bundled choices. World Builder
-edits made since the last import are replaced, so export first if you want to
-keep them. Optionally reset the world's flags and event history.
+race, class, and skill selection, plus any new bundled choices. A World Forge
+draft started before the upgrade is marked out of date; rebase it, or publish it
+to replace the upgrade. Optionally reset the world's flags and event history.
 
 To uninstall a custom world, disable it first, then use **Remove World**.
 Removal deletes the world's rooms and content and ends its dungeon runs. Its
@@ -2403,7 +2396,7 @@ Definitions still held by characters (a class, an effect burning on someone, an
 item a player carries) are kept, hidden from new use, so nothing a player has
 breaks. The original Station World cannot be uninstalled.
 
-The installed ZIP is kept for sharing. Exports are read from the database so
-builder changes are included the next time you export. Removing a
+The installed ZIP is kept for sharing. Exports are read from the database, so
+published World Forge changes are included the next time you export. Removing a
 world deletes its rooms and placed content while keeping player possessions
 and quest records intact.

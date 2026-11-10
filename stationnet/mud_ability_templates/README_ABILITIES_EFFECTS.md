@@ -9,8 +9,8 @@ one you install works in play; none of them can add a new mechanic.
 Install them station-wide from **SYSOP Settings → Abilities & Effects** (one
 ability, one effect, or a pack), bundle them in a world package
 (`abilities.json`, `effects.json`), bundle them in a dungeon theme (schema 2
-`abilities` and `effects`), or write a world's own in the World Builder's
-**Definitions** section. Templates: `ability.json`, `effect.json`, `pack.json`.
+`abilities` and `effects`), or write a world's own in World Forge's
+**Abilities** and **Effects** collections. Templates: `ability.json`, `effect.json`, `pack.json`.
 
 ## Effects
 

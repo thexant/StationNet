@@ -1,4 +1,6 @@
 """Portable, file-authored traditional MUD maps."""
+from contextlib import contextmanager
+from contextvars import ContextVar
 from io import BytesIO
 import hashlib
 import json
@@ -15,6 +17,43 @@ from .mud_package_report import PackageReport
 
 
 MAX_ZIP_BYTES = 16 * 1024 * 1024
+# Set only while World Forge publishes the home world: the one path allowed to
+# read a package named 'stationnet' and to upgrade a world that was never imported.
+_HOME_PUBLISH = ContextVar("mud_world_home_publish", default=False)
+
+
+@contextmanager
+def home_publish():
+    """Let read_package and upgrade accept the home world for the duration of a World Forge publish."""
+    token = _HOME_PUBLISH.set(True)
+    try:
+        yield
+    finally:
+        _HOME_PUBLISH.reset(token)
+
+
+@contextmanager
+def dry_run(database, name):
+    """A transaction whose writes are always rolled back.
+
+    Outside a transaction it starts with BEGIN IMMEDIATE: a deferred one that reads
+    first and writes later fails at once with "database is locked" if another
+    connection committed in between (WAL snapshot conflict).
+    """
+    own = not database.in_transaction
+    database.execute("BEGIN IMMEDIATE" if own else f"SAVEPOINT {name}")
+    try:
+        yield
+    finally:
+        if own:
+            database.rollback()
+        else:
+            database.execute(f"ROLLBACK TO {name}")
+            database.execute(f"RELEASE {name}")
+
+
+def _upgradable(world_id, world):
+    return world is not None and (world["imported"] or (world_id == mud_scope.HOME and _HOME_PUBLISH.get()))
 MAX_FILE_BYTES = 8 * 1024 * 1024
 ID_RE = re.compile(r"^[a-z][a-z0-9-]{0,63}$")
 FILES = {"manifest.json", "rooms.json", "exits.json"}
@@ -276,7 +315,8 @@ def read_package(payload, database=None, report=None):
                      "to lists of keys.")
         availability = None
     world_id = manifest.get("id")
-    if not isinstance(world_id, str) or not ID_RE.fullmatch(world_id) or world_id == "stationnet":
+    if (not isinstance(world_id, str) or not ID_RE.fullmatch(world_id)
+            or (world_id == mud_scope.HOME and not _HOME_PUBLISH.get())):
         raise WorldError("World ID must be lowercase letters, digits, and hyphens, starting with a letter; 'stationnet' is reserved.")
     name = _label(manifest.get("name"), "World name", 2, 80)
     author = _label(manifest.get("author"), "World author", 1, 80)
@@ -1393,7 +1433,7 @@ def _package_availability(database, document, skill_map, notes=None):
 
 
 def world_definitions(database, world_id):
-    """The races, classes, skills, abilities, and effects a world owns, by kind, for the World Builder."""
+    """The races, classes, skills, abilities, and effects a world owns, by kind, for World Forge."""
     from . import character_creation, mud_skills
     owner = ("world", world_id)
     sources = {"effects": mud_effects.catalog(database), "abilities": mud_abilities.catalog(database),
@@ -1639,8 +1679,7 @@ def validate_install(database, payload):
     Returns the read document and its report; a failed check is an error in the report.
     """
     report = PackageReport()
-    database.execute("SAVEPOINT world_dry_run")
-    try:
+    with dry_run(database, "world_dry_run"):
         document = read_package(payload, database, report)
         notes = []
         if database.execute("SELECT 1 FROM mud_world_packages WHERE id=?", (document["id"],)).fetchone() is None:
@@ -1651,9 +1690,6 @@ def validate_install(database, payload):
         for note in notes:
             report.info("", "", note)
         return document, report
-    finally:
-        database.execute("ROLLBACK TO world_dry_run")
-        database.execute("RELEASE world_dry_run")
 
 
 def _install_rows(database, document, payload, *, origin_mode=None, selected=None, notes=None, upgrade=False):
@@ -1811,19 +1847,15 @@ def validate_upgrade(database, payload):
     world = database.execute("SELECT imported FROM mud_world_packages WHERE id=?", (document["id"],)).fetchone()
     if world is None:
         raise WorldError("No installed world has that ID; import it as a new world instead.", report)
-    if not world["imported"]:
-        raise WorldError("The World Builder home world cannot be replaced by an import.", report)
+    if not _upgradable(document["id"], world):
+        raise WorldError("The home world cannot be replaced by an import; edit it in World Forge.", report)
     incoming = None
-    database.execute("SAVEPOINT world_upgrade_check")
-    try:
+    with dry_run(database, "world_upgrade_check"):
         try:
             _upgrade_rows(database, document, payload)
             incoming, _incoming_report = export_document(database, document["id"])
         except (WorldError, ValueError) as problem:
             report.error("", "", str(problem))
-    finally:
-        database.execute("ROLLBACK TO world_upgrade_check")
-        database.execute("RELEASE world_upgrade_check")
     if report.errors:
         raise WorldError(report.summary(), report)
     return document, report, incoming
@@ -1841,7 +1873,7 @@ def upgrade(database, payload, expected_hash, *, reset_world_state=False):
         raise WorldError("This file differs from the one that was previewed; preview it again.")
     document = read_package(payload, database)
     world = database.execute("SELECT imported FROM mud_world_packages WHERE id=?", (document["id"],)).fetchone()
-    if world is None or not world["imported"]:
+    if not _upgradable(document["id"], world):
         raise WorldError("Only installed custom worlds can be upgraded.")
     path = directory() / f"{document['id']}.zip"
     staged = path.with_name(f"{path.name}.upgrading-{uuid.uuid4().hex}")
@@ -1859,6 +1891,156 @@ def upgrade(database, payload, expected_hash, *, reset_world_state=False):
         raise
     try:
         staged.replace(path)
+    except OSError:
+        summary["file_warning"] = True
+    return document, summary
+
+
+# Field-only edits World Forge can publish in place, like the old builder's row edits: no rows
+# appear or vanish and nothing that names other content changes, so live state (items players
+# dropped, NPC positions, dungeon runs) stays put. Anything else goes through a full upgrade.
+LIGHT_ROOM_FIELDS = {"name", "description", "bank"}
+LIGHT_EXIT_FIELDS = {"hidden", "pick_difficulty", "conditions_message"}
+LIGHT_CONTENT_FIELDS = {
+    "mud_item_definitions": {"name", "description"},
+    "mud_npc_definitions": {"name", "description"},
+    "mud_conversations": {"name"},
+    "mud_dialogue_nodes": {"body"},
+    "mud_dialogue_responses": {"response_text"},
+    "mud_quests": {"name", "description", "summary"},
+    "mud_quest_objectives": {"description"},
+    "mud_world_factions": {"name", "description"},
+    "mud_world_destinations": {"name", "description"},
+    "mud_shop_stock": {"price", "quantity"},
+    "mud_npc_trainers": {"price"},
+    "mud_professions": {"name", "description"},
+    "mud_work_activities": {"name", "description"},
+    "mud_properties": {"name", "description"},
+    "mud_storage_points": {"name", "description"},
+    "mud_vehicle_definitions": {"name", "description"},
+    "mud_npc_combat_profiles": {"maximum_health", "attack", "defense", "experience_reward",
+                                "respawn_seconds", "accuracy", "evasion"},
+}
+LIGHT_KEYS = {"mud_npc_combat_profiles": "npc_definition_id"}
+
+
+def _exit_key(row):
+    return row.get("id") or ("", row.get("from"), row.get("name"))
+
+
+def _row_edits(before, after, allowed):
+    """Changed fields between two rows, or None when a field outside ``allowed`` changed."""
+    edits = {}
+    for key in set(before) | set(after):
+        if before.get(key) != after.get(key):
+            if key not in allowed:
+                return None
+            edits[key] = after.get(key)
+    return edits
+
+
+def light_changes(current, incoming):
+    """Per-row field edits that turn ``current`` into ``incoming``, or None if any change is structural."""
+    plain = lambda document: {key: value for key, value in document.items()
+                              if key not in ("id", "name", "author", "rooms", "exits", "content")}
+    if plain(current) != plain(incoming):
+        return None
+    edits = []
+    if current.get("name") != incoming.get("name") or current.get("author") != incoming.get("author"):
+        edits.append(("manifest", None, {"name": incoming.get("name"), "author": incoming.get("author")}))
+    sections = [("rooms", lambda row: row.get("id"), LIGHT_ROOM_FIELDS, current.get("rooms"), incoming.get("rooms")),
+                ("exits", _exit_key, LIGHT_EXIT_FIELDS, current.get("exits"), incoming.get("exits"))]
+    before_content, after_content = current.get("content") or {}, incoming.get("content") or {}
+    for table in set(before_content) | set(after_content):
+        key = LIGHT_KEYS.get(table, "id")
+        if table not in LIGHT_CONTENT_FIELDS or key not in CONTENT_TABLES[table]:
+            if before_content.get(table) != after_content.get(table):
+                return None
+            continue
+        sections.append((table, lambda row, key=key: row.get(key), LIGHT_CONTENT_FIELDS[table],
+                         before_content.get(table), after_content.get(table)))
+    for section, key, allowed, before_rows, after_rows in sections:
+        before_rows = {key(row): row for row in before_rows or []}
+        after_rows = {key(row): row for row in after_rows or []}
+        if set(before_rows) != set(after_rows):
+            return None
+        for local, row in after_rows.items():
+            changed = _row_edits(before_rows[local], row, allowed)
+            if changed is None:
+                return None
+            if changed:
+                edits.append((section, local, changed))
+    return edits
+
+
+def light_upgrade_plan(database, payload):
+    """The field edits a package makes to its installed world, or None when it needs a full upgrade."""
+    document, _report, incoming = validate_upgrade(database, payload)
+    maps = {}
+    current, _current_report = export_document(database, document["id"], keep_id=True, maps_out=maps)
+    if incoming is None:
+        return None
+    incoming = {**incoming, "id": current["id"]}
+    edits = light_changes(current, incoming)
+    return None if edits is None else {"document": document, "edits": edits, "maps": maps}
+
+
+def light_upgrade(database, payload, expected_hash):
+    """Apply a field-only package in place; returns (document, summary) or None when it is not field-only."""
+    if package_hash(payload) != expected_hash:
+        raise WorldError("This file differs from the one that was previewed; preview it again.")
+    plan = light_upgrade_plan(database, payload)
+    if plan is None:
+        return None
+    document, maps = plan["document"], plan["maps"]
+    world_id = document["id"]
+    to_global = {section: {local: global_id for global_id, local in mapping.items()}
+                 for section, mapping in maps.items() if isinstance(mapping, dict)}
+    exits = {}
+    for row in database.execute("SELECT e.id,e.from_room_id,e.name FROM mud_world_exits e "
+                                "JOIN mud_world_rooms r ON r.id=e.from_room_id WHERE r.world_id=?", (world_id,)):
+        exits[("", maps["rooms"].get(row["from_room_id"]), row["name"])] = row["id"]
+    exits.update(to_global.get("exits", {}))
+    before = database.execute("SELECT package_hash FROM mud_world_packages WHERE id=?", (world_id,)).fetchone()
+    touched_rooms = []
+    try:
+        database.execute("BEGIN IMMEDIATE")
+        for section, local, fields in plan["edits"]:
+            if section == "manifest":
+                database.execute("UPDATE mud_world_packages SET name=?,author=? WHERE id=?",
+                                 (fields["name"], fields["author"], world_id))
+                continue
+            if section == "rooms":
+                target, table, key = to_global["rooms"].get(local), "mud_world_rooms", "id"
+                fields = {("banking_enabled" if name == "bank" else name): (int(bool(value)) if name == "bank" else value)
+                          for name, value in fields.items()}
+                touched_rooms.append(target)
+            elif section == "exits":
+                target, table, key = exits.get(local), "mud_world_exits", "id"
+                fields = {name: (int(bool(value)) if name == "hidden" else value) for name, value in fields.items()}
+            else:
+                key = LIGHT_KEYS.get(section, "id")
+                table = section
+                target = (to_global.get("mud_npc_definitions", {}).get(local) if key == "npc_definition_id"
+                          else to_global.get(section, {}).get(local))
+            if target is None:
+                raise WorldError("The installed world changed while this edit was prepared; preview it again.")
+            database.execute(f"UPDATE {table} SET {','.join(f'{name}=?' for name in fields)} WHERE {key}=?",
+                             (*fields.values(), target))
+        database.execute("UPDATE mud_world_packages SET package_hash=? WHERE id=?", (expected_hash, world_id))
+        summary = {"from_hash": before["package_hash"] if before else None, "light": True,
+                   "edits": len(plan["edits"]), "moved_to_start": 0, "carried": 0, "notes": [],
+                   "moved_users": [], "touched_rooms": [room for room in touched_rooms if room],
+                   "ended_holding_owners": []}
+        database.execute("INSERT INTO mud_world_upgrades(world_id,from_hash,to_hash,summary_json) VALUES(?,?,?,?)",
+                         (world_id, summary["from_hash"], expected_hash,
+                          json.dumps(summary, separators=(",", ":"), default=sorted)))
+        database.commit()
+    except Exception:
+        database.rollback()
+        raise
+    try:
+        (directory() / f"{world_id}.zip").write_bytes(payload)
     except OSError:
         summary["file_warning"] = True
     return document, summary
@@ -1886,6 +2068,20 @@ def _upgrade_rows(database, document, payload, *, reset_world_state=False):
     old_rooms = local_ids([row["id"] for row in database.execute(
         "SELECT id FROM mud_world_rooms WHERE world_id=? AND kind='authored' ORDER BY id", (world_id,))],
         world_id, "room", "room")
+    # Rows a builder created were never imported, so their IDs carry no local ID; the
+    # installed world's own export names them, exactly as a World Forge draft saw them.
+    old_local = {}
+    try:
+        export_document(database, world_id, keep_id=True, maps_out=old_local)
+    except (WorldError, ValueError):
+        old_local = {}
+    for global_id, local in (old_local.get("rooms") or {}).items():
+        if not local.startswith("@"):
+            old_rooms.setdefault(global_id, local)
+    for global_id, local in (old_local.get("exits") or {}).items():
+        if global_id in old_exits and not old_exits[global_id]:
+            old_exits[global_id] = local
+    present_users = [row["user_id"] for row in locations]
     housing = _housing_snapshot(database, world_id)
     transport = _transport_snapshot(database, world_id)
     database.execute("UPDATE mud_world_packages SET enabled=0 WHERE id=?", (world_id,))
@@ -1910,11 +2106,13 @@ def _upgrade_rows(database, document, payload, *, reset_world_state=False):
 
     def carried(old_id, table):
         match = GLOBAL_ID_RE.fullmatch(old_id or "")
-        return maps.get(table, {}).get(match.group("local")) if match and match.group("world") == world_id else None
+        local = (match.group("local") if match and match.group("world") == world_id
+                 else (old_local.get(table) or {}).get(old_id))
+        return maps.get(table, {}).get(local) if local else None
 
     kept_copies = _restore_housing(database, housing, carried, old_rooms, new_rooms)
     riders = _restore_transport(database, transport, carried, old_rooms, new_rooms, start)
-    moved = 0
+    moved, moved_users = 0, []
     for row in locations:
         if row["location_key"] in kept_copies:
             continue
@@ -1922,6 +2120,7 @@ def _upgrade_rows(database, document, payload, *, reset_world_state=False):
         target = riders.get(row["user_id"]) or (new_rooms.get(local) if local else None)
         if target is None:
             target, moved = start, moved + 1
+            moved_users.append(row["user_id"])
         database.execute("UPDATE mud_player_locations SET location_key=? WHERE user_id=?", (target, row["user_id"]))
     # A character's start room keeps following its local ID; wilderness cells keep theirs.
     for row in database.execute("SELECT id,start_room_id FROM mud_characters WHERE world_key=? "
@@ -1971,7 +2170,8 @@ def _upgrade_rows(database, document, payload, *, reset_world_state=False):
         for row in database.execute("SELECT rowid,trigger_id FROM mud_trigger_fires WHERE realm=?",
                                     (world_id,)).fetchall():
             match = GLOBAL_ID_RE.fullmatch(row["trigger_id"])
-            target = f"world:{world_id}:{installed['installation_key']}:trigger:{match.group('local')}" if match else None
+            local = match.group("local") if match else (old_local.get("triggers") or {}).get(row["trigger_id"])
+            target = f"world:{world_id}:{installed['installation_key']}:trigger:{local}" if local else None
             if target and database.execute("SELECT 1 FROM mud_world_triggers WHERE id=?", (target,)).fetchone():
                 database.execute("UPDATE OR IGNORE mud_trigger_fires SET trigger_id=? WHERE rowid=?",
                                  (target, row["rowid"]))
@@ -1994,8 +2194,14 @@ def _upgrade_rows(database, document, payload, *, reset_world_state=False):
             set_enabled(database, world_id, True)
         except WorldError as problem:
             notes.append(f"The world was left disabled: {problem}")
+    ended_holdings = [holding for holding in housing["holdings"]
+                      if not database.execute("SELECT 1 FROM mud_property_holdings WHERE id=?",
+                                              (holding["id"],)).fetchone()]
+    ended_owners = sorted({owner["character_id"] for owner in housing["owners"]
+                           if owner["holding_id"] in {holding["id"] for holding in ended_holdings}})
     return {"from_hash": before["package_hash"], "moved_to_start": moved, "carried": carried_rows,
-            "notes": notes}
+            "notes": notes, "moved_users": moved_users, "present_users": present_users,
+            "ended_holding_owners": ended_owners}
 
 
 def _housing_snapshot(database, world_id):
@@ -2234,7 +2440,9 @@ def _export_content(database, world_id, room_map, exit_map=None, report=None):
              "mud_professions", "mud_properties", "mud_vehicle_definitions", "mud_transit_lines"}
     all_placed_items = [dict(row) for row in database.execute(
         "SELECT id,definition_id,room_id,container_id FROM mud_item_instances "
-        "WHERE spawn_source_id IS NULL AND id NOT LIKE 'world:wild-item:%'"
+        "WHERE spawn_source_id IS NULL AND id NOT LIKE 'world:wild-item:%' "
+        # Only placements a builder or package made; items players dropped are not world content.
+        "AND id LIKE 'world:%' AND id NOT LIKE 'world:spawn:%' AND id NOT LIKE 'world:respawn:%'"
     )]
     placed_item_ids = {row["id"] for row in all_placed_items if row["room_id"] in room_map}
     while True:
@@ -2345,7 +2553,7 @@ def _export_content(database, world_id, room_map, exit_map=None, report=None):
         if table in roots:
             rows = [row for row in rows if database.execute(
                 f"SELECT world_id FROM {table} WHERE id=?", (row["id"],)
-            ).fetchone()[0] == world_id and not row["id"].startswith("stationnet:") and
+            ).fetchone()[0] == world_id and not row["id"].startswith(("stationnet:", "origin:")) and
                 database.execute("SELECT 1 FROM mud_dungeon_managed_definitions WHERE definition_id=?",
                                  (row["id"],)).fetchone() is None or
                 table == "mud_item_definitions" and row["id"] in needed_items or
@@ -2547,8 +2755,13 @@ def export(database, world_id, *, origin_keys=None, skill_keys=None, strict=Fals
     return package_bytes(document)
 
 
-def export_document(database, world_id, *, origin_keys=None, skill_keys=None):
-    """A self-contained package document for a world, and the problems found building it."""
+def export_document(database, world_id, *, origin_keys=None, skill_keys=None, keep_id=False, maps_out=None):
+    """A self-contained package document for a world, and the problems found building it.
+
+    ``keep_id`` keeps the home world's own ID (World Forge drafts); public exports
+    rename it. ``maps_out`` receives installed ID -> package-local ID for every
+    section, so an upgrade can carry progress for rows that were never imported.
+    """
     report = PackageReport()
     world = database.execute("SELECT * FROM mud_world_packages WHERE id=?", (world_id,)).fetchone()
     if world is None:
@@ -2582,7 +2795,8 @@ def export_document(database, world_id, *, origin_keys=None, skill_keys=None):
     for row in left_out:
         report.warning("exits.json", "", f"Exit {row['name']} leads outside this world; it was left out.")
     content, maps = _export_content(database, world_id, ids, exit_ids, report)
-    document = {"format_version": PACKAGE_FORMAT, "id": world_id if world_id != "stationnet" else "my-world",
+    document = {"format_version": PACKAGE_FORMAT,
+                "id": world_id if world_id != mud_scope.HOME or keep_id else "my-world",
                 "name": world["name"], "author": world["author"],
                 "start_room": ids[world["start_room_id"]],
                 "resource": {"enabled": bool(world["resource_enabled"]), "name": world["resource_name"]},
@@ -2725,6 +2939,10 @@ def export_document(database, world_id, *, origin_keys=None, skill_keys=None):
     events = _export_triggers(triggers, maps, local_reference)
     if events:
         document["events"] = events
+    if maps_out is not None:
+        maps_out.update(maps)
+        maps_out["rooms"] = dict(ids)
+        maps_out["triggers"] = {trigger["global_id"]: trigger["id"] for trigger in triggers}
 
     def shared(table):
         return lambda value: maps.get(table, {}).get(value, value)
@@ -2839,6 +3057,12 @@ def _export_exit_reference(maps, local_reference):
     return mapper
 
 
+# Station-owned rows (portal shop, treasure, origin kit, dungeon-managed definitions) carry
+# world_id='stationnet' only as the column default; retiring the home world must leave them.
+SYSTEM_ROW_GUARD = (" AND id NOT LIKE 'stationnet:%' AND id NOT LIKE 'origin:%' AND id NOT IN "
+                    "(SELECT definition_id FROM mud_dungeon_managed_definitions)")
+
+
 def _retire_rows(database, world_id, reason, *, keep_state=False):
     """Take a world's content out of play; the caller owns the transaction.
 
@@ -2854,7 +3078,7 @@ def _retire_rows(database, world_id, reason, *, keep_state=False):
     retired_id = f"retired:{world_id}:{uuid.uuid4().hex}"
     for table in ("mud_item_definitions", "mud_npc_definitions", "mud_conversations", "mud_quests",
                   "mud_world_factions"):
-        database.execute(f"UPDATE {table} SET world_id=? WHERE world_id=?", (retired_id, world_id))
+        database.execute(f"UPDATE {table} SET world_id=? WHERE world_id=?{SYSTEM_ROW_GUARD}", (retired_id, world_id))
     # Room items may contain other items; remove descendants before their
     # containers so the item-location constraint remains satisfied.
     items = database.execute(
@@ -2964,7 +3188,7 @@ def _retire_rows_batched(database, world_id, reason):
         retired_id = f"retired:{world_id}:{uuid.uuid4().hex}"
         for table in ("mud_item_definitions", "mud_npc_definitions", "mud_conversations", "mud_quests",
                       "mud_world_factions"):
-            database.execute(f"UPDATE {table} SET world_id=? WHERE world_id=?", (retired_id, world_id))
+            database.execute(f"UPDATE {table} SET world_id=? WHERE world_id=?{SYSTEM_ROW_GUARD}", (retired_id, world_id))
     # Descendants go before their containers so the item-location constraint holds in every batch.
     items = [row[0] for row in database.execute(
         "WITH RECURSIVE placed(id,depth) AS ("

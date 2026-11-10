@@ -1,0 +1,67 @@
+{#- Building blocks for the Sysop Settings page.
+
+  Import with context so the macros can read session and g:
+    {% import 'settings/_macros.html' as ui with context %}
+
+  card()      One settings card. Its id is the anchor that sidebar links,
+              search results, and backend redirects jump to. Flash
+              messages for a redirect to that anchor appear in its
+              status slot.
+  subhead()   A heading inside a card; pass tag='immediate' for blocks
+              whose buttons act at once rather than saving fields.
+  save_bar()  The footer of a settings form: primary save button, optional
+              CANCEL CHANGES (form reset), extra buttons via {% call %},
+              and the unsaved-changes note.
+  module_chip()  Live on/off state of a module, linking to the Modules
+              switchboard where it is changed.
+  overrides() A collapsed disclosure for long per-member lists.
+-#}
+
+{% macro csrf() %}<input type="hidden" name="csrf_token" value="{{ session.csrf_token }}">{% endmacro %}
+
+{% macro card(id, title, description='', attrs='') %}
+<section class="settings-card" id="{{ id }}" data-settings-card aria-labelledby="{{ id }}-title" {{ attrs }}>
+  <header class="settings-card-header">
+    <h3 class="settings-card-title" id="{{ id }}-title" tabindex="-1">{{ title }}</h3>
+    {% if description %}<p class="settings-card-desc">{{ description }}</p>{% endif %}
+  </header>
+  <div class="settings-card-status" data-card-status aria-live="polite" hidden></div>
+  <div class="settings-card-body">{{ caller() }}</div>
+</section>
+{% endmacro %}
+
+{% macro subhead(title, tag='', id='') %}
+<h4 class="settings-subhead"{% if id %} id="{{ id }}"{% endif %}><span>{{ title }}</span>{% if tag == 'immediate' %}<span class="settings-tag" title="These buttons take effect as soon as they are pressed">APPLIES IMMEDIATELY</span>{% elif tag %}<span class="settings-tag">{{ tag }}</span>{% endif %}</h4>
+{% endmacro %}
+
+{% macro save_bar(label, reset=true) %}
+<div class="settings-save-bar">
+  <button type="submit">{{ label }}</button>
+  {% if reset %}<button type="reset" class="secondary">CANCEL CHANGES</button>{% endif %}
+  {% if caller is defined %}{{ caller() }}{% endif %}
+  <span class="settings-dirty-note" aria-hidden="true">UNSAVED CHANGES</span>
+</div>
+{% endmacro %}
+
+{% macro module_chip(name, label) %}
+{% set on = module_enabled(name) %}
+<p class="settings-module-chip {{ 'is-on' if on else 'is-off' }}">
+  <span class="settings-module-state">{{ label }} MODULE {{ 'ENABLED' if on else 'DISABLED' }}</span>
+  <a href="#module-availability">{{ 'TURN OFF' if on else 'TURN ON' }} IN MODULES →</a>
+</p>
+{% endmacro %}
+
+{% macro overrides(summary) %}
+<details class="settings-disclosure">
+  <summary>{{ summary }}</summary>
+  <div class="settings-disclosure-body">{{ caller() }}</div>
+</details>
+{% endmacro %}
+
+{% macro quota_row(user, field, endpoint, default_mb) %}
+<form method="post" action="{{ url_for(endpoint, user_id=user.id) }}" class="inline-form settings-quota-row">
+  {{ csrf() }}
+  <label>{{ user.username }} / {{ user.callsign }}<input type="number" name="{{ field }}" min="1" max="10240" value="{{ user[field] or '' }}" placeholder="INHERIT {{ default_mb }} MB"></label>
+  <button class="secondary">SAVE QUOTA</button>
+</form>
+{% endmacro %}

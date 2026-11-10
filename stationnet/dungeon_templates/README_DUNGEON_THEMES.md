@@ -612,9 +612,9 @@ database checks, each reported with a JSON-path error.
 
 ### Using a theme inside an authored world
 
-The same format powers **world dungeons**. World builders can create templates
-in the World Builder's **Dungeons** section, starting from any installed theme,
-and place entrances in their rooms. Those templates belong to the world and
+The same format powers **world dungeons**. Builders can create templates
+in World Forge (**Dungeon templates → New from a theme**), starting from any
+installed theme, and place entrances in their rooms. Those templates belong to the world and
 travel in its ZIP as `dungeons.json`. They take no `id` or `version`, because
 the station assigns them per revision. They also cannot bundle `origins`,
 `skills`, `abilities`, or `effects`; they use the world's own, by local key. Enabling or disabling themes here does not affect them. See section

@@ -71,7 +71,7 @@
         {% if g.station.office_enabled and g.station.office_nav_links_enabled %}<i>*</i><a href="{{ url_for('office.index') }}" {% if request.blueprint=='office' %}aria-current="page"{% endif %}>OFFICE</a>{% endif %}
         {% if module_enabled('applications') %}<i>*</i><a href="{{ url_for('applications.index') }}" {% if request.blueprint=='applications' %}aria-current="page"{% endif %}>PROGRAMS</a>{% endif %}
         {% if g.station.mud_enabled %}<i>*</i><a href="{{ url_for('mud.index') }}" {% if request.endpoint in ('mud.index', 'mud.play') %}aria-current="page"{% endif %}>MUD</a>{% endif %}
-        {% if g.station.mud_enabled and g.mud_can_build %}<i>*</i><a href="{{ url_for('mud.builder_worlds') }}" {% if request.endpoint and request.endpoint.startswith('mud.builder') %}aria-current="page"{% endif %}>WORLD BUILDER</a>{% endif %}
+        {% if g.station.mud_enabled and g.mud_can_build %}<i>*</i><a href="{{ url_for('world_forge.index') }}" {% if request.blueprint == 'world_forge' %}aria-current="page"{% endif %}>WORLD FORGE</a>{% endif %}
         {% endif %}
         {% if g.user and g.user.is_admin %}<i>*</i><a href="{{ url_for('station.settings') }}" {% if request.endpoint=='station.settings' or request.blueprint in ('application_admin', 'tv_admin') %}aria-current="page"{% endif %}>SYSOP CONTROL</a><i>*</i><a href="{{ url_for('moderation.dashboard') }}" {% if request.blueprint=='moderation' %}aria-current="page"{% endif %}>MODERATION</a>{% endif %}
       </nav>

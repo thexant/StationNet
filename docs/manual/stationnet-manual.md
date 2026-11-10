@@ -323,9 +323,9 @@ apply everywhere.
 a small downward triangle (▾). Choose it to reveal actions such as `DELETE`.
 StationNet asks you to confirm before anything is removed.
 
-**Reporting.** Items written by other people carry a small flag symbol. Choose
-the flag, type a reason of 10 to 500 characters, and choose `REPORT` to send
-the item to the SYSOPs for review. You may have one open report on any item and
+**Reporting.** Items written by other people carry a small `▾` actions menu.
+Open it and choose `REPORT`, then type a reason of 10 to 500 characters when
+asked to send that item to the SYSOPs for review. You may have one open report on any item and
 may file up to ten reports a day.
 
 **Times** are displayed in your own device's time zone.
@@ -448,7 +448,7 @@ From another member's profile you may:
 
 - Choose `OPEN DIRECT CHAT`, if the member is online (Section 7.2).
 - Choose `SEND PRIVATE MAIL` (Chapter 8).
-- Report the member's behaviour with the flag symbol (Section 3.3).
+- Report the member's behaviour with `REPORT USER` in the profile's `▾` menu (Section 3.3).
 
 ### 6.3 User Feeds
 
@@ -1182,6 +1182,54 @@ professions, vehicles, and other systems. `/help` always lists the commands
 that apply where you are.
 :::
 
+### 20.10 Building Worlds with World Forge
+
+Builders and the SYSOP create and edit worlds with **World Forge**, linked as
+`WORLD FORGE` in the navigation bar and from each world's MUD page. The first
+screen lists the station's installed worlds and any new worlds not yet
+installed. `Create a world` starts a world with one arrival room;
+`Import world ZIP` opens a world package as a new draft.
+
+**Drafts.** Opening a world edits its *draft*, a copy kept on the station and
+shared by every builder. Each change is saved to the draft at once; `UNDO`
+and `REDO` step through recent changes, and `CHECKPOINT` (Ctrl+S) records a
+backup that **Backups & recovery** can restore. Players see nothing until the
+draft is published. Builders editing the same draft are named in the header.
+
+**Tabs.**
+
+- **World map.** The *Grid* view places rooms on numbered squares, draws
+  passages, and paints wilderness terrain with the brush, rectangle, and
+  ellipse tools. Layers hold upper and lower floors, joined by `up` and `down`
+  passages. The *Connections* view diagrams rooms that have no grid position.
+- **Content library.** Every kind of content: items, characters, dialogue,
+  quests, factions, shops, professions, housing, vehicles, transit, triggers,
+  dungeon templates, terrain presets, races, classes, skills, abilities, and
+  effects. Selecting a record opens its guided editor; the *JSON* tab edits
+  it directly. *Used by* lists what refers to it, and records still in use
+  cannot be deleted.
+- **Review.** Checks the draft for errors before it is published.
+- **Handbook.** The creator handbook: every field, with examples.
+- **Live world.** Acts on the running world: who is where, property holdings,
+  vehicles, script state, and builder access. These actions take effect at
+  once and do not change the draft.
+
+**Publishing.** `PUBLISH` checks the draft and shows what will change. A draft
+that only changes text and numbers is applied in place, and players notice
+nothing but the new text. Adding, removing, or reconnecting content upgrades
+the world: characters keep their levels, quests, reputation, and possessions;
+characters standing in a removed room move to the starting room; items lying
+in rooms return to their authored places; and dungeon runs in progress end.
+A new world is *installed* hidden; the SYSOP enables it under **MUD service →
+Worlds**. If a world is upgraded from Settings while a draft is open, the
+draft is marked out of date and may be rebased from **Backups & recovery**.
+
+::: note
+The home world may be edited and published like any other. Take a station
+backup (Section 40.1) before its first full publish, which converts the home
+world to the package format.
+:::
+
 <!-- pagebreak -->
 
 # Part IV. Office
@@ -1695,49 +1743,83 @@ macOS a `wake_command` must be configured in `manager.json`; see the README.
 
 ## 37. SYSOP Control: Station Settings
 
-The `SYSOP CONTROL` tab opens the station settings. A row of links at the top
-jumps to each section. Each section has its own save button.
+The `SYSOP CONTROL` tab opens the station settings. A sidebar on the left lists
+the categories; choose one to show its settings, and choose an entry beneath it
+to jump to a particular card. On a narrow screen the categories appear as a row
+of buttons above the settings. **Find a setting**, at the top of the sidebar,
+searches every card by name, field label, or member name; press Enter to open
+the first result.
 
-**Module availability.** Select the services to offer and choose
+| Category | Contents |
+|---|---|
+| Overview | Station status at a glance and links to the management consoles |
+| Identity & Appearance | Station name and description, landing page message, station icon, site theme, masthead and ASCII banner, header taglines, theme library, station MIDI theme |
+| Access & Members | Registration and guest access, invitations, permission groups, group membership |
+| Modules | The module switchboard |
+| Community | Events, User Feeds, Imageboard, Office |
+| Media & Content | File archive, Videos, Library, Arcade, WIKI |
+| Radio & Broadcasting | Band allocations, hosted broadcasting, broadcaster storage |
+| Television | TV settings and the link to TV management |
+| MUD | General settings, worlds, races and classes, skills, abilities and effects, dungeon themes, Dungeon of the Day |
+
+**Saving.** Each form has its own save button directly beneath the fields it
+saves, and nothing else is saved with it. After saving, the result appears at
+the top of the same card. Blocks marked `APPLIES IMMEDIATELY` (such as
+generating an invitation, enabling a world, or downloading a core) act as soon
+as their button is pressed. A form that has been edited but not saved is
+marked `UNSAVED CHANGES`, and its category shows an amber dot in the sidebar.
+Moving between categories keeps the edits; saving a different form or leaving
+the page asks for confirmation first. `CANCEL CHANGES` restores a form's saved
+values.
+
+**Module switchboard.** Select the services to offer and choose
 `SAVE MODULE AVAILABILITY`. A disabled module disappears from navigation, but
-its data is kept.
+its data is kept and its settings can still be changed. Each service's
+settings card shows whether the module is on, with a link back to the
+switchboard; this is the only place modules are turned on or off.
 
-**Station settings.** Here you set the station name and description; the
-station icon (and whether it is used for the installed application); a station
-MIDI theme tune and its volume; the header taglines and their colours and
-effects; the landing page message (Markdown is accepted); the station themes,
-and whether members may choose their own; the ASCII banner text, lettering
-style, size, and colour; and the file archive policy (who may upload, total
-storage, and largest file). Custom colour themes are imported here from JSON
-files.
+**Identity & Appearance.** Here you set the station name and description; the
+landing page message (Markdown is accepted); the station icon (and whether it
+is used for the installed application); the site theme, and whether members
+may choose their own; the masthead theme and the ASCII banner text, lettering
+style, size, and colour, with a live preview; the header taglines and their
+colours and effects; and a station MIDI theme tune and its volume. Custom
+colour themes are imported from JSON files, or removed, in the **Theme
+library**.
 
 **Registration and guest access.** Choose the registration mode (Open,
 Private, or Disabled) and whether guests may browse. For a private station,
 choose `GENERATE INVITATION`. The complete invitation code and link are shown
 once only; send them to the new member. Unused invitations may be revoked.
 
-**Service sections.** Further sections configure each optional service:
-Events (who may create events), User Feeds, Office, Videos, Library, Arcade,
-Television, Imageboard, WIKI, MUD, Dungeon of the Day, and Radio. These are
-described in Chapter 39.
+**Service settings.** The Community, Media & Content, Radio & Broadcasting,
+Television, and MUD categories configure each optional service. The file
+archive policy (who may upload, total storage, and largest file) is under
+Media & Content. These services are described in Chapter 39.
+
+**Management consoles.** Moderation, TV management, automated broadcasts,
+Programs, announcements, and World Forge have their own pages. They are
+linked from the Overview and from the foot of the sidebar.
 
 ## 38. Accounts, Permissions, and Moderation
 
 ### 38.1 Delegating Duties
 
 There is one SYSOP account. Duties are delegated to members through *groups*,
-which are managed in the radio permission sections of SYSOP CONTROL:
+which are managed under **SYSOP CONTROL → Access & Members**:
 
 - **Permission groups.** Create a group with `CREATE GROUP`. Give it
   `HOST BROADCASTS` (radio hosting) or `MODERATE IMAGEBOARD` (pin, lock, and
   delete on the imageboard), and add radio access rules (`FULL`, `LISTEN`, or
   `DENIED` for a band, range, or frequency).
-- **Assignments and effective access.** Select the groups each member belongs
+- **Group membership.** Open a member and select the groups they belong
   to. Every member also belongs to the permanent `DEFAULT` group. Across
   groups, `DENIED` overrides `FULL`, and `FULL` overrides `LISTEN`.
 - **Events.** Event creation may be limited to selected groups.
-- **MUD building.** In the World Builder, the SYSOP may authorize members as
-  builders. Builder access permits editing worlds only.
+- **MUD building.** In World Forge (**Live world → Builder access**), the
+  SYSOP may authorize members as builders. Builders may edit and publish any
+  authored world; only the SYSOP may change a world's progression or starting
+  room, and new worlds stay hidden until the SYSOP enables them.
 
 ### 38.2 Moderation
 
@@ -1767,7 +1849,7 @@ from its ▾ menu. Post announcements with `NEW ANNOUNCEMENT +`.
 **Videos, Library, and Arcade.** Each has a **Community** mode (members
 upload, within per-member quotas) and a **Curated** mode (station uploads
 only). Set the default quota and per-member overrides, and upload station
-material, in the service's settings section. The Videos module also has a maximum video
+material, in the service's settings card. The Videos module also has a maximum video
 file size setting for member and station uploads, configurable from 1 to
 1,048,576 MB. The Library has categories, an
 option to allow downloads, and a maximum file size. The Arcade section manages
@@ -1786,15 +1868,16 @@ schedule from categorized programmes; review the proposed schedule and choose
 
 **Radio.** Set band names, ranges, and permitted transmission types under
 **Band allocations**; assign each broadcast host a frequency and set the
-maximum continuous session under **Frequency assignments**; and set audio
-storage quotas under **Broadcaster library quotas**. `MANAGE AUTOMATED
+maximum continuous session under **Hosted broadcasting**; and set audio
+storage quotas under **Broadcaster storage**. `MANAGE AUTOMATED
 BROADCASTS` schedules programmes to start at set times or intervals.
 
 **WIKI.** Place `.zim` reference files in the station's `kiwix_data` folder
-(the path is shown in the settings section) and enable WIKI. New files are
+(the path is shown in the WIKI settings card) and turn WIKI on in the module
+switchboard. New files are
 found on the next visit. Install only collections from sources you trust.
 
-**Programs.** Choose `PROGRAMS` in the settings links (**Manage programs**).
+**Programs.** Choose `PROGRAMS` under the management consoles (**Manage programs**).
 Upload a program package ZIP and choose `VALIDATE + INSTALL`. Installed
 programs can be disabled, re-enabled, or uninstalled. Built-in programs can
 be disabled but not removed. Uninstalling keeps members' saved data.
@@ -1802,8 +1885,8 @@ be disabled but not removed. Uninstalling keeps members' saved data.
 **MUD.** Enable the MUD module, then enable individual worlds under **MUD
 service → Worlds**. Worlds are imported from ZIP files; several may run at
 once. The section also imports races, classes, skills, abilities, and dungeon
-themes, and offers an example world to download. The World Builder edits
-worlds in the browser.
+themes, and offers an example world to download. World Forge (Section 20.10)
+builds and edits worlds in the browser.
 
 ## 40. Backup, Upgrade, and Maintenance
 
@@ -1934,10 +2017,11 @@ ID, name, and author, and edit the colours. The SYSOP imports it under
 
 MUD worlds are distributed as ZIP files containing rooms, exits, items, NPCs,
 dialogue, quests, triggers, wilderness, dungeons, and their own races, classes,
-and skills. They may be built in the World Builder and exported, or written
-directly as files. Races and classes, skills, abilities and effects, and
+and skills. They may be built in World Forge and exported, or written
+directly as files. The complete format reference is the creator handbook,
+available from World Forge's **Handbook** tab. Races and classes, skills, abilities and effects, and
 dungeon themes may also be distributed separately as JSON. Each kind has a
-downloadable template in **SYSOP CONTROL → MUD service**.
+downloadable template in **SYSOP CONTROL → MUD**.
 
 ## 45. Testing, Building, and Further References
 
@@ -2047,7 +2131,7 @@ offers them.
 | Add a poll | NEW BULLETIN +; ADVANCED; Add a poll |
 | Share a file | FILES; UPLOAD FILE + |
 | RSVP to an event | EVENTS; choose event; GOING or INTERESTED |
-| Report content | Choose the flag symbol; give a reason |
+| Report content | Open the item's `▾` menu, choose `REPORT`; give a reason |
 | Listen to radio | POWER: OFF; SCAN > |
 | Watch television | TV; POWER; GUIDE |
 | Bookmark a book | While reading, BOOKMARK |

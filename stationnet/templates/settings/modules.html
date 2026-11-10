@@ -1,0 +1,38 @@
+{% import 'settings/_macros.html' as ui with context %}
+{#- Where each module is configured: a card anchor on this page, or a console URL. -#}
+{% set module_links = {
+  'board': ('', 'Message boards for station members.'),
+  'imageboard': ('#imageboard-service', 'One station-wide image board.'),
+  'announcements': (url_for('announcements.index') if module_enabled('announcements') else '', 'Station news posted by sysops.'),
+  'events': ('#events-service', 'Station events with RSVPs.'),
+  'kiwix': ('#kiwix-service', 'Offline wiki reader for .zim archives.'),
+  'videos': ('#videos-service', 'Video library for station and member uploads.'),
+  'library': ('#library-service', 'EPUB and PDF book library.'),
+  'arcade': ('#arcade-service', 'Emulated retro games in the browser.'),
+  'tv': ('#tv-service', 'Scheduled linear television channels.'),
+  'chat': ('', 'Live chat rooms and direct messages.'),
+  'mail': ('', 'Station mail between members.'),
+  'radio': ('#cat-radio', 'The radio spectrum and hosted broadcasts.'),
+  'archive': ('#file-archive', 'Shared file archive.'),
+  'users': ('', 'Member directory and presence.'),
+  'office': ('#office-suite', 'Documents and office tools for members.'),
+  'applications': (url_for('application_admin.manage') if module_enabled('applications') else '', 'Installable station programs.'),
+  'mud': ('#cat-mud', 'Multi-user dungeon worlds.'),
+  'user_feeds': ('#user-feeds', 'Profile posts, comments, and reactions.'),
+} %}
+{% call ui.card('module-availability', 'Module switchboard', 'Disabled modules disappear from navigation and cannot be accessed. Their data and settings remain intact and can be configured while off. Individual Programs are managed in the Programs console.') %}
+<form method="post" action="{{ url_for('station.settings') }}" class="settings-module-form">
+  {{ ui.csrf() }}
+  <input type="hidden" name="settings_section" value="modules">
+  <div class="settings-module-grid">
+    {% for name, label in available_modules %}
+    {% set link, blurb = module_links.get(name, ('', '')) %}
+    <div class="settings-module-row">
+      <label class="switch"><input type="checkbox" name="{{ name }}_enabled" {% if module_enabled(name) %}checked{% endif %}> <span><strong>{{ label }}</strong>{% if blurb %}<small>{{ blurb }}</small>{% endif %}</span></label>
+      {% if link %}<a class="settings-module-link" href="{{ link }}" aria-label="Configure {{ label }}">CONFIGURE →</a>{% endif %}
+    </div>
+    {% endfor %}
+  </div>
+  {{ ui.save_bar('SAVE MODULE AVAILABILITY') }}
+</form>
+{% endcall %}

@@ -602,6 +602,12 @@ for(const editor of document.querySelectorAll("[data-banner-editor]")){
   syncPreset();
 }
 for(const form of document.querySelectorAll("form[data-confirm]"))form.addEventListener("submit",e=>{if(!confirm(form.dataset.confirm))e.preventDefault()});
+for(const form of document.querySelectorAll("form[data-report-prompt]"))form.addEventListener("submit",e=>{
+  const reason=prompt("Reason for reporting this (at least 10 characters):");
+  if(reason===null){e.preventDefault();return}
+  if(reason.trim().length<10){e.preventDefault();alert("Please give a reason of at least 10 characters.");return}
+  form.elements.reason.value=reason.trim().slice(0,500);
+});
 for(const toggle of document.querySelectorAll("[data-feed-comment-toggle]"))toggle.addEventListener("click",()=>{
   const form=document.getElementById(toggle.getAttribute("aria-controls"));
   if(!form)return;

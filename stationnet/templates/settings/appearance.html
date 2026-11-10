@@ -1,0 +1,199 @@
+{% import 'settings/_macros.html' as ui with context %}
+{% macro tagline_row(entry) %}
+<div class="tagline-editor-row" data-tagline-row>
+  <label>Tagline text<input name="tagline_text" maxlength="160" required value="{{ entry.text }}" placeholder="★ YOUR STATION MESSAGE ★" data-tagline-text></label>
+  <div class="tagline-editor-options">
+    <label>Text color<select name="tagline_color_mode" data-tagline-color-mode><option value="inherit" {% if not entry.color %}selected{% endif %}>Inherit station theme</option><option value="custom" {% if entry.color %}selected{% endif %}>Custom color</option></select></label>
+    <label>Custom color<input type="color" name="tagline_color_value" value="{{ entry.color or '#e6a431' }}" data-tagline-color-value></label>
+    <label>Animation<select name="tagline_effect" data-tagline-effect>
+      {% for value, label in [
+        ('none', 'None (static)'), ('blink', 'Blink'), ('rainbow', 'Rainbow / Color Cycle'),
+        ('glow', 'Glow / Pulse'), ('typewriter', 'Typewriter'), ('marquee', 'Marquee / Ticker'),
+        ('scramble', 'Scramble / Decode'), ('crt-flicker', 'CRT Flicker'),
+        ('glitch', 'Glitch / Interference'), ('scanline', 'Scanline Sweep'),
+        ('ansi-steps', 'ANSI Color Steps'), ('reverse-video', 'Reverse Video'),
+        ('block-reveal', 'Block Reveal'), ('wave', 'Wave / Ripple'),
+        ('slide', 'Slide In / Out'), ('shimmer', 'Shimmer'),
+        ('phosphor', 'Phosphor Fade'), ('jitter', 'Character Jitter'),
+        ('spacing-pulse', 'Letter Spacing Pulse'), ('terminal-scroll', 'Terminal Scroll'),
+        ('neon-buzz', 'Neon Buzz')
+      ] %}<option value="{{ value }}" {% if entry.effect == value %}selected{% endif %}>{{ label }}</option>{% endfor %}
+    </select></label>
+  </div>
+  <div class="button-row tagline-editor-actions"><button type="button" class="secondary" data-tagline-preview-button>PREVIEW</button><button type="button" class="secondary" data-tagline-up aria-label="Move tagline up">↑ UP</button><button type="button" class="secondary" data-tagline-down aria-label="Move tagline down">↓ DOWN</button><button type="button" class="text-button" data-tagline-delete>DELETE</button></div>
+</div>
+{% endmacro %}
+
+{% call ui.card('station-identity', 'Station identity', 'The station name appears in the masthead, page titles, and member apps.') %}
+<form method="post" action="{{ url_for('station.settings') }}" class="form-grid">
+  {{ ui.csrf() }}<input type="hidden" name="return_to" value="station-identity">
+  <p class="settings-readout">CALLSIGN <strong>{{ g.station.callsign }}</strong></p>
+  <label>Station name
+    <input name="name" minlength="2" maxlength="80" required value="{{ g.station.name }}">
+    <small>2–80 characters. Renaming also renames the station folder at the next restart.</small>
+  </label>
+  <label>Station description
+    <textarea name="description" maxlength="500" rows="5">{{ g.station.description }}</textarea>
+    <small>Up to 500 characters.</small>
+  </label>
+  {{ ui.save_bar('SAVE IDENTITY') }}
+</form>
+{% endcall %}
+
+{% call ui.card('landing-message', 'Landing page message', 'The information panel shown beside registration and sign-in.') %}
+<form method="post" action="{{ url_for('station.settings') }}" class="form-grid">
+  {{ ui.csrf() }}<input type="hidden" name="return_to" value="landing-message">
+  <input type="hidden" name="landing_message_control" value="1">
+  <label class="switch"><input type="checkbox" name="landing_message_enabled" {% if g.station.landing_message_enabled %}checked{% endif %}> Show the message panel on the registration and login landing page</label>
+  <label>Message heading
+    <input name="landing_heading" maxlength="100" value="{{ g.station.landing_heading }}" placeholder="STATION INFORMATION">
+    <small>Leave blank to use a heading that reflects the current registration mode.</small>
+  </label>
+  <label>Message body (Markdown supported)
+    <textarea name="landing_message" maxlength="4000" rows="7" placeholder="Use the automatic access-aware welcome message">{{ g.station.landing_message }}</textarea>
+    <small>Supports headings, lists, links, emphasis, quotes, and code. Leave blank to use the automatic welcome message.</small>
+  </label>
+  {{ ui.save_bar('SAVE LANDING MESSAGE') }}
+</form>
+{% endcall %}
+
+{% call ui.card('station-icon', 'Station icon', 'Shown beside the masthead and, optionally, as the installed web-app icon.') %}
+<form method="post" action="{{ url_for('station.upload_station_icon') }}" enctype="multipart/form-data" class="form-grid">
+  {{ ui.csrf() }}
+  <div class="settings-media-row">
+    {% if station_icon_exists %}<img class="profile-photo profile-photo-preview" src="{{ url_for('station.station_icon') }}" alt="Current station icon" width="128" height="128">{% else %}<p class="muted">No icon uploaded.</p>{% endif %}
+    <div class="settings-media-options">
+      <label class="switch"><input type="checkbox" name="display_station_icon" {% if g.station.display_station_icon %}checked{% endif %}> Display station icon</label>
+      <label class="switch"><input type="checkbox" name="use_station_icon_for_web_app" {% if g.station.use_station_icon_for_web_app %}checked{% endif %}> Use Station icon for web-app</label>
+    </div>
+  </div>
+  <label>Upload a new icon (optional)
+    <input type="file" name="station_icon" accept="image/png,image/jpeg,image/gif,image/webp">
+    <small>PNG, JPEG, GIF, or WebP, up to 10 MB. The image is cropped and saved as a 128 × 128 PNG. Uploading another icon replaces the current one. Leave empty to save only the switches above.</small>
+  </label>
+  {{ ui.save_bar('SAVE ICON SETTINGS') }}
+</form>
+{% endcall %}
+
+{% call ui.card('station-themes', 'Site theme', 'The station palette for pages, navigation, panels, and controls.') %}
+<form method="post" action="{{ url_for('station.settings') }}" class="form-grid">
+  {{ ui.csrf() }}<input type="hidden" name="return_to" value="station-themes">
+  <label>Site-wide theme
+    <select name="site_theme" data-theme-selector="site">
+      {% for id, theme in site_themes.items() %}<option value="{{ id }}" {% if g.station.site_theme==id %}selected{% endif %}>{{ '[CUSTOM] ' if theme.custom else '' }}{{ theme.name }}{% if theme.custom %} — {{ theme.author }}{% endif %}</option>{% endfor %}
+    </select>
+    <small>Sets the station palette for pages, navigation, panels, controls, and interactive states. Add more in the Theme library.</small>
+  </label>
+  <div class="theme-preview theme-swatch--{{ g.station.site_theme }}" data-theme-preview="site" aria-hidden="true"><span>STATION</span><strong>PREVIEW PANEL</strong><em>ACTIVE LINK</em><b>BUTTON</b></div>
+  <input type="hidden" name="personal_themes_control" value="1">
+  <label class="switch"><input type="checkbox" name="personal_themes_enabled" {% if g.station.personal_themes_enabled %}checked{% endif %}> Allow users to choose their own site and masthead themes</label>
+  <p class="muted settings-note">When off, everyone uses the station themes. Saved member choices are kept and apply again if this is turned on.</p>
+  {{ ui.save_bar('SAVE SITE THEME') }}
+</form>
+{% endcall %}
+
+{% call ui.card('masthead-banner', 'Masthead & banner', 'The ASCII station banner at the top of every page and its colours.') %}
+<form method="post" action="{{ url_for('station.settings') }}" class="form-grid" data-banner-editor data-preview-url="{{ url_for('station.banner_preview') }}">
+  {{ ui.csrf() }}<input type="hidden" name="return_to" value="masthead-banner">
+  <section class="banner-preview" aria-labelledby="banner-preview-heading" data-banner-preview>
+    <div><span class="eyebrow" id="banner-preview-heading">LIVE BANNER PREVIEW</span><small data-banner-preview-status aria-live="polite">Matches the saved masthead renderer.</small></div>
+    <pre><span class="ansi-logo-art" data-banner-preview-output>{{ g.station_banner }}</span></pre>
+  </section>
+  <label>Masthead theme
+    <select name="masthead_theme" data-theme-selector="masthead">
+      {% for id, theme in masthead_themes.items() %}<option value="{{ id }}" {% if g.station.masthead_theme==id %}selected{% endif %}>{{ '[CUSTOM] ' if theme.custom else '' }}{{ theme.name }}{% if theme.custom %} — {{ theme.author }}{% endif %}</option>{% endfor %}
+    </select>
+    <small>Sets the ASCII masthead colour and shadow independently of the site palette. Changing it clears a custom banner colour unless you also pick a new one.</small>
+  </label>
+  <div class="theme-preview theme-preview-masthead theme-swatch--{{ g.station.masthead_theme }}" data-theme-preview="masthead" aria-hidden="true"><strong>STATIONNET</strong><span>// MASTHEAD SIGNAL //</span></div>
+  <label>Banner text
+    <input name="header_text" maxlength="80" value="{{ g.station.header_text }}" placeholder="{{ g.station.name }}" data-banner-text>
+    <small>Leave blank to use the station name. The preview uses the same FIGlet renderer as the live masthead.</small>
+  </label>
+  <div class="settings-two-col">
+    <label>Find a FIGlet style
+      <input type="search" placeholder="Search {{ header_fonts|length }} installed styles" autocomplete="off" data-font-search>
+      <small>All fonts installed with pyfiglet are available. Search narrows the list.</small>
+    </label>
+    <label>Header size (%)
+      <input type="number" name="header_font_size" min="5" max="200" step="5" required value="{{ g.station.header_font_size }}" data-banner-size>
+      <small>5% to 200%. Reduce it for long names or larger styles.</small>
+    </label>
+  </div>
+  <label>Header style
+    <select name="header_font" size="8" data-font-browser>
+      {% if g.station.header_font not in header_fonts %}<option value="small" selected>small (saved style unavailable; using fallback)</option>{% endif %}
+      {% for font in header_fonts %}<option value="{{ font }}" {% if g.station.header_font==font %}selected{% endif %}>{{ font }}</option>{% endfor %}
+    </select>
+    <small>The selected style is sampled in the live preview.</small>
+  </label>
+  <label>Banner colour
+    <span class="banner-color-controls"><select data-banner-color-preset aria-label="Banner colour preset">
+      <option value="">Selected masthead theme</option><option value="#00ed45">Terminal green</option><option value="#71ff8a">Bright green</option><option value="#00d8cf">Cyan</option><option value="#e6a431">Amber</option><option value="#d829be">Magenta</option><option value="custom">Custom…</option>
+    </select><input type="color" value="{{ g.station.header_color or '#00d8cf' }}" data-banner-color-picker aria-label="Custom banner colour"></span>
+    <input type="hidden" name="header_color" value="{{ g.station.header_color }}" data-banner-color>
+    <small>Optional legacy/custom banner colour. Choose “Selected masthead theme” to use the masthead palette. An allowed personal masthead choice takes precedence.</small>
+  </label>
+  {% call ui.save_bar('SAVE MASTHEAD') %}<button type="button" class="secondary" data-banner-restore>RESTORE BANNER DEFAULT</button>{% endcall %}
+</form>
+{% endcall %}
+
+{% call ui.card('header-taglines', 'Header taglines', 'Short messages shown under the masthead; one is picked on each page.') %}
+<form method="post" action="{{ url_for('station.settings') }}" class="form-grid tagline-editor" data-tagline-editor>
+  {{ ui.csrf() }}<input type="hidden" name="settings_section" value="header_taglines">
+  <p class="muted settings-note">One message is picked when each page opens. The same message is avoided on the next page when possible. Symbols and Unicode text are welcome. Picking a color automatically selects Custom color. Rainbow cycles colors while active; the selected color appears when motion is reduced.</p>
+  <div class="tagline-editor-list" data-tagline-list>{% for entry in header_taglines %}{{ tagline_row(entry) }}{% endfor %}</div>
+  <template data-tagline-template>{{ tagline_row({'text': '', 'color': '', 'effect': 'none'}) }}</template>
+  <div class="button-row"><button type="button" class="secondary" data-tagline-add>ADD TAGLINE</button><small data-tagline-status role="status"></small></div>
+  <div class="tagline-preview-panel"><span class="eyebrow">TAGLINE PREVIEW</span><span class="brand-tag" data-tagline-preview-output>Choose PREVIEW on a tagline to see its current text, color, and effect.</span></div>
+  {{ ui.save_bar('SAVE TAGLINES') }}
+</form>
+{% endcall %}
+
+{% call ui.card('theme-library', 'Theme library', 'Install or remove custom colour themes for the site and masthead.') %}
+{{ ui.subhead('Import a colour theme', 'immediate') }}
+<form method="post" action="{{ url_for('station.import_theme') }}" enctype="multipart/form-data" class="form-grid">
+  {{ ui.csrf() }}
+  <label>Theme JSON file
+    <input type="file" name="theme_file" accept=".json,application/json" required>
+    <small>Up to 16 KB. Start with data/themes/template-theme.json; copy it, set a unique ID, name, and author, then edit the site colours, masthead colours, or both.</small>
+  </label>
+  <div class="settings-save-bar"><button>IMPORT THEME</button></div>
+</form>
+{{ ui.subhead('Installed custom themes') }}
+{% if custom_themes %}
+<ul class="settings-plain-list">{% for id, theme in custom_themes.items() %}<li><strong>{{ theme.name }}</strong> <code>{{ id }}</code> — {{ theme.author }}</li>{% endfor %}</ul>
+<form method="post" action="{{ url_for('station.remove_theme') }}" class="form-grid settings-danger-zone">
+  {{ ui.csrf() }}
+  <label>Remove an installed theme
+    <select name="theme_id" required>
+      <option value="">Select a custom theme</option>
+      {% for id, theme in custom_themes.items() %}<option value="{{ id }}">{{ theme.name }} ({{ id }}) — {{ theme.author }}</option>{% endfor %}
+    </select>
+    <small>Station selections return to Default / Cyan. Member selections return to the station theme.</small>
+  </label>
+  <label class="switch"><input type="checkbox" name="confirm_remove" required> Confirm removal of the selected theme</label>
+  <div class="settings-save-bar"><button type="submit" class="danger">REMOVE THEME</button></div>
+</form>
+{% else %}<p class="muted">No custom themes installed. Built-in themes cannot be removed.</p>{% endif %}
+{% endcall %}
+
+{% call ui.card('station-midi', 'Station MIDI theme', 'An optional MIDI theme that plays for listeners.') %}
+<form method="post" action="{{ url_for('station.upload_station_midi') }}" enctype="multipart/form-data" class="form-grid">
+  {{ ui.csrf() }}
+  <p class="settings-readout">CURRENT THEME <strong>{{ 'UPLOADED' if station_midi_exists else 'NONE' }}</strong></p>
+  <label class="switch"><input type="checkbox" name="play_station_midi" {% if g.station.play_station_midi %}checked{% endif %} {% if not station_midi_exists %}disabled{% endif %}> Play Station MIDI{% if not station_midi_exists %} <small>(upload a theme first)</small>{% endif %}</label>
+  <label>Station MIDI volume (%)
+    <input type="number" name="station_midi_volume" min="0" max="100" step="1" required value="{{ g.station.station_midi_volume }}">
+    <small>Sets the station theme volume for listeners. 0 is silent; 100 is full volume.</small>
+  </label>
+  <label>Upload a MIDI theme (optional)
+    <input type="file" name="station_midi" accept=".mid,.midi,audio/midi,audio/x-midi">
+    <small>Standard MIDI type 0 or 1, up to 2 MB. Uploading another theme replaces the current one. Playback is disabled by default.</small>
+  </label>
+  {% call ui.save_bar('SAVE MIDI SETTINGS') %}{% if station_midi_exists %}<button type="submit" class="danger" form="station-midi-clear">CLEAR MIDI THEME</button>{% endif %}{% endcall %}
+</form>
+{% if station_midi_exists %}
+<form method="post" action="{{ url_for('station.clear_station_midi') }}" id="station-midi-clear" data-confirm="Delete the uploaded Station MIDI theme and stop playback?">{{ ui.csrf() }}</form>
+{% endif %}
+{% endcall %}

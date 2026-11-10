@@ -1,0 +1,18 @@
+{% extends 'base.html' %}
+{% block title %}World Forge{% endblock %}
+{% block extra_styles %}<link rel="stylesheet" href="{{ url_for('static', filename='world-forge.css', v='2') }}">{% endblock %}
+{% block content %}
+<section class="world-forge-shell">
+  <div id="world-forge" class="world-forge"
+       data-api="{{ url_for('world_forge.index') }}api"
+       data-csrf="{{ session.csrf_token }}"
+       data-admin="{{ '1' if is_admin else '0' }}"
+       data-world="{{ initial_world }}"
+       data-settings="{{ url_for('station.settings') if is_admin else '' }}"
+       data-play="{{ url_for('mud.index') }}">
+    <noscript><p class="terminal-card">World Forge needs JavaScript.</p></noscript>
+    <p class="world-forge-loading" role="status">LOADING WORLD FORGE…</p>
+  </div>
+</section>
+<script src="{{ url_for('static', filename='world-forge.js', v='2') }}" defer></script>
+{% endblock %}

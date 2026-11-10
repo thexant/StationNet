@@ -1,0 +1,18 @@
+{% import 'settings/_macros.html' as ui with context %}
+{% call ui.card('tv-service', 'TV settings', 'Linear television: channels air scheduled programming and viewers tune in to whatever is on now. Channels, programming, and schedules remain in station data when TV is disabled, and can be prepared before it is enabled.') %}
+{{ ui.module_chip('tv', 'TV') }}
+<form method="post" action="{{ url_for('station.settings') }}" class="form-grid">
+  {{ ui.csrf() }}<input type="hidden" name="settings_section" value="tv"><input type="hidden" name="preserve_enabled" value="1">
+  <label>Schedule time zone<input name="tv_timezone" required maxlength="80" value="{{ g.station.tv_timezone }}" placeholder="Europe/London"><small>IANA zone used when entering schedule times. Viewers always see guide times in their own local time.</small></label>
+  <div class="settings-two-col">
+    <label>Max programme upload size (MB)<input type="number" name="tv_max_upload_mb" min="1" max="1048576" required value="{{ g.station.tv_max_upload_mb }}"><small>Uploads are sent in resumable 8 MB chunks, so large files do not need a larger request limit.</small></label>
+    <label>Default channel<select name="tv_default_channel_id"><option value="">Lowest channel number</option>{% for channel in tv_channels %}<option value="{{ channel.id }}" {% if g.station.tv_default_channel_id == channel.id %}selected{% endif %}>{{ channel.number }} {{ channel.name }}</option>{% endfor %}</select><small>Used when a viewer has not watched a channel before.</small></label>
+  </div>
+  {{ ui.save_bar('SAVE TV SETTINGS') }}
+</form>
+{% endcall %}
+
+{% call ui.card('tv-management', 'Channels & programming', 'Create channels, upload programmes, and build schedules in the dedicated TV console.') %}
+<p class="settings-readout">{{ tv_channels|length }} CHANNEL{{ 'S' if tv_channels|length != 1 }} CONFIGURED</p>
+<p><a class="button" href="{{ url_for('tv_admin.manage') }}">OPEN TV MANAGEMENT →</a></p>
+{% endcall %}
