@@ -7,6 +7,7 @@ from flask import (Blueprint, abort, current_app, flash, g, redirect,
                    render_template, request, send_from_directory, url_for)
 from PIL import Image, ImageOps, UnidentifiedImageError
 
+from . import notifications
 from .auth import login_required
 from .db import get_db
 from .moderation import audit, active_restriction
@@ -260,6 +261,16 @@ def reply(thread_id):
             flash("This thread has reached its image reply limit. You can still post a text reply.", "error")
             return redirect(url_for("imageboard.thread", thread_id=thread_id) + "#reply-form")
         database.execute("UPDATE imageboard_threads SET bumped_at=? WHERE id=?", (now, thread_id))
+        url = url_for("imageboard.thread", thread_id=thread_id) + f"#reply-{cursor.lastrowid}"
+        mentioned = set(notifications.notify_mentions(
+            database, body, url, g.user, f'the imageboard thread "{item["subject"]}"'))
+        if item["author_id"] not in mentioned:
+            notifications.notify(
+                database, item["author_id"], "reply",
+                f'{g.user["username"]} replied to your imageboard thread "{item["subject"]}"',
+                url=url, body=notifications.excerpt(body) if body else "[image]",
+                actor_id=g.user["id"], dedupe_key=f"ib:{thread_id}",
+            )
         database.commit()
     except Exception:
         database.rollback()

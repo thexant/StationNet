@@ -112,6 +112,8 @@ def delete_account(user_id):
                          "(SELECT id FROM mud_action_log WHERE actor_id=?)", (user_id,))
 
         database.execute("DELETE FROM mail WHERE sender_id=? OR recipient_id=?", (user_id, user_id))
+        # Alerts name their actor in the text, so they go with the account.
+        database.execute("DELETE FROM notifications WHERE user_id=? OR actor_id=?", (user_id, user_id))
         database.execute("DELETE FROM video_comments WHERE author_id=?", (user_id,))
         database.execute("DELETE FROM videos WHERE uploader_id=?", (user_id,))
         database.execute("DELETE FROM library_bookmarks WHERE user_id=?", (user_id,))

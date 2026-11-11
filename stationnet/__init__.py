@@ -4,7 +4,7 @@ import secrets
 from datetime import timedelta
 from pathlib import Path
 from flask import Flask, abort, g, jsonify, redirect, render_template, request, url_for
-from . import announcements, applications, arcade, archive, auth, auto_removal, board, broadcast, chat, db, downloads, dungeons, events, feeds, header_taglines, imageboard, kiwix, library, mail, moderation, mud, mud_worlds, office, polls, programs, pwa, radio, station, station_hours, themes, timefmt, tv, users, videos, world_forge
+from . import announcements, applications, arcade, archive, auth, auto_removal, board, broadcast, chat, db, door, downloads, dungeons, events, feeds, header_taglines, imageboard, kiwix, library, mail, moderation, mud, mud_worlds, notifications, office, polls, programs, pwa, radio, station, station_hours, themes, timefmt, tv, users, videos, world_forge
 from .ansi import station_banner
 from .realtime import DirectChatStore
 from .radio import RadioStore
@@ -77,6 +77,8 @@ def create_app(test_config=None):
     app.register_blueprint(moderation.bp)
     app.register_blueprint(moderation.report_bp)
     app.register_blueprint(mail.bp)
+    app.register_blueprint(notifications.bp)
+    app.register_blueprint(door.bp)
     app.register_blueprint(archive.bp)
     app.register_blueprint(videos.bp)
     app.register_blueprint(library.bp)
@@ -133,12 +135,10 @@ def create_app(test_config=None):
             mud.ensure_daily_dungeon(db.get_db())
             db.get_db().commit()
         g.mail_latest_id = 0
+        g.notifications_latest_id = 0
         if g.user is not None:
-            g.mail_latest_id = db.get_db().execute(
-                "SELECT COALESCE(MAX(id),0) FROM mail WHERE recipient_id=? "
-                "AND (? OR subject NOT LIKE 'FEED:%')",
-                (g.user["id"], g.station["user_feeds_enabled"] if g.station else 0),
-            ).fetchone()[0]
+            g.mail_latest_id = mail.latest_id(db.get_db(), g.user["id"])
+            g.notifications_latest_id = notifications.latest_id(db.get_db(), g.user["id"])
         g.mud_can_build = bool(g.user and mud.can_build(db.get_db(), g.user))
         try:
             g.masthead_font_size = min(
@@ -185,6 +185,8 @@ def create_app(test_config=None):
         return {
             "station_header_tagline": lambda: header_taglines.pick_for_page(g.station),
             "module_enabled": lambda name: modules.enabled(g.station, name),
+            "door_configured_panels": door.configured_panels,
+            "door_panel_labels": door.PANELS,
         }
 
     @app.after_request

@@ -1502,3 +1502,59 @@ details[open] > summary { margin-bottom: .6rem; }
 .poll-option.selected > span { color: var(--cyan); }
 .poll-tag { padding: .05rem .3rem; border: 1px solid var(--magenta); color: var(--magenta); font-size: var(--text-xs); vertical-align: middle; }
 .auto-removal-note { margin: .6rem 0 0; font-size: var(--text-xs); }
+
+/* Notification centre and WAITING FOR YOU summary */
+.waiting-panel { padding: .75rem 1rem; border: 1px solid var(--green); }
+.waiting-panel h2 { margin: 0 0 .5rem; padding-bottom: .35rem; border-bottom: 1px solid var(--green-dim); font-size: 1rem; font-weight: 700; letter-spacing: .08em; }
+.waiting-panel h2 span { color: var(--cyan); }
+.waiting-list { display: flex; flex-wrap: wrap; gap: .35rem 1.2rem; margin: 0; padding: 0; list-style: none; }
+.waiting-list li::before { content: "* "; color: var(--amber); }
+.waiting-list a { overflow-wrap: anywhere; }
+.waiting-clear { margin: 0; color: var(--green-dim); }
+.access-actions .waiting-panel { margin: 0 0 1rem; text-align: left; }
+.alert-actions { display: flex; flex-wrap: wrap; gap: .5rem; }
+.alert-list { display: grid; gap: .5rem; margin: 1rem 0; }
+.alert-row { padding: .6rem .8rem; border: 1px solid var(--green-dim); }
+.alert-row.unread { border-color: var(--green); background: var(--surface-selected); }
+.alert-meta { display: flex; flex-wrap: wrap; justify-content: space-between; gap: .5rem; color: var(--green-dim); font-size: var(--text-xs); }
+.alert-kind { color: var(--cyan); letter-spacing: .08em; }
+.alert-open { padding: 0; text-align: left; overflow-wrap: anywhere; }
+.alert-dot { color: var(--amber); }
+.alert-body { margin-top: .35rem; color: var(--grey); white-space: pre-wrap; overflow-wrap: anywhere; }
+
+/* Login door sequence */
+.door-sequence { display: grid; gap: 1rem; max-width: 60rem; margin: 0 auto; }
+.door-head h1 { margin: .2rem 0 0; }
+.door-panel { min-width: 0; padding: .75rem 1rem; border: 1px solid var(--green-dim); animation: door-reveal .45s steps(6, end) both; }
+.door-panel > .waiting-panel { margin: -.75rem -1rem; border: 0; }
+.door-panel h2 { margin: 0 0 .5rem; padding-bottom: .35rem; border-bottom: 1px solid var(--green-dim); font-size: 1rem; font-weight: 700; letter-spacing: .08em; }
+.door-panel h2 span { color: var(--cyan); }
+.door-banner { padding: .5rem; overflow-x: auto; border: 0; text-align: center; }
+.door-banner .ansi-logo { margin: 0 auto; }
+.door-quote blockquote { margin: 0; color: var(--amber); font-style: italic; overflow-wrap: anywhere; }
+.door-quote blockquote::before { content: "\201C"; }
+.door-quote blockquote::after { content: "\201D"; }
+.door-note { margin: 0 0 .4rem; font-size: var(--text-xs); }
+.door-table { display: grid; gap: .2rem; margin: 0; padding: 0; list-style: none; }
+.door-table li { display: flex; flex-wrap: wrap; align-items: baseline; gap: .25rem .75rem; justify-content: space-between; min-width: 0; }
+.door-table li > span, .door-table li > a { min-width: 0; overflow-wrap: anywhere; }
+.door-callers li { justify-content: flex-start; }
+.door-callers li > :last-child { margin-left: auto; color: var(--green-dim); }
+.door-num { color: var(--green-dim); min-width: 4.5ch; }
+.door-oneliners li { justify-content: flex-start; }
+.door-who { color: var(--cyan); }
+.door-line { flex: 1 1 12rem; }
+.door-oneliners form { margin: 0; }
+.door-oneliner-form { display: flex; gap: .5rem; margin-top: .6rem; }
+.door-oneliner-form input { flex: 1 1 auto; min-width: 0; }
+.door-continue { display: grid; justify-items: center; gap: .3rem; padding: 1rem 0; }
+.door-hint { margin: 0; font-size: var(--text-xs); }
+.door-step-2 { animation-delay: .15s; }
+.door-step-3 { animation-delay: .3s; }
+.door-step-4 { animation-delay: .45s; }
+.door-step-5 { animation-delay: .6s; }
+.door-step-6 { animation-delay: .75s; }
+.door-step-7 { animation-delay: .9s; }
+@keyframes door-reveal { from { opacity: 0; clip-path: inset(0 0 100% 0); } to { opacity: 1; clip-path: inset(0 0 0 0); } }
+@media (prefers-reduced-motion: reduce) { .door-panel { animation: none; } }
+@media (max-width: 40rem) { .door-panel { padding: .6rem .7rem; } .door-panel > .waiting-panel { margin: -.6rem -.7rem; } .door-oneliner-form { flex-wrap: wrap; } .door-oneliner-form button { flex: 1 1 100%; } }

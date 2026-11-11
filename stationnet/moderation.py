@@ -6,6 +6,7 @@ from flask import Blueprint, abort, flash, g, jsonify, redirect, render_template
 from .auth import admin_required, login_required
 from .account_deletion import delete_account, is_station_owner
 from .db import get_db
+from . import notifications
 from .realtime import utc_now
 from .security import validate_csrf
 
@@ -138,12 +139,13 @@ def user_action(user_id):
             "INSERT INTO moderation_restrictions(user_id,kind,starts_at,expires_at,actor_id,reason,private_note) "
             "VALUES(?,?,?,?,?,?,?)", (user_id, kind, utc_now(), expires, g.user["id"], reason, note),
         )
+        if kind == "mute":
+            from .timefmt import utc_text
+            until = "indefinitely" if expires is None else f"until {utc_text(expires)}"
+            notifications.notify(database, user_id, "moderation",
+                                 f"A SYSOP has muted your account {until}", body=reason)
     elif action == "warn":
-        cursor = database.execute(
-            "INSERT INTO mail(sender_id,recipient_id,subject,body,sender_deleted) VALUES(?,?,?,?,1)",
-            (g.user["id"], user_id, "Formal SYSOP warning", reason),
-        )
-        database.execute("UPDATE mail SET thread_id=id WHERE id=?", (cursor.lastrowid,))
+        notifications.notify(database, user_id, "moderation", "Formal SYSOP warning", body=reason)
     elif action in {"reinstate", "unmute"}:
         kinds = ("suspension", "ban") if action == "reinstate" else ("mute",)
         placeholders = ",".join("?" for _ in kinds)
@@ -176,6 +178,11 @@ def resolve_report(report_id):
                      (status, note, g.user["id"], utc_now(), report_id))
     audit(database, g.user["id"], report["subject_user_id"], f"report_{status}", note,
           report["target_type"], report["target_id"])
+    notifications.notify(
+        database, report["reporter_id"], "report",
+        "Your report was reviewed: " + ("action taken" if status == "resolved" else "no action needed"),
+        body=note, url=url_for("notifications.index"),
+    )
     database.commit()
     flash("Report reviewed.", "success")
     return redirect(url_for("moderation.dashboard"))

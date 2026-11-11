@@ -239,87 +239,99 @@ for(const form of document.querySelectorAll("form[data-sfx-submit]"))form.addEve
   setTimeout(()=>form.requestSubmit(),180);
 });
 
-const mailNotificationsUrl=document.body.dataset.mailNotificationsUrl;
-if(mailNotificationsUrl){
+// One poll feeds every header badge: mail, direct chat, and alerts.
+const notificationsUrl=document.body.dataset.notificationsUrl;
+const cursorFor=(name,initial)=>{
+  const key=`stationnet.${name}.cursor.${document.body.dataset.userId}`;
+  const stored=sessionStorage.getItem(key);
+  let value=stored===null?Number(initial):Number(stored);
+  if(!Number.isFinite(value))value=0;
+  sessionStorage.setItem(key,String(value));
+  return {get:()=>value,set:next=>{if(next!==value){value=next;sessionStorage.setItem(key,String(value))}}};
+};
+const setBadge=(badge,count,label,unit)=>{
+  if(!badge)return;
+  badge.hidden=count===0;
+  badge.textContent=count>99?"99+":String(count);
+  badge.parentElement.setAttribute("aria-label",count?`${label}, ${count} ${unit}`:label);
+};
+if(notificationsUrl){
   const mailBadge=document.querySelector("[data-mail-count]");
-  const mailCursorKey=`stationnet.mail.cursor.${document.body.dataset.userId}`;
-  const storedMailCursor=sessionStorage.getItem(mailCursorKey);
-  let mailCursor=storedMailCursor===null?Number(document.body.dataset.mailLatestId):Number(storedMailCursor);
-  if(!Number.isFinite(mailCursor))mailCursor=0;
-  sessionStorage.setItem(mailCursorKey,String(mailCursor));
-  let mailPollBusy=false;
-  const pollMail=async()=>{
-    if(mailPollBusy)return;
-    mailPollBusy=true;
-    try{
-      const response=await fetch(`${mailNotificationsUrl}?after=${mailCursor}`,{headers:{Accept:"application/json"},cache:"no-store"});
-      if(response.status===401||response.redirected)return;
-      if(!response.ok)throw new Error("Mail notification link unavailable.");
-      const payload=await response.json();
-      const latestId=Math.max(mailCursor,Number(payload.latest_id)||0);
-      if(latestId!==mailCursor){mailCursor=latestId;sessionStorage.setItem(mailCursorKey,String(mailCursor))}
-      const unread=Math.max(0,Number(payload.unread_count)||0);
-      mailBadge.hidden=unread===0;
-      mailBadge.textContent=unread>99?"99+":String(unread);
-      mailBadge.parentElement.setAttribute("aria-label",unread?`Mail, ${unread} unread messages`:"Mail");
-      if(Number(payload.new_count)>0)playSfx("newmail");
-    }catch(_){}finally{mailPollBusy=false}
-  };
-  pollMail();
-  setInterval(pollMail,5000);
-}else{
-  for(let index=sessionStorage.length-1;index>=0;index--){
-    const key=sessionStorage.key(index);
-    if(key?.startsWith("stationnet.mail.cursor."))sessionStorage.removeItem(key);
-  }
-}
-
-const directNotificationsUrl=document.body.dataset.directNotificationsUrl;
-if(directNotificationsUrl){
-  const alerts=document.querySelector("[data-direct-alerts]");
-  const badge=document.querySelector("[data-direct-count]");
+  const notifyBadge=document.querySelector("[data-notify-count]");
+  const directBadge=document.querySelector("[data-direct-count]");
+  const directAlerts=document.querySelector("[data-direct-alerts]");
   const activeChat=document.querySelector("[data-direct-peer]");
   const activePeer=Number(activeChat?.dataset.directPeer)||0;
+  const mailCursor=cursorFor("mail",document.body.dataset.mailLatestId||0);
+  const alertCursor=cursorFor("alerts",document.body.dataset.notificationsLatestId||0);
   const viewingDirect=()=>{
     const log=activeChat?.querySelector("[data-chat-log]");
     return activePeer&&document.visibilityState==="visible"&&document.hasFocus()&&
       log&&log.scrollHeight-log.scrollTop-log.clientHeight<80;
   };
-  let directPollBusy=false;
+  let busy=false;
   let previousUnread="";
-  const pollDirect=async()=>{
-    if(directPollBusy)return;
-    directPollBusy=true;
+  const showDirect=direct=>{
+    const unread=direct.unread||[];
+    setBadge(directBadge,unread.reduce((total,item)=>total+item.count,0),"Chat","unread direct messages");
+    const signature=JSON.stringify(unread);
+    if(directAlerts&&signature!==previousUnread){
+      previousUnread=signature;
+      directAlerts.replaceChildren();
+      for(const item of unread){
+        const link=document.createElement("a");
+        link.className="direct-alert";
+        link.href=document.body.dataset.directBaseUrl.replace(/0$/,String(item.user_id));
+        link.textContent=`DIRECT / ${item.username} [${item.callsign}] · ${item.count} unread`;
+        link.setAttribute("aria-label",`${item.count} unread direct messages from ${item.username}. Open conversation.`);
+        directAlerts.append(link);
+      }
+    }
+    return (direct.alerts||[]).some(item=>item.user_id!==activePeer||!viewingDirect());
+  };
+  const pollNotifications=async()=>{
+    if(busy)return;
+    busy=true;
     try{
       const claim=document.visibilityState==="visible"&&document.hasFocus()?"1":"0";
-      const response=await fetch(`${directNotificationsUrl}?claim=${claim}`,{headers:{Accept:"application/json"},cache:"no-store"});
-      if(!response.ok||response.redirected)return;
+      const query=`after=${alertCursor.get()}&mail_after=${mailCursor.get()}&claim=${claim}`;
+      const response=await fetch(`${notificationsUrl}?${query}`,{headers:{Accept:"application/json"},cache:"no-store"});
+      if(response.status===401||response.redirected||!response.ok)return;
       const payload=await response.json();
-      const unread=payload.unread||[];
-      const count=unread.reduce((total,item)=>total+item.count,0);
-      badge.hidden=count===0;
-      badge.textContent=count>99?"99+":String(count);
-      badge.parentElement.setAttribute("aria-label",count?`Chat, ${count} unread direct messages`:"Chat");
-      const signature=JSON.stringify(unread);
-      if(signature!==previousUnread){
-        previousUnread=signature;
-        alerts.replaceChildren();
-        for(const item of unread){
-          const link=document.createElement("a");
-          link.className="direct-alert";
-          link.href=document.body.dataset.directBaseUrl.replace(/0$/,String(item.user_id));
-          link.textContent=`DIRECT / ${item.username} [${item.callsign}] · ${item.count} unread`;
-          link.setAttribute("aria-label",`${item.count} unread direct messages from ${item.username}. Open conversation.`);
-          alerts.append(link);
-        }
+      let chime="";
+      if(payload.mail){
+        mailCursor.set(Math.max(mailCursor.get(),Number(payload.mail.latest_id)||0));
+        setBadge(mailBadge,Math.max(0,Number(payload.mail.unread_count)||0),"Mail","unread messages");
+        if(Number(payload.mail.new_count)>0)chime="newmail";
       }
-      if((payload.alerts||[]).some(item=>item.user_id!==activePeer||!viewingDirect()))playSfx("newchat");
-    }catch(_){}finally{directPollBusy=false}
+      if(payload.notifications){
+        alertCursor.set(Math.max(alertCursor.get(),Number(payload.notifications.latest_id)||0));
+        setBadge(notifyBadge,Math.max(0,Number(payload.notifications.unread_count)||0),"Alerts","unread alerts");
+        if(Number(payload.notifications.new_count)>0&&!chime)chime="newmail";
+      }
+      if(payload.direct&&showDirect(payload.direct))chime="newchat";
+      if(chime)playSfx(chime);
+    }catch(_){}finally{busy=false}
   };
-  pollDirect();
-  setInterval(pollDirect,2000);
-  window.addEventListener("focus",pollDirect);
-  document.addEventListener("visibilitychange",()=>{if(!document.hidden)pollDirect()});
+  pollNotifications();
+  setInterval(pollNotifications,2500);
+  window.addEventListener("focus",pollNotifications);
+  document.addEventListener("visibilitychange",()=>{if(!document.hidden)pollNotifications()});
+}else{
+  for(let index=sessionStorage.length-1;index>=0;index--){
+    const key=sessionStorage.key(index);
+    if(key?.startsWith("stationnet.mail.cursor.")||key?.startsWith("stationnet.alerts.cursor."))sessionStorage.removeItem(key);
+  }
+}
+
+// Login door: Enter continues to the station unless typing in a field.
+const door=document.querySelector("[data-door]");
+if(door){
+  document.addEventListener("keydown",event=>{
+    if(event.key!=="Enter"||event.defaultPrevented)return;
+    if(event.target.closest?.("input,textarea,select,button,a,[contenteditable]"))return;
+    window.location.assign(door.dataset.doorNext);
+  });
 }
 
 const clock=document.querySelector("[data-clock]");

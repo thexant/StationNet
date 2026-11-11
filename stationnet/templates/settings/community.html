@@ -1,4 +1,25 @@
 {% import 'settings/_macros.html' as ui with context %}
+{% call ui.card('login-sequence', 'Login sequence', 'The BBS-style screen members see after each login, before the station directory.') %}
+{% set door_panels = door_configured_panels(g.station) %}
+<form method="post" action="{{ url_for('door.save_settings') }}" class="form-grid">
+  {{ ui.csrf() }}
+  <label class="switch"><input type="checkbox" name="door_enabled" {% if g.station.door_enabled %}checked{% endif %}> Show the login sequence after members log in</label>
+  <fieldset><legend>Panels and order</legend>
+    {% for key, label in door_panel_labels.items() %}
+    {% set position = (door_panels.index(key) + 1) if key in door_panels else (door_panels|length + loop.index) %}
+    <div class="settings-two-col">
+      <label class="check switch"><input type="checkbox" name="panel" value="{{ key }}" {% if key in door_panels %}checked{% endif %}> {{ label }}</label>
+      <label>Position<input type="number" name="position_{{ key }}" min="1" max="{{ door_panel_labels|length }}" value="{{ position }}"></label>
+    </div>
+    {% endfor %}
+    <small class="muted">Panels show in ascending position. Events and the Dungeon of the Day appear only while those services are enabled.</small>
+  </fieldset>
+  <label>Quotes of the day<textarea name="door_quotes" rows="6" maxlength="20200" placeholder="One quote per line">{{ g.station.door_quotes }}</textarea><small>One per line, up to 100 quotes of 200 characters. One is chosen each day. When empty, a header tagline is used.</small></label>
+  <p class="muted settings-note">Members may remove their own oneliners; SYSOPs can remove any oneliner from the login sequence, and each removal is recorded in moderation history.</p>
+  {{ ui.save_bar('SAVE LOGIN SEQUENCE') }}
+</form>
+{% endcall %}
+
 {% call ui.card('events-service', 'Events', 'Who may create station events. Disabling Events keeps all events and RSVPs.') %}
 {{ ui.module_chip('events', 'EVENTS') }}
 <form method="post" action="{{ url_for('station.settings') }}" class="form-grid">

@@ -30,14 +30,7 @@ def reset_password_for_user(database, user):
         return False
 
     temporary_password = generate_temporary_password()
-    subject = f"SYSTEM: Password reset for {user['username']}"
-    body = (
-        "SYSTEM-GENERATED PASSWORD RESET\n\n"
-        f"User: {user['username']} - [{user['callsign']}]\n"
-        f"Temporary password: {temporary_password}\n\n"
-        "Give this password to the user manually. After signing in, they should "
-        "change it from Edit Profile."
-    )
+    from .notifications import notify
     try:
         database.execute("BEGIN IMMEDIATE")
         database.execute(
@@ -45,13 +38,15 @@ def reset_password_for_user(database, user):
             (hash_password(temporary_password), user["id"]),
         )
         for sysop in sysops:
-            cursor = database.execute(
-                "INSERT INTO mail(sender_id,recipient_id,subject,body,sender_deleted) "
-                "VALUES(?,?,?,?,1)",
-                (user["id"], sysop["id"], subject, body),
-            )
-            database.execute(
-                "UPDATE mail SET thread_id=id WHERE id=?", (cursor.lastrowid,)
+            notify(
+                database, sysop["id"], "system",
+                f"Password reset for {user['username']} - [{user['callsign']}]",
+                body=(
+                    f"Temporary password: {temporary_password}\n\n"
+                    "Give this password to the user manually. After signing in, they should "
+                    "change it from Edit Profile."
+                ),
+                url=url_for("notifications.index"),
             )
         database.commit()
     except Exception:
@@ -80,6 +75,16 @@ def load_logged_in_user():
     g.user = None if user_id is None else get_db().execute("SELECT id,username,callsign,is_admin,created_at,site_theme,masthead_theme,station_midi_enabled FROM users WHERE id=?", (user_id,)).fetchone()
     if user_id is not None and g.user is None:
         session.clear()
+
+def begin_call(user_id):
+    """Record a login as a station call and return where the member should land."""
+    from . import door
+    database = get_db()
+    door.record_call(database, user_id)
+    database.commit()
+    station = get_station()
+    return url_for("door.door") if door.enabled(station) else url_for("station.terminal")
+
 
 def establish_connection(user_id):
     connection_id = secrets.token_urlsafe(18)
@@ -238,6 +243,7 @@ def setup():
                     database, name, description, registration_mode, username, hash_password(password)
                 )
                 session.clear(); session["user_id"] = user_id; establish_connection(user_id)
+                begin_call(user_id)
                 sync_name(current_app.config.get("STATION_CONFIG"), name)
                 _discard_prepared_setup()
                 flash(
@@ -312,8 +318,9 @@ def register():
                         flash("That invitation is invalid or no longer available.", "error")
                         return render_template("register.html", invite_code=invite_code)
                 database.commit(); session.clear(); session["user_id"] = cursor.lastrowid; establish_connection(cursor.lastrowid)
+                landing = begin_call(cursor.lastrowid)
                 flash(f"Account linked: {username} - [{callsign}].", "success")
-                return redirect(url_for("station.terminal"))
+                return redirect(landing)
             except sqlite3.IntegrityError:
                 database.rollback()
                 flash("That username is already registered.", "error")
@@ -360,8 +367,9 @@ def login():
                 f"Link established. Welcome, {user['username']} - [{user['callsign']}].",
                 "success",
             )
+            landing = begin_call(user["id"])
             destination = request.args.get("next", "")
-            if not destination.startswith("/") or destination.startswith("//"): destination = url_for("station.terminal")
+            if not destination.startswith("/") or destination.startswith("//"): destination = landing
             return redirect(destination)
     return render_template("login.html")
 

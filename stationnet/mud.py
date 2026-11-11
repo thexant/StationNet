@@ -7695,6 +7695,36 @@ def _record_daily_result(database, instance_id, user_id, result, rooms_visited=0
     )
 
 
+def daily_overview(database, user_id, now=None):
+    """Today's Dungeon of the Day for station-wide summaries, or None when unavailable."""
+    try:
+        daily = ensure_daily_dungeon(database, now)
+        if daily is None or daily["status"] != "ready":
+            return None
+        settings = _daily_settings(database)
+    except ActionError:
+        return None
+    participation = _daily_participation(database, daily["day_key"], user_id)
+    attempts = participation["attempts"] if participation else 0
+    theme_name = daily["theme_id"]
+    template_row = database.execute(
+        "SELECT template_json FROM mud_dungeon_template_versions WHERE theme_id=? AND version=?",
+        (daily["theme_id"], daily["theme_version"]),
+    ).fetchone()
+    if template_row:
+        try:
+            theme_name = json.loads(template_row["template_json"]).get("name", theme_name)
+        except json.JSONDecodeError:
+            pass
+    return {
+        "day_key": daily["day_key"], "theme": theme_name,
+        "attempts": attempts, "max_attempts": settings["max_attempts"],
+        "attempts_left": max(0, settings["max_attempts"] - attempts),
+        "completed": bool(participation and participation["completions"]),
+        "reward_claimed": bool(participation and participation["rewarded_at"]),
+    }
+
+
 def _daily_status_text(database, user_id, now=None):
     daily = ensure_daily_dungeon(database, now)
     if daily["status"] != "ready":
@@ -9311,6 +9341,14 @@ def _tell_to(database, user, target_id, message):
     database.execute("INSERT INTO mud_tell_history(user_id,world_key,other_user_id) VALUES(?,?,?) "
                      "ON CONFLICT(user_id,world_key) DO UPDATE SET other_user_id=excluded.other_user_id",
                      (target_id, _world(), user["id"]))
+    from . import notifications
+    try:
+        tell_url = url_for("mud.index")
+    except RuntimeError:  # domain-level calls outside a request
+        tell_url = ""
+    notifications.notify(database, target_id, "mud_tell", f"{sender} sent you a MUD tell",
+                         url=tell_url, body=message, actor_id=user["id"],
+                         dedupe_key=f"tell:{user['id']}")
     return [EventDraft(f"You tell {target['name']}: {message}", event_type="tell"),
             EventDraft(f"{sender} tells you: {message}", event_type="tell", audience_key=str(target_id))]
 
@@ -11481,6 +11519,10 @@ def updates():
     try:
         database.execute("BEGIN IMMEDIATE")
         _register_presence(database, g.user, client_id)
+        # Tells arrive in the game log while it is open; keep them out of the alert badge.
+        database.execute("UPDATE notifications SET read_at=? WHERE user_id=? AND kind='mud_tell' "
+                         "AND read_at IS NULL",
+                         (datetime.now(timezone.utc).replace(microsecond=0).isoformat(), g.user["id"]))
         events = [dict(row) for row in _events_for_user(
             database, g.user["id"], after=after
         )]

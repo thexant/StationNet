@@ -3,6 +3,7 @@ from datetime import datetime, timedelta, timezone
 
 from flask import Blueprint, abort, flash, g, redirect, request, url_for
 
+from . import notifications
 from .auth import login_required
 from .db import get_db
 from .moderation import active_restriction, audit
@@ -60,6 +61,8 @@ def create_post(user_id):
     cursor = database.execute(
         "INSERT INTO user_feed_posts(owner_id,body) VALUES(?,?)", (user_id, body)
     )
+    notifications.notify_mentions(database, body, _destination(user_id, cursor.lastrowid),
+                                  g.user, "a profile post")
     database.commit()
     flash("Post published.", "success")
     return redirect(_destination(user_id, cursor.lastrowid))
@@ -99,17 +102,14 @@ def create_comment(post_id):
         "INSERT INTO user_feed_comments(post_id,author_id,body) VALUES(?,?,?)",
         (post_id, g.user["id"], body),
     )
-    # Existing private mail is the station's notification channel. Notify the
-    # profile owner only for another person's comment, in the same transaction.
-    if post["owner_id"] != g.user["id"]:
-        cursor = database.execute(
-            "INSERT INTO mail(sender_id,recipient_id,subject,body,sender_deleted) "
-            "VALUES(?,?,?,?,1)",
-            (g.user["id"], post["owner_id"], "FEED: New comment on your post",
-             f"{g.user['username']} commented on your profile feed.\n\n{body}\n\n"
-             f"Open: {_destination(post['owner_id'], post_id)}"),
-        )
-        database.execute("UPDATE mail SET thread_id=id WHERE id=?", (cursor.lastrowid,))
+    destination = _destination(post["owner_id"], post_id)
+    notifications.notify(
+        database, post["owner_id"], "comment",
+        f"{g.user['username']} commented on your profile post",
+        url=destination, body=notifications.excerpt(body), actor_id=g.user["id"],
+    )
+    notifications.notify_mentions(database, body, destination, g.user, "a feed comment",
+                                  skip={post["owner_id"]})
     database.commit()
     flash("Comment added.", "success")
     return redirect(_destination(post["owner_id"], post_id))
@@ -166,6 +166,18 @@ def react(post_id):
             "INSERT INTO user_feed_reactions(post_id,user_id,kind) VALUES(?,?,?) "
             "ON CONFLICT(post_id,user_id) DO UPDATE SET kind=excluded.kind,created_at=CURRENT_TIMESTAMP",
             (post_id, g.user["id"], kind),
+        )
+        total = database.execute(
+            "SELECT COUNT(*) FROM user_feed_reactions WHERE post_id=?", (post_id,)
+        ).fetchone()[0]
+        others = total - 1
+        text = (f"{g.user['username']} reacted to your profile post" if others <= 0 else
+                f"{g.user['username']} and {others} other{'s' if others != 1 else ''} "
+                "reacted to your profile post")
+        notifications.notify(
+            database, post["owner_id"], "reaction", text,
+            url=_destination(post["owner_id"], post_id), actor_id=g.user["id"],
+            dedupe_key=f"react:{post_id}",
         )
     database.commit()
     return redirect(_destination(post["owner_id"], post_id))

@@ -1,0 +1,11 @@
+{#- WAITING FOR YOU: compact per-member summary built by notifications.summary(). -#}
+<section class="waiting-panel" aria-labelledby="waiting-heading">
+  <h2 id="waiting-heading"><span aria-hidden="true">&gt;</span> WAITING FOR YOU</h2>
+  {% if waiting %}
+  <ul class="waiting-list">
+    {% for item in waiting %}<li><a href="{{ item.url }}">{{ item.text }}{% if item.when %} · {{ item.when|localtime }}{% endif %}</a></li>{% endfor %}
+  </ul>
+  {% else %}
+  <p class="waiting-clear">NO NEW UPDATES</p>
+  {% endif %}
+</section>

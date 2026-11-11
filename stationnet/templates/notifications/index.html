@@ -1,0 +1,44 @@
+{% extends 'base.html' %}
+{% block title %}Alerts{% endblock %}
+{% block content %}
+<header class="board-head">
+  <div><p class="eyebrow">ALERTS</p><h1>Notification centre</h1><p class="muted">Replies, mentions, reminders, and notices addressed to you. {{ unread }} unread.</p></div>
+  <div class="alert-actions">
+    {% if unread %}<form method="post" action="{{ url_for('notifications.read_all') }}"><input type="hidden" name="csrf_token" value="{{ session.csrf_token }}"><button>MARK ALL READ</button></form>{% endif %}
+    {% if notifications %}<form method="post" action="{{ url_for('notifications.clear_read') }}" data-confirm="Delete every alert you have already read?"><input type="hidden" name="csrf_token" value="{{ session.csrf_token }}"><button class="secondary">CLEAR READ</button></form>{% endif %}
+  </div>
+</header>
+
+<section class="alert-list" aria-label="Alerts">
+{% for item in notifications %}
+  <article class="alert-row{% if not item.read_at %} unread{% endif %}" id="alert-{{ item.id }}">
+    <div class="alert-meta"><span class="alert-kind">{{ kinds.get(item.kind, item.kind)|upper }}</span>{{ item.created_at|localtime }}</div>
+    <form method="post" action="{{ url_for('notifications.open_notification',notification_id=item.id) }}">
+      <input type="hidden" name="csrf_token" value="{{ session.csrf_token }}">
+      <button class="alert-open text-button">{% if not item.read_at %}<span class="alert-dot" aria-label="Unread">*</span> {% endif %}{{ item.text }}</button>
+    </form>
+    {% if item.body %}<div class="alert-body message-body">{{ item.body }}</div>{% endif %}
+  </article>
+{% else %}
+  <div class="empty-state"><span class="empty-signal" aria-hidden="true">~</span><h2>No alerts.</h2><p>Replies, @mentions, event reminders, and SYSOP notices will appear here.</p></div>
+{% endfor %}
+</section>
+{% if page > 1 or has_more %}
+<nav class="subnav" aria-label="Alert pages">
+  {% if page > 1 %}<a href="{{ url_for('notifications.index',page=page-1) }}">← NEWER</a>{% endif %}
+  {% if has_more %}<a href="{{ url_for('notifications.index',page=page+1) }}">OLDER →</a>{% endif %}
+</nav>
+{% endif %}
+
+<section class="terminal-card" id="alert-preferences" aria-labelledby="alert-preferences-heading">
+  <h2 id="alert-preferences-heading">Alert preferences</h2>
+  <form method="post" action="{{ url_for('notifications.save_mutes') }}" class="form-grid">
+    <input type="hidden" name="csrf_token" value="{{ session.csrf_token }}">
+    <fieldset><legend>Alert me about</legend>
+      {% for kind in mutable_kinds %}<label class="check switch"><input type="checkbox" name="kind" value="{{ kind }}" {% if kind not in muted %}checked{% endif %}> {{ kinds[kind] }}</label>{% endfor %}
+      <small class="muted">SYSOP notices and system messages are always delivered.</small>
+    </fieldset>
+    <button>SAVE PREFERENCES</button>
+  </form>
+</section>
+{% endblock %}

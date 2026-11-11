@@ -1,6 +1,6 @@
 """Initial bulletin board service."""
 from flask import Blueprint, abort, flash, g, redirect, render_template, request, url_for
-from . import auto_removal, polls
+from . import auto_removal, notifications, polls
 from .auth import login_required
 from .db import get_db
 from .security import validate_csrf
@@ -12,6 +12,19 @@ def _allowed():
     if g.user is None and not g.station["guest_access"]:
         flash("Guest bulletin access is disabled. Sign in to continue.", "warning")
         return redirect(url_for("auth.login", next=request.path))
+
+def _notify_reply(database, post, reply_id, body):
+    """Alert the thread author and earlier repliers, plus anyone @mentioned."""
+    url=url_for("board.thread", post_id=post["id"])+f"#reply-{reply_id}"
+    mentioned=set(notifications.notify_mentions(database,body,url,g.user,f'a reply to "{post["title"]}"'))
+    participants=[post["author_id"]]+[row["author_id"] for row in database.execute(
+        "SELECT DISTINCT author_id FROM posts WHERE parent_id=? AND author_id<>? ORDER BY author_id",
+        (post["id"],post["author_id"]))]
+    for user_id in participants:
+        if user_id in mentioned: continue
+        whose="your bulletin" if user_id==post["author_id"] else "a thread you replied to"
+        notifications.notify(database,user_id,"reply",f'{g.user["username"]} replied to {whose}: "{post["title"]}"',
+            url=url,body=notifications.excerpt(body),actor_id=g.user["id"],dedupe_key=f"board:{post['id']}")
 
 @bp.get("")
 def index():
@@ -36,6 +49,7 @@ def create():
             else:
                 database=get_db(); cursor=database.execute("INSERT INTO posts(author_id,title,body,expires_at) VALUES(?,?,?,?)", (g.user["id"],title,body,expires_at))
                 if poll: polls.create(database,g.user["id"],poll,post_id=cursor.lastrowid)
+                notifications.notify_mentions(database,title+" "+body,url_for("board.thread",post_id=cursor.lastrowid),g.user,f'the bulletin "{title}"')
                 database.commit()
                 flash("Bulletin transmitted.", "success"); return redirect(url_for("board.thread", post_id=cursor.lastrowid))
     return render_template("board/new.html")
@@ -52,7 +66,8 @@ def thread(post_id):
         validate_csrf(); body=request.form.get("body", "").strip()
         if not 1 <= len(body) <= 5000: flash("Reply must be between 1 and 5000 characters.", "error")
         else:
-            database.execute("INSERT INTO posts(author_id,parent_id,body) VALUES(?,?,?)", (g.user["id"],post_id,body)); database.commit()
+            cursor=database.execute("INSERT INTO posts(author_id,parent_id,body) VALUES(?,?,?)", (g.user["id"],post_id,body))
+            _notify_reply(database,post,cursor.lastrowid,body); database.commit()
             flash("Reply transmitted.", "success"); return redirect(url_for("board.thread", post_id=post_id))
     replies=database.execute("SELECT p.*,u.username,u.callsign FROM posts p JOIN users u ON u.id=p.author_id WHERE p.parent_id=? ORDER BY p.created_at,p.id", (post_id,)).fetchall()
     return render_template("board/thread.html", post=post, replies=replies, poll=polls.view_for_post(post_id))

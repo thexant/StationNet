@@ -326,9 +326,13 @@ def index():
                 f"Welcome to **{g.station['name']}** — [{g.station['callsign']}]. "
                 "Identify yourself to access station services."
             )
+    waiting = None
+    if g.user is not None:
+        from . import notifications
+        waiting = notifications.summary(get_db(), g.user)
     return render_template(
         "welcome.html", landing_heading=heading,
-        landing_body_html=render_markdown(body),
+        landing_body_html=render_markdown(body), waiting=waiting,
     )
 
 @bp.get("/terminal")

@@ -109,18 +109,22 @@ def direct_messages(user_id):
     return jsonify(active=True, messages=messages, muted=bool(active_restriction(g.user["id"], ("mute",))))
 
 
+def direct_unread(claim=False):
+    """Unread direct-chat summaries for this browser connection, claiming new alerts if asked."""
+    peers = get_db().execute(
+        "SELECT id,username,callsign,connection_id FROM users "
+        "WHERE connection_id IS NOT NULL AND last_seen>=?", (_cutoff(),)
+    ).fetchall()
+    return current_app.extensions["direct_chat"].notifications(
+        g.user["id"], session.get("connection_id"), {peer["id"]: peer for peer in peers},
+        claim=claim,
+    )
+
+
 @bp.get("/direct/notifications")
 @login_required
 def direct_notifications():
-    cutoff = _cutoff()
-    peers = get_db().execute(
-        "SELECT id,username,callsign,connection_id FROM users "
-        "WHERE connection_id IS NOT NULL AND last_seen>=?", (cutoff,)
-    ).fetchall()
-    unread, alerts = current_app.extensions["direct_chat"].notifications(
-        g.user["id"], session["connection_id"], {peer["id"]: peer for peer in peers},
-        claim=request.args.get("claim") == "1",
-    )
+    unread, alerts = direct_unread(claim=request.args.get("claim") == "1")
     response = jsonify(unread=unread, alerts=alerts)
     response.headers["Cache-Control"] = "no-store"
     return response

@@ -237,7 +237,9 @@ Usernames cannot be changed later, so choose carefully.
 4. Choose `LOGIN`.
 
 When you are signed in, the station displays `Link established. Welcome,
-<username>` and opens the STATION page.
+<username>` and opens the **login sequence** (Section 2.6), or the STATION page
+if the station has turned the login sequence off. If you were sent to the sign-in
+page from another page, you return to that page instead.
 
 With **Remember me on this device** selected, the station keeps you signed in
 on that browser across restarts of the browser and of the station until you
@@ -256,10 +258,37 @@ StationNet does not use e-mail and cannot send you a reset link. Instead:
    appears.
 2. Make sure your username is entered, then choose `FORGOT PASSWORD`.
 3. The station generates a temporary password and sends it privately to the
-   station's SYSOPs. Contact a SYSOP, who will give it to you.
+   `ALERTS` of the station's SYSOPs. Contact a SYSOP, who will give it to you.
 4. Sign in with the temporary password, then change it at once (Section 4.4).
 
-### 2.6 Disconnecting
+### 2.6 The Login Sequence
+
+After you sign in, many stations greet you with a short login sequence in the
+manner of an old bulletin board system. The SYSOP chooses which panels appear
+and in what order:
+
+- **Station banner**: the station's ASCII banner.
+- **Waiting for you**: what has arrived for you, such as `3 NEW MAIL`,
+  `12 NEW BOARD MSGS` since your last call, unread alerts and direct messages,
+  events you have answered starting within a day, and today's Dungeon of the
+  Day if you still have attempts left. Each line links to the service.
+- **Quote of the day**: one quote, the same for everyone all day.
+- **Last callers**: the most recent calls, with your own previous call. A call
+  is a sign-in, or opening the login sequence from the front page while
+  remembered on this device.
+- **Oneliners**: a wall of short messages. Type up to 80 characters and choose
+  `POST`; you may post one oneliner a minute and remove your own with `[X]`.
+- **Coming up**: events in the next two days.
+- **Dungeon of the Day**: today's dungeon and your remaining attempts.
+
+If you are remembered on this device, choosing `> ENTER THE STATION <` on the
+station's front page also opens the login sequence.
+
+Choose `> CONTINUE TO THE STATION <`, or press Enter, to open the STATION page.
+The **Waiting for you** summary also appears on the station's front page while
+you are signed in.
+
+### 2.7 Disconnecting
 
 To sign out, open the `STATION` tab and choose `[ DISCONNECT ]` in the
 **CURRENT OPERATOR** panel. The station displays `Connection closed.`
@@ -464,7 +493,7 @@ another replaces it.
 
 **To comment**, choose `COMMENT` beneath the post, type up to 500 characters,
 and choose `COMMENT` again. When you comment on another member's post, that
-member is notified by private mail. A profile shows the three newest comments
+member receives an alert (Chapter 29). A profile shows the three newest comments
 on each post; choose `VIEW ALL COMMENTS` to see the rest.
 
 You may delete your own posts and comments from their ▾ menus. The station
@@ -538,8 +567,10 @@ choose `SEND REPLY`. To remove a message from your own mailbox, choose `DELETE`
 beside it. Deleting a message does not remove it from the other member's
 mailbox.
 
-The station also uses private mail for some notices: feed comments, SYSOP
-warnings, and password reset messages sent to SYSOPs.
+Mail is for messages between members. Station notices, such as feed comments,
+SYSOP warnings, and password reset messages for SYSOPs, arrive as alerts
+instead (Chapter 29). Feed-comment notices that earlier versions delivered as
+mail are moved into alerts when the station is upgraded.
 
 ## 9. Bulletin Board, Announcements, and Polls
 
@@ -1475,12 +1506,26 @@ browser's zoom setting (Ctrl and + or −).
 
 StationNet notifies you within the station's pages:
 
+- A count on the `ALERTS` tab shows unread alerts, with a sound if `SFX` is on.
+  You receive an alert when someone replies to your bulletin or imageboard
+  thread, or to a bulletin thread you replied to; mentions you as
+  `@username` in a bulletin, reply, feed post, feed comment, or oneliner;
+  comments on or reacts to your feed post; or sends you a MUD tell while you
+  are away from the MUD. You are also reminded of an event you answered
+  `GOING` or `INTERESTED` to once it is less than a day away, told when a
+  report you filed has been reviewed, and receive SYSOP warnings and notices.
+  Repeated alerts about the same thread or post are combined into one line.
 - A count on the `MAIL` tab shows unread mail, with a sound if `SFX` is on.
 - A count on the `CHAT` tab and an alert at the top of the page announce a
   direct chat message. The alert clears when you open the conversation.
 - The **STATION ACTIVITY** panel summarizes new bulletins, files, members,
   broadcasts, and television.
 - Agenda reminders use your browser's notifications (Chapter 26).
+
+Open `ALERTS` to read your alerts. Choose an alert to mark it read and go to
+what it concerns; `MARK ALL READ` and `CLEAR READ` tidy the list. Under
+**Alert preferences**, clear the kinds of alert you do not want. SYSOP notices
+and system messages are always delivered.
 
 Notifications appear only while a station page is open in your browser.
 
@@ -1756,7 +1801,7 @@ the first result.
 | Identity & Appearance | Station name and description, landing page message, station icon, site theme, masthead and ASCII banner, header taglines, theme library, station MIDI theme |
 | Access & Members | Registration and guest access, invitations, permission groups, group membership |
 | Modules | The module switchboard |
-| Community | Events, User Feeds, Imageboard, Office |
+| Community | Login sequence, Events, User Feeds, Imageboard, Office |
 | Media & Content | File archive, Videos, Library, Arcade, WIKI |
 | Radio & Broadcasting | Band allocations, hosted broadcasting, broadcaster storage |
 | Television | TV settings and the link to TV management |
@@ -1791,6 +1836,13 @@ library**.
 Private, or Disabled) and whether guests may browse. For a private station,
 choose `GENERATE INVITATION`. The complete invitation code and link are shown
 once only; send them to the new member. Unused invitations may be revoked.
+
+**Login sequence.** Under Community, **Login sequence** turns the screen
+members see after signing in (Section 2.6) on or off, chooses its panels and
+their order by position number, and holds the **Quotes of the day**: one per
+line, up to 100 quotes of 200 characters. When no quotes are entered, a header
+tagline is shown instead. A SYSOP may remove any oneliner with its `[X]`
+button; each removal is recorded in the moderation audit history.
 
 **Service settings.** The Community, Media & Content, Radio & Broadcasting,
 Television, and MUD categories configure each optional service. The file
@@ -1828,8 +1880,10 @@ and a searchable **Audit history**. For each report, read the reported item and
 choose `RESOLVE` or `DISMISS` with a note.
 
 Open an account to record an action. Actions are formal warnings (delivered
-by private mail), temporary suspensions, permanent bans, chat mutes, and
+as an alert), temporary suspensions, permanent bans, chat mutes, and
 reinstatement. A reason is required; private notes are visible only to SYSOPs.
+Warned and muted members receive the reason as an alert, and the member who
+filed a report is told when it is resolved or dismissed, with your note.
 `DELETE USER CHAT` removes the member's recent public chat messages. The account
 page also allows an account to be deleted.
 
@@ -1838,8 +1892,8 @@ restrictions expire automatically.
 
 ### 38.3 Passwords
 
-When a member uses `FORGOT PASSWORD`, the station mails a temporary password
-to the SYSOP. Confirm the member's identity before passing it on.
+When a member uses `FORGOT PASSWORD`, the station sends a temporary password
+to every SYSOP's `ALERTS`. Confirm the member's identity before passing it on.
 
 ## 39. Managing Modules and Content
 

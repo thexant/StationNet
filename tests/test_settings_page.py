@@ -13,7 +13,7 @@ TOKEN = "settings-test"
 # Every fragment a save route redirects to must exist on the page, or the
 # sysop lands on the wrong category after saving.
 REDIRECT_ANCHORS = (
-    "module-availability", "station-parameters", "station-identity", "landing-message",
+    "module-availability", "station-parameters", "station-identity", "landing-message", "login-sequence",
     "station-icon", "station-themes", "masthead-banner", "header-taglines", "theme-library",
     "station-midi", "access-policy", "invitations", "events-service", "user-feeds",
     "office-suite", "file-archive", "videos-service", "library-service", "arcade-service",

@@ -1219,6 +1219,32 @@ BEGIN
  INSERT OR IGNORE INTO radio_group_memberships(user_id,group_id)
  SELECT NEW.id,id FROM radio_permission_groups WHERE is_default=1;
 END;
+CREATE TABLE IF NOT EXISTS notifications (
+ id INTEGER PRIMARY KEY AUTOINCREMENT,
+ user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+ kind TEXT NOT NULL,
+ actor_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+ text TEXT NOT NULL, body TEXT NOT NULL DEFAULT '', url TEXT NOT NULL DEFAULT '',
+ dedupe_key TEXT,
+ created_at TEXT NOT NULL, read_at TEXT);
+CREATE INDEX IF NOT EXISTS idx_notifications_user ON notifications(user_id,read_at,id DESC);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_notifications_dedupe
+ ON notifications(user_id,dedupe_key) WHERE dedupe_key IS NOT NULL;
+CREATE TABLE IF NOT EXISTS notification_mutes (
+ user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+ kind TEXT NOT NULL,
+ PRIMARY KEY(user_id,kind));
+CREATE TABLE IF NOT EXISTS station_calls (
+ id INTEGER PRIMARY KEY AUTOINCREMENT,
+ user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+ called_at TEXT NOT NULL);
+CREATE INDEX IF NOT EXISTS idx_station_calls_user ON station_calls(user_id,id DESC);
+CREATE TABLE IF NOT EXISTS oneliners (
+ id INTEGER PRIMARY KEY AUTOINCREMENT,
+ author_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+ body TEXT NOT NULL CHECK(length(body) BETWEEN 1 AND 80),
+ created_at TEXT NOT NULL);
+CREATE INDEX IF NOT EXISTS idx_oneliners_created ON oneliners(id DESC);
 """
 
 DEFAULT_RADIO_BANDS = (
@@ -1486,6 +1512,8 @@ def init_db():
     _migrate_registration_policy(database)
     _migrate_community_fields(database)
     _migrate_mail_threads(database)
+    _migrate_notifications(database)
+    _migrate_door(database)
     _migrate_hosted_broadcast_fields(database)
     _migrate_broadcast_identity_fields(database)
     _migrate_mud_settings(database)
@@ -1693,6 +1721,52 @@ def _migrate_application_categories(database):
     )
     database.execute("DROP TABLE installed_applications")
     database.execute("ALTER TABLE installed_applications_new RENAME TO installed_applications")
+
+
+def _migrate_notifications(database):
+    """Move legacy feed-comment notices out of private mail into notifications."""
+    legacy = database.execute(
+        "SELECT id,sender_id,recipient_id,subject,body,is_read,recipient_deleted,created_at "
+        "FROM mail WHERE subject LIKE 'FEED:%'"
+    ).fetchall()
+    for row in legacy:
+        if not row["recipient_deleted"]:
+            body = row["body"] or ""
+            url = ""
+            marker = "\nOpen: "
+            if marker in body:
+                body, url = body.rsplit(marker, 1)
+                url = url.strip() if url.strip().startswith("/") else ""
+            created = str(row["created_at"] or "").replace(" ", "T")
+            if created and not created.endswith(("Z", "+00:00")):
+                created += "+00:00"
+            database.execute(
+                "INSERT INTO notifications(user_id,kind,actor_id,text,body,url,created_at,read_at) "
+                "VALUES(?,?,?,?,?,?,?,?)",
+                (row["recipient_id"], "comment", row["sender_id"],
+                 row["subject"][len("FEED:"):].strip() or "New comment on your post",
+                 body.strip(), url, created or "1970-01-01T00:00:00+00:00",
+                 created if row["is_read"] else None),
+            )
+    if legacy:
+        ids = [row["id"] for row in legacy]
+        marks = ",".join("?" * len(ids))
+        # A member may have replied to a notice; keep that reply as its own conversation.
+        database.execute(f"UPDATE mail SET thread_id=id WHERE thread_id IN ({marks}) "
+                         f"AND id NOT IN ({marks})", ids + ids)
+        database.execute(f"UPDATE mail SET reply_to_id=NULL WHERE reply_to_id IN ({marks})", ids)
+        database.execute(f"DELETE FROM mail WHERE id IN ({marks})", ids)
+
+
+def _migrate_door(database):
+    columns = {row["name"] for row in database.execute("PRAGMA table_info(station)")}
+    if "door_enabled" not in columns:
+        database.execute("ALTER TABLE station ADD COLUMN door_enabled INTEGER NOT NULL DEFAULT 1 "
+                         "CHECK(door_enabled IN (0,1))")
+    if "door_panels_json" not in columns:
+        database.execute("ALTER TABLE station ADD COLUMN door_panels_json TEXT")
+    if "door_quotes" not in columns:
+        database.execute("ALTER TABLE station ADD COLUMN door_quotes TEXT NOT NULL DEFAULT ''")
 
 
 def _migrate_mail_threads(database):

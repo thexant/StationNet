@@ -1,0 +1,79 @@
+{% extends 'base.html' %}
+{% block title %}Login Sequence{% endblock %}
+{% block content %}
+<section class="door-sequence" data-door data-door-next="{{ url_for('station.terminal') }}" aria-labelledby="door-heading">
+  <header class="door-head">
+    <p class="eyebrow">CONNECT / {{ g.station.name }} - [{{ g.station.callsign }}]</p>
+    <h1 id="door-heading">Welcome back, {{ g.user.username }}</h1>
+  </header>
+
+  {% set step = namespace(n=0) %}
+  {% for panel in panels %}
+    {% if panel == 'banner' %}
+    {% set step.n = step.n + 1 %}
+    <div class="door-panel door-banner door-step-{{ step.n }}" aria-hidden="true"><pre class="ansi-logo"><span class="ansi-logo-art">{{ g.station_banner }}</span></pre></div>
+
+    {% elif panel == 'waiting' %}
+    {% set step.n = step.n + 1 %}
+    <div class="door-panel door-step-{{ step.n }}">{% include '_waiting.html' %}</div>
+
+    {% elif panel == 'quote' and quote %}
+    {% set step.n = step.n + 1 %}
+    <section class="door-panel door-quote door-step-{{ step.n }}" aria-labelledby="door-quote-heading">
+      <h2 id="door-quote-heading"><span aria-hidden="true">&gt;</span> QUOTE OF THE DAY</h2>
+      <blockquote>{{ quote }}</blockquote>
+    </section>
+
+    {% elif panel == 'callers' %}
+    {% set step.n = step.n + 1 %}
+    <section class="door-panel door-step-{{ step.n }}" aria-labelledby="door-callers-heading">
+      <h2 id="door-callers-heading"><span aria-hidden="true">&gt;</span> LAST CALLERS</h2>
+      {% if previous_call %}<p class="muted door-note">YOUR LAST CALL: {{ previous_call|localtime }}</p>{% else %}<p class="muted door-note">YOUR LAST CALL: NONE</p>{% endif %}
+      <ol class="door-table door-callers">
+        {% for call in callers %}<li><span class="door-num">#{{ call.id }}</span><span>{% if module_enabled('users') %}<a href="{{ url_for('users.profile',user_id=call.user_id) }}">{{ call.username }}</a>{% else %}{{ call.username }}{% endif %} [{{ call.callsign }}]</span>{{ call.called_at|localtime }}</li>{% else %}<li>NO CALLS YET</li>{% endfor %}
+      </ol>
+    </section>
+
+    {% elif panel == 'oneliners' %}
+    {% set step.n = step.n + 1 %}
+    <section class="door-panel door-step-{{ step.n }}" id="oneliners" aria-labelledby="door-oneliners-heading">
+      <h2 id="door-oneliners-heading"><span aria-hidden="true">&gt;</span> ONELINERS</h2>
+      <ul class="door-table door-oneliners">
+        {% for line in oneliners %}<li><span class="door-who">{{ line.username }}:</span><span class="door-line">{{ line.body }}</span>{% if line.author_id == g.user.id or g.user.is_admin %}<form method="post" action="{{ url_for('door.delete_oneliner',oneliner_id=line.id) }}" data-confirm="Remove this oneliner?"><input type="hidden" name="csrf_token" value="{{ session.csrf_token }}"><button class="text-button" aria-label="Remove oneliner by {{ line.username }}">[X]</button></form>{% endif %}</li>{% else %}<li class="muted">NO MESSAGES ON THE WALL</li>{% endfor %}
+      </ul>
+      {% if can_post_oneliner %}
+      <form method="post" action="{{ url_for('door.post_oneliner') }}" class="door-oneliner-form">
+        <input type="hidden" name="csrf_token" value="{{ session.csrf_token }}">
+        <input id="oneliner-body" name="body" aria-label="Your oneliner" maxlength="80" required placeholder="Leave a line on the wall (80 chars)" autocomplete="off">
+        <button>POST</button>
+      </form>
+      {% endif %}
+    </section>
+
+    {% elif panel == 'events' and events is defined %}
+    {% set step.n = step.n + 1 %}
+    <section class="door-panel door-step-{{ step.n }}" aria-labelledby="door-events-heading">
+      <h2 id="door-events-heading"><span aria-hidden="true">&gt;</span> COMING UP</h2>
+      <ul class="door-table">
+        {% for event in events %}<li><a href="{{ url_for('events.detail',event_id=event.id) }}">{{ event.name }}</a>{{ event.start_at|localtime }}</li>{% else %}<li class="muted">NO UPCOMING EVENTS</li>{% endfor %}
+      </ul>
+    </section>
+
+    {% elif panel == 'daily' and daily is defined %}
+    {% set step.n = step.n + 1 %}
+    <section class="door-panel door-step-{{ step.n }}" aria-labelledby="door-daily-heading">
+      <h2 id="door-daily-heading"><span aria-hidden="true">&gt;</span> DUNGEON OF THE DAY</h2>
+      {% if daily %}
+      <p><a href="{{ url_for('mud.index') }}">{{ daily.theme|upper }}</a> · {{ daily.day_key }}</p>
+      <p class="muted">{% if daily.completed %}CLEARED TODAY{% if daily.reward_claimed %} · REWARD CLAIMED{% endif %}.{% else %}{{ daily.attempts_left }} OF {{ daily.max_attempts }} ATTEMPTS LEFT.{% endif %}</p>
+      {% else %}<p class="muted">NOT AVAILABLE TODAY</p>{% endif %}
+    </section>
+    {% endif %}
+  {% endfor %}
+
+  <div class="door-continue">
+    <a class="button enter-button" href="{{ url_for('station.terminal') }}" data-door-continue>&gt; CONTINUE TO THE STATION &lt;</a>
+    <p class="muted door-hint">PRESS ENTER TO CONTINUE</p>
+  </div>
+</section>
+{% endblock %}
