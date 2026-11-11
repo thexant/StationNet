@@ -332,3 +332,26 @@
     padding: 6px 10px;
   }
 }
+@media(max-width:760px) {
+  .world-forge .connections-note,
+  .world-forge .connections-toolbar .hint { display: none; }
+  .world-forge .connections-toolbar { flex-wrap: nowrap; overflow-x: auto; gap: 4px; padding: 6px 8px; scrollbar-width: none; }
+  .world-forge .connections-toolbar::-webkit-scrollbar { display: none; }
+  .world-forge .connections-toolbar button { flex-shrink: 0; min-height: 44px; min-width: 44px; font-size: 12px; }
+  .world-forge .connections-toolbar>span { flex-shrink: 0; font-size: 12px; }
+  .world-forge .connections-browser { height: auto; max-height: 150px; padding: 6px 8px; }
+  .world-forge .connections-browser label,
+  .world-forge .connections-browser>p { font-size: 12px; }
+  .world-forge .connections-results button { min-width: 170px; min-height: 52px; }
+  .world-forge .connections-results small,
+  .world-forge .connections-pages,
+  .world-forge .connections-pages button { font-size: 12px; }
+  .world-forge .connections-pages button { min-height: 40px; }
+  .world-forge .connections-diagram { min-height: 220px; }
+  .world-forge .connections-detail { max-height: 40%; overflow: auto; font-size: 13px; }
+  .world-forge .connections-detail button,
+  .world-forge .connection-passages button { min-height: 40px; font-size: 12px; white-space: normal; text-align: left; }
+  .world-forge .connections-detail .inline { flex-wrap: wrap; }
+  .world-forge .connections-legend { overflow-x: auto; flex-wrap: nowrap; scrollbar-width: none; }
+  .world-forge .connections-legend span { flex-shrink: 0; font-size: 11px; }
+}

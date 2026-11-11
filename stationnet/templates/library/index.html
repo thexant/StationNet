@@ -1,7 +1,7 @@
 {% extends 'base.html' %}
 {% block title %}Library{% endblock %}
 {% block content %}
-<header class="board-head"><div><p class="eyebrow">STATION BOOKS + DOCUMENTS</p><h1>Library</h1></div>{% if g.user and g.station.library_mode == 'community' %}<a class="button" href="{{ url_for('library.upload') }}">UPLOAD EPUB / PDF +</a>{% endif %}</header>
+<header class="board-head"><div><p class="eyebrow">LIBRARY</p><h1>Library</h1></div>{% if g.user and g.station.library_mode == 'community' %}<a class="button" href="{{ url_for('library.upload') }}">UPLOAD EPUB / PDF +</a>{% endif %}</header>
 <form method="get" action="{{ url_for('library.index') }}" class="library-filters">
   <label>Search titles, authors, and descriptions<input type="search" name="q" value="{{ query }}" maxlength="100"></label>
   <label>Category<select name="category"><option value="">All categories</option>{% for item in categories %}<option value="{{ item.id }}" {% if category == item.id|string %}selected{% endif %}>{{ item.name }}</option>{% endfor %}</select></label>

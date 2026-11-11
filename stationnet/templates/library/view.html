@@ -5,7 +5,7 @@
 <p><a href="{{ url_for('library.index') }}">RETURN TO LIBRARY</a></p>
 <article class="terminal-card library-detail">
   <div>{% if book.cover_path or book.format == 'pdf' %}<img class="library-detail-cover" src="{{ url_for('library.cover',book_id=book.id) }}" alt="Cover of {{ book.title }}">{% else %}<span class="library-cover-placeholder" aria-hidden="true">BOOK</span>{% endif %}</div>
-  <div><p class="eyebrow">STATION LIBRARY / {{ book.format|upper }}</p><h1>{{ book.title }}</h1><p class="library-author">{{ book.author or 'Unknown author' }}</p><p class="video-description">{{ book.description or 'No description available.' }}</p>
+  <div><p class="eyebrow">LIBRARY / {{ book.format|upper }}</p><h1>{{ book.title }}</h1><p class="library-author">{{ book.author or 'Unknown author' }}</p><p class="video-description">{{ book.description or 'No description available.' }}</p>
     {% if book.publisher or book.language %}<p class="muted">{% if book.publisher %}{{ book.publisher }}{% endif %}{% if book.publisher and book.language %} / {% endif %}{{ book.language }}</p>{% endif %}
     {% if book.identifier %}<p class="muted">Identifier: {{ book.identifier }}</p>{% endif %}
     <p class="muted">Category: {{ book.category_name or 'Uncategorized' }}</p>

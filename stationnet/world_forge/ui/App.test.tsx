@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import React from 'react';
 import {afterEach,beforeEach,describe,it,expect,vi} from 'vitest';
-import {render,screen,cleanup,fireEvent,waitFor} from '@testing-library/react';
+import {render,screen,cleanup,fireEvent,waitFor,within} from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import App from './App';
 import {Project,Registry,Row} from './data';
@@ -112,5 +112,40 @@ describe('Workbench workflow',()=>{
  });
  it('opens review and runs checks without a real browser host',async()=>{
   const user=userEvent.setup();render(<App/>);await user.click(await screen.findByRole('button',{name:'Create a world'}));await user.type(screen.getByLabelText('World name'),'Review World');await user.click(screen.getByRole('button',{name:'Create world'}));await screen.findByRole('application');await user.click(screen.getByRole('button',{name:'Review'}));await user.click(screen.getByRole('button',{name:'Validate world'}));await screen.findByText('Your world passes every check.');
+ });
+});
+
+describe('Phone layout',()=>{
+ const phone=()=>vi.stubGlobal('matchMedia',(query:string)=>({matches:query.includes('max-width: 760px'),media:query,addEventListener(){},removeEventListener(){}}));
+ const touch=(target:Element,type:string,init:Row)=>{const event=new MouseEvent(type,{bubbles:true,cancelable:true,...init});Object.defineProperty(event,'pointerId',{value:init.pointerId});Object.defineProperty(event,'pointerType',{value:'touch'});fireEvent(target,event);};
+ const open=async(user:ReturnType<typeof userEvent.setup>)=>{render(<App/>);await user.click(await screen.findByRole('button',{name:'Create a world'}));await user.type(screen.getByLabelText('World name'),'Pocket World');await user.click(screen.getByRole('button',{name:'Create world'}));await screen.findByRole('application',{name:'World grid map'});};
+ it('reaches every workspace action through the menu, the collections drawer, and the inspector sheet',async()=>{
+  phone();const user=userEvent.setup();await open(user);
+  const shell=document.querySelector('.app-shell')!;
+  await waitFor(()=>expect(shell.className).toContain('left-collapsed'));expect(shell.className).toContain('right-collapsed');
+  await user.click(screen.getByRole('button',{name:'More actions'}));
+  const menu=within(screen.getByRole('dialog',{name:'World actions'}));
+  for(const name of ['Find anything','Checkpoint','World settings','Duplicate world','Export draft ZIP','All worlds'])expect(menu.getByRole('button',{name:new RegExp(name)})).toBeTruthy();
+  await user.click(menu.getByRole('button',{name:/Backups & recovery/}));
+  await waitFor(()=>expect(requests.some(r=>r.endsWith('/backups'))).toBe(true));
+  await user.click(screen.getByRole('button',{name:'Done'}));
+  await user.click(screen.getByRole('button',{name:'Content library'}));
+  await user.click(screen.getByRole('button',{name:'Choose a content collection'}));
+  expect(shell.className).not.toContain('left-collapsed');
+  await user.click(screen.getByRole('button',{name:/^Passages/}));
+  expect(shell.className).toContain('left-collapsed');
+  await user.click(screen.getByRole('button',{name:'Choose a content collection'}));await user.click(screen.getByRole('button',{name:/^Rooms/}));
+  await user.click(screen.getByRole('button',{name:/Arrival/}));
+  expect(shell.className).not.toContain('right-collapsed');
+  await user.click(screen.getByRole('button',{name:'Close inspector'}));
+  expect(shell.className).toContain('right-collapsed');
+ });
+ it('adds a room on a touch tap, not when the finger first lands',async()=>{
+  phone();const user=userEvent.setup();await open(user);
+  await user.click(screen.getByRole('button',{name:'Add room'}));const canvas=screen.getByRole('application');
+  touch(canvas,'pointerdown',{clientX:480,clientY:288,button:0,pointerId:7});
+  expect(requests.some(r=>r.endsWith('/transaction'))).toBe(false);
+  touch(canvas,'pointerup',{clientX:481,clientY:289,button:0,pointerId:7});
+  await waitFor(()=>expect(project.files['rooms.json']).toHaveLength(2));
  });
 });

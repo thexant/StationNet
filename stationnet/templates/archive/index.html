@@ -2,7 +2,7 @@
 {% from '_report.html' import report_button with context %}
 {% block title %}File Archive{% endblock %}
 {% block content %}
-<header class="board-head"><div><p class="eyebrow">FILE ARCHIVE</p><h1>File archive</h1><p class="muted">{{ used_bytes|filesizeformat }} used of {{ (g.station.file_storage_limit_mb * 1024 * 1024)|filesizeformat }}.</p></div>{% if can_upload %}<a class="button" href="{{ url_for('archive.upload') }}">UPLOAD FILE +</a>{% endif %}</header>
+<header class="board-head"><div><p class="eyebrow">FILES</p><h1>File archive</h1><p class="muted">{{ used_bytes|filesizeformat }} used of {{ (g.station.file_storage_limit_mb * 1024 * 1024)|filesizeformat }}.</p></div>{% if can_upload %}<a class="button" href="{{ url_for('archive.upload') }}">UPLOAD FILE +</a>{% endif %}</header>
 <nav class="subnav" aria-label="File categories"><a href="{{ url_for('archive.index') }}" {% if not category %}aria-current="page"{% endif %}>ALL</a>{% for name in categories %}<a href="{{ url_for('archive.index',category=name) }}" {% if category==name %}aria-current="page"{% endif %}>{{ name|upper }}</a>{% endfor %}</nav>
 <section class="file-list">
   {% for file in files %}

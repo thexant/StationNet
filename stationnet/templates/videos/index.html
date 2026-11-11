@@ -1,7 +1,7 @@
 {% extends 'base.html' %}
 {% block title %}Videos{% endblock %}
 {% block content %}
-<header class="board-head"><div><p class="eyebrow">STATION MEDIA</p><h1>Videos</h1></div>{% if g.user and g.station.videos_mode == 'community' %}<a class="button" href="{{ url_for('videos.upload') }}">UPLOAD VIDEO +</a>{% endif %}</header>
+<header class="board-head"><div><p class="eyebrow">VIDEOS</p><h1>Videos</h1></div>{% if g.user and g.station.videos_mode == 'community' %}<a class="button" href="{{ url_for('videos.upload') }}">UPLOAD VIDEO +</a>{% endif %}</header>
 <form method="get" action="{{ url_for('videos.index') }}" class="video-search"><label>Search videos by title<input type="search" name="q" value="{{ query }}" maxlength="100"></label><button>SEARCH</button>{% if query %}<a href="{{ url_for('videos.index') }}">CLEAR</a>{% endif %}</form>
 <section class="video-grid" aria-label="Videos">
 {% for video in videos %}

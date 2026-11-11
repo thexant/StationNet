@@ -1,6 +1,6 @@
 {% extends 'base.html' %}
 {% block title %}World Forge{% endblock %}
-{% block extra_styles %}<link rel="stylesheet" href="{{ url_for('static', filename='world-forge.css', v='2') }}">{% endblock %}
+{% block extra_styles %}<link rel="stylesheet" href="{{ url_for('static', filename='world-forge.css', v='3') }}">{% endblock %}
 {% block content %}
 <section class="world-forge-shell">
   <div id="world-forge" class="world-forge"
@@ -14,5 +14,5 @@
     <p class="world-forge-loading" role="status">LOADING WORLD FORGE…</p>
   </div>
 </section>
-<script src="{{ url_for('static', filename='world-forge.js', v='2') }}" defer></script>
+<script src="{{ url_for('static', filename='world-forge.js', v='3') }}" defer></script>
 {% endblock %}

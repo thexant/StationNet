@@ -1,7 +1,7 @@
 {% extends 'base.html' %}
 {% block title %}User Directory{% endblock %}
 {% block content %}
-<header class="board-head"><div><p class="eyebrow">REGISTERED USERS</p><h1>User directory</h1><p class="muted">Direct chat is only available while another user is online.</p></div><a class="button secondary" href="{{ url_for('users.edit_profile',user_id=g.user.id) }}">EDIT MY PROFILE</a></header>
+<header class="board-head"><div><p class="eyebrow">USERS</p><h1>User directory</h1><p class="muted">Direct chat is only available while another user is online.</p></div><a class="button secondary" href="{{ url_for('users.edit_profile',user_id=g.user.id) }}">EDIT MY PROFILE</a></header>
 <div class="directory-toolbar">
   <p class="directory-count" aria-live="polite">{% if total %}SHOWING {{ first_result }}–{{ last_result }} OF {{ total }} USERS{% else %}NO USERS FOUND{% endif %}</p>
   <form method="get" action="{{ url_for('users.directory') }}" class="directory-sort">

@@ -60,6 +60,7 @@ lucide-react/dist/esm/defaultAttributes.js:
 lucide-react/dist/esm/Icon.js:
 lucide-react/dist/esm/createLucideIcon.js:
 lucide-react/dist/esm/icons/activity.js:
+lucide-react/dist/esm/icons/arrow-left.js:
 lucide-react/dist/esm/icons/arrow-up-right.js:
 lucide-react/dist/esm/icons/book-open.js:
 lucide-react/dist/esm/icons/boxes.js:
@@ -74,6 +75,7 @@ lucide-react/dist/esm/icons/code-xml.js:
 lucide-react/dist/esm/icons/compass.js:
 lucide-react/dist/esm/icons/copy.js:
 lucide-react/dist/esm/icons/download.js:
+lucide-react/dist/esm/icons/ellipsis.js:
 lucide-react/dist/esm/icons/eye.js:
 lucide-react/dist/esm/icons/file-check-2.js:
 lucide-react/dist/esm/icons/git-branch.js:

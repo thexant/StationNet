@@ -1,7 +1,7 @@
 {% extends 'base.html' %}
 {% block title %}Broadcast Programs{% endblock %}
 {% block content %}
-<header class="board-head"><div><p class="eyebrow">RADIO SERVICE / UNIFIED PROGRAMMING</p><h1>Broadcast programs</h1><p>Combine playlists, reusable audio, Morse, SSTV, and live breaks into one running order.</p></div><a class="button secondary" href="{{ url_for('broadcast.manage') }}">AUDIO + PLAYLISTS</a></header>
+<header class="board-head"><div><p class="eyebrow">RADIO / PROGRAMMING</p><h1>Broadcast programs</h1><p>Combine playlists, reusable audio, Morse, SSTV, and live breaks into one running order.</p></div><a class="button secondary" href="{{ url_for('broadcast.manage') }}">AUDIO + PLAYLISTS</a></header>
 <nav class="subnav settings-jump-nav" aria-label="Program sections"><a href="#content-library">CONTENT LIBRARY</a><a href="#program-editor">PROGRAM EDITOR</a><a href="{{ url_for('broadcast.manage') }}">AUDIO + PLAYLISTS</a></nav>
 
 <section class="terminal-card broadcast-section" id="content-library">

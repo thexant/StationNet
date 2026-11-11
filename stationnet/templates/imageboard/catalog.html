@@ -1,7 +1,7 @@
 {% extends 'base.html' %}
 {% block title %}Imageboard catalog{% endblock %}
 {% block content %}
-<header class="board-head"><div><p class="eyebrow">STATION IMAGEBOARD</p><h1>Thread catalog</h1><p class="muted">Imageboard threads from station members.</p></div><a class="button" href="{{ url_for('imageboard.create') }}">NEW THREAD +</a></header>
+<header class="board-head"><div><p class="eyebrow">IMAGEBOARD</p><h1>Thread catalog</h1><p class="muted">Imageboard threads from station members.</p></div><a class="button" href="{{ url_for('imageboard.create') }}">NEW THREAD +</a></header>
 <section class="imageboard-catalog" aria-label="Imageboard threads">
 {% for thread in threads %}
 <article class="terminal-card imageboard-card">

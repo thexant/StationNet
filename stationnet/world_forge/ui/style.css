@@ -2150,118 +2150,6 @@ html:has(:fullscreen) .world-forge-shell { --forge-vw: 100vw; }
     display: none;
   }
 }
-@media(max-width:640px) {
-  .world-forge .app-shell {
-    grid-template-columns: 0 1fr 0;
-    grid-template-rows: 55px 42px minmax(0,1fr) 25px;
-  }
-  .world-forge .app-shell .sidebar {
-    display: none;
-  }
-  .world-forge .app-shell .inspector {
-    position: fixed;
-    right: 0;
-    top: 97px;
-    bottom: 25px;
-    width: min(340px,90vw);
-    z-index: 20;
-    border-left: 1px solid var(--green);
-  }
-  .world-forge .app-shell.right-collapsed .inspector {
-    display: none;
-  }
-  .world-forge .app-shell .main-area {
-    grid-column: 2;
-  }
-  .world-forge .workspace-nav {
-    grid-template-columns: 28px 1fr 29px;
-    padding: 0 8px;
-    gap: 5px;
-  }
-  .world-forge .workspace-label {
-    display: none;
-  }
-  .world-forge .workspace-nav nav {
-    justify-content: center;
-    gap: 13px;
-  }
-  .world-forge .workspace-nav nav button {
-    font-size: 0;
-    gap: 2px;
-  }
-  .world-forge .workspace-nav nav button svg {
-    width: 18px;
-    height: 18px;
-  }
-  .world-forge .app-header .world-switch {
-    font-size: 11px;
-    max-width: 145px;
-  }
-  .world-forge .header-actions .search-trigger {
-    display: none;
-  }
-  .world-forge .header-actions>.icon {
-    display: none;
-  }
-  .world-forge .header-actions button {
-    font-size: 10px;
-  }
-  .world-forge .header-actions .header-divider {
-    display: none;
-  }
-  .world-forge .app-header {
-    gap: 8px;
-  }
-  .world-forge .brand strong {
-    font-size: 11px;
-  }
-  .world-forge .modal {
-    --modal-pad: 16px;
-  }
-  .world-forge .modal-backdrop {
-    padding: 15px;
-  }
-  .world-forge .toast {
-    bottom: 35px;
-    width: 90vw;
-    font-size: 11px;
-  }
-  .world-forge .toast>button:not(.icon) {
-    display: none;
-  }
-  .world-forge .map-heading {
-    padding: 16px;
-  }
-  .world-forge .map-heading h1 {
-    font-size: 23px;
-  }
-  .world-forge .map-legend>span {
-    font-size: 8px;
-  }
-  .world-forge .map-instructions {
-    font-size: 9px;
-  }
-  .world-forge .content-heading {
-    flex-direction: row;
-    align-items: center;
-  }
-  .world-forge .review-stats {
-    grid-template-columns: repeat(3,1fr);
-  }
-  .world-forge .review-stats button,
-.world-forge .review-stats > div {
-    flex-direction: column;
-    align-items: flex-start;
-  }
-  .world-forge .review-stats span {
-    margin: 0;
-  }
-  .world-forge .statusbar {
-    font-size: 7px;
-    padding: 0 10px;
-  }
-}
-
 /* World Forge additions: publishing, the live world, presence, dungeon previews. */
 .world-forge .live-section { margin: 0 0 26px; padding-top: 16px; border-top: 1px solid var(--border-soft); }
 .world-forge .live-section h3 { display: flex; align-items: center; gap: 8px; margin-bottom: 10px; font-size: 13px; }
@@ -2360,8 +2248,222 @@ html:has(:fullscreen) .world-forge-shell { --forge-vw: 100vw; }
 .world-forge .toast { border-color: var(--green); }
 
 @media (max-width: 600px) {
-  .world-forge button.forge-world-row { grid-template-columns: 1fr; gap: .55rem; }
+  .world-forge button.forge-world-row { grid-template-columns: 1fr; gap: .55rem; padding: 1rem .85rem; }
   .world-forge .forge-world-state { justify-content: flex-start; }
-  .world-forge .forge-button-row button { flex: 1 1 100%; }
+  .world-forge .forge-button-row button { flex: 1 1 100%; min-height: 46px; font-size: 13px; }
+  .world-forge .forge-tag { font-size: 11px; padding: 2px 6px; }
+  .world-forge .forge-row-action { padding: 8px 12px; font-size: 12px; }
+  .world-forge .forge-world-info h3 { font-size: 16px; }
+  .world-forge .forge-world-info p,
+  .world-forge .forge-world-info code,
+  .world-forge .forge-world-info .presence,
+  .world-forge .forge-panel-header p,
+  .world-forge .forge-note { font-size: 12px; }
+  .world-forge .forge-page-header p.muted { font-size: 13px; }
+  .world-forge button.forge-new-row { min-height: 48px; font-size: 12px; }
 }
 
+
+/* ---------------------------------------------------------------------------
+   Phones. One pane at a time: a compact header with an actions menu, a bottom
+   tab bar for the workspace modes, the content list as a drawer, and the
+   inspector as a full-screen sheet. Text stays at 11px or more, controls at
+   44px, and inputs at 16px so mobile browsers do not zoom on focus.
+   Kept last so it wins over the unconditional rules above.
+   --------------------------------------------------------------------------- */
+.world-forge .overflow-trigger,
+.world-forge .collections-trigger,
+.world-forge .drawer-backdrop { display: none; }
+.world-forge .action-menu { display: grid; gap: 6px; }
+.world-forge .action-menu button { justify-content: flex-start; gap: 12px; min-height: 46px; padding: 10px 14px; font-size: 13px; }
+
+@media (max-width: 760px) {
+  .world-forge { --forge-height: 100vh; --forge-height: 100dvh; font-size: 14px; }
+  .world-forge-shell:not(:has(.home)) { width: 100vw; margin-left: calc(50% - 50vw); }
+
+  /* Shell: header / one pane / bottom tab bar. */
+  .world-forge .app-shell,
+  .world-forge .app-shell.left-collapsed,
+  .world-forge .app-shell.right-collapsed,
+  .world-forge .app-shell.left-collapsed.right-collapsed {
+    grid-template-columns: minmax(0,1fr);
+    grid-template-rows: 54px minmax(0,1fr) 62px;
+  }
+  .world-forge .app-shell .main-area { grid-column: 1; grid-row: 2; }
+  .world-forge .statusbar { display: none; }
+
+  /* Header. */
+  .world-forge .app-header { grid-column: 1; grid-row: 1; gap: 4px; padding: 0 6px 0 8px; }
+  .world-forge .app-header .brand strong,
+  .world-forge .header-slash,
+  .world-forge .draft-badge,
+  .world-forge .header-actions .search-trigger,
+  .world-forge .header-actions .header-divider,
+  .world-forge .header-actions .save-button,
+  .world-forge .header-actions > .icon[title*="ull screen"] { display: none; }
+  .world-forge .app-header .brand { padding: 0; }
+  .world-forge .app-header .brand-mark { width: 36px; height: 44px; }
+  .world-forge .app-header .world-switch { flex: 1 1 auto; min-width: 0; max-width: none; min-height: 44px; font-size: 13px; }
+  .world-forge .header-actions { gap: 0; margin-left: 0; flex-shrink: 0; }
+  .world-forge .header-actions > .icon,
+  .world-forge .header-actions .overflow-trigger { display: inline-flex; width: 42px; height: 44px; }
+  .world-forge .header-actions button.primary { min-height: 40px; margin-left: 4px; padding: 8px 10px; font-size: 12px; }
+
+  /* Workspace modes become a bottom tab bar. */
+  .world-forge .workspace-nav { grid-column: 1; grid-row: 3; display: flex; padding: 0; gap: 0; border-top: 1px solid var(--green-dim); border-bottom: 0; }
+  .world-forge .workspace-nav > .inline,
+  .world-forge .workspace-nav > .icon { display: none; }
+  .world-forge .workspace-nav nav { flex: 1; gap: 0; justify-content: stretch; }
+  .world-forge .workspace-nav nav button { flex: 1 1 0; min-width: 0; flex-direction: column; gap: 4px; padding: 6px 2px; font-size: 10px; letter-spacing: .03em; white-space: nowrap; overflow: hidden; }
+  .world-forge .workspace-nav nav button svg { width: 20px; height: 20px; flex-shrink: 0; }
+  .world-forge .workspace-nav nav button.active { color: var(--green-bright); background: var(--surface-selected); }
+  .world-forge .workspace-nav nav button.active:after { top: 0; bottom: auto; }
+  .world-forge .workspace-nav nav .count,
+  .world-forge .workspace-nav nav .error-count { position: absolute; top: 4px; right: calc(50% - 22px); padding: 0 4px; font-size: 10px; }
+
+  /* Content list: a drawer over the page. */
+  .world-forge .app-shell .sidebar { position: fixed; inset: 0 auto 0 0; z-index: 41; display: flex; width: min(330px,88vw); border-right: 1px solid var(--green); }
+  .world-forge .app-shell.left-collapsed .sidebar { display: none; }
+  .world-forge .drawer-backdrop { display: block; position: fixed; inset: 0; z-index: 40; background: rgba(0,0,0,.7); }
+  .world-forge .sidebar-title { padding: 8px 8px 8px 16px; gap: 4px; }
+  .world-forge .sidebar-title > span { flex: 1; font-size: 12px; }
+  .world-forge .sidebar-scroll { padding: 0 8px 16px; }
+  .world-forge .nav-group-title { min-height: 40px; font-size: 12px; }
+  .world-forge .collection-link { min-height: 46px; padding: 10px 12px 10px 24px; font-size: 14px; }
+  .world-forge .collection-link small { font-size: 12px; }
+  .world-forge .sidebar-bottom button { min-height: 44px; font-size: 13px; }
+  .world-forge .sidebar-bottom > span { font-size: 11px; }
+  .world-forge button.collections-trigger { display: flex; width: 100%; justify-content: flex-start; gap: 10px; min-height: 46px; margin-bottom: 14px; font-size: 13px; }
+  .world-forge button.collections-trigger span { flex: 1; overflow: hidden; text-overflow: ellipsis; text-align: left; }
+
+  /* Inspector: a full-screen sheet. */
+  .world-forge .app-shell .inspector { position: fixed; inset: 0; z-index: 45; width: auto; border-left: 0; }
+  .world-forge .app-shell.right-collapsed .inspector { display: none; }
+  .world-forge .inspector-heading { min-height: 0; padding: 8px 10px 12px 6px; gap: 6px; border-bottom: 1px solid var(--border-soft); background: var(--surface-title); }
+  .world-forge .inspector-heading > div:nth-child(2) { flex: 1; min-width: 0; padding-top: 6px; }
+  .world-forge .inspector-heading .eyebrow { font-size: 11px; }
+  .world-forge .inspector-heading h2 { font-size: 17px; margin: 4px 0; }
+  .world-forge .inspector-heading code { font-size: 12px; }
+  .world-forge .inspector-heading .icon { width: 44px; height: 44px; padding: 10px; }
+  .world-forge .inspector-tabs button { flex: 1; min-height: 46px; font-size: 12px; }
+  .world-forge .inspector-scroll { padding: 16px; }
+  .world-forge .inspector-foot { padding: 6px 16px; font-size: 12px; }
+  .world-forge .inspector-foot button { min-height: 40px; font-size: 12px; }
+  .world-forge .inspector-actions button { min-height: 44px; font-size: 12px; white-space: normal; }
+  .world-forge .inspector-empty p,
+  .world-forge .inspector-empty > span { font-size: 13px; }
+
+  /* Readable text. */
+  .world-forge .eyebrow,
+  .world-forge .count,
+  .world-forge .subtle-badge,
+  .world-forge small,
+  .world-forge .hint,
+  .world-forge .field .hint,
+  .world-forge .field-error,
+  .world-forge .dialog-field small,
+  .world-forge kbd,
+  .world-forge code { font-size: 12px; }
+  .world-forge .field-label,
+  .world-forge .field-label label,
+  .world-forge .structured summary,
+  .world-forge .advanced-fields summary,
+  .world-forge .custom-property summary,
+  .world-forge .check,
+  .world-forge .dialog-field,
+  .world-forge .error-banner,
+  .world-forge .wall-grid label,
+  .world-forge .record-row span,
+  .world-forge .review-stats span,
+  .world-forge .related small,
+  .world-forge .read-preview small,
+  .world-forge .backup-list small,
+  .world-forge .global-results code { font-size: 12px; }
+  .world-forge button,
+  .world-forge a.button,
+  .world-forge .modal-actions button { font-size: 12px; }
+  .world-forge button.text-button { min-height: 40px; font-size: 13px; }
+
+  /* Touch-sized controls; 16px inputs stop focus zoom. */
+  .world-forge input:not([type=checkbox]):not([type=radio]),
+  .world-forge select,
+  .world-forge textarea { min-height: 44px; font-size: 16px; }
+  .world-forge .field input,
+  .world-forge .field textarea,
+  .world-forge .field select { font-size: 16px; }
+  .world-forge input[type=checkbox] { width: 20px; height: 20px; }
+  .world-forge button { min-height: 40px; }
+  .world-forge button.icon { width: 44px; height: 44px; min-height: 44px; padding: 10px; }
+  .world-forge .field-label-tools .icon,
+  .world-forge .remove-field { width: 40px; height: 40px; min-height: 40px; }
+  .world-forge .wall-grid { gap: 4px; }
+  .world-forge .wall-grid label { min-height: 44px; padding: 0 6px; border: 1px solid var(--border-soft); }
+  .world-forge .switch { min-height: 0; }
+
+  /* Map. */
+  .world-forge .map-heading { padding: 8px 12px; }
+  .world-forge .map-heading h1 { margin: 0; font-size: 15px; }
+  .world-forge .map-heading .subtle-badge { margin-left: 6px; }
+  .world-forge .map-view-tabs { padding: 6px 12px; }
+  .world-forge .map-view-tabs button { flex: 1; min-height: 40px; }
+  .world-forge .map-topline { height: auto; min-height: 48px; padding: 2px 6px 2px 12px; gap: 6px; }
+  .world-forge .map-topline select { font-size: 14px; }
+  .world-forge .map-topline .hint { display: none; }
+  .world-forge .map-toolstrip { height: auto; padding: 4px 8px; gap: 2px; overflow-x: auto; scrollbar-width: none; }
+  .world-forge .map-toolstrip::-webkit-scrollbar { display: none; }
+  .world-forge .tool { width: 44px; height: 44px; min-height: 44px; flex-shrink: 0; }
+  .world-forge .tool-label { display: inline; flex-shrink: 0; padding-right: 8px; font-size: 12px; }
+  .world-forge .terrain-bar { padding: 6px 10px; gap: 6px; }
+  .world-forge .terrain-bar select { flex: 1 1 40%; font-size: 16px; }
+  .world-forge .terrain-bar .check { margin-left: 0; font-size: 13px; min-height: 40px; }
+  .world-forge .map-holder { min-height: 260px; }
+  .world-forge .map-instructions { left: 8px; right: 8px; bottom: 60px; max-width: none; font-size: 12px; }
+  .world-forge .map-zoom { right: 8px; bottom: 8px; }
+  .world-forge .map-zoom .icon { width: 44px; height: 44px; }
+  .world-forge .map-zoom span { font-size: 12px; }
+  .world-forge .map-loading { font-size: 12px; }
+  .world-forge .map-legend { padding: 6px 12px; }
+  .world-forge .map-legend > span { display: none; }
+  .world-forge .map-legend > span.coordinate { display: flex; font-size: 12px; }
+  .world-forge .room-tray { max-height: 40%; overflow: auto; padding: 8px 12px; }
+  .world-forge .tray-heading { flex-wrap: wrap; gap: 6px; }
+  .world-forge .tray-heading input { flex: 1 1 140px; width: auto; }
+  .world-forge .tray-explanation { font-size: 12px; }
+  .world-forge .tray-room { min-height: 44px; }
+
+  /* Content, review, handbook. */
+  .world-forge .content-browser,
+  .world-forge .review,
+  .world-forge .handbook { padding: 14px 12px 24px; }
+  .world-forge .content-heading { flex-direction: row; flex-wrap: wrap; align-items: flex-end; gap: 10px; }
+  .world-forge .content-heading h1 { font-size: 19px; }
+  .world-forge .content-heading .inline { flex-wrap: wrap; }
+  .world-forge .content-tools { flex-wrap: wrap; }
+  .world-forge .record-row { min-height: 56px; }
+  .world-forge .record-row strong { font-size: 14px; }
+  .world-forge .pagination { flex-wrap: wrap; gap: 6px; font-size: 12px; }
+  .world-forge .review-stats { grid-template-columns: 1fr; }
+  .world-forge .review-stats button,
+  .world-forge .review-stats > div { flex-direction: row; align-items: center; }
+  .world-forge .review-stats span { margin-left: auto; }
+  .world-forge .issue { white-space: normal; text-align: left; }
+  .world-forge .handbook-sections summary { min-height: 44px; font-size: 13px; }
+  .world-forge .handbook-sections pre { white-space: pre-wrap; overflow-wrap: anywhere; font-size: 12px; }
+  .world-forge .dialogue-graph .graph-hint { font-size: 12px; }
+
+  /* Dialogs rise from the bottom at full width. */
+  .world-forge .modal-backdrop { padding: 0; align-items: flex-end; }
+  .world-forge .modal,
+  .world-forge .modal.wide { --modal-pad: 16px; width: 100%; max-height: 92vh; max-height: 92dvh; border-width: 1px 0 0; }
+  .world-forge .modal-header { padding: 4px 4px 4px var(--modal-pad); }
+  .world-forge .modal-actions { flex-wrap: wrap; }
+  .world-forge .modal-actions button { flex: 1 1 auto; min-height: 46px; }
+  .world-forge .two-columns { grid-template-columns: 1fr; gap: 0; }
+  .world-forge .backup-list button,
+  .world-forge .global-results > button { min-height: 52px; white-space: normal; }
+
+  /* Toasts clear the tab bar. */
+  .world-forge .toast { bottom: 74px; width: calc(100vw - 16px); max-width: none; font-size: 13px; }
+  .world-forge .toast > button:not(.icon) { display: none; }
+  .world-forge .toast .icon { width: 40px; height: 40px; }
+}

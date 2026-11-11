@@ -2,7 +2,7 @@
 {% block title %}Arcade{% endblock %}
 {% block extra_styles %}<link rel="stylesheet" href="{{ url_for('static',filename='arcade.css') }}">{% endblock %}
 {% block content %}
-<header class="board-head"><div><p class="eyebrow">STATION GAMES</p><h1>Arcade</h1><p class="muted">Browse the station catalogue and choose a game to play.</p></div>{% if g.user and g.station.arcade_mode == 'community' %}<a class="button" href="{{ url_for('arcade.upload') }}">UPLOAD GAME +</a>{% endif %}</header>
+<header class="board-head"><div><p class="eyebrow">ARCADE</p><h1>Arcade</h1><p class="muted">Browse the station catalogue and choose a game to play.</p></div>{% if g.user and g.station.arcade_mode == 'community' %}<a class="button" href="{{ url_for('arcade.upload') }}">UPLOAD GAME +</a>{% endif %}</header>
 <form method="get" action="{{ url_for('arcade.index') }}" class="terminal-card arcade-filters">
   <div class="arcade-filter-top"><label>Search games<input type="search" name="q" value="{{ query }}" maxlength="100" placeholder="Title, description, developer"></label><label>Sort by<select name="sort"><option value="title" {% if sort == 'title' %}selected{% endif %}>Title A–Z</option><option value="newest" {% if sort == 'newest' %}selected{% endif %}>Newest added</option><option value="oldest" {% if sort == 'oldest' %}selected{% endif %}>Oldest added</option><option value="year_desc" {% if sort == 'year_desc' %}selected{% endif %}>Release year: newest</option><option value="year_asc" {% if sort == 'year_asc' %}selected{% endif %}>Release year: oldest</option></select></label></div>
   <div class="arcade-filter-controls">

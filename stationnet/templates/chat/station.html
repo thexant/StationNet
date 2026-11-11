@@ -2,7 +2,7 @@
 {% block title %}Station Chat{% endblock %}
 {% block content %}
 <section class="terminal-card live-chat" data-live-chat data-messages-url="{{ url_for('chat.station_messages') }}" data-report-url="{{ url_for('reports.create_report') }}" {% if g.user.is_admin %}data-delete-url="{{ url_for('moderation.delete_chat',message_id=0) }}"{% endif %}>
-  <p class="eyebrow">STATION PUBLIC CHAT</p>
+  <p class="eyebrow">CHAT</p>
   <h1>Station chat</h1>
   <p class="muted">Persistent station-wide traffic.</p>
   <div class="chat-log" data-chat-log role="log" aria-live="polite" aria-label="Station chat messages"><p class="muted" data-chat-empty>Loading messages...</p></div>

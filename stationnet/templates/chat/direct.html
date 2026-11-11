@@ -2,7 +2,7 @@
 {% block title %}Direct Chat{% endblock %}
 {% block content %}
 <section class="terminal-card live-chat" data-live-chat data-direct-peer="{{ peer.id }}" data-messages-url="{{ url_for('chat.direct_messages',user_id=peer.id) }}">
-  <p class="eyebrow">DIRECT CHAT / {{ peer.username }} - [{{ peer.callsign }}]</p>
+  <p class="eyebrow">CHAT / {{ peer.username }} - [{{ peer.callsign }}]</p>
   <h1>{{ peer.username }}</h1>
   <p class="muted">Temporary private channel. Traffic is erased when either connection ends. <a href="{{ url_for('users.profile',user_id=peer.id) }}">Report this user</a> if needed.</p>
   <div class="chat-log" data-chat-log role="log" aria-live="polite" aria-label="Direct messages with {{ peer.username }}"><p class="muted" data-chat-empty>Loading messages...</p></div>
